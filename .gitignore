@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+out/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Prisma
+apps/server/prisma/migrations/
+
+# Electron
+apps/client/out/
+apps/client/release/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Starter Files
+PRD.md
+ui-reference.jpg
+reson8-logo.png

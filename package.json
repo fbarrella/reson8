@@ -1,0 +1,25 @@
+{
+  "name": "reson8",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Self-hosted voice and text communication platform",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "tsc --build --force",
+    "dev:server": "npm run dev -w apps/server",
+    "dev:client": "npm run dev -w apps/client",
+    "lint": "eslint . --ext .ts,.tsx",
+    "format": "prettier --write \"**/*.{ts,tsx,json,md}\""
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.0",
+    "prettier": "^3.5.0",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

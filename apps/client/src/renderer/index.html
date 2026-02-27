@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src ws: http:; style-src 'self' 'unsafe-inline';">
+  <title>Reson8</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: #1a1a2e;
+      color: #e0e0e0;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    header {
+      background: #16213e;
+      padding: 12px 20px;
+      border-bottom: 1px solid #0f3460;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    header h1 {
+      font-size: 18px;
+      font-weight: 600;
+      color: #53d8fb;
+    }
+    .connect-form {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex: 1;
+    }
+    input {
+      background: #0f3460;
+      border: 1px solid #1a1a4e;
+      color: #e0e0e0;
+      padding: 6px 12px;
+      border-radius: 4px;
+      font-size: 14px;
+      outline: none;
+    }
+    input:focus { border-color: #53d8fb; }
+    input::placeholder { color: #888; }
+    button {
+      background: #53d8fb;
+      color: #1a1a2e;
+      border: none;
+      padding: 7px 16px;
+      border-radius: 4px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    button:hover { background: #30b8db; }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+    .status-bar {
+      background: #16213e;
+      padding: 6px 20px;
+      font-size: 12px;
+      color: #888;
+      border-top: 1px solid #0f3460;
+    }
+    .status-bar .connected { color: #4ade80; }
+    .status-bar .disconnected { color: #f87171; }
+    .log-area {
+      flex: 1;
+      padding: 16px 20px;
+      overflow-y: auto;
+      font-family: 'Cascadia Code', 'Fira Code', monospace;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+    .log-entry { padding: 2px 0; }
+    .log-entry .timestamp { color: #888; margin-right: 8px; }
+    .log-entry.info { color: #53d8fb; }
+    .log-entry.success { color: #4ade80; }
+    .log-entry.error { color: #f87171; }
+    .log-entry.event { color: #c084fc; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>🎧 Reson8</h1>
+    <div class="connect-form">
+      <input type="text" id="serverHost" placeholder="Server address (e.g. localhost)" value="localhost" />
+      <input type="number" id="serverPort" placeholder="Port" value="9800" style="width: 80px;" />
+      <input type="text" id="nickname" placeholder="Nickname" value="Alpha" />
+      <button id="connectBtn">Connect</button>
+      <button id="disconnectBtn" disabled>Disconnect</button>
+    </div>
+  </header>
+
+  <div class="log-area" id="logArea"></div>
+
+  <div class="status-bar">
+    Status: <span id="statusText" class="disconnected">Disconnected</span>
+  </div>
+
+  <script src="./renderer.js"></script>
+</body>
+</html>

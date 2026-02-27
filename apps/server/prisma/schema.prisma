@@ -1,0 +1,151 @@
+// This is your Prisma schema file for Reson8 — self-hosted voice & text platform.
+// Learn more: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Server — represents a single Reson8 server instance
+// ---------------------------------------------------------------------------
+
+model Server {
+  id         String    @id @default(uuid())
+  name       String
+  address    String
+  maxClients Int       @default(32)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  channels Channel[]
+  roles    Role[]
+  users    UserServer[]
+
+  @@map("servers")
+}
+
+// ---------------------------------------------------------------------------
+// Channel — self-referencing tree structure (parentId → parent channel)
+// ---------------------------------------------------------------------------
+
+enum ChannelType {
+  TEXT
+  VOICE
+}
+
+model Channel {
+  id        String      @id @default(uuid())
+  serverId  String
+  name      String
+  type      ChannelType @default(VOICE)
+  parentId  String?
+  position  Int         @default(0)
+  maxUsers  Int?        // null = unlimited
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  server   Server    @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  parent   Channel?  @relation("ChannelTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children Channel[] @relation("ChannelTree")
+  messages Message[]
+
+  @@index([serverId])
+  @@index([parentId])
+  @@map("channels")
+}
+
+// ---------------------------------------------------------------------------
+// User — application-level user account
+// ---------------------------------------------------------------------------
+
+model User {
+  id        String   @id @default(uuid())
+  username  String   @unique
+  nickname  String
+  password  String   // bcrypt hash (Phase 4+)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  servers  UserServer[]
+  roles    UserRole[]
+  messages Message[]
+
+  @@map("users")
+}
+
+// ---------------------------------------------------------------------------
+// UserServer — many-to-many join: which users belong to which servers
+// ---------------------------------------------------------------------------
+
+model UserServer {
+  userId   String
+  serverId String
+  joinedAt DateTime @default(now())
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  server Server @relation(fields: [serverId], references: [id], onDelete: Cascade)
+
+  @@id([userId, serverId])
+  @@map("user_servers")
+}
+
+// ---------------------------------------------------------------------------
+// Role — permission group with bitwise perms and a power-level hierarchy
+// ---------------------------------------------------------------------------
+
+model Role {
+  id          String   @id @default(uuid())
+  serverId    String
+  name        String
+  permissions BigInt   @default(0) // bitwise flags (see PermissionFlags enum)
+  powerLevel  Int      @default(0)
+  color       String?  // hex color, e.g. "#FF5733"
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  server Server     @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  users  UserRole[]
+
+  @@index([serverId])
+  @@map("roles")
+}
+
+// ---------------------------------------------------------------------------
+// UserRole — many-to-many join: which users have which roles
+// ---------------------------------------------------------------------------
+
+model UserRole {
+  userId String
+  roleId String
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+  @@map("user_roles")
+}
+
+// ---------------------------------------------------------------------------
+// Message — persistent text channel messages
+// ---------------------------------------------------------------------------
+
+model Message {
+  id        String   @id @default(uuid())
+  channelId String
+  userId    String
+  content   String
+  createdAt DateTime @default(now())
+
+  channel Channel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([channelId, createdAt])
+  @@map("messages")
+}

@@ -1,0 +1,25 @@
+{
+    "extends": "../../tsconfig.base.json",
+    "compilerOptions": {
+        "outDir": "./dist",
+        "rootDir": "./src",
+        "module": "CommonJS",
+        "moduleResolution": "Node",
+        "lib": [
+            "ES2022",
+            "DOM",
+            "DOM.Iterable"
+        ],
+        "composite": false,
+        "declaration": false,
+        "declarationMap": false
+    },
+    "include": [
+        "src"
+    ],
+    "references": [
+        {
+            "path": "../../packages/shared-types"
+        }
+    ]
+}
