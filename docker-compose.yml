@@ -1,0 +1,54 @@
+services:
+  reson8-server:
+    build:
+      context: .
+      dockerfile: apps/server/Dockerfile
+    container_name: reson8-server
+    restart: unless-stopped
+    ports:
+      - "9800:9800"
+      - "10000-10100:10000-10100/udp"
+      - "10000-10100:10000-10100/tcp"
+    environment:
+      PORT: "9800"
+      HOST: "0.0.0.0"
+      DATABASE_URL: "postgresql://reson8:reson8@postgres:5432/reson8?schema=public"
+      REDIS_URL: "redis://redis:6379"
+      MEDIASOUP_ANNOUNCED_IP: "${MEDIASOUP_ANNOUNCED_IP:-127.0.0.1}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: reson8-postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: reson8
+      POSTGRES_PASSWORD: reson8
+      POSTGRES_DB: reson8
+    volumes:
+      - reson8_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U reson8" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: reson8-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - reson8_redisdata:/data
+
+volumes:
+  reson8_pgdata:
+  reson8_redisdata:

@@ -19,6 +19,9 @@ type TypedSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 let socket: TypedSocket | null = null;
 let voiceService: VoiceService | null = null;
 
+// Default server ID — matches the seed
+const DEFAULT_SERVER_ID = "00000000-0000-0000-0000-000000000001";
+
 // ── Callback registry ────────────────────────────────────────────────────
 
 type Callback = (...args: any[]) => void;
@@ -91,7 +94,7 @@ function createSignaling(): VoiceSignaling {
 const api = {
     // ── Connection ──────────────────────────────────────────────────────────
 
-    connect(host: string, port: number = 9800): void {
+    connect(host: string, port: number, nickname: string): void {
         if (socket?.connected) {
             socket.disconnect();
         }
@@ -107,7 +110,21 @@ const api = {
         voiceService = new VoiceService(createSignaling());
 
         socket.on("connect", () => {
-            emit("connected", { socketId: socket!.id });
+            // Auto-join the default server
+            socket!.emit(
+                "USER_JOIN_SERVER",
+                { serverId: DEFAULT_SERVER_ID, nickname },
+                (res) => {
+                    if (res.success) {
+                        emit("connected", { serverId: DEFAULT_SERVER_ID });
+                    } else {
+                        emit("error", {
+                            code: "JOIN_FAILED",
+                            message: res.error ?? "Failed to join server",
+                        });
+                    }
+                },
+            );
         });
 
         socket.on("disconnect", (reason) => {
@@ -119,11 +136,13 @@ const api = {
             emit("error", { code: "CONNECT_ERROR", message: err.message });
         });
 
+        // Channel & presence events
         socket.on("USER_JOINED", (payload) => emit("user-joined", payload));
         socket.on("USER_LEFT", (payload) => emit("user-left", payload));
         socket.on("CHANNEL_TREE_UPDATE", (payload) => emit("channel-tree", payload));
         socket.on("PRESENCE_UPDATE", (payload) => emit("presence", payload));
         socket.on("MESSAGE_RECEIVED", (payload) => emit("message", payload));
+        socket.on("CHANNEL_DELETED", (payload) => emit("channel-deleted", payload));
         socket.on("ERROR", (payload) => emit("error", payload));
 
         // Voice-specific events
@@ -158,37 +177,6 @@ const api = {
         listeners[event].push(callback);
     },
 
-    off(event: string): void {
-        delete listeners[event];
-    },
-
-    // ── Server join ─────────────────────────────────────────────────────────
-
-    joinServer(
-        serverId: string,
-        nickname: string,
-    ): Promise<{ success: boolean; error?: string }> {
-        return new Promise((resolve) => {
-            if (!socket?.connected) {
-                resolve({ success: false, error: "Not connected" });
-                return;
-            }
-            socket.emit("USER_JOIN_SERVER", { serverId, nickname }, resolve);
-        });
-    },
-
-    joinChannel(
-        channelId: string,
-    ): Promise<{ success: boolean; error?: string }> {
-        return new Promise((resolve) => {
-            if (!socket?.connected) {
-                resolve({ success: false, error: "Not connected" });
-                return;
-            }
-            socket.emit("USER_JOIN_CHANNEL", { channelId }, resolve);
-        });
-    },
-
     // ── Voice ───────────────────────────────────────────────────────────────
 
     async joinVoiceChannel(
@@ -211,16 +199,25 @@ const api = {
 
             // Now do the mediasoup voice handshake
             await voiceService.joinVoiceChannel(channelId);
-            emit("voice-status", { event: "joined", channelId });
             return { success: true };
         } catch (err: any) {
             return { success: false, error: err.message };
         }
     },
 
-    async leaveVoiceChannel(): Promise<void> {
+    leaveVoiceChannel(): void {
+        if (socket?.connected) {
+            // Notify server we're leaving the channel
+            const channelId = voiceService?.currentChannelId;
+            if (channelId) {
+                socket.emit("USER_LEAVE_CHANNEL", { channelId });
+            }
+        }
         voiceService?.cleanup();
-        emit("voice-status", { event: "left" });
+        // Reinitialize voice service for next join
+        if (socket?.connected) {
+            voiceService = new VoiceService(createSignaling());
+        }
     },
 
     toggleMute(): boolean {
@@ -231,12 +228,37 @@ const api = {
         return voiceService?.toggleDeafen() ?? false;
     },
 
-    isInVoice(): boolean {
-        return voiceService?.isInVoice ?? false;
+    // ── Channel CRUD ────────────────────────────────────────────────────────
+
+    createChannel(
+        serverId: string,
+        name: string,
+        type: "TEXT" | "VOICE",
+        parentId?: string | null,
+    ): Promise<{ success: boolean; channelId?: string; error?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.emit(
+                "CREATE_CHANNEL",
+                { serverId, name, type, parentId: parentId ?? null },
+                resolve,
+            );
+        });
     },
 
-    isMuted(): boolean {
-        return voiceService?.isMuted ?? false;
+    deleteChannel(
+        channelId: string,
+    ): Promise<{ success: boolean; error?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.emit("DELETE_CHANNEL", { channelId }, resolve);
+        });
     },
 };
 

@@ -8,6 +8,7 @@
  */
 
 import type {
+    IChannel,
     IChannelTreeNode,
     IMessage,
     IUserPresence,
@@ -46,6 +47,29 @@ export interface ClientToServerEvents {
         newParentId: string | null;
         newPosition: number;
     }) => void;
+
+    /** Client requests creation of a new channel. */
+    CREATE_CHANNEL: (
+        payload: {
+            serverId: string;
+            name: string;
+            type: "TEXT" | "VOICE";
+            parentId?: string | null;
+        },
+        ack: (response: { success: boolean; channelId?: string; error?: string }) => void,
+    ) => void;
+
+    /** Client requests deletion of a channel. */
+    DELETE_CHANNEL: (
+        payload: { channelId: string },
+        ack: (response: { success: boolean; error?: string }) => void,
+    ) => void;
+
+    /** Client requests an update to a channel's properties. */
+    UPDATE_CHANNEL: (
+        payload: { channelId: string; name?: string; position?: number },
+        ack: (response: { success: boolean; error?: string }) => void,
+    ) => void;
 
     /** Client sends a text message to their current channel. */
     SEND_MESSAGE: (
@@ -146,6 +170,18 @@ export interface ServerToClientEvents {
 
     /** Delivers a new text message to channel subscribers. */
     MESSAGE_RECEIVED: (payload: IMessage) => void;
+
+    /** Broadcasts that a new channel was created. */
+    CHANNEL_CREATED: (payload: {
+        serverId: string;
+        channel: IChannel;
+    }) => void;
+
+    /** Broadcasts that a channel was deleted. */
+    CHANNEL_DELETED: (payload: {
+        serverId: string;
+        channelId: string;
+    }) => void;
 
     /** Reports an error condition to the client. */
     ERROR: (payload: { code: string; message: string }) => void;
