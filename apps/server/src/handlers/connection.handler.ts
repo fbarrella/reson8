@@ -16,6 +16,7 @@ import type {
 } from "@reson8/shared-types";
 import { PresenceService } from "../services/presence.service.js";
 import { buildChannelTree } from "../services/channel-tree.service.js";
+import type { MediasoupService } from "../services/mediasoup.service.js";
 
 type TypedIO = SocketIOServer<
     ClientToServerEvents,
@@ -37,6 +38,7 @@ type TypedSocket = Socket<
 export function registerConnectionHandlers(
     io: TypedIO,
     app: FastifyInstance,
+    mediasoup: MediasoupService,
 ): void {
     const presence = new PresenceService(app.redis);
 
@@ -88,7 +90,7 @@ export function registerConnectionHandlers(
                     id: ch.id,
                     serverId: ch.serverId,
                     name: ch.name,
-                    type: ch.type,
+                    type: ch.type as import("@reson8/shared-types").ChannelType,
                     parentId: ch.parentId,
                     position: ch.position,
                     maxUsers: ch.maxUsers,
@@ -165,6 +167,28 @@ export function registerConnectionHandlers(
                 });
 
                 ack({ success: true });
+
+                // Notify joining user of existing voice producers in this channel
+                const existingProducers = mediasoup.getExistingProducers(
+                    channelId,
+                    socket.data.userId,
+                );
+                if (existingProducers.length > 0) {
+                    // Look up nicknames for each producer
+                    const producersWithNicknames = existingProducers.map((p) => {
+                        const userSession = mediasoup.getSession(channelId, p.userId);
+                        return {
+                            userId: p.userId,
+                            nickname: p.userId, // fallback — userId is socketId
+                            producerId: p.producerId,
+                        };
+                    });
+                    socket.emit("EXISTING_PRODUCERS", {
+                        channelId,
+                        producers: producersWithNicknames,
+                    });
+                }
+
                 app.log.info(
                     { socketId: socket.id, channelId },
                     "User joined channel",
@@ -182,6 +206,17 @@ export function registerConnectionHandlers(
 
                 await socket.leave(`channel:${channelId}`);
                 await presence.leaveChannel(socket.id, channelId);
+
+                // Clean up mediasoup voice session
+                const producerId = mediasoup.getSession(channelId, socket.data.userId)?.producer?.id;
+                if (producerId) {
+                    socket.to(`channel:${channelId}`).emit("PRODUCER_CLOSED", {
+                        userId: socket.data.userId,
+                        producerId,
+                    });
+                }
+                mediasoup.cleanupUserSession(channelId, socket.data.userId);
+
                 socket.data.currentChannelId = null;
 
                 // Broadcast updated occupants
@@ -218,6 +253,16 @@ export function registerConnectionHandlers(
                 if (serverId) {
                     // Clean up channel presence
                     if (currentChannelId) {
+                        // Clean up mediasoup voice session
+                        const producerId = mediasoup.getSession(currentChannelId, socket.id)?.producer?.id;
+                        if (producerId) {
+                            socket.to(`channel:${currentChannelId}`).emit("PRODUCER_CLOSED", {
+                                userId: socket.id,
+                                producerId,
+                            });
+                        }
+                        mediasoup.cleanupUserSession(currentChannelId, socket.id);
+
                         await presence.leaveChannel(socket.id, currentChannelId);
 
                         // Broadcast updated occupants for the channel they were in

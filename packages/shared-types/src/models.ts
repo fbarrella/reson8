@@ -120,3 +120,23 @@ export interface IMessage {
     content: string;
     createdAt: string;
 }
+
+// ---------------------------------------------------------------------------
+// WebRTC / mediasoup DTOs
+// ---------------------------------------------------------------------------
+
+/** Parameters sent to the client after creating a WebRtcTransport. */
+export interface ITransportOptions {
+    id: string;
+    iceParameters: any;
+    iceCandidates: any[];
+    dtlsParameters: any;
+}
+
+/** Consumer info sent to the client to consume a remote producer. */
+export interface IConsumerInfo {
+    id: string;
+    producerId: string;
+    kind: "audio" | "video";
+    rtpParameters: any;
+}

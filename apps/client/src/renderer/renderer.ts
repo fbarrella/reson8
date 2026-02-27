@@ -1,7 +1,7 @@
 /**
  * Reson8 Client — Renderer Script
  *
- * Handles the UI logic for the connect form and event log.
+ * Handles the UI logic for connection, event logging, and voice controls.
  * Communicates with the main process via the `reson8Api` bridge
  * exposed by the preload script.
  */
@@ -21,6 +21,14 @@ interface Window {
         joinChannel(
             channelId: string,
         ): Promise<{ success: boolean; error?: string }>;
+        joinVoiceChannel(
+            channelId: string,
+        ): Promise<{ success: boolean; error?: string }>;
+        leaveVoiceChannel(): Promise<void>;
+        toggleMute(): boolean;
+        toggleDeafen(): boolean;
+        isInVoice(): boolean;
+        isMuted(): boolean;
     };
 }
 
@@ -29,11 +37,20 @@ const hostInput = document.getElementById("serverHost") as HTMLInputElement;
 const portInput = document.getElementById("serverPort") as HTMLInputElement;
 const nicknameInput = document.getElementById("nickname") as HTMLInputElement;
 const connectBtn = document.getElementById("connectBtn") as HTMLButtonElement;
-const disconnectBtn = document.getElementById(
-    "disconnectBtn",
-) as HTMLButtonElement;
+const disconnectBtn = document.getElementById("disconnectBtn") as HTMLButtonElement;
 const logArea = document.getElementById("logArea") as HTMLDivElement;
 const statusText = document.getElementById("statusText") as HTMLSpanElement;
+
+// Voice controls
+const joinVoiceBtn = document.getElementById("joinVoiceBtn") as HTMLButtonElement;
+const muteBtn = document.getElementById("muteBtn") as HTMLButtonElement;
+const deafenBtn = document.getElementById("deafenBtn") as HTMLButtonElement;
+const voiceStatus = document.getElementById("voiceStatus") as HTMLSpanElement;
+
+// Voice state
+let inVoice = false;
+let isMuted = false;
+let isDeafened = false;
 
 // ── Logging Utility ──────────────────────────────────────────────────────
 
@@ -72,22 +89,88 @@ disconnectBtn.addEventListener("click", () => {
     statusText.className = "disconnected";
     connectBtn.disabled = false;
     disconnectBtn.disabled = true;
+    joinVoiceBtn.disabled = true;
+    muteBtn.disabled = true;
+    deafenBtn.disabled = true;
+    updateVoiceUI(false);
 });
+
+// ── Voice Controls ───────────────────────────────────────────────────────
+
+joinVoiceBtn.addEventListener("click", async () => {
+    if (inVoice) {
+        // Leave voice
+        await window.reson8Api.leaveVoiceChannel();
+        updateVoiceUI(false);
+        log("Left voice channel.", "info");
+    } else {
+        // Join voice — use "default" channel for Phase 2 testing
+        log("Joining voice channel...", "info");
+        const result = await window.reson8Api.joinVoiceChannel("default-voice");
+        if (result.success) {
+            updateVoiceUI(true);
+            log("🔊 Joined voice channel! Mic is active.", "success");
+        } else {
+            log(`Failed to join voice: ${result.error}`, "error");
+        }
+    }
+});
+
+muteBtn.addEventListener("click", () => {
+    isMuted = window.reson8Api.toggleMute();
+    muteBtn.textContent = isMuted ? "🔊" : "🔇";
+    muteBtn.classList.toggle("active", isMuted);
+    muteBtn.title = isMuted ? "Unmute" : "Mute";
+    log(isMuted ? "Microphone muted." : "Microphone unmuted.", "info");
+});
+
+deafenBtn.addEventListener("click", () => {
+    isDeafened = window.reson8Api.toggleDeafen();
+    deafenBtn.textContent = isDeafened ? "🔉" : "🔈";
+    deafenBtn.classList.toggle("active", isDeafened);
+    deafenBtn.title = isDeafened ? "Undeafen" : "Deafen";
+    log(isDeafened ? "Audio deafened." : "Audio undeafened.", "info");
+});
+
+function updateVoiceUI(joined: boolean): void {
+    inVoice = joined;
+    if (joined) {
+        joinVoiceBtn.textContent = "📤 Leave";
+        joinVoiceBtn.title = "Leave Voice Channel";
+        muteBtn.disabled = false;
+        deafenBtn.disabled = false;
+        voiceStatus.textContent = "🔊 In Voice";
+        voiceStatus.className = "voice-status";
+    } else {
+        joinVoiceBtn.textContent = "🎤 Voice";
+        joinVoiceBtn.title = "Join Voice Channel";
+        muteBtn.disabled = true;
+        deafenBtn.disabled = true;
+        muteBtn.textContent = "🔇";
+        muteBtn.title = "Mute";
+        muteBtn.classList.remove("active");
+        deafenBtn.textContent = "🔈";
+        deafenBtn.title = "Deafen";
+        deafenBtn.classList.remove("active");
+        voiceStatus.textContent = "–";
+        voiceStatus.className = "voice-status inactive";
+        isMuted = false;
+        isDeafened = false;
+    }
+}
 
 // ── Register Reson8 Event Listeners ──────────────────────────────────────
 
 window.reson8Api.on("connected", async (data: { socketId: string }) => {
-    log(
-        `Connected to server. Socket ID: <b>${data.socketId}</b>`,
-        "success",
-    );
+    log(`Connected to server. Socket ID: <b>${data.socketId}</b>`, "success");
 
     statusText.textContent = `Connected as ${nicknameInput.value}`;
     statusText.className = "connected";
     connectBtn.disabled = true;
     disconnectBtn.disabled = false;
+    joinVoiceBtn.disabled = false;
 
-    // Automatically join a default server (for Phase 1 testing)
+    // Auto-join the default server
     const nickname = nicknameInput.value.trim() || "Alpha";
     const result = await window.reson8Api.joinServer("default", nickname);
 
@@ -105,6 +188,8 @@ window.reson8Api.on("disconnected", (data: { reason: string }) => {
     statusText.className = "disconnected";
     connectBtn.disabled = false;
     disconnectBtn.disabled = true;
+    joinVoiceBtn.disabled = true;
+    updateVoiceUI(false);
 });
 
 window.reson8Api.on(
@@ -137,6 +222,21 @@ window.reson8Api.on(
 
 window.reson8Api.on("error", (data: { code: string; message: string }) => {
     log(`Server error [${data.code}]: ${data.message}`, "error");
+});
+
+// Voice events
+window.reson8Api.on("voice-status", (data: { event: string; channelId?: string; userId?: string }) => {
+    if (data.event === "consuming") {
+        log(`🔊 Consuming audio from user <b>${data.userId}</b>.`, "event");
+    }
+});
+
+window.reson8Api.on("new-producer", (data: { userId: string; nickname: string }) => {
+    log(`🎤 <b>"${data.nickname}"</b> started speaking.`, "event");
+});
+
+window.reson8Api.on("producer-closed", (data: { userId: string }) => {
+    log(`🔇 User <b>${data.userId}</b> stopped producing audio.`, "event");
 });
 
 // ── Initial Log ──────────────────────────────────────────────────────────

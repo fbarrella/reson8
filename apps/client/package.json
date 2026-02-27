@@ -9,14 +9,15 @@
         "typecheck": "tsc --noEmit"
     },
     "dependencies": {
-        "socket.io-client": "^4.8.0",
-        "@reson8/shared-types": "*"
+        "@reson8/shared-types": "*",
+        "mediasoup-client": "^3.18.7",
+        "socket.io-client": "^4.8.0"
     },
     "devDependencies": {
+        "@types/node": "^22.13.0",
         "electron": "^34.0.0",
         "electron-builder": "^25.1.0",
         "tsx": "^4.19.0",
-        "typescript": "^5.7.0",
-        "@types/node": "^22.13.0"
+        "typescript": "^5.7.0"
     }
 }

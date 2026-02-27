@@ -5,12 +5,20 @@
  * This is the entry point for the Electron desktop client.
  */
 
-import { app, BrowserWindow } from "electron";
+import { app, BrowserWindow, session } from "electron";
 import path from "node:path";
 
 let mainWindow: BrowserWindow | null = null;
 
 function createWindow(): void {
+    // Grant mic/camera permission requests automatically
+    session.defaultSession.setPermissionRequestHandler(
+        (_webContents, permission, callback) => {
+            const allowed = ["media", "audioCapture", "microphone"];
+            callback(allowed.includes(permission));
+        },
+    );
+
     mainWindow = new BrowserWindow({
         width: 1024,
         height: 768,

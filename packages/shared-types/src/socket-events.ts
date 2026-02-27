@@ -7,7 +7,13 @@
  * @see https://socket.io/docs/v4/typescript/
  */
 
-import type { IChannelTreeNode, IMessage, IUserPresence } from "./models.js";
+import type {
+    IChannelTreeNode,
+    IMessage,
+    IUserPresence,
+    ITransportOptions,
+    IConsumerInfo,
+} from "./models.js";
 
 // ---------------------------------------------------------------------------
 // Client → Server Events
@@ -16,47 +22,98 @@ import type { IChannelTreeNode, IMessage, IUserPresence } from "./models.js";
 export interface ClientToServerEvents {
     /**
      * Client requests to join a server instance.
-     * Payload: the server ID and the user's chosen nickname.
      */
     USER_JOIN_SERVER: (
         payload: { serverId: string; nickname: string },
         ack: (response: { success: boolean; error?: string }) => void,
     ) => void;
 
-    /**
-     * Client signals they are leaving the server.
-     */
+    /** Client signals they are leaving the server. */
     USER_LEAVE_SERVER: (payload: { serverId: string }) => void;
 
-    /**
-     * Client moves into a specific voice/text channel.
-     */
+    /** Client moves into a specific voice/text channel. */
     USER_JOIN_CHANNEL: (
         payload: { channelId: string },
         ack: (response: { success: boolean; error?: string }) => void,
     ) => void;
 
-    /**
-     * Client leaves their current channel.
-     */
+    /** Client leaves their current channel. */
     USER_LEAVE_CHANNEL: (payload: { channelId: string }) => void;
 
-    /**
-     * Client requests a channel to be repositioned in the tree.
-     * `newParentId` of null means move to root level.
-     */
+    /** Client requests a channel to be repositioned in the tree. */
     CHANNEL_MOVED: (payload: {
         channelId: string;
         newParentId: string | null;
         newPosition: number;
     }) => void;
 
-    /**
-     * Client sends a text message to their current channel.
-     */
+    /** Client sends a text message to their current channel. */
     SEND_MESSAGE: (
         payload: { channelId: string; content: string },
         ack: (response: { success: boolean; messageId?: string }) => void,
+    ) => void;
+
+    // ── WebRTC / Voice signaling (mediasoup) ────────────────────────────────
+
+    /** Request the Router's RTP capabilities for a voice channel. */
+    GET_ROUTER_CAPABILITIES: (
+        payload: { channelId: string },
+        ack: (response: {
+            success: boolean;
+            rtpCapabilities?: any;
+            error?: string;
+        }) => void,
+    ) => void;
+
+    /** Request creation of a WebRTC transport (send or recv). */
+    CREATE_WEBRTC_TRANSPORT: (
+        payload: { channelId: string; direction: "send" | "recv" },
+        ack: (response: {
+            success: boolean;
+            transport?: ITransportOptions;
+            error?: string;
+        }) => void,
+    ) => void;
+
+    /** Provide DTLS parameters to connect a transport. */
+    CONNECT_TRANSPORT: (
+        payload: { transportId: string; dtlsParameters: any },
+        ack: (response: { success: boolean; error?: string }) => void,
+    ) => void;
+
+    /** Start producing an audio track. */
+    PRODUCE: (
+        payload: {
+            transportId: string;
+            kind: "audio";
+            rtpParameters: any;
+        },
+        ack: (response: {
+            success: boolean;
+            producerId?: string;
+            error?: string;
+        }) => void,
+    ) => void;
+
+    /** Request to consume another user's audio producer. */
+    CONSUME: (
+        payload: { producerId: string; rtpCapabilities?: any },
+        ack: (response: {
+            success: boolean;
+            consumer?: IConsumerInfo;
+            error?: string;
+        }) => void,
+    ) => void;
+
+    /** Resume a paused consumer (consumers start paused). */
+    RESUME_CONSUMER: (
+        payload: { consumerId: string },
+        ack: (response: { success: boolean; error?: string }) => void,
+    ) => void;
+
+    /** Stop producing (close producer / mute). */
+    CLOSE_PRODUCER: (
+        payload: { producerId: string },
     ) => void;
 }
 
@@ -65,47 +122,61 @@ export interface ClientToServerEvents {
 // ---------------------------------------------------------------------------
 
 export interface ServerToClientEvents {
-    /**
-     * Broadcasts that a user has joined the server.
-     */
+    /** Broadcasts that a user has joined the server. */
     USER_JOINED: (payload: {
         userId: string;
         nickname: string;
         serverId: string;
     }) => void;
 
-    /**
-     * Broadcasts that a user has left the server.
-     */
+    /** Broadcasts that a user has left the server. */
     USER_LEFT: (payload: { userId: string; serverId: string }) => void;
 
-    /**
-     * Sends the full channel tree structure to the client.
-     * Emitted on initial join and whenever the tree changes.
-     */
+    /** Sends the full channel tree structure to the client. */
     CHANNEL_TREE_UPDATE: (payload: {
         serverId: string;
         tree: IChannelTreeNode[];
     }) => void;
 
-    /**
-     * Notifies clients about presence changes in a channel
-     * (user joined/left a channel).
-     */
+    /** Notifies clients about presence changes in a channel. */
     PRESENCE_UPDATE: (payload: {
         channelId: string;
         occupants: IUserPresence[];
     }) => void;
 
-    /**
-     * Delivers a new text message to channel subscribers.
-     */
+    /** Delivers a new text message to channel subscribers. */
     MESSAGE_RECEIVED: (payload: IMessage) => void;
 
-    /**
-     * Reports an error condition to the client.
-     */
+    /** Reports an error condition to the client. */
     ERROR: (payload: { code: string; message: string }) => void;
+
+    // ── WebRTC / Voice events ──────────────────────────────────────────────
+
+    /** Notifies the channel that a new audio producer is available. */
+    NEW_PRODUCER: (payload: {
+        userId: string;
+        nickname: string;
+        producerId: string;
+    }) => void;
+
+    /** Notifies the channel that a producer was closed. */
+    PRODUCER_CLOSED: (payload: {
+        userId: string;
+        producerId: string;
+    }) => void;
+
+    /**
+     * Sent to a client joining a voice channel with existing producers.
+     * The client should consume each one.
+     */
+    EXISTING_PRODUCERS: (payload: {
+        channelId: string;
+        producers: Array<{
+            userId: string;
+            nickname: string;
+            producerId: string;
+        }>;
+    }) => void;
 }
 
 // ---------------------------------------------------------------------------

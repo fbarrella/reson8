@@ -18,6 +18,8 @@ import type {
 import { prismaPlugin } from "./plugins/prisma.js";
 import { redisPlugin } from "./plugins/redis.js";
 import { registerConnectionHandlers } from "./handlers/connection.handler.js";
+import { registerVoiceHandlers } from "./handlers/voice.handler.js";
+import { MediasoupService } from "./services/mediasoup.service.js";
 
 const PORT = parseInt(process.env.PORT ?? "9800", 10);
 const HOST = process.env.HOST ?? "0.0.0.0";
@@ -41,6 +43,11 @@ async function main(): Promise<void> {
     await app.register(prismaPlugin);
     await app.register(redisPlugin);
 
+    // ── mediasoup SFU ──────────────────────────────────────────────────────
+    const mediasoupService = new MediasoupService();
+    await mediasoupService.init();
+    app.log.info("🎙️ mediasoup Workers initialized");
+
     // ── Health-check route ─────────────────────────────────────────────────
     app.get("/health", async () => ({ status: "ok", uptime: process.uptime() }));
 
@@ -57,7 +64,8 @@ async function main(): Promise<void> {
     });
 
     // Register socket event handlers
-    registerConnectionHandlers(io, app);
+    registerConnectionHandlers(io, app, mediasoupService);
+    registerVoiceHandlers(io, app, mediasoupService);
 
     // ── Start ──────────────────────────────────────────────────────────────
     try {
@@ -71,6 +79,7 @@ async function main(): Promise<void> {
     // Graceful shutdown
     const shutdown = async (): Promise<void> => {
         app.log.info("Shutting down...");
+        mediasoupService.close();
         io.close();
         await app.close();
         process.exit(0);
