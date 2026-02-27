@@ -1,0 +1,215 @@
+================================================================================
+  RESON8 — Development Progress Log
+  Generated: 2026-02-27
+================================================================================
+
+PROJECT OVERVIEW
+================
+Reson8 is a high-performance, self-hosted voice and text communication platform
+for desktop (Electron). It replicates the TeamSpeak 3 experience — low-latency
+voice, hierarchical channel trees, and private server ownership — while
+integrating modern persistent text channels.
+
+Tech Stack: Electron + TypeScript, Fastify + Socket.io, mediasoup (SFU),
+PostgreSQL + Prisma, Redis, Docker.
+
+Monorepo structure:
+  apps/client/      — Electron desktop client
+  apps/server/      — Node.js signaling + SFU server
+  packages/shared-types/  — Shared DTOs, enums, and Socket.io event types
+
+
+================================================================================
+  PHASE 1: SIGNALING & PRESENCE (Foundation)  ✅ COMPLETE
+================================================================================
+
+Deliverables:
+  - Fastify + Socket.io signaling server on port 9800
+  - Redis-backed presence tracking (who is in which channel)
+  - Electron shell that connects to the signaling server
+  - Socket.io typed event system (ClientToServerEvents, ServerToClientEvents)
+  - Prisma schema defined: Server, Channel (tree), User, Role, Message
+  - Channel tree service: O(n) map-based algorithm to build nested tree from flat rows
+  - Presence service: Redis hash-based tracking (joinServer, leaveServer,
+    joinChannel, leaveChannel, getChannelOccupants)
+
+Key Files:
+  apps/server/src/index.ts              — Server entry point (Fastify + Socket.io + mediasoup)
+  apps/server/src/handlers/connection.handler.ts — USER_JOIN/LEAVE_SERVER/CHANNEL, disconnect
+  apps/server/src/services/presence.service.ts   — Redis presence tracking
+  apps/server/src/services/channel-tree.service.ts — Flat→nested tree builder
+  apps/server/src/plugins/prisma.ts     — Prisma plugin for Fastify
+  apps/server/src/plugins/redis.ts      — Redis (ioredis) plugin for Fastify
+  apps/server/prisma/schema.prisma      — Full database schema
+  apps/client/src/main.ts               — Electron main process
+  apps/client/src/preload.ts            — contextBridge API (reson8Api)
+  apps/client/src/renderer/             — UI (index.html + renderer.ts)
+  packages/shared-types/src/models.ts   — IServer, IChannel, IChannelTreeNode, IUser, IRole, etc.
+  packages/shared-types/src/socket-events.ts — Typed Socket.io event maps
+
+
+================================================================================
+  PHASE 2: THE VOICE BRIDGE (mediasoup)  ✅ COMPLETE
+================================================================================
+
+Deliverables:
+  - mediasoup SFU integrated into the Node.js backend
+  - Full WebRTC handshake: 6-step signaling flow
+  - Two-way audio: two users in the same room can hear each other
+  - Mute/Unmute and Deafen/Undeafen controls
+  - Voice control tooltips for better UX
+
+6-Step WebRTC Handshake:
+  1. GET_ROUTER_CAPABILITIES — client gets Router's RTP capabilities
+  2. CREATE_WEBRTC_TRANSPORT — client creates send + recv transports
+  3. CONNECT_TRANSPORT — DTLS handshake for each transport
+  4. PRODUCE — client starts sending mic audio
+  5. CONSUME — client receives remote audio
+  6. RESUME_CONSUMER — consumer starts paused, client resumes after setup
+
+Key Files:
+  apps/server/src/services/mediasoup.service.ts — Worker pool, Router/Transport/Session management
+  apps/server/src/config/mediasoup.config.ts    — Worker, Router, Transport settings (Opus codec)
+  apps/server/src/handlers/voice.handler.ts     — All 6 signaling events + CLOSE_PRODUCER
+  apps/client/src/services/voice.service.ts     — Client-side mediasoup-client engine
+
+Bugs Fixed During Phase 2:
+  1. No Mic Permission Prompt (Electron)
+     - Electron silently blocks getUserMedia by default
+     - Fix: session.defaultSession.setPermissionRequestHandler in main.ts
+       to auto-grant "media", "audioCapture", "microphone" permissions
+
+  2. Silent Audio — Race Condition (EXISTING_PRODUCERS before recv transport)
+     - EXISTING_PRODUCERS event fired before client's recv transport was ready
+     - Fix: queueConsumeProducer() in VoiceService defers consumption until
+       recv transport is created, then drains the queue
+
+  3. Silent Audio — ICE Candidate IP
+     - Server used "0.0.0.0" as announcedAddress → ICE candidates couldn't route
+     - Fix: default announcedAddress to "127.0.0.1" in mediasoup.config.ts
+     - For VPS deployments: set MEDIASOUP_ANNOUNCED_IP env var
+
+  4. Silent Audio — Audio Element in Electron
+     - Detached `new Audio()` elements don't output audio in preload context
+     - Fix: use document.createElement("audio"), append to document.body, cleanup with audio.remove()
+
+  5. Deafen Toggle Not Toggling Back
+     - consumer.paused was unreliable with zero consumers
+     - Fix: explicit _isDeafened boolean flag in VoiceService
+
+  6. Voice Controls UI Overflow
+     - Buttons overflowed the header area
+     - Fix: moved voice controls to dedicated panel, added tooltips
+
+
+================================================================================
+  PHASE 3: RELATIONAL LOGIC & HIERARCHY  ✅ COMPLETE
+================================================================================
+
+Deliverables:
+  - Database seeding: default server + 6 channels + 2 roles
+  - Channel CRUD via Socket.io: CREATE_CHANNEL, DELETE_CHANNEL, UPDATE_CHANNEL
+  - Three-pane TeamSpeak-style UI (channel tree + event log + status bar)
+  - Click-to-join voice channels with occupant display in tree
+  - Create channel modal + delete channel confirmation modal
+  - Production Docker Compose: Reson8 server + Postgres + Redis
+
+Database Seed (apps/server/prisma/seed.ts):
+  Default Server: "Reson8 Server" (localhost:9800, max 32 clients)
+  Channels:
+    📁 General (category)
+    ├── 🔊 Lobby (voice)
+    └── 💬 Chat (text)
+    📁 Gaming (category)
+    ├── 🔊 Game Room 1 (voice)
+    └── 🔊 Game Room 2 (voice)
+  Roles:
+    Member (CONNECT | SPEAK | SEND_MESSAGES, power 0)
+    Server Admin (all permissions, power 100)
+
+New Socket Events:
+  Client→Server: CREATE_CHANNEL, DELETE_CHANNEL, UPDATE_CHANNEL
+  Server→Client: CHANNEL_CREATED, CHANNEL_DELETED
+
+Client UI Layout:
+  ┌──────────────────────────────────────────────────┐
+  │ 🎧 Reson8  [host] [port] [nick] [Connect] [Disc]│
+  ├──────────────┬───────────────────────────────────┤
+  │ Channel Tree │  Server Log / Events              │
+  │  🔊 Lobby    │  > Alpha joined Lobby             │
+  │    └ Alpha   │  > Channel "Music" created        │
+  │  💬 Chat     │                                   │
+  │  🔊 Game 1   │                                   │
+  ├──────────────┼───────────────────────────────────┤
+  │ Voice Panel  │ Connected as Alpha                │
+  │ [Mute][Deaf] │                                   │
+  └──────────────┴───────────────────────────────────┘
+
+Key Files:
+  apps/server/prisma/seed.ts            — Idempotent seed (upsert)
+  apps/server/src/handlers/channel.handler.ts — Channel CRUD + tree broadcasting
+  apps/client/src/renderer/index.html   — Three-pane layout + modals
+  apps/client/src/renderer/renderer.ts  — Tree rendering, channel nav, voice controls
+  apps/client/src/preload.ts            — Auto-join server, channel CRUD API
+  apps/server/Dockerfile                — Multi-stage build (mediasoup native deps)
+  docker-compose.yml                    — Production: server + Postgres + Redis
+  apps/server/entrypoint.sh             — Migrate → seed → start
+
+Docker Setup:
+  Development:  docker compose -f docker-compose.dev.yml up -d  (Postgres + Redis only)
+  Production:   docker compose up --build  (full stack: server + Postgres + Redis)
+  VPS deploy:   MEDIASOUP_ANNOUNCED_IP=<public-ip> docker compose up --build
+
+Bugs Fixed During Phase 3:
+  1. window.confirm() not clickable in Electron renderer
+     - Fix: replaced with custom delete confirmation modal
+
+  2. Create channel modal inputs not clickable
+     - Fix: added pointer-events: auto, -webkit-app-region: no-drag,
+       and stopPropagation on .modal-content
+
+
+================================================================================
+  ENVIRONMENT & CONFIGURATION
+================================================================================
+
+Server .env (apps/server/.env):
+  DATABASE_URL=postgresql://reson8:reson8@localhost:5432/reson8?schema=public
+  REDIS_URL=redis://localhost:6379
+  PORT=9800
+  HOST=0.0.0.0
+  MEDIASOUP_ANNOUNCED_IP=127.0.0.1  (set to public IP for VPS)
+
+Key Ports:
+  9800         — Fastify + Socket.io signaling
+  10000-10100  — mediasoup WebRTC media (UDP + TCP)
+  5432         — PostgreSQL
+  6379         — Redis
+
+Build Commands:
+  cd packages/shared-types && npx tsc --build      # Build shared types
+  cd apps/server && npx tsc                         # Build server
+  cd apps/client && npx tsc --build && node scripts/copy-html.mjs  # Build client
+
+Run Commands:
+  cd apps/server && npm run dev                     # Start server (tsx watch)
+  cd apps/client && npx electron .                  # Start client
+
+
+================================================================================
+  REMAINING PHASES (from PRD)
+================================================================================
+
+Phase 4: Permissions & Persistent Text
+  - Bitwise permission check middleware on the server
+  - Tabbed chat UI for the Bottom Pane
+  - Message persistence in PostgreSQL
+
+Phase 5: Desktop UX & Audio Polish
+  - Electron globalShortcut for Push-to-Talk
+  - Details Pane (right side) showing server/user info
+  - Audio settings (input/output device selection)
+
+Phase 6: Deployment & Packaging
+  - Dockerize the Server App (already done partially in Phase 3)
+  - Package the Client for Windows/Linux/macOS using Electron Builder

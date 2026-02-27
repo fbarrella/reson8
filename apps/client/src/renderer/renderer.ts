@@ -1,243 +1,500 @@
 /**
  * Reson8 Client — Renderer Script
  *
- * Handles the UI logic for connection, event logging, and voice controls.
- * Communicates with the main process via the `reson8Api` bridge
- * exposed by the preload script.
+ * Handles the three-pane UI:
+ *   - Left pane: Channel tree with occupants
+ *   - Right pane: Server event log
+ *   - Bottom: Voice controls + status bar
  */
 
-// Type declaration for the preload-exposed API
-// (No `export {}` — this file is loaded as a <script> tag, not a module)
-interface Window {
-    reson8Api: {
-        connect(host: string, port?: number): void;
-        disconnect(): void;
-        on(event: string, callback: (...args: any[]) => void): void;
-        off(event: string): void;
-        joinServer(
-            serverId: string,
-            nickname: string,
-        ): Promise<{ success: boolean; error?: string }>;
-        joinChannel(
-            channelId: string,
-        ): Promise<{ success: boolean; error?: string }>;
-        joinVoiceChannel(
-            channelId: string,
-        ): Promise<{ success: boolean; error?: string }>;
-        leaveVoiceChannel(): Promise<void>;
-        toggleMute(): boolean;
-        toggleDeafen(): boolean;
-        isInVoice(): boolean;
-        isMuted(): boolean;
-    };
+// Type declaration for the preload API
+interface Reson8Api {
+    connect(host: string, port: number, nickname: string): void;
+    disconnect(): void;
+    joinVoiceChannel(channelId: string): Promise<{ success: boolean; error?: string }>;
+    leaveVoiceChannel(): void;
+    toggleMute(): boolean;
+    toggleDeafen(): boolean;
+    createChannel(
+        serverId: string,
+        name: string,
+        type: "TEXT" | "VOICE",
+        parentId?: string | null,
+    ): Promise<{ success: boolean; channelId?: string; error?: string }>;
+    deleteChannel(channelId: string): Promise<{ success: boolean; error?: string }>;
+    on(event: string, callback: (...args: any[]) => void): void;
 }
 
-// ── DOM Elements ──────────────────────────────────────────────────────────
-const hostInput = document.getElementById("serverHost") as HTMLInputElement;
-const portInput = document.getElementById("serverPort") as HTMLInputElement;
-const nicknameInput = document.getElementById("nickname") as HTMLInputElement;
-const connectBtn = document.getElementById("connectBtn") as HTMLButtonElement;
-const disconnectBtn = document.getElementById("disconnectBtn") as HTMLButtonElement;
-const logArea = document.getElementById("logArea") as HTMLDivElement;
-const statusText = document.getElementById("statusText") as HTMLSpanElement;
+const api = (window as any).reson8Api as Reson8Api;
 
-// Voice controls
-const joinVoiceBtn = document.getElementById("joinVoiceBtn") as HTMLButtonElement;
-const muteBtn = document.getElementById("muteBtn") as HTMLButtonElement;
-const deafenBtn = document.getElementById("deafenBtn") as HTMLButtonElement;
-const voiceStatus = document.getElementById("voiceStatus") as HTMLSpanElement;
+// ── State ─────────────────────────────────────────────────────────────────
 
-// Voice state
-let inVoice = false;
+let isConnected = false;
+let currentServerId = "";
+let currentChannelId: string | null = null;
+let isInVoice = false;
 let isMuted = false;
 let isDeafened = false;
 
-// ── Logging Utility ──────────────────────────────────────────────────────
+// Store the current tree for parent selection in the modal
+let currentTree: any[] = [];
 
-function log(
-    message: string,
-    type: "info" | "success" | "error" | "event" = "info",
-): void {
+// ── DOM Elements ──────────────────────────────────────────────────────────
+
+const hostInput = document.getElementById("host") as HTMLInputElement;
+const portInput = document.getElementById("port") as HTMLInputElement;
+const nicknameInput = document.getElementById("nickname") as HTMLInputElement;
+const btnConnect = document.getElementById("btn-connect") as HTMLButtonElement;
+const btnDisconnect = document.getElementById("btn-disconnect") as HTMLButtonElement;
+
+const channelTree = document.getElementById("channel-tree") as HTMLDivElement;
+const eventLog = document.getElementById("event-log") as HTMLDivElement;
+
+const voicePanel = document.getElementById("voice-panel") as HTMLDivElement;
+const voiceChannelName = document.getElementById("voice-channel-name") as HTMLSpanElement;
+const btnMute = document.getElementById("btn-mute") as HTMLButtonElement;
+const btnDeafen = document.getElementById("btn-deafen") as HTMLButtonElement;
+const btnLeaveVoice = document.getElementById("btn-leave-voice") as HTMLButtonElement;
+
+const statusDot = document.getElementById("status-dot") as HTMLSpanElement;
+const statusText = document.getElementById("status-text") as HTMLSpanElement;
+
+const btnCreateChannel = document.getElementById("btn-create-channel") as HTMLButtonElement;
+const createChannelModal = document.getElementById("create-channel-modal") as HTMLDivElement;
+const newChannelName = document.getElementById("new-channel-name") as HTMLInputElement;
+const newChannelType = document.getElementById("new-channel-type") as HTMLSelectElement;
+const newChannelParent = document.getElementById("new-channel-parent") as HTMLSelectElement;
+const btnModalCancel = document.getElementById("btn-modal-cancel") as HTMLButtonElement;
+const btnModalCreate = document.getElementById("btn-modal-create") as HTMLButtonElement;
+
+const deleteChannelModal = document.getElementById("delete-channel-modal") as HTMLDivElement;
+const deleteChannelNameEl = document.getElementById("delete-channel-name") as HTMLElement;
+const btnDeleteCancel = document.getElementById("btn-delete-cancel") as HTMLButtonElement;
+const btnDeleteConfirm = document.getElementById("btn-delete-confirm") as HTMLButtonElement;
+
+// State for pending delete
+let pendingDeleteChannelId: string | null = null;
+
+// ── Logging ───────────────────────────────────────────────────────────────
+
+function log(message: string, type: "info" | "success" | "error" | "" = ""): void {
     const entry = document.createElement("div");
     entry.className = `log-entry ${type}`;
 
-    const now = new Date();
-    const ts = now.toLocaleTimeString("en-US", { hour12: false });
+    const time = new Date().toLocaleTimeString();
+    entry.innerHTML = `<span class="timestamp">[${time}]</span>${message}`;
 
-    entry.innerHTML = `<span class="timestamp">&lt;${ts}&gt;</span> ${message}`;
-    logArea.appendChild(entry);
-    logArea.scrollTop = logArea.scrollHeight;
+    eventLog.appendChild(entry);
+    eventLog.scrollTop = eventLog.scrollHeight;
 }
 
-// ── Connect / Disconnect ─────────────────────────────────────────────────
+// ── Connection ────────────────────────────────────────────────────────────
 
-connectBtn.addEventListener("click", () => {
-    const host = hostInput.value.trim() || "localhost";
-    const port = parseInt(portInput.value, 10) || 9800;
+btnConnect.addEventListener("click", () => {
+    const host = hostInput.value.trim();
+    const port = parseInt(portInput.value.trim(), 10);
+    const nickname = nicknameInput.value.trim() || "User";
 
-    log(`Trying to resolve hostname <b>${host}</b>...`);
-    log(`Trying to connect to server on <b>${host}:${port}</b>...`);
+    if (!host || !port) {
+        log("Please enter server address and port", "error");
+        return;
+    }
 
-    window.reson8Api.connect(host, port);
+    log(`Connecting to ${host}:${port} as "${nickname}"...`, "info");
+    api.connect(host, port, nickname);
 });
 
-disconnectBtn.addEventListener("click", () => {
-    window.reson8Api.disconnect();
-    log("Disconnected from server.", "info");
-
-    statusText.textContent = "Disconnected";
-    statusText.className = "disconnected";
-    connectBtn.disabled = false;
-    disconnectBtn.disabled = true;
-    joinVoiceBtn.disabled = true;
-    muteBtn.disabled = true;
-    deafenBtn.disabled = true;
-    updateVoiceUI(false);
+btnDisconnect.addEventListener("click", () => {
+    api.disconnect();
 });
 
-// ── Voice Controls ───────────────────────────────────────────────────────
+// ── Channel Tree Rendering ────────────────────────────────────────────────
 
-joinVoiceBtn.addEventListener("click", async () => {
-    if (inVoice) {
-        // Leave voice
-        await window.reson8Api.leaveVoiceChannel();
-        updateVoiceUI(false);
-        log("Left voice channel.", "info");
-    } else {
-        // Join voice — use "default" channel for Phase 2 testing
-        log("Joining voice channel...", "info");
-        const result = await window.reson8Api.joinVoiceChannel("default-voice");
-        if (result.success) {
-            updateVoiceUI(true);
-            log("🔊 Joined voice channel! Mic is active.", "success");
+interface TreeNode {
+    id: string;
+    name: string;
+    type: "TEXT" | "VOICE";
+    parentId: string | null;
+    children: TreeNode[];
+    occupants: { userId: string; nickname: string }[];
+}
+
+function renderTree(tree: TreeNode[]): void {
+    currentTree = tree;
+    channelTree.innerHTML = "";
+
+    if (tree.length === 0) {
+        channelTree.innerHTML = `
+            <div style="padding: 20px 12px; color: var(--text-muted); font-size: 12px; text-align: center;">
+                No channels found
+            </div>
+        `;
+        return;
+    }
+
+    for (const node of tree) {
+        if (node.children.length > 0) {
+            // This node has children — render as a category
+            channelTree.appendChild(renderCategory(node));
         } else {
-            log(`Failed to join voice: ${result.error}`, "error");
+            // Leaf channel at root level
+            channelTree.appendChild(renderChannel(node));
+            renderOccupants(channelTree, node);
         }
     }
-});
 
-muteBtn.addEventListener("click", () => {
-    isMuted = window.reson8Api.toggleMute();
-    muteBtn.textContent = isMuted ? "🔊" : "🔇";
-    muteBtn.classList.toggle("active", isMuted);
-    muteBtn.title = isMuted ? "Unmute" : "Mute";
-    log(isMuted ? "Microphone muted." : "Microphone unmuted.", "info");
-});
+    updateParentSelect(tree);
+}
 
-deafenBtn.addEventListener("click", () => {
-    isDeafened = window.reson8Api.toggleDeafen();
-    deafenBtn.textContent = isDeafened ? "🔉" : "🔈";
-    deafenBtn.classList.toggle("active", isDeafened);
-    deafenBtn.title = isDeafened ? "Undeafen" : "Deafen";
-    log(isDeafened ? "Audio deafened." : "Audio undeafened.", "info");
-});
+function renderCategory(node: TreeNode): HTMLDivElement {
+    const category = document.createElement("div");
+    category.className = "tree-category";
 
-function updateVoiceUI(joined: boolean): void {
-    inVoice = joined;
-    if (joined) {
-        joinVoiceBtn.textContent = "📤 Leave";
-        joinVoiceBtn.title = "Leave Voice Channel";
-        muteBtn.disabled = false;
-        deafenBtn.disabled = false;
-        voiceStatus.textContent = "🔊 In Voice";
-        voiceStatus.className = "voice-status";
-    } else {
-        joinVoiceBtn.textContent = "🎤 Voice";
-        joinVoiceBtn.title = "Join Voice Channel";
-        muteBtn.disabled = true;
-        deafenBtn.disabled = true;
-        muteBtn.textContent = "🔇";
-        muteBtn.title = "Mute";
-        muteBtn.classList.remove("active");
-        deafenBtn.textContent = "🔈";
-        deafenBtn.title = "Deafen";
-        deafenBtn.classList.remove("active");
-        voiceStatus.textContent = "–";
-        voiceStatus.className = "voice-status inactive";
-        isMuted = false;
-        isDeafened = false;
+    const label = document.createElement("div");
+    label.className = "tree-category-label";
+    label.innerHTML = `<span class="arrow">▾</span> ${escapeHtml(node.name)}`;
+    label.addEventListener("click", () => {
+        category.classList.toggle("collapsed");
+    });
+    category.appendChild(label);
+
+    const children = document.createElement("div");
+    children.className = "tree-children";
+
+    for (const child of node.children) {
+        if (child.children.length > 0) {
+            children.appendChild(renderCategory(child));
+        } else {
+            children.appendChild(renderChannel(child));
+            renderOccupants(children, child);
+        }
+    }
+
+    // Also render the category itself as a joinable channel if it's a voice channel
+    // (categories can also be voice channels that users can join)
+
+    category.appendChild(children);
+    return category;
+}
+
+function renderChannel(node: TreeNode): HTMLDivElement {
+    const channel = document.createElement("div");
+    channel.className = "tree-channel";
+    if (currentChannelId === node.id) {
+        channel.classList.add("active");
+    }
+
+    const isVoice = node.type === "VOICE";
+    const iconClass = isVoice ? "voice" : "text";
+    const icon = isVoice ? "🔊" : "💬";
+
+    const count = node.occupants.length;
+    const countBadge = count > 0 ? `<span class="ch-count">${count}</span>` : "";
+
+    channel.innerHTML = `
+        <span class="ch-icon ${iconClass}">${icon}</span>
+        <span class="ch-name">${escapeHtml(node.name)}</span>
+        ${countBadge}
+    `;
+
+    channel.addEventListener("click", () => handleChannelClick(node));
+
+    // Right-click to delete
+    channel.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        showDeleteModal(node.id, node.name);
+    });
+
+    return channel;
+}
+
+function renderOccupants(container: HTMLElement, node: TreeNode): void {
+    for (const occ of node.occupants) {
+        const el = document.createElement("div");
+        el.className = "tree-occupant";
+        el.innerHTML = `<span class="occ-dot"></span>${escapeHtml(occ.nickname)}`;
+        container.appendChild(el);
     }
 }
 
-// ── Register Reson8 Event Listeners ──────────────────────────────────────
+function updateParentSelect(tree: TreeNode[]): void {
+    newChannelParent.innerHTML = '<option value="">— None (root) —</option>';
+    addParentOptions(tree, 0);
+}
 
-window.reson8Api.on("connected", async (data: { socketId: string }) => {
-    log(`Connected to server. Socket ID: <b>${data.socketId}</b>`, "success");
+function addParentOptions(nodes: TreeNode[], depth: number): void {
+    for (const node of nodes) {
+        const indent = "  ".repeat(depth);
+        const option = document.createElement("option");
+        option.value = node.id;
+        option.textContent = `${indent}${node.name}`;
+        newChannelParent.appendChild(option);
 
-    statusText.textContent = `Connected as ${nicknameInput.value}`;
-    statusText.className = "connected";
-    connectBtn.disabled = true;
-    disconnectBtn.disabled = false;
-    joinVoiceBtn.disabled = false;
+        if (node.children.length > 0) {
+            addParentOptions(node.children, depth + 1);
+        }
+    }
+}
 
-    // Auto-join the default server
-    const nickname = nicknameInput.value.trim() || "Alpha";
-    const result = await window.reson8Api.joinServer("default", nickname);
+// ── Channel Interaction ───────────────────────────────────────────────────
 
-    if (result.success) {
-        log(`Joined server as <b>${nickname}</b>.`, "success");
+async function handleChannelClick(node: TreeNode): Promise<void> {
+    if (!isConnected) return;
+
+    if (node.type === "VOICE") {
+        // If already in this voice channel, do nothing
+        if (currentChannelId === node.id && isInVoice) return;
+
+        // Leave previous voice channel first
+        if (isInVoice) {
+            api.leaveVoiceChannel();
+            isInVoice = false;
+        }
+
+        currentChannelId = node.id;
+        log(`Joining voice channel: ${node.name}...`, "info");
+
+        const result = await api.joinVoiceChannel(node.id);
+        if (result.success) {
+            isInVoice = true;
+            isMuted = false;
+            isDeafened = false;
+            updateVoiceUI(node.name);
+            log(`Joined voice channel: ${node.name}`, "success");
+        } else {
+            log(`Failed to join voice: ${result.error}`, "error");
+            currentChannelId = null;
+        }
     } else {
-        log(`Failed to join server: ${result.error}`, "error");
+        // Text channel — mark as active for now
+        currentChannelId = node.id;
+        log(`Switched to text channel: ${node.name}`, "info");
+    }
+
+    // Re-render tree to update active state
+    if (currentTree.length > 0) {
+        renderTree(currentTree);
+    }
+}
+
+async function deleteChannel(channelId: string): Promise<void> {
+    const result = await api.deleteChannel(channelId);
+    if (result.success) {
+        log("Channel deleted", "success");
+    } else {
+        log(`Failed to delete channel: ${result.error}`, "error");
+    }
+}
+
+// ── Voice Controls ────────────────────────────────────────────────────────
+
+function updateVoiceUI(channelName?: string): void {
+    if (isInVoice) {
+        voicePanel.classList.add("visible");
+        if (channelName) {
+            voiceChannelName.textContent = `Voice: ${channelName}`;
+        }
+        btnMute.textContent = isMuted ? "🔇 Unmute" : "🎤 Mute";
+        btnMute.classList.toggle("active", isMuted);
+        btnDeafen.textContent = isDeafened ? "🔇 Undeafen" : "🔊 Deafen";
+        btnDeafen.classList.toggle("active", isDeafened);
+    } else {
+        voicePanel.classList.remove("visible");
+    }
+}
+
+btnMute.addEventListener("click", () => {
+    isMuted = api.toggleMute();
+    updateVoiceUI();
+});
+
+btnDeafen.addEventListener("click", () => {
+    isDeafened = api.toggleDeafen();
+    updateVoiceUI();
+});
+
+btnLeaveVoice.addEventListener("click", () => {
+    api.leaveVoiceChannel();
+    isInVoice = false;
+    currentChannelId = null;
+    updateVoiceUI();
+    log("Left voice channel", "info");
+    if (currentTree.length > 0) {
+        renderTree(currentTree);
     }
 });
 
-window.reson8Api.on("disconnected", (data: { reason: string }) => {
-    log(`Disconnected: ${data.reason}`, "error");
+// ── Create Channel Modal ──────────────────────────────────────────────────
 
+btnCreateChannel.addEventListener("click", () => {
+    if (!isConnected) return;
+    newChannelName.value = "";
+    createChannelModal.classList.add("visible");
+    newChannelName.focus();
+});
+
+btnModalCancel.addEventListener("click", () => {
+    createChannelModal.classList.remove("visible");
+});
+
+createChannelModal.addEventListener("click", (e) => {
+    if (e.target === createChannelModal) {
+        createChannelModal.classList.remove("visible");
+    }
+});
+
+// Prevent clicks inside modal content from closing the modal
+const modalContents = document.querySelectorAll(".modal-content");
+modalContents.forEach((content) => {
+    content.addEventListener("click", (e) => {
+        e.stopPropagation();
+    });
+});
+
+btnModalCreate.addEventListener("click", async () => {
+    const name = newChannelName.value.trim();
+    if (!name) {
+        newChannelName.focus();
+        return;
+    }
+
+    const type = newChannelType.value as "TEXT" | "VOICE";
+    const parentId = newChannelParent.value || null;
+
+    const result = await api.createChannel(currentServerId, name, type, parentId);
+    if (result.success) {
+        log(`Channel "${name}" created`, "success");
+        createChannelModal.classList.remove("visible");
+    } else {
+        log(`Failed to create channel: ${result.error}`, "error");
+    }
+});
+
+// ── Delete Channel Modal ──────────────────────────────────────────────────
+
+function showDeleteModal(channelId: string, channelName: string): void {
+    pendingDeleteChannelId = channelId;
+    deleteChannelNameEl.textContent = channelName;
+    deleteChannelModal.classList.add("visible");
+}
+
+btnDeleteCancel.addEventListener("click", () => {
+    deleteChannelModal.classList.remove("visible");
+    pendingDeleteChannelId = null;
+});
+
+deleteChannelModal.addEventListener("click", (e) => {
+    if (e.target === deleteChannelModal) {
+        deleteChannelModal.classList.remove("visible");
+        pendingDeleteChannelId = null;
+    }
+});
+
+btnDeleteConfirm.addEventListener("click", async () => {
+    if (!pendingDeleteChannelId) return;
+    const channelId = pendingDeleteChannelId;
+    deleteChannelModal.classList.remove("visible");
+    pendingDeleteChannelId = null;
+    await deleteChannel(channelId);
+});
+
+// ── Event Listeners ───────────────────────────────────────────────────────
+
+api.on("connected", (data: { serverId: string }) => {
+    isConnected = true;
+    currentServerId = data.serverId;
+    btnConnect.disabled = true;
+    btnDisconnect.disabled = false;
+    hostInput.disabled = true;
+    portInput.disabled = true;
+    nicknameInput.disabled = true;
+    statusDot.classList.add("connected");
+    statusText.textContent = `Connected as ${nicknameInput.value.trim() || "User"}`;
+    log("Connected to server", "success");
+});
+
+api.on("disconnected", () => {
+    isConnected = false;
+    isInVoice = false;
+    currentChannelId = null;
+    currentServerId = "";
+    currentTree = [];
+    btnConnect.disabled = false;
+    btnDisconnect.disabled = true;
+    hostInput.disabled = false;
+    portInput.disabled = false;
+    nicknameInput.disabled = false;
+    statusDot.classList.remove("connected");
     statusText.textContent = "Disconnected";
-    statusText.className = "disconnected";
-    connectBtn.disabled = false;
-    disconnectBtn.disabled = true;
-    joinVoiceBtn.disabled = true;
-    updateVoiceUI(false);
+    updateVoiceUI();
+    channelTree.innerHTML = `
+        <div style="padding: 20px 12px; color: var(--text-muted); font-size: 12px; text-align: center;">
+            Connect to a server to see channels
+        </div>
+    `;
+    log("Disconnected from server", "error");
 });
 
-window.reson8Api.on(
-    "user-joined",
-    (data: { nickname: string; userId: string }) => {
-        log(`<b>"${data.nickname}"</b> joined the server.`, "event");
-    },
-);
-
-window.reson8Api.on("user-left", (data: { userId: string }) => {
-    log(`User <b>${data.userId}</b> left the server.`, "event");
+api.on("error", (data: { message: string }) => {
+    log(`Error: ${data.message}`, "error");
 });
 
-window.reson8Api.on("channel-tree", (data: { tree: any[] }) => {
-    log(
-        `Received channel tree update: ${data.tree.length} root channel(s).`,
-        "event",
-    );
+api.on("channel-tree", (data: { serverId: string; tree: TreeNode[] }) => {
+    renderTree(data.tree);
 });
 
-window.reson8Api.on(
-    "presence",
-    (data: { channelId: string; occupants: any[] }) => {
-        log(
-            `Presence update for channel <b>${data.channelId}</b>: ${data.occupants.length} user(s).`,
-            "event",
-        );
-    },
-);
-
-window.reson8Api.on("error", (data: { code: string; message: string }) => {
-    log(`Server error [${data.code}]: ${data.message}`, "error");
+api.on("presence", (data: { channelId: string; occupants: any[] }) => {
+    // Update occupants in the current tree
+    updateOccupants(data.channelId, data.occupants);
 });
 
-// Voice events
-window.reson8Api.on("voice-status", (data: { event: string; channelId?: string; userId?: string }) => {
-    if (data.event === "consuming") {
-        log(`🔊 Consuming audio from user <b>${data.userId}</b>.`, "event");
+api.on("user-joined", (data: { nickname: string }) => {
+    log(`${data.nickname} joined the server`, "info");
+});
+
+api.on("user-left", (data: { userId: string }) => {
+    log(`A user left the server`, "info");
+});
+
+api.on("channel-deleted", (data: { channelId: string }) => {
+    if (currentChannelId === data.channelId) {
+        currentChannelId = null;
+        if (isInVoice) {
+            api.leaveVoiceChannel();
+            isInVoice = false;
+            updateVoiceUI();
+        }
+        log("Your current channel was deleted", "error");
     }
 });
 
-window.reson8Api.on("new-producer", (data: { userId: string; nickname: string }) => {
-    log(`🎤 <b>"${data.nickname}"</b> started speaking.`, "event");
-});
+// ── Tree Update Helpers ───────────────────────────────────────────────────
 
-window.reson8Api.on("producer-closed", (data: { userId: string }) => {
-    log(`🔇 User <b>${data.userId}</b> stopped producing audio.`, "event");
-});
+function updateOccupants(channelId: string, occupants: any[]): void {
+    // Walk the tree and update occupants for the matching channel
+    function walk(nodes: TreeNode[]): boolean {
+        for (const node of nodes) {
+            if (node.id === channelId) {
+                node.occupants = occupants.map((o) => ({
+                    userId: o.userId,
+                    nickname: o.nickname,
+                }));
+                return true;
+            }
+            if (walk(node.children)) return true;
+        }
+        return false;
+    }
 
-// ── Initial Log ──────────────────────────────────────────────────────────
-log("Reson8 Client initialized. Enter a server address and click Connect.");
+    if (walk(currentTree)) {
+        renderTree(currentTree);
+    }
+}
+
+// ── Utilities ─────────────────────────────────────────────────────────────
+
+function escapeHtml(text: string): string {
+    const div = document.createElement("div");
+    div.textContent = text;
+    return div.innerHTML;
+}
