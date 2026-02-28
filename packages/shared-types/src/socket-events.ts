@@ -25,7 +25,7 @@ export interface ClientToServerEvents {
      * Client requests to join a server instance.
      */
     USER_JOIN_SERVER: (
-        payload: { serverId: string; nickname: string },
+        payload: { serverId: string; nickname: string; instanceId: string },
         ack: (response: { success: boolean; error?: string }) => void,
     ) => void;
 
@@ -75,6 +75,12 @@ export interface ClientToServerEvents {
     SEND_MESSAGE: (
         payload: { channelId: string; content: string },
         ack: (response: { success: boolean; messageId?: string }) => void,
+    ) => void;
+
+    /** Client requests paginated message history for a channel. */
+    FETCH_MESSAGES: (
+        payload: { channelId: string; before?: string; limit?: number },
+        ack: (response: { success: boolean; messages?: IMessage[]; error?: string }) => void,
     ) => void;
 
     // ── WebRTC / Voice signaling (mediasoup) ────────────────────────────────

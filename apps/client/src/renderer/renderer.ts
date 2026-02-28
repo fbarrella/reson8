@@ -7,9 +7,17 @@
  *   - Bottom: Voice controls + status bar
  */
 
-// Type declaration for the preload API
+interface ChatMessage {
+    id: string;
+    channelId: string;
+    userId: string;
+    nickname: string;
+    content: string;
+    createdAt: string;
+}
+
 interface Reson8Api {
-    connect(host: string, port: number, nickname: string): void;
+    connect(host: string, port: number, nickname: string): Promise<void>;
     disconnect(): void;
     joinVoiceChannel(channelId: string): Promise<{ success: boolean; error?: string }>;
     leaveVoiceChannel(): void;
@@ -22,6 +30,8 @@ interface Reson8Api {
         parentId?: string | null,
     ): Promise<{ success: boolean; channelId?: string; error?: string }>;
     deleteChannel(channelId: string): Promise<{ success: boolean; error?: string }>;
+    sendMessage(channelId: string, content: string): Promise<{ success: boolean; messageId?: string }>;
+    fetchMessages(channelId: string, before?: string, limit?: number): Promise<{ success: boolean; messages?: ChatMessage[]; error?: string }>;
     on(event: string, callback: (...args: any[]) => void): void;
 }
 
@@ -49,6 +59,11 @@ const btnDisconnect = document.getElementById("btn-disconnect") as HTMLButtonEle
 
 const channelTree = document.getElementById("channel-tree") as HTMLDivElement;
 const eventLog = document.getElementById("event-log") as HTMLDivElement;
+const tabBar = document.getElementById("tab-bar") as HTMLDivElement;
+const tabContentArea = document.getElementById("tab-content-area") as HTMLDivElement;
+const chatInputBar = document.getElementById("chat-input-bar") as HTMLDivElement;
+const chatInput = document.getElementById("chat-input") as HTMLInputElement;
+const btnSend = document.getElementById("btn-send") as HTMLButtonElement;
 
 const voicePanel = document.getElementById("voice-panel") as HTMLDivElement;
 const voiceChannelName = document.getElementById("voice-channel-name") as HTMLSpanElement;
@@ -58,6 +73,7 @@ const btnLeaveVoice = document.getElementById("btn-leave-voice") as HTMLButtonEl
 
 const statusDot = document.getElementById("status-dot") as HTMLSpanElement;
 const statusText = document.getElementById("status-text") as HTMLSpanElement;
+const statusInstance = document.getElementById("status-instance") as HTMLDivElement;
 
 const btnCreateChannel = document.getElementById("btn-create-channel") as HTMLButtonElement;
 const createChannelModal = document.getElementById("create-channel-modal") as HTMLDivElement;
@@ -74,6 +90,18 @@ const btnDeleteConfirm = document.getElementById("btn-delete-confirm") as HTMLBu
 
 // State for pending delete
 let pendingDeleteChannelId: string | null = null;
+
+// State for tabs: map of channelId → { tabEl, contentEl, messagesEl }
+interface ChatTab {
+    channelId: string;
+    channelName: string;
+    tabEl: HTMLDivElement;
+    contentEl: HTMLDivElement;
+    messagesEl: HTMLDivElement;
+    loaded: boolean;
+}
+const chatTabs = new Map<string, ChatTab>();
+let activeTabId = "server-log"; // default active tab
 
 // ── Logging ───────────────────────────────────────────────────────────────
 
@@ -266,9 +294,8 @@ async function handleChannelClick(node: TreeNode): Promise<void> {
             currentChannelId = null;
         }
     } else {
-        // Text channel — mark as active for now
-        currentChannelId = node.id;
-        log(`Switched to text channel: ${node.name}`, "info");
+        // Text channel — open (or focus) a chat tab
+        openChatTab(node.id, node.name);
     }
 
     // Re-render tree to update active state
@@ -400,7 +427,7 @@ btnDeleteConfirm.addEventListener("click", async () => {
 
 // ── Event Listeners ───────────────────────────────────────────────────────
 
-api.on("connected", (data: { serverId: string }) => {
+api.on("connected", (data: { serverId: string; instanceId: string }) => {
     isConnected = true;
     currentServerId = data.serverId;
     btnConnect.disabled = true;
@@ -410,6 +437,7 @@ api.on("connected", (data: { serverId: string }) => {
     nicknameInput.disabled = true;
     statusDot.classList.add("connected");
     statusText.textContent = `Connected as ${nicknameInput.value.trim() || "User"}`;
+    statusInstance.textContent = `ID: ${data.instanceId}`;
     log("Connected to server", "success");
 });
 
@@ -426,12 +454,18 @@ api.on("disconnected", () => {
     nicknameInput.disabled = false;
     statusDot.classList.remove("connected");
     statusText.textContent = "Disconnected";
+    statusInstance.textContent = "";
     updateVoiceUI();
     channelTree.innerHTML = `
         <div style="padding: 20px 12px; color: var(--text-muted); font-size: 12px; text-align: center;">
             Connect to a server to see channels
         </div>
     `;
+    // Close all chat tabs
+    for (const [channelId] of chatTabs) {
+        closeTab(channelId);
+    }
+    switchTab("server-log");
     log("Disconnected from server", "error");
 });
 
@@ -498,3 +532,155 @@ function escapeHtml(text: string): string {
     div.textContent = text;
     return div.innerHTML;
 }
+
+// ── Tab Management ────────────────────────────────────────────────────────
+
+function switchTab(tabId: string): void {
+    activeTabId = tabId;
+
+    // Deactivate all tabs and content
+    tabBar.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
+    tabContentArea.querySelectorAll(".tab-content").forEach((c) => c.classList.remove("active"));
+
+    // Activate selected tab
+    const tabEl = tabBar.querySelector(`.tab[data-tab-id="${tabId}"]`);
+    const contentEl = tabContentArea.querySelector(`.tab-content[data-tab-id="${tabId}"]`);
+    tabEl?.classList.add("active");
+    contentEl?.classList.add("active");
+
+    // Show/hide chat input bar
+    if (tabId === "server-log") {
+        chatInputBar.classList.remove("visible");
+    } else {
+        chatInputBar.classList.add("visible");
+        chatInput.focus();
+    }
+}
+
+function openChatTab(channelId: string, channelName: string): void {
+    // If tab already exists, just switch to it
+    if (chatTabs.has(channelId)) {
+        switchTab(channelId);
+        return;
+    }
+
+    // Create tab button
+    const tabEl = document.createElement("div");
+    tabEl.className = "tab";
+    tabEl.dataset.tabId = channelId;
+    tabEl.innerHTML = `💬 ${escapeHtml(channelName)} <span class="tab-close">✕</span>`;
+
+    tabEl.addEventListener("click", (e) => {
+        // Check if close button was clicked
+        if ((e.target as HTMLElement).classList.contains("tab-close")) {
+            closeTab(channelId);
+        } else {
+            switchTab(channelId);
+        }
+    });
+
+    tabBar.appendChild(tabEl);
+
+    // Create tab content
+    const contentEl = document.createElement("div");
+    contentEl.className = "tab-content";
+    contentEl.dataset.tabId = channelId;
+
+    const messagesEl = document.createElement("div");
+    messagesEl.className = "chat-messages";
+    contentEl.appendChild(messagesEl);
+
+    tabContentArea.appendChild(contentEl);
+
+    // Store tab state
+    const chatTab: ChatTab = {
+        channelId,
+        channelName,
+        tabEl,
+        contentEl,
+        messagesEl,
+        loaded: false,
+    };
+    chatTabs.set(channelId, chatTab);
+
+    // Switch to the new tab
+    switchTab(channelId);
+
+    // Fetch message history
+    loadChatHistory(chatTab);
+}
+
+function closeTab(channelId: string): void {
+    const tab = chatTabs.get(channelId);
+    if (!tab) return;
+
+    tab.tabEl.remove();
+    tab.contentEl.remove();
+    chatTabs.delete(channelId);
+
+    // If this was the active tab, switch to server log
+    if (activeTabId === channelId) {
+        switchTab("server-log");
+    }
+}
+
+async function loadChatHistory(tab: ChatTab): Promise<void> {
+    if (tab.loaded) return;
+    tab.loaded = true;
+
+    const result = await api.fetchMessages(tab.channelId);
+    if (result.success && result.messages) {
+        for (const msg of result.messages) {
+            renderChatMessage(tab, msg);
+        }
+    }
+}
+
+function renderChatMessage(tab: ChatTab, msg: ChatMessage): void {
+    const el = document.createElement("div");
+    el.className = "chat-msg";
+
+    const time = new Date(msg.createdAt).toLocaleTimeString();
+    el.innerHTML = `<span class="msg-time">${time}</span><span class="msg-nick">${escapeHtml(msg.nickname)}</span><span class="msg-text">${escapeHtml(msg.content)}</span>`;
+
+    tab.messagesEl.appendChild(el);
+    tab.messagesEl.scrollTop = tab.messagesEl.scrollHeight;
+}
+
+// ── Chat Input ────────────────────────────────────────────────────────────
+
+async function sendChatMessage(): Promise<void> {
+    const content = chatInput.value.trim();
+    if (!content || activeTabId === "server-log") return;
+
+    const channelId = activeTabId;
+    chatInput.value = "";
+
+    const result = await api.sendMessage(channelId, content);
+    if (!result.success) {
+        log("Failed to send message", "error");
+    }
+}
+
+btnSend.addEventListener("click", () => sendChatMessage());
+
+chatInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        sendChatMessage();
+    }
+});
+
+// ── Server Log Tab Click ──────────────────────────────────────────────────
+
+const serverLogTab = tabBar.querySelector('.tab[data-tab-id="server-log"]');
+serverLogTab?.addEventListener("click", () => switchTab("server-log"));
+
+// ── Message Event Listener ────────────────────────────────────────────────
+
+api.on("message", (msg: ChatMessage) => {
+    const tab = chatTabs.get(msg.channelId);
+    if (tab) {
+        renderChatMessage(tab, msg);
+    }
+});

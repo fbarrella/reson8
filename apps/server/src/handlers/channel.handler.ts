@@ -14,7 +14,9 @@ import type {
     SocketData,
     ChannelType,
 } from "@reson8/shared-types";
+import { PermissionFlags } from "@reson8/shared-types";
 import { buildChannelTree } from "../services/channel-tree.service.js";
+import { requirePermission } from "../middleware/permissions.middleware.js";
 
 type TypedIO = SocketIOServer<
     ClientToServerEvents,
@@ -75,6 +77,15 @@ export function registerChannelHandlers(
             try {
                 const { serverId, name, type, parentId } = payload;
 
+                // Permission check: CREATE_CHANNEL
+                const allowed = await requirePermission(
+                    app, socket, BigInt(PermissionFlags.CREATE_CHANNEL),
+                );
+                if (!allowed) {
+                    ack({ success: false, error: "Permission denied" });
+                    return;
+                }
+
                 if (!name || name.trim().length === 0) {
                     ack({ success: false, error: "Channel name is required" });
                     return;
@@ -109,6 +120,15 @@ export function registerChannelHandlers(
         socket.on("DELETE_CHANNEL", async (payload, ack) => {
             try {
                 const { channelId } = payload;
+
+                // Permission check: MANAGE_CHANNELS
+                const allowed = await requirePermission(
+                    app, socket, BigInt(PermissionFlags.MANAGE_CHANNELS),
+                );
+                if (!allowed) {
+                    ack({ success: false, error: "Permission denied" });
+                    return;
+                }
 
                 const channel = await app.prisma.channel.findUnique({
                     where: { id: channelId },
@@ -150,6 +170,15 @@ export function registerChannelHandlers(
         socket.on("UPDATE_CHANNEL", async (payload, ack) => {
             try {
                 const { channelId, name, position } = payload;
+
+                // Permission check: MANAGE_CHANNELS
+                const allowed = await requirePermission(
+                    app, socket, BigInt(PermissionFlags.MANAGE_CHANNELS),
+                );
+                if (!allowed) {
+                    ack({ success: false, error: "Permission denied" });
+                    return;
+                }
 
                 const data: Record<string, unknown> = {};
                 if (name !== undefined) data.name = name.trim();
