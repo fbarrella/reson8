@@ -197,17 +197,66 @@ Run Commands:
 
 
 ================================================================================
+  PHASE 4: PERMISSIONS & PERSISTENT TEXT  ✅ COMPLETE
+================================================================================
+
+Deliverables:
+  - Instance-based identity: each Electron client generates a persistent UUID
+    stored in app.getPath('userData')/instance-id.txt. Sent on connect, used
+    as the userId for all permission and message lookups. Server auto-creates
+    User + assigns the default "Member" role via upsert.
+    * Dev quality-of-life: Generates a fresh UUID every launch if running in
+      dev mode, allowing easy local multi-client testing.
+    * Server admin: Automatically grants the "Server Admin" role if the client's
+      instance ID matches the ADMIN_INSTANCE_ID in `.env`.
+  - Bitwise permission service: hasPermission, hasAnyPermission, isAdmin
+    (ADMIN flag bypasses all checks), getUserPermissions (aggregates roles)
+  - Permission middleware: requirePermission() guard for Socket.io events
+  - Permission guards on channel CRUD:
+    CREATE_CHANNEL → requires CREATE_CHANNEL permission
+    DELETE_CHANNEL → requires MANAGE_CHANNELS permission
+    UPDATE_CHANNEL → requires MANAGE_CHANNELS permission
+  - Message handler: SEND_MESSAGE (permission-checked, persisted, broadcast)
+    and FETCH_MESSAGES (paginated history, cursor-based, max 100 per page)
+  - Tabbed chat UI: Server Log tab always present + dynamic per-channel chat
+    tabs with close buttons. Chat input bar (hidden on log tab). Messages
+    render with timestamp, nickname, and content.
+  - Text channel click opens (or focuses) a chat tab + loads history
+  - Real-time messages via MESSAGE_RECEIVED event
+
+Socket Events Added/Modified:
+  Client→Server: SEND_MESSAGE (existed), FETCH_MESSAGES (new)
+  Server→Client: MESSAGE_RECEIVED (existed, now wired)
+  USER_JOIN_SERVER payload now includes instanceId field
+
+Unit Tests:
+  11 new tests in permissions.test.ts:
+    - hasPermission: matching flag, missing flag, zero perms, ADMIN bypass
+    - hasAnyPermission: partial match, no match, ADMIN bypass
+    - isAdmin: with flag, without flag, zero perms
+
+Key Files:
+  apps/client/src/instance-id.ts                  — Persistent UUID generator
+  apps/client/src/main.ts                         — IPC handler for instance ID
+  apps/server/src/services/permissions.service.ts  — Bitwise permission utilities
+  apps/server/src/middleware/permissions.middleware.ts — requirePermission guard
+  apps/server/src/handlers/message.handler.ts      — SEND_MESSAGE + FETCH_MESSAGES
+  apps/server/src/handlers/channel.handler.ts      — Permission-guarded CRUD
+  apps/server/src/handlers/connection.handler.ts   — Instance ID + auto role
+  apps/client/src/preload.ts                       — sendMessage/fetchMessages API
+  apps/client/src/renderer/index.html              — Tabbed UI + chat styles
+  apps/client/src/renderer/renderer.ts             — Tab management + chat logic
+  packages/shared-types/src/socket-events.ts       — FETCH_MESSAGES + instanceId
+
+
+================================================================================
   REMAINING PHASES (from PRD)
 ================================================================================
 
-Phase 4: Permissions & Persistent Text
-  - Bitwise permission check middleware on the server
-  - Tabbed chat UI for the Bottom Pane
-  - Message persistence in PostgreSQL
-
-Phase 5: Desktop UX & Audio Polish
+Phase 5: Desktop UX, Audio Polish & Admin
+  - Role Management UI (Server Admin assigns roles to connected/known users)
+  - Details Pane settings (right side overlay or modal)
   - Electron globalShortcut for Push-to-Talk
-  - Details Pane (right side) showing server/user info
   - Audio settings (input/output device selection)
 
 Phase 6: Deployment & Packaging

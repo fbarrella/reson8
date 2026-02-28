@@ -48,24 +48,62 @@ export function registerConnectionHandlers(
         // ── USER_JOIN_SERVER ────────────────────────────────────────────────
         socket.on("USER_JOIN_SERVER", async (payload, ack) => {
             try {
-                const { serverId, nickname } = payload;
+                const { serverId, nickname, instanceId } = payload;
 
-                // Store metadata on the socket for later reference
+                // Use the persistent instance ID as userId
                 socket.data.serverId = serverId;
                 socket.data.nickname = nickname;
-                // In Phase 3+, userId will come from auth. For now, use socket.id.
-                socket.data.userId = socket.id;
+                socket.data.userId = instanceId;
                 socket.data.currentChannelId = null;
+
+                // Auto-create (upsert) User record for this instance
+                await app.prisma.user.upsert({
+                    where: { id: instanceId },
+                    update: { nickname },
+                    create: {
+                        id: instanceId,
+                        username: instanceId,
+                        nickname,
+                        password: "instance-auth", // no real auth — instance-based
+                    },
+                });
+
+                // Assign the default Member role
+                const rolesToAssign = ["role-default"];
+
+                // Check if this instance is the designated server admin
+                if (
+                    process.env.ADMIN_INSTANCE_ID &&
+                    instanceId === process.env.ADMIN_INSTANCE_ID
+                ) {
+                    rolesToAssign.push("role-admin");
+                }
+
+                for (const roleId of rolesToAssign) {
+                    await app.prisma.userRole.upsert({
+                        where: {
+                            userId_roleId: {
+                                userId: instanceId,
+                                roleId: roleId,
+                            },
+                        },
+                        update: {},
+                        create: {
+                            userId: instanceId,
+                            roleId: roleId,
+                        },
+                    });
+                }
 
                 // Join the Socket.io room for this server
                 await socket.join(`server:${serverId}`);
 
                 // Register presence in Redis
-                await presence.joinServer(socket.id, serverId, nickname);
+                await presence.joinServer(instanceId, serverId, nickname);
 
                 // Notify all other clients in the server
                 socket.to(`server:${serverId}`).emit("USER_JOINED", {
-                    userId: socket.id,
+                    userId: instanceId,
                     nickname,
                     serverId,
                 });
@@ -103,7 +141,7 @@ export function registerConnectionHandlers(
 
                 ack({ success: true });
                 app.log.info(
-                    { socketId: socket.id, nickname, serverId },
+                    { socketId: socket.id, nickname, serverId, instanceId },
                     "User joined server",
                 );
             } catch (err) {
@@ -117,11 +155,11 @@ export function registerConnectionHandlers(
             try {
                 const { serverId } = payload;
 
-                await presence.leaveServer(socket.id, serverId);
+                await presence.leaveServer(socket.data.userId, serverId);
                 await socket.leave(`server:${serverId}`);
 
                 socket.to(`server:${serverId}`).emit("USER_LEFT", {
-                    userId: socket.id,
+                    userId: socket.data.userId,
                     serverId,
                 });
 
@@ -135,6 +173,7 @@ export function registerConnectionHandlers(
         socket.on("USER_JOIN_CHANNEL", async (payload, ack) => {
             try {
                 const { channelId } = payload;
+                const userId = socket.data.userId;
 
                 // Leave previous channel room if any
                 if (socket.data.currentChannelId) {
@@ -144,7 +183,7 @@ export function registerConnectionHandlers(
                 // Join new channel
                 socket.data.currentChannelId = channelId;
                 await socket.join(`channel:${channelId}`);
-                await presence.joinChannel(socket.id, channelId);
+                await presence.joinChannel(userId, channelId);
 
                 // Get current occupants and broadcast presence update
                 const occupantIds = await presence.getChannelOccupants(channelId);
@@ -171,7 +210,7 @@ export function registerConnectionHandlers(
                 // Notify joining user of existing voice producers in this channel
                 const existingProducers = mediasoup.getExistingProducers(
                     channelId,
-                    socket.data.userId,
+                    userId,
                 );
                 if (existingProducers.length > 0) {
                     // Look up nicknames for each producer
@@ -179,7 +218,7 @@ export function registerConnectionHandlers(
                         const userSession = mediasoup.getSession(channelId, p.userId);
                         return {
                             userId: p.userId,
-                            nickname: p.userId, // fallback — userId is socketId
+                            nickname: p.userId, // fallback — userId is instanceId
                             producerId: p.producerId,
                         };
                     });
@@ -203,19 +242,20 @@ export function registerConnectionHandlers(
         socket.on("USER_LEAVE_CHANNEL", async (payload) => {
             try {
                 const { channelId } = payload;
+                const userId = socket.data.userId;
 
                 await socket.leave(`channel:${channelId}`);
-                await presence.leaveChannel(socket.id, channelId);
+                await presence.leaveChannel(userId, channelId);
 
                 // Clean up mediasoup voice session
-                const producerId = mediasoup.getSession(channelId, socket.data.userId)?.producer?.id;
+                const producerId = mediasoup.getSession(channelId, userId)?.producer?.id;
                 if (producerId) {
                     socket.to(`channel:${channelId}`).emit("PRODUCER_CLOSED", {
-                        userId: socket.data.userId,
+                        userId,
                         producerId,
                     });
                 }
-                mediasoup.cleanupUserSession(channelId, socket.data.userId);
+                mediasoup.cleanupUserSession(channelId, userId);
 
                 socket.data.currentChannelId = null;
 
@@ -248,22 +288,22 @@ export function registerConnectionHandlers(
         // ── DISCONNECT ──────────────────────────────────────────────────────
         socket.on("disconnect", async (reason) => {
             try {
-                const { serverId, currentChannelId, nickname } = socket.data;
+                const { serverId, currentChannelId, nickname, userId } = socket.data;
 
                 if (serverId) {
                     // Clean up channel presence
                     if (currentChannelId) {
                         // Clean up mediasoup voice session
-                        const producerId = mediasoup.getSession(currentChannelId, socket.id)?.producer?.id;
+                        const producerId = mediasoup.getSession(currentChannelId, userId)?.producer?.id;
                         if (producerId) {
                             socket.to(`channel:${currentChannelId}`).emit("PRODUCER_CLOSED", {
-                                userId: socket.id,
+                                userId,
                                 producerId,
                             });
                         }
-                        mediasoup.cleanupUserSession(currentChannelId, socket.id);
+                        mediasoup.cleanupUserSession(currentChannelId, userId);
 
-                        await presence.leaveChannel(socket.id, currentChannelId);
+                        await presence.leaveChannel(userId, currentChannelId);
 
                         // Broadcast updated occupants for the channel they were in
                         const occupantIds =
@@ -288,10 +328,10 @@ export function registerConnectionHandlers(
                     }
 
                     // Clean up server presence
-                    await presence.leaveServer(socket.id, serverId);
+                    await presence.leaveServer(userId, serverId);
 
                     io.to(`server:${serverId}`).emit("USER_LEFT", {
-                        userId: socket.id,
+                        userId,
                         serverId,
                     });
                 }

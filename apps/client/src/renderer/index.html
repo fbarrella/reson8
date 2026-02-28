@@ -371,7 +371,7 @@
       color: #fff;
     }
 
-    /* ── Right Pane (Log / Chat) ──────────────────────────────────────── */
+    /* ── Right Pane (Tabbed Log / Chat) ──────────────────────────────── */
     #right-pane {
       flex: 1;
       display: flex;
@@ -379,15 +379,83 @@
       overflow: hidden;
     }
 
-    #log-header {
-      padding: 10px 12px;
-      font-weight: 600;
-      font-size: 11px;
-      text-transform: uppercase;
-      letter-spacing: 1px;
-      color: var(--text-muted);
-      border-bottom: 1px solid var(--border);
+    #tab-bar {
+      display: flex;
+      align-items: center;
+      gap: 0;
       background: var(--bg-secondary);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+
+    #tab-bar::-webkit-scrollbar {
+      display: none;
+    }
+
+    .tab {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 14px;
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--text-muted);
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      white-space: nowrap;
+      transition: all 0.15s;
+      user-select: none;
+    }
+
+    .tab:hover {
+      color: var(--text-secondary);
+      background: rgba(79, 195, 247, 0.04);
+    }
+
+    .tab.active {
+      color: var(--accent);
+      border-bottom-color: var(--accent);
+    }
+
+    .tab .tab-close {
+      font-size: 10px;
+      width: 14px;
+      height: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 50%;
+      opacity: 0;
+      transition: all 0.15s;
+    }
+
+    .tab:hover .tab-close {
+      opacity: 0.6;
+    }
+
+    .tab .tab-close:hover {
+      opacity: 1;
+      background: rgba(255, 255, 255, 0.1);
+    }
+
+    #tab-content-area {
+      flex: 1;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .tab-content {
+      position: absolute;
+      inset: 0;
+      display: none;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .tab-content.active {
+      display: flex;
     }
 
     #event-log {
@@ -419,6 +487,86 @@
       color: var(--text-muted);
       margin-right: 8px;
       font-size: 10px;
+    }
+
+    .chat-messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 8px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .chat-msg {
+      padding: 3px 0;
+      font-size: 13px;
+      line-height: 1.4;
+    }
+
+    .chat-msg .msg-time {
+      color: var(--text-muted);
+      font-size: 10px;
+      margin-right: 6px;
+    }
+
+    .chat-msg .msg-nick {
+      font-weight: 600;
+      color: var(--accent);
+      margin-right: 6px;
+    }
+
+    .chat-msg .msg-text {
+      color: var(--text-primary);
+    }
+
+    /* Chat input */
+    #chat-input-bar {
+      display: none;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border-top: 1px solid var(--border);
+      background: var(--bg-secondary);
+      flex-shrink: 0;
+    }
+
+    #chat-input-bar.visible {
+      display: flex;
+    }
+
+    #chat-input {
+      flex: 1;
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      color: var(--text-primary);
+      padding: 7px 12px;
+      border-radius: var(--radius);
+      font-size: 12px;
+      font-family: var(--font);
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    #chat-input:focus {
+      border-color: var(--accent);
+    }
+
+    #btn-send {
+      padding: 7px 16px;
+      background: var(--accent);
+      color: #000;
+      border: none;
+      border-radius: var(--radius);
+      font-size: 12px;
+      font-family: var(--font);
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+
+    #btn-send:hover {
+      background: var(--accent-hover);
     }
 
     /* ── Status Bar ───────────────────────────────────────────────────── */
@@ -604,17 +752,33 @@
       </div>
     </div>
 
-    <!-- Right Pane: Event Log -->
+    <!-- Right Pane: Tabbed Log / Chat -->
     <div id="right-pane">
-      <div id="log-header">Server Log</div>
-      <div id="event-log"></div>
+      <div id="tab-bar">
+        <div class="tab active" data-tab-id="server-log">📋 Server Log</div>
+      </div>
+      <div id="tab-content-area">
+        <div class="tab-content active" data-tab-id="server-log">
+          <div id="event-log"></div>
+        </div>
+      </div>
+      <div id="chat-input-bar">
+        <input type="text" id="chat-input" placeholder="Type a message...">
+        <button id="btn-send">Send</button>
+      </div>
     </div>
   </div>
 
   <!-- ── Status Bar ────────────────────────────────────────────────────── -->
   <div id="status-bar">
-    <span class="status-dot" id="status-dot"></span>
-    <span class="status-text" id="status-text">Disconnected</span>
+    <div>
+      <span class="status-dot" id="status-dot"></span>
+      <span class="status-text" id="status-text">Disconnected</span>
+    </div>
+    <div id="status-instance"
+      style="font-family: monospace; color: var(--text-muted); font-size: 10px; user-select: text;">
+      <!-- Populated dynamically -->
+    </div>
   </div>
 
   <!-- ── Create Channel Modal ──────────────────────────────────────────── -->

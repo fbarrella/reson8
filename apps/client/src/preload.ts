@@ -6,11 +6,12 @@
  * Integrates VoiceService for WebRTC audio.
  */
 
-import { contextBridge } from "electron";
+import { contextBridge, ipcRenderer } from "electron";
 import { io, Socket } from "socket.io-client";
 import type {
     ClientToServerEvents,
     ServerToClientEvents,
+    IMessage,
 } from "@reson8/shared-types";
 import { VoiceService, VoiceSignaling } from "./services/voice.service";
 
@@ -18,6 +19,7 @@ type TypedSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 
 let socket: TypedSocket | null = null;
 let voiceService: VoiceService | null = null;
+let instanceId: string = "";
 
 // Default server ID — matches the seed
 const DEFAULT_SERVER_ID = "00000000-0000-0000-0000-000000000001";
@@ -94,10 +96,13 @@ function createSignaling(): VoiceSignaling {
 const api = {
     // ── Connection ──────────────────────────────────────────────────────────
 
-    connect(host: string, port: number, nickname: string): void {
+    async connect(host: string, port: number, nickname: string): Promise<void> {
         if (socket?.connected) {
             socket.disconnect();
         }
+
+        // Fetch instance ID from main process
+        instanceId = await ipcRenderer.invoke("get-instance-id");
 
         socket = io(`http://${host}:${port}`, {
             transports: ["websocket"],
@@ -113,10 +118,10 @@ const api = {
             // Auto-join the default server
             socket!.emit(
                 "USER_JOIN_SERVER",
-                { serverId: DEFAULT_SERVER_ID, nickname },
+                { serverId: DEFAULT_SERVER_ID, nickname, instanceId },
                 (res) => {
                     if (res.success) {
-                        emit("connected", { serverId: DEFAULT_SERVER_ID });
+                        emit("connected", { serverId: DEFAULT_SERVER_ID, instanceId });
                     } else {
                         emit("error", {
                             code: "JOIN_FAILED",
@@ -258,6 +263,39 @@ const api = {
                 return;
             }
             socket.emit("DELETE_CHANNEL", { channelId }, resolve);
+        });
+    },
+
+    // ── Text Chat ────────────────────────────────────────────────────────
+
+    sendMessage(
+        channelId: string,
+        content: string,
+    ): Promise<{ success: boolean; messageId?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false });
+                return;
+            }
+            socket.emit("SEND_MESSAGE", { channelId, content }, resolve);
+        });
+    },
+
+    fetchMessages(
+        channelId: string,
+        before?: string,
+        limit?: number,
+    ): Promise<{ success: boolean; messages?: IMessage[]; error?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.emit(
+                "FETCH_MESSAGES",
+                { channelId, before, limit },
+                resolve,
+            );
         });
     },
 };

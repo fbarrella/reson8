@@ -20,6 +20,7 @@ import { redisPlugin } from "./plugins/redis.js";
 import { registerConnectionHandlers } from "./handlers/connection.handler.js";
 import { registerVoiceHandlers } from "./handlers/voice.handler.js";
 import { registerChannelHandlers } from "./handlers/channel.handler.js";
+import { registerMessageHandlers } from "./handlers/message.handler.js";
 import { MediasoupService } from "./services/mediasoup.service.js";
 
 const PORT = parseInt(process.env.PORT ?? "9800", 10);
@@ -68,6 +69,7 @@ async function main(): Promise<void> {
     registerConnectionHandlers(io, app, mediasoupService);
     registerVoiceHandlers(io, app, mediasoupService);
     registerChannelHandlers(io, app);
+    registerMessageHandlers(io, app);
 
     // ── Start ──────────────────────────────────────────────────────────────
     try {

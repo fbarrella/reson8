@@ -5,8 +5,9 @@
  * This is the entry point for the Electron desktop client.
  */
 
-import { app, BrowserWindow, session } from "electron";
+import { app, BrowserWindow, session, ipcMain } from "electron";
 import path from "node:path";
+import { getInstanceId } from "./instance-id.js";
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -45,7 +46,13 @@ function createWindow(): void {
     });
 }
 
-app.whenReady().then(createWindow);
+app.whenReady().then(() => {
+    // Expose instance ID to renderer/preload
+    const instanceId = getInstanceId();
+    ipcMain.handle("get-instance-id", () => instanceId);
+
+    createWindow();
+});
 
 app.on("window-all-closed", () => {
     if (process.platform !== "darwin") {
