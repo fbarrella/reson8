@@ -17,6 +17,7 @@ interface ChatMessage {
 }
 
 interface Reson8Api {
+    getInstanceId(): string;
     connect(host: string, port: number, nickname: string): Promise<void>;
     disconnect(): void;
     joinVoiceChannel(channelId: string): Promise<{ success: boolean; error?: string }>;
@@ -32,6 +33,9 @@ interface Reson8Api {
     deleteChannel(channelId: string): Promise<{ success: boolean; error?: string }>;
     sendMessage(channelId: string, content: string): Promise<{ success: boolean; messageId?: string }>;
     fetchMessages(channelId: string, before?: string, limit?: number): Promise<{ success: boolean; messages?: ChatMessage[]; error?: string }>;
+    getAllUsers(serverId: string): Promise<{ success: boolean; users?: any[]; error?: string }>;
+    getRoles(serverId: string): Promise<{ success: boolean; roles?: any[]; error?: string }>;
+    assignRole(userId: string, roleId: string, action: "add" | "remove"): Promise<{ success: boolean; error?: string }>;
     on(event: string, callback: (...args: any[]) => void): void;
 }
 
@@ -73,7 +77,32 @@ const btnLeaveVoice = document.getElementById("btn-leave-voice") as HTMLButtonEl
 
 const statusDot = document.getElementById("status-dot") as HTMLSpanElement;
 const statusText = document.getElementById("status-text") as HTMLSpanElement;
-const statusInstance = document.getElementById("status-instance") as HTMLDivElement;
+const statusInstance = document.getElementById("status-instance") as HTMLSpanElement;
+const btnCopyId = document.getElementById("btn-copy-id") as HTMLButtonElement;
+
+// Show instance ID immediately on page load
+setTimeout(() => {
+    const id = api.getInstanceId();
+    if (id) statusInstance.textContent = `ID: ${id}`;
+}, 100);
+
+// Copy instance ID to clipboard
+btnCopyId.addEventListener("click", () => {
+    const id = api.getInstanceId();
+    if (id) {
+        // Use a hidden textarea to copy (Electron renderer doesn't support navigator.clipboard)
+        const textarea = document.createElement("textarea");
+        textarea.value = id;
+        textarea.style.position = "fixed";
+        textarea.style.opacity = "0";
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand("copy");
+        document.body.removeChild(textarea);
+        btnCopyId.textContent = "Copied!";
+        setTimeout(() => { btnCopyId.textContent = "Copy"; }, 1500);
+    }
+});
 
 const btnCreateChannel = document.getElementById("btn-create-channel") as HTMLButtonElement;
 const createChannelModal = document.getElementById("create-channel-modal") as HTMLDivElement;
@@ -87,6 +116,12 @@ const deleteChannelModal = document.getElementById("delete-channel-modal") as HT
 const deleteChannelNameEl = document.getElementById("delete-channel-name") as HTMLElement;
 const btnDeleteCancel = document.getElementById("btn-delete-cancel") as HTMLButtonElement;
 const btnDeleteConfirm = document.getElementById("btn-delete-confirm") as HTMLButtonElement;
+
+// Admin modal
+const btnServerSettings = document.getElementById("btn-server-settings") as HTMLButtonElement;
+const adminModal = document.getElementById("admin-modal") as HTMLDivElement;
+const adminUserList = document.getElementById("admin-user-list") as HTMLDivElement;
+const btnAdminClose = document.getElementById("btn-admin-close") as HTMLButtonElement;
 
 // State for pending delete
 let pendingDeleteChannelId: string | null = null;
@@ -102,6 +137,7 @@ interface ChatTab {
 }
 const chatTabs = new Map<string, ChatTab>();
 let activeTabId = "server-log"; // default active tab
+let allServerRoles: any[] = []; // cached roles for the admin panel
 
 // ── Logging ───────────────────────────────────────────────────────────────
 
@@ -437,8 +473,16 @@ api.on("connected", (data: { serverId: string; instanceId: string }) => {
     nicknameInput.disabled = true;
     statusDot.classList.add("connected");
     statusText.textContent = `Connected as ${nicknameInput.value.trim() || "User"}`;
+    statusText.classList.add("connected");
     statusInstance.textContent = `ID: ${data.instanceId}`;
     log("Connected to server", "success");
+
+    // Try to show the admin settings button (will only work if user has MANAGE_ROLES)
+    api.getAllUsers(data.serverId).then((res) => {
+        if (res.success) {
+            btnServerSettings.style.display = "";
+        }
+    });
 });
 
 api.on("disconnected", () => {
@@ -454,7 +498,8 @@ api.on("disconnected", () => {
     nicknameInput.disabled = false;
     statusDot.classList.remove("connected");
     statusText.textContent = "Disconnected";
-    statusInstance.textContent = "";
+    statusText.classList.remove("connected");
+    btnServerSettings.style.display = "none";
     updateVoiceUI();
     channelTree.innerHTML = `
         <div style="padding: 20px 12px; color: var(--text-muted); font-size: 12px; text-align: center;">
@@ -532,6 +577,109 @@ function escapeHtml(text: string): string {
     div.textContent = text;
     return div.innerHTML;
 }
+
+// ── Admin Panel ───────────────────────────────────────────────────────
+
+async function openAdminPanel(): Promise<void> {
+    adminModal.classList.add("visible");
+    adminUserList.innerHTML = '<div class="admin-empty">Loading users...</div>';
+
+    // Fetch roles and users concurrently
+    const [rolesRes, usersRes] = await Promise.all([
+        api.getRoles(currentServerId),
+        api.getAllUsers(currentServerId),
+    ]);
+
+    if (!rolesRes.success || !usersRes.success) {
+        adminUserList.innerHTML = '<div class="admin-empty">Failed to load data. You may not have permission.</div>';
+        return;
+    }
+
+    allServerRoles = rolesRes.roles ?? [];
+    renderAdminUsers(usersRes.users ?? []);
+}
+
+function renderAdminUsers(users: any[]): void {
+    adminUserList.innerHTML = "";
+
+    if (users.length === 0) {
+        adminUserList.innerHTML = '<div class="admin-empty">No users found.</div>';
+        return;
+    }
+
+    for (const user of users) {
+        const row = document.createElement("div");
+        row.className = "admin-user-row";
+
+        const userRoleIds = new Set((user.roles ?? []).map((r: any) => r.id));
+
+        // User info
+        const infoEl = document.createElement("div");
+        infoEl.className = "admin-user-info";
+        infoEl.innerHTML = `
+            <div class="admin-user-nickname">${escapeHtml(user.nickname)}</div>
+            <div class="admin-user-id">${escapeHtml(user.id)}</div>
+        `;
+        row.appendChild(infoEl);
+
+        // Role toggles
+        const badgesEl = document.createElement("div");
+        badgesEl.className = "admin-role-badges";
+
+        for (const role of allServerRoles) {
+            const badge = document.createElement("span");
+            badge.className = `role-badge${userRoleIds.has(role.id) ? " active" : ""}`;
+            badge.textContent = role.name;
+            if (role.color) {
+                badge.style.borderColor = role.color;
+                if (userRoleIds.has(role.id)) {
+                    badge.style.background = role.color;
+                    badge.style.color = "#fff";
+                }
+            }
+
+            badge.addEventListener("click", async () => {
+                const hasRole = badge.classList.contains("active");
+                const action = hasRole ? "remove" : "add";
+
+                // Block admin from removing their own admin role
+                const myId = api.getInstanceId();
+                if (action === "remove" && user.id === myId && role.name === "Server Admin") {
+                    log("You cannot remove your own admin role", "error");
+                    return;
+                }
+
+                const result = await api.assignRole(user.id, role.id, action);
+                if (result.success) {
+                    // Refresh the panel
+                    openAdminPanel();
+                } else {
+                    log(`Failed to ${action} role: ${result.error}`, "error");
+                }
+            });
+
+            badgesEl.appendChild(badge);
+        }
+
+        row.appendChild(badgesEl);
+        adminUserList.appendChild(row);
+    }
+}
+
+btnServerSettings.addEventListener("click", () => {
+    if (!isConnected) return;
+    openAdminPanel();
+});
+
+btnAdminClose.addEventListener("click", () => {
+    adminModal.classList.remove("visible");
+});
+
+adminModal.addEventListener("click", (e) => {
+    if (e.target === adminModal) {
+        adminModal.classList.remove("visible");
+    }
+});
 
 // ── Tab Management ────────────────────────────────────────────────────────
 

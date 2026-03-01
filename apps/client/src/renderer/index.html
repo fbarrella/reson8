@@ -163,7 +163,8 @@
       align-items: center;
     }
 
-    #btn-create-channel {
+    #btn-create-channel,
+    #btn-server-settings {
       background: none;
       border: 1px solid var(--border);
       color: var(--text-secondary);
@@ -178,7 +179,8 @@
       transition: all 0.15s;
     }
 
-    #btn-create-channel:hover {
+    #btn-create-channel:hover,
+    #btn-server-settings:hover {
       border-color: var(--accent);
       color: var(--accent);
     }
@@ -595,11 +597,43 @@
 
     #status-bar .status-text {
       flex: 1;
+      color: var(--danger);
     }
 
-    /* ── Create Channel Modal ─────────────────────────────────────────── */
+    #status-bar .status-text.connected {
+      color: var(--success);
+    }
+
+    #status-instance-area {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-family: monospace;
+      color: var(--text-muted);
+      font-size: 10px;
+      user-select: text;
+    }
+
+    #btn-copy-id {
+      background: none;
+      border: 1px solid var(--text-muted);
+      color: var(--text-secondary);
+      font-size: 9px;
+      padding: 1px 6px;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    #btn-copy-id:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    /* ── Modals ────────────────────────────────────────────────────────── */
     #create-channel-modal,
-    #delete-channel-modal {
+    #delete-channel-modal,
+    #admin-modal {
       display: none;
       position: fixed;
       top: 0;
@@ -614,7 +648,8 @@
     }
 
     #create-channel-modal.visible,
-    #delete-channel-modal.visible {
+    #delete-channel-modal.visible,
+    #admin-modal.visible {
       display: flex;
     }
 
@@ -626,6 +661,90 @@
       width: 320px;
       pointer-events: auto;
       -webkit-app-region: no-drag;
+    }
+
+    .modal-content.wide {
+      width: 480px;
+      max-height: 70vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .admin-user-list {
+      flex: 1;
+      overflow-y: auto;
+      margin: 8px 0;
+    }
+
+    .admin-user-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--border);
+      gap: 10px;
+    }
+
+    .admin-user-row:last-child {
+      border-bottom: none;
+    }
+
+    .admin-user-info {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .admin-user-nickname {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-primary);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .admin-user-id {
+      font-size: 9px;
+      font-family: monospace;
+      color: var(--text-muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .admin-role-badges {
+      display: flex;
+      gap: 4px;
+      flex-wrap: wrap;
+    }
+
+    .role-badge {
+      font-size: 10px;
+      padding: 2px 8px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      cursor: pointer;
+      transition: all 0.15s;
+      user-select: none;
+      color: var(--text-muted);
+      background: transparent;
+    }
+
+    .role-badge.active {
+      background: var(--accent);
+      color: var(--bg-primary);
+      border-color: var(--accent);
+    }
+
+    .role-badge:hover {
+      border-color: var(--accent);
+    }
+
+    .admin-empty {
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 12px;
+      padding: 20px;
     }
 
     .modal-content h3 {
@@ -732,7 +851,16 @@
     <div id="left-pane">
       <div id="tree-header">
         <span>Channels</span>
-        <button id="btn-create-channel" title="Create Channel">+</button>
+        <div style="display:flex; gap:4px;">
+          <button id="btn-server-settings" title="Server Settings" style="display:none;"><svg width="14" height="14"
+              viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+              stroke-linejoin="round">
+              <circle cx="12" cy="12" r="3" />
+              <path
+                d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+            </svg></button>
+          <button id="btn-create-channel" title="Create Channel">+</button>
+        </div>
       </div>
       <div id="channel-tree">
         <div style="padding: 20px 12px; color: var(--text-muted); font-size: 12px; text-align: center;">
@@ -775,9 +903,9 @@
       <span class="status-dot" id="status-dot"></span>
       <span class="status-text" id="status-text">Disconnected</span>
     </div>
-    <div id="status-instance"
-      style="font-family: monospace; color: var(--text-muted); font-size: 10px; user-select: text;">
-      <!-- Populated dynamically -->
+    <div id="status-instance-area">
+      <span id="status-instance"></span>
+      <button id="btn-copy-id" title="Copy Instance ID">Copy</button>
     </div>
   </div>
 
@@ -811,6 +939,19 @@
       <div class="modal-actions">
         <button class="btn btn-cancel" id="btn-delete-cancel">Cancel</button>
         <button class="btn btn-disconnect" id="btn-delete-confirm">Delete</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Admin / Server Settings Modal ────────────────────────────────── -->
+  <div id="admin-modal">
+    <div class="modal-content wide">
+      <h3>⚙ Server Settings — Role Management</h3>
+      <div id="admin-user-list" class="admin-user-list">
+        <div class="admin-empty">Loading users...</div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-cancel" id="btn-admin-close">Close</button>
       </div>
     </div>
   </div>

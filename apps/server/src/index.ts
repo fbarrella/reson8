@@ -21,6 +21,7 @@ import { registerConnectionHandlers } from "./handlers/connection.handler.js";
 import { registerVoiceHandlers } from "./handlers/voice.handler.js";
 import { registerChannelHandlers } from "./handlers/channel.handler.js";
 import { registerMessageHandlers } from "./handlers/message.handler.js";
+import { registerAdminHandlers } from "./handlers/admin.handler.js";
 import { MediasoupService } from "./services/mediasoup.service.js";
 
 const PORT = parseInt(process.env.PORT ?? "9800", 10);
@@ -70,6 +71,7 @@ async function main(): Promise<void> {
     registerVoiceHandlers(io, app, mediasoupService);
     registerChannelHandlers(io, app);
     registerMessageHandlers(io, app);
+    registerAdminHandlers(io, app);
 
     // ── Start ──────────────────────────────────────────────────────────────
     try {
