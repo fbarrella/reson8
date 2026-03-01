@@ -5,11 +5,12 @@
  * This is the entry point for the Electron desktop client.
  */
 
-import { app, BrowserWindow, session, ipcMain } from "electron";
+import { app, BrowserWindow, session, ipcMain, globalShortcut } from "electron";
 import path from "node:path";
 import { getInstanceId } from "./instance-id.js";
 
 let mainWindow: BrowserWindow | null = null;
+let pttKey: string | null = null;
 
 function createWindow(): void {
     // Grant mic/camera permission requests automatically
@@ -46,10 +47,47 @@ function createWindow(): void {
     });
 }
 
+// ── PTT shortcut management ──────────────────────────────────────────────
+
+function registerPttShortcut(key: string): void {
+    // Unregister any previous PTT shortcut
+    unregisterPttShortcut();
+
+    pttKey = key;
+
+    try {
+        globalShortcut.register(key, () => {
+            mainWindow?.webContents.send("ptt-pressed");
+        });
+    } catch (err) {
+        console.error("[main] Failed to register PTT shortcut:", err);
+    }
+}
+
+function unregisterPttShortcut(): void {
+    if (pttKey) {
+        try {
+            globalShortcut.unregister(pttKey);
+        } catch { /* ignore */ }
+        pttKey = null;
+    }
+}
+
+// ── App lifecycle ────────────────────────────────────────────────────────
+
 app.whenReady().then(() => {
     // Expose instance ID to renderer/preload
     const instanceId = getInstanceId();
     ipcMain.handle("get-instance-id", () => instanceId);
+
+    // PTT shortcut IPC
+    ipcMain.on("set-ptt-key", (_event, key: string) => {
+        registerPttShortcut(key);
+    });
+
+    ipcMain.on("clear-ptt-key", () => {
+        unregisterPttShortcut();
+    });
 
     createWindow();
 });
@@ -64,4 +102,8 @@ app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
         createWindow();
     }
+});
+
+app.on("will-quit", () => {
+    globalShortcut.unregisterAll();
 });

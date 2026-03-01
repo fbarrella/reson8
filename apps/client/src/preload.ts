@@ -246,6 +246,23 @@ const api = {
         return voiceService?.toggleDeafen() ?? false;
     },
 
+    // ── Audio Settings ──────────────────────────────────────────────────────
+
+    async enumerateAudioDevices(): Promise<{ inputs: { deviceId: string; label: string }[]; outputs: { deviceId: string; label: string }[] }> {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const inputs = devices
+            .filter((d) => d.kind === "audioinput")
+            .map((d) => ({ deviceId: d.deviceId, label: d.label || `Mic ${d.deviceId.slice(0, 8)}` }));
+        const outputs = devices
+            .filter((d) => d.kind === "audiooutput")
+            .map((d) => ({ deviceId: d.deviceId, label: d.label || `Speaker ${d.deviceId.slice(0, 8)}` }));
+        return { inputs, outputs };
+    },
+
+    setAudioInputDevice(deviceId: string | null): void {
+        voiceService?.setAudioDeviceId(deviceId);
+    },
+
     // ── Channel CRUD ────────────────────────────────────────────────────────
 
     createChannel(
@@ -354,3 +371,7 @@ const api = {
 };
 
 contextBridge.exposeInMainWorld("reson8Api", api);
+
+// ── PTT IPC from main process ─────────────────────────────────────────────
+ipcRenderer.on("ptt-pressed", () => emit("ptt-pressed", null));
+ipcRenderer.on("ptt-released", () => emit("ptt-released", null));

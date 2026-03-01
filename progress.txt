@@ -250,14 +250,40 @@ Key Files:
 
 
 ================================================================================
-  REMAINING PHASES (from PRD)
+  PHASE 5: DESKTOP UX, AUDIO POLISH & ADMIN  ✅ COMPLETE
 ================================================================================
 
-Phase 5: Desktop UX, Audio Polish & Admin
-  - Role Management UI (Server Admin assigns roles to connected/known users)
-  - Details Pane settings (right side overlay or modal)
-  - Electron globalShortcut for Push-to-Talk
-  - Audio settings (input/output device selection)
+Deliverables:
+  - Unified Settings Modal: Single ⚙ button in channel header opens a tabbed
+    modal with "👑 Roles" and "🎤 Voice & Shortcuts" tabs.
+    Settings button visible to all connected users; Roles tab disabled for
+    non-admin users.
+  - Role Management: Lists all known users with clickable role badges to toggle
+    Member / Server Admin assignments. Admins cannot remove their own role.
+  - Socket events: GET_ALL_USERS, GET_ROLES, ASSIGN_ROLE (permission-guarded)
+  - Audio Device Selection: Microphone (input) and Speaker (output) device
+    selection using enumerateDevices() with localStorage persistence.
+    Output applied via setSinkId(), input via getUserMedia() deviceId.
+  - Multi-Key Combo Shortcuts (e.g. L-Ctrl + L-Shift + G):
+      Push-to-Talk, Mute/Unmute, Deafen/Undeafen, Disconnect Voice.
+    All saved/restored from localStorage.
+  - Electron globalShortcut in main.ts for system-wide PTT press detection.
+  - URL-based Connection: Single server-url input (supports host:port and URLs).
+  - Instance ID always visible in footer with Copy button.
+  - Status bar colors: red for disconnected, green for connected.
+
+Key Files:
+  apps/server/src/handlers/admin.handler.ts          — Admin CRUD events
+  apps/client/src/services/voice.service.ts          — Audio device selection
+  apps/client/src/main.ts                            — globalShortcut PTT
+  apps/client/src/preload.ts                         — enumerateDevices + PTT IPC
+  apps/client/src/renderer/index.html                — Unified Settings modal
+  apps/client/src/renderer/renderer.ts               — Settings tabs + shortcuts
+
+
+================================================================================
+  REMAINING PHASES (from PRD)
+================================================================================
 
 Phase 6: Deployment & Packaging
   - Dockerize the Server App (already done partially in Phase 3)

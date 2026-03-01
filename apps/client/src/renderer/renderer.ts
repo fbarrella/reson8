@@ -36,6 +36,8 @@ interface Reson8Api {
     getAllUsers(serverId: string): Promise<{ success: boolean; users?: any[]; error?: string }>;
     getRoles(serverId: string): Promise<{ success: boolean; roles?: any[]; error?: string }>;
     assignRole(userId: string, roleId: string, action: "add" | "remove"): Promise<{ success: boolean; error?: string }>;
+    enumerateAudioDevices(): Promise<{ inputs: { deviceId: string; label: string }[]; outputs: { deviceId: string; label: string }[] }>;
+    setAudioInputDevice(deviceId: string | null): void;
     on(event: string, callback: (...args: any[]) => void): void;
 }
 
@@ -55,8 +57,7 @@ let currentTree: any[] = [];
 
 // ── DOM Elements ──────────────────────────────────────────────────────────
 
-const hostInput = document.getElementById("host") as HTMLInputElement;
-const portInput = document.getElementById("port") as HTMLInputElement;
+const serverUrlInput = document.getElementById("server-url") as HTMLInputElement;
 const nicknameInput = document.getElementById("nickname") as HTMLInputElement;
 const btnConnect = document.getElementById("btn-connect") as HTMLButtonElement;
 const btnDisconnect = document.getElementById("btn-disconnect") as HTMLButtonElement;
@@ -122,6 +123,11 @@ const btnServerSettings = document.getElementById("btn-server-settings") as HTML
 const adminModal = document.getElementById("admin-modal") as HTMLDivElement;
 const adminUserList = document.getElementById("admin-user-list") as HTMLDivElement;
 const btnAdminClose = document.getElementById("btn-admin-close") as HTMLButtonElement;
+const settingsTabRoles = document.getElementById("settings-tab-roles") as HTMLButtonElement;
+
+// Audio device selects (inside settings modal voice tab)
+const audioInputSelect = document.getElementById("audio-input-select") as HTMLSelectElement;
+const audioOutputSelect = document.getElementById("audio-output-select") as HTMLSelectElement;
 
 // State for pending delete
 let pendingDeleteChannelId: string | null = null;
@@ -152,15 +158,27 @@ function log(message: string, type: "info" | "success" | "error" | "" = ""): voi
     eventLog.scrollTop = eventLog.scrollHeight;
 }
 
-// ── Connection ────────────────────────────────────────────────────────────
+// ── Connection ──────────────────────────────────────────────────────────
+
+function parseServerUrl(raw: string): { host: string; port: number } {
+    let url = raw.trim();
+    // Strip protocol if provided
+    url = url.replace(/^https?:\/\//, "").replace(/^wss?:\/\//, "");
+    // Remove trailing slash
+    url = url.replace(/\/+$/, "");
+
+    const parts = url.split(":");
+    const host = parts[0] || "localhost";
+    const port = parts[1] ? parseInt(parts[1], 10) : 9800;
+    return { host, port };
+}
 
 btnConnect.addEventListener("click", () => {
-    const host = hostInput.value.trim();
-    const port = parseInt(portInput.value.trim(), 10);
+    const { host, port } = parseServerUrl(serverUrlInput.value);
     const nickname = nicknameInput.value.trim() || "User";
 
-    if (!host || !port) {
-        log("Please enter server address and port", "error");
+    if (!host) {
+        log("Please enter a server URL", "error");
         return;
     }
 
@@ -468,8 +486,7 @@ api.on("connected", (data: { serverId: string; instanceId: string }) => {
     currentServerId = data.serverId;
     btnConnect.disabled = true;
     btnDisconnect.disabled = false;
-    hostInput.disabled = true;
-    portInput.disabled = true;
+    serverUrlInput.disabled = true;
     nicknameInput.disabled = true;
     statusDot.classList.add("connected");
     statusText.textContent = `Connected as ${nicknameInput.value.trim() || "User"}`;
@@ -477,10 +494,15 @@ api.on("connected", (data: { serverId: string; instanceId: string }) => {
     statusInstance.textContent = `ID: ${data.instanceId}`;
     log("Connected to server", "success");
 
-    // Try to show the admin settings button (will only work if user has MANAGE_ROLES)
+    // Always show the settings button
+    btnServerSettings.style.display = "";
+
+    // Check if user is admin to enable/disable the Roles tab
     api.getAllUsers(data.serverId).then((res) => {
         if (res.success) {
-            btnServerSettings.style.display = "";
+            settingsTabRoles.disabled = false;
+        } else {
+            settingsTabRoles.disabled = true;
         }
     });
 });
@@ -493,8 +515,7 @@ api.on("disconnected", () => {
     currentTree = [];
     btnConnect.disabled = false;
     btnDisconnect.disabled = true;
-    hostInput.disabled = false;
-    portInput.disabled = false;
+    serverUrlInput.disabled = false;
     nicknameInput.disabled = false;
     statusDot.classList.remove("connected");
     statusText.textContent = "Disconnected";
@@ -578,26 +599,7 @@ function escapeHtml(text: string): string {
     return div.innerHTML;
 }
 
-// ── Admin Panel ───────────────────────────────────────────────────────
-
-async function openAdminPanel(): Promise<void> {
-    adminModal.classList.add("visible");
-    adminUserList.innerHTML = '<div class="admin-empty">Loading users...</div>';
-
-    // Fetch roles and users concurrently
-    const [rolesRes, usersRes] = await Promise.all([
-        api.getRoles(currentServerId),
-        api.getAllUsers(currentServerId),
-    ]);
-
-    if (!rolesRes.success || !usersRes.success) {
-        adminUserList.innerHTML = '<div class="admin-empty">Failed to load data. You may not have permission.</div>';
-        return;
-    }
-
-    allServerRoles = rolesRes.roles ?? [];
-    renderAdminUsers(usersRes.users ?? []);
-}
+// ── Admin Panel (renderAdminUsers only — open/close handled by openSettingsPanel) ──
 
 function renderAdminUsers(users: any[]): void {
     adminUserList.innerHTML = "";
@@ -652,7 +654,7 @@ function renderAdminUsers(users: any[]): void {
                 const result = await api.assignRole(user.id, role.id, action);
                 if (result.success) {
                     // Refresh the panel
-                    openAdminPanel();
+                    openSettingsPanel();
                 } else {
                     log(`Failed to ${action} role: ${result.error}`, "error");
                 }
@@ -665,21 +667,6 @@ function renderAdminUsers(users: any[]): void {
         adminUserList.appendChild(row);
     }
 }
-
-btnServerSettings.addEventListener("click", () => {
-    if (!isConnected) return;
-    openAdminPanel();
-});
-
-btnAdminClose.addEventListener("click", () => {
-    adminModal.classList.remove("visible");
-});
-
-adminModal.addEventListener("click", (e) => {
-    if (e.target === adminModal) {
-        adminModal.classList.remove("visible");
-    }
-});
 
 // ── Tab Management ────────────────────────────────────────────────────────
 
@@ -830,5 +817,282 @@ api.on("message", (msg: ChatMessage) => {
     const tab = chatTabs.get(msg.channelId);
     if (tab) {
         renderChatMessage(tab, msg);
+    }
+});
+
+// ── Unified Settings Modal (Tabs) ─────────────────────────────────────
+
+let isAdminUser = false;
+
+// Settings tab switching
+const settingsTabBtns = document.querySelectorAll(".settings-tab-btn");
+const settingsPanels = document.querySelectorAll(".settings-panel");
+
+settingsTabBtns.forEach((btn) => {
+    btn.addEventListener("click", () => {
+        if ((btn as HTMLButtonElement).disabled) return;
+        const tabId = (btn as HTMLElement).dataset.settingsTab;
+        settingsTabBtns.forEach((b) => b.classList.remove("active"));
+        settingsPanels.forEach((p) => p.classList.remove("active"));
+        btn.classList.add("active");
+        document.querySelector(`.settings-panel[data-settings-panel="${tabId}"]`)?.classList.add("active");
+    });
+});
+
+async function openSettingsPanel(): Promise<void> {
+    adminModal.classList.add("visible");
+
+    // Populate audio devices
+    await populateAudioDevices();
+
+    // Fetch users and roles concurrently
+    const [usersRes, rolesRes] = await Promise.all([
+        api.getAllUsers(currentServerId),
+        api.getRoles(currentServerId),
+    ]);
+
+    isAdminUser = usersRes.success;
+    settingsTabRoles.disabled = !isAdminUser;
+
+    if (isAdminUser) {
+        allServerRoles = rolesRes.roles ?? [];
+        renderAdminUsers(usersRes.users ?? []);
+    } else {
+        adminUserList.innerHTML = '<div class="admin-empty">You don\'t have permission to manage roles.</div>';
+    }
+}
+
+btnServerSettings.addEventListener("click", () => {
+    if (!isConnected) return;
+    openSettingsPanel();
+});
+
+btnAdminClose.addEventListener("click", () => {
+    adminModal.classList.remove("visible");
+    activeShortcutSlot = null;
+});
+
+adminModal.addEventListener("click", (e) => {
+    if (e.target === adminModal) {
+        adminModal.classList.remove("visible");
+        activeShortcutSlot = null;
+    }
+});
+
+// ── Audio Device Selection ─────────────────────────────────────────
+
+const savedInputDevice = localStorage.getItem("reson8-audio-input") || "";
+const savedOutputDevice = localStorage.getItem("reson8-audio-output") || "";
+
+if (savedInputDevice) {
+    api.setAudioInputDevice(savedInputDevice);
+}
+
+async function populateAudioDevices(): Promise<void> {
+    const { inputs, outputs } = await api.enumerateAudioDevices();
+
+    audioInputSelect.innerHTML = '<option value="">System Default</option>';
+    for (const d of inputs) {
+        const opt = document.createElement("option");
+        opt.value = d.deviceId;
+        opt.textContent = d.label;
+        if (d.deviceId === savedInputDevice) opt.selected = true;
+        audioInputSelect.appendChild(opt);
+    }
+
+    audioOutputSelect.innerHTML = '<option value="">System Default</option>';
+    for (const d of outputs) {
+        const opt = document.createElement("option");
+        opt.value = d.deviceId;
+        opt.textContent = d.label;
+        if (d.deviceId === savedOutputDevice) opt.selected = true;
+        audioOutputSelect.appendChild(opt);
+    }
+}
+
+audioInputSelect.addEventListener("change", () => {
+    const deviceId = audioInputSelect.value || null;
+    api.setAudioInputDevice(deviceId);
+    localStorage.setItem("reson8-audio-input", audioInputSelect.value);
+    log(`Microphone set to: ${audioInputSelect.selectedOptions[0]?.textContent}`, "info");
+});
+
+audioOutputSelect.addEventListener("change", () => {
+    localStorage.setItem("reson8-audio-output", audioOutputSelect.value);
+    const audioEls = document.querySelectorAll("audio");
+    for (const el of audioEls) {
+        if ((el as any).setSinkId) {
+            (el as any).setSinkId(audioOutputSelect.value).catch(() => { });
+        }
+    }
+    log(`Speaker set to: ${audioOutputSelect.selectedOptions[0]?.textContent}`, "info");
+});
+
+// ── Multi-Key Combo Shortcuts ───────────────────────────────────────
+
+type ShortcutSlot = "ptt" | "mute" | "deafen" | "disconnect";
+
+interface ShortcutCombo {
+    keys: Set<string>;   // Set of key codes held together
+    display: string;     // Human-readable string like "CtrlLeft + ShiftLeft + KeyG"
+}
+
+const shortcuts: Record<ShortcutSlot, ShortcutCombo | null> = {
+    ptt: null,
+    mute: null,
+    deafen: null,
+    disconnect: null,
+};
+
+let activeShortcutSlot: ShortcutSlot | null = null;
+let recordingKeys = new Set<string>();
+const heldKeys = new Set<string>();
+
+const shortcutInputs: Record<ShortcutSlot, HTMLInputElement> = {
+    ptt: document.getElementById("shortcut-ptt") as HTMLInputElement,
+    mute: document.getElementById("shortcut-mute") as HTMLInputElement,
+    deafen: document.getElementById("shortcut-deafen") as HTMLInputElement,
+    disconnect: document.getElementById("shortcut-disconnect") as HTMLInputElement,
+};
+
+// Convert key code to readable name
+function keyCodeToLabel(code: string): string {
+    const map: Record<string, string> = {
+        ControlLeft: "L-Ctrl", ControlRight: "R-Ctrl",
+        ShiftLeft: "L-Shift", ShiftRight: "R-Shift",
+        AltLeft: "L-Alt", AltRight: "R-Alt",
+        MetaLeft: "L-Meta", MetaRight: "R-Meta",
+        Space: "Space", Backquote: "`",
+    };
+    if (map[code]) return map[code];
+    if (code.startsWith("Key")) return code.slice(3);
+    if (code.startsWith("Digit")) return code.slice(5);
+    return code;
+}
+
+function comboToDisplay(keys: Set<string>): string {
+    return [...keys].map(keyCodeToLabel).join(" + ");
+}
+
+function setsEqual(a: Set<string>, b: Set<string>): boolean {
+    if (a.size !== b.size) return false;
+    for (const k of a) {
+        if (!b.has(k)) return false;
+    }
+    return true;
+}
+
+// Load saved shortcuts
+for (const slot of Object.keys(shortcuts) as ShortcutSlot[]) {
+    const saved = localStorage.getItem(`reson8-shortcut-${slot}`);
+    if (saved) {
+        try {
+            const keys = new Set<string>(JSON.parse(saved));
+            shortcuts[slot] = { keys, display: comboToDisplay(keys) };
+            shortcutInputs[slot].value = shortcuts[slot]!.display;
+        } catch { /* ignore corrupt data */ }
+    }
+}
+
+// Set / Clear buttons
+document.querySelectorAll("[data-shortcut-set]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+        const slot = (btn as HTMLElement).dataset.shortcutSet as ShortcutSlot;
+        activeShortcutSlot = slot;
+        recordingKeys.clear();
+        shortcutInputs[slot].value = "Press keys...";
+        shortcutInputs[slot].classList.add("listening");
+    });
+});
+
+document.querySelectorAll("[data-shortcut-clear]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+        const slot = (btn as HTMLElement).dataset.shortcutClear as ShortcutSlot;
+        shortcuts[slot] = null;
+        shortcutInputs[slot].value = "";
+        shortcutInputs[slot].classList.remove("listening");
+        localStorage.removeItem(`reson8-shortcut-${slot}`);
+        log(`Shortcut for ${slot} cleared`, "info");
+    });
+});
+
+// Record combo: accumulate keys on keydown, finalize on keyup
+document.addEventListener("keydown", (e) => {
+    if (activeShortcutSlot) {
+        e.preventDefault();
+        e.stopPropagation();
+        recordingKeys.add(e.code);
+        shortcutInputs[activeShortcutSlot].value = comboToDisplay(recordingKeys);
+        return;
+    }
+
+    // Track held keys for shortcut matching
+    heldKeys.add(e.code);
+
+    // Check shortcuts (skip PTT which uses press/release)
+    if (!e.repeat) {
+        if (shortcuts.mute && setsEqual(heldKeys, shortcuts.mute.keys)) {
+            isMuted = api.toggleMute();
+            updateVoiceUI();
+        }
+        if (shortcuts.deafen && setsEqual(heldKeys, shortcuts.deafen.keys)) {
+            isDeafened = api.toggleDeafen();
+            updateVoiceUI();
+        }
+        if (shortcuts.disconnect && setsEqual(heldKeys, shortcuts.disconnect.keys)) {
+            api.leaveVoiceChannel();
+            isInVoice = false;
+            currentChannelId = null;
+            updateVoiceUI();
+            log("Disconnected from voice (shortcut)", "info");
+        }
+        // PTT keydown → unmute
+        if (shortcuts.ptt && setsEqual(heldKeys, shortcuts.ptt.keys)) {
+            api.toggleMute(); // unmute
+        }
+    }
+});
+
+document.addEventListener("keyup", (e) => {
+    if (activeShortcutSlot) {
+        // Finalize the combo on first keyup
+        const slot = activeShortcutSlot;
+        const combo: ShortcutCombo = {
+            keys: new Set(recordingKeys),
+            display: comboToDisplay(recordingKeys),
+        };
+        shortcuts[slot] = combo;
+        shortcutInputs[slot].value = combo.display;
+        shortcutInputs[slot].classList.remove("listening");
+        localStorage.setItem(`reson8-shortcut-${slot}`, JSON.stringify([...combo.keys]));
+        log(`Shortcut for ${slot} set to: ${combo.display}`, "success");
+        activeShortcutSlot = null;
+        recordingKeys.clear();
+        return;
+    }
+
+    // PTT keyup → mute
+    if (shortcuts.ptt && heldKeys.has(e.code)) {
+        // Check if releasing breaks the combo
+        const wasMatching = setsEqual(heldKeys, shortcuts.ptt.keys);
+        heldKeys.delete(e.code);
+        if (wasMatching) {
+            api.toggleMute(); // mute
+        }
+    } else {
+        heldKeys.delete(e.code);
+    }
+});
+
+// Global PTT from main process
+api.on("ptt-pressed", () => {
+    if (shortcuts.ptt) {
+        api.toggleMute(); // unmute
+    }
+});
+
+api.on("ptt-released", () => {
+    if (shortcuts.ptt) {
+        api.toggleMute(); // mute
     }
 });

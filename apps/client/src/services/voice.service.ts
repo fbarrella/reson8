@@ -210,18 +210,29 @@ export class VoiceService {
         );
     }
 
-    // ── Produce audio ─────────────────────────────────────────────────────
+    private _audioDeviceId: string | null = null;
+
+    /** Set the preferred audio input device ID. */
+    setAudioDeviceId(deviceId: string | null): void {
+        this._audioDeviceId = deviceId;
+    }
 
     /** Request mic access and start producing audio. */
     async startProducing(): Promise<void> {
         if (!this.sendTransport) throw new Error("Send transport not ready");
 
+        const audioConstraints: MediaTrackConstraints = {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+        };
+
+        if (this._audioDeviceId) {
+            audioConstraints.deviceId = { exact: this._audioDeviceId };
+        }
+
         this.localStream = await navigator.mediaDevices.getUserMedia({
-            audio: {
-                echoCancellation: true,
-                noiseSuppression: true,
-                autoGainControl: true,
-            },
+            audio: audioConstraints,
         });
 
         const track = this.localStream.getAudioTracks()[0];
