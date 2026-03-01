@@ -18,8 +18,13 @@ import { VoiceService, VoiceSignaling } from "./services/voice.service";
 type TypedSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 
 let socket: TypedSocket | null = null;
-let voiceService: VoiceService | null = null;
 let instanceId: string = "";
+let voiceService: VoiceService | null = null;
+
+// Eagerly fetch instance ID so it's available before any connection
+ipcRenderer.invoke("get-instance-id").then((id: string) => {
+    instanceId = id;
+});
 
 // Default server ID — matches the seed
 const DEFAULT_SERVER_ID = "00000000-0000-0000-0000-000000000001";
@@ -94,6 +99,12 @@ function createSignaling(): VoiceSignaling {
 }
 
 const api = {
+    // ── Identity ─────────────────────────────────────────────────────────────
+
+    getInstanceId(): string {
+        return instanceId;
+    },
+
     // ── Connection ──────────────────────────────────────────────────────────
 
     async connect(host: string, port: number, nickname: string): Promise<void> {
@@ -101,8 +112,10 @@ const api = {
             socket.disconnect();
         }
 
-        // Fetch instance ID from main process
-        instanceId = await ipcRenderer.invoke("get-instance-id");
+        // Ensure we have instance ID (should already be fetched eagerly)
+        if (!instanceId) {
+            instanceId = await ipcRenderer.invoke("get-instance-id");
+        }
 
         socket = io(`http://${host}:${port}`, {
             transports: ["websocket"],
@@ -233,6 +246,23 @@ const api = {
         return voiceService?.toggleDeafen() ?? false;
     },
 
+    // ── Audio Settings ──────────────────────────────────────────────────────
+
+    async enumerateAudioDevices(): Promise<{ inputs: { deviceId: string; label: string }[]; outputs: { deviceId: string; label: string }[] }> {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const inputs = devices
+            .filter((d) => d.kind === "audioinput")
+            .map((d) => ({ deviceId: d.deviceId, label: d.label || `Mic ${d.deviceId.slice(0, 8)}` }));
+        const outputs = devices
+            .filter((d) => d.kind === "audiooutput")
+            .map((d) => ({ deviceId: d.deviceId, label: d.label || `Speaker ${d.deviceId.slice(0, 8)}` }));
+        return { inputs, outputs };
+    },
+
+    setAudioInputDevice(deviceId: string | null): void {
+        voiceService?.setAudioDeviceId(deviceId);
+    },
+
     // ── Channel CRUD ────────────────────────────────────────────────────────
 
     createChannel(
@@ -298,6 +328,50 @@ const api = {
             );
         });
     },
+
+    // ── Admin / Role Management ──────────────────────────────────────────
+
+    getAllUsers(
+        serverId: string,
+    ): Promise<{ success: boolean; users?: any[]; error?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.emit("GET_ALL_USERS", { serverId }, resolve);
+        });
+    },
+
+    getRoles(
+        serverId: string,
+    ): Promise<{ success: boolean; roles?: any[]; error?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.emit("GET_ROLES", { serverId }, resolve);
+        });
+    },
+
+    assignRole(
+        userId: string,
+        roleId: string,
+        action: "add" | "remove",
+    ): Promise<{ success: boolean; error?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.emit("ASSIGN_ROLE", { userId, roleId, action }, resolve);
+        });
+    },
 };
 
 contextBridge.exposeInMainWorld("reson8Api", api);
+
+// ── PTT IPC from main process ─────────────────────────────────────────────
+ipcRenderer.on("ptt-pressed", () => emit("ptt-pressed", null));
+ipcRenderer.on("ptt-released", () => emit("ptt-released", null));

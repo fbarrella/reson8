@@ -11,6 +11,8 @@ import type {
     IChannel,
     IChannelTreeNode,
     IMessage,
+    IRole,
+    IUser,
     IUserPresence,
     ITransportOptions,
     IConsumerInfo,
@@ -81,6 +83,30 @@ export interface ClientToServerEvents {
     FETCH_MESSAGES: (
         payload: { channelId: string; before?: string; limit?: number },
         ack: (response: { success: boolean; messages?: IMessage[]; error?: string }) => void,
+    ) => void;
+
+    // ── Admin / Role Management ──────────────────────────────────────────────
+
+    /** Admin requests list of all known users on the server. */
+    GET_ALL_USERS: (
+        payload: { serverId: string },
+        ack: (response: {
+            success: boolean;
+            users?: Array<IUser & { roles: IRole[] }>;
+            error?: string;
+        }) => void,
+    ) => void;
+
+    /** Admin requests list of all roles on the server. */
+    GET_ROLES: (
+        payload: { serverId: string },
+        ack: (response: { success: boolean; roles?: IRole[]; error?: string }) => void,
+    ) => void;
+
+    /** Admin assigns or removes a role from a user. */
+    ASSIGN_ROLE: (
+        payload: { userId: string; roleId: string; action: "add" | "remove" },
+        ack: (response: { success: boolean; error?: string }) => void,
     ) => void;
 
     // ── WebRTC / Voice signaling (mediasoup) ────────────────────────────────
