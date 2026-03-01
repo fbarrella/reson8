@@ -1,12 +1,52 @@
 {
     "name": "@reson8/client",
     "version": "0.1.0",
+    "description": "Reson8 — Voice and text communication client",
+    "author": "Felipe B. Netto",
     "private": true,
     "main": "dist/main.js",
     "scripts": {
         "dev": "tsc --build && node scripts/copy-html.mjs && electron .",
+        "prebuild": "tsc --build && node scripts/copy-html.mjs",
         "build": "electron-builder",
+        "build:win": "electron-builder --win",
+        "build:linux": "electron-builder --linux",
+        "build:mac": "electron-builder --mac",
         "typecheck": "tsc --noEmit"
+    },
+    "build": {
+        "appId": "com.reson8.client",
+        "productName": "Reson8",
+        "electronVersion": "34.5.8",
+        "npmRebuild": false,
+        "directories": {
+            "output": "release"
+        },
+        "files": [
+            "dist/**/*",
+            "node_modules/**/*",
+            "!node_modules/.cache"
+        ],
+        "win": {
+            "target": "nsis",
+            "icon": "assets/icon.ico"
+        },
+        "nsis": {
+            "oneClick": false,
+            "allowToChangeInstallationDirectory": true
+        },
+        "linux": {
+            "target": [
+                "AppImage",
+                "deb"
+            ],
+            "category": "Network;AudioVideo",
+            "icon": "assets/icon.png"
+        },
+        "mac": {
+            "target": "dmg",
+            "icon": "assets/icon.icns"
+        }
     },
     "dependencies": {
         "@reson8/shared-types": "*",
@@ -15,7 +55,7 @@
     },
     "devDependencies": {
         "@types/node": "^22.13.0",
-        "electron": "^34.0.0",
+        "electron": "34.5.8",
         "electron-builder": "^25.1.0",
         "tsx": "^4.19.0",
         "typescript": "^5.7.0"
