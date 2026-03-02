@@ -1,5 +1,5 @@
 # ── Build Stage ─────────────────────────────────────────────────────────
-FROM node:20-bookworm AS builder
+FROM node:22-bookworm AS builder
 
 # mediasoup requires native compilation tools
 RUN apt-get update && apt-get install -y \
@@ -32,7 +32,7 @@ RUN cd apps/server && npx prisma generate
 RUN cd apps/server && npx tsc
 
 # ── Runtime Stage ──────────────────────────────────────────────────────
-FROM node:20-bookworm-slim
+FROM node:22-bookworm-slim
 
 RUN apt-get update && apt-get install -y \
     openssl \
