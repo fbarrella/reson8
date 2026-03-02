@@ -6,6 +6,7 @@
  */
 
 import "dotenv/config";
+import { randomUUID } from "node:crypto";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import { Server as SocketIOServer } from "socket.io";
@@ -23,6 +24,13 @@ import { registerChannelHandlers } from "./handlers/channel.handler.js";
 import { registerMessageHandlers } from "./handlers/message.handler.js";
 import { registerAdminHandlers } from "./handlers/admin.handler.js";
 import { MediasoupService } from "./services/mediasoup.service.js";
+
+// Augment Fastify with the resolved server ID
+declare module "fastify" {
+    interface FastifyInstance {
+        serverId: string;
+    }
+}
 
 const PORT = parseInt(process.env.PORT ?? "9800", 10);
 const HOST = process.env.HOST ?? "0.0.0.0";
@@ -45,6 +53,29 @@ async function main(): Promise<void> {
     // ── Plugins (Prisma + Redis) ───────────────────────────────────────────
     await app.register(prismaPlugin);
     await app.register(redisPlugin);
+
+    // ── Server Bootstrap ──────────────────────────────────────────────────
+    // Auto-create (or reuse) the server record in the database.
+    const serverName = process.env.SERVER_NAME ?? "Reson8 Server";
+    const serverAddress = process.env.SERVER_ADDRESS ?? `localhost:${PORT}`;
+    const maxClients = parseInt(process.env.MAX_CLIENTS ?? "32", 10);
+
+    let server = await app.prisma.server.findFirst();
+    if (!server) {
+        server = await app.prisma.server.create({
+            data: {
+                id: randomUUID(),
+                name: serverName,
+                address: serverAddress,
+                maxClients,
+            },
+        });
+        app.log.info(`🆕 Created server record: ${server.name} (${server.id})`);
+    } else {
+        app.log.info(`✅ Using existing server record: ${server.name} (${server.id})`);
+    }
+
+    app.decorate("serverId", server.id);
 
     // ── mediasoup SFU ──────────────────────────────────────────────────────
     const mediasoupService = new MediasoupService();

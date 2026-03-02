@@ -1,0 +1,34 @@
+# Docker Compose Override — TURN Server (coturn)
+#
+# Enables WebRTC relay for tunneled deployments (e.g. Cloudflare Tunnel).
+# Usage: docker compose -f docker-compose.yml -f docker-compose.turn.yml up --build
+#
+# Without this file, voice connects directly via UDP/TCP (standard deployment).
+
+services:
+  reson8-server:
+    environment:
+      TURN_URL: "turn:coturn:3478"
+      TURN_USERNAME: "reson8"
+      TURN_CREDENTIAL: "reson8pass"
+    depends_on:
+      coturn:
+        condition: service_started
+
+  coturn:
+    image: coturn/coturn:latest
+    container_name: reson8-coturn
+    restart: unless-stopped
+    ports:
+      - "3478:3478/tcp"
+      - "3478:3478/udp"
+    command:
+      - "--lt-cred-mech"
+      - "--user=reson8:reson8pass"
+      - "--realm=reson8"
+      - "--no-tls"
+      - "--no-dtls"
+      - "--listening-port=3478"
+      - "--min-port=49152"
+      - "--max-port=49200"
+      - "--log-file=stdout"

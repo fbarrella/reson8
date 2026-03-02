@@ -1,31 +1,37 @@
 /**
- * Prisma Seed — Creates a default Reson8 server with starter channels.
+ * Prisma Seed — Creates default channels and roles for the Reson8 server.
+ *
+ * Only runs when SEED_DEFAULT_TEMPLATE=true (set in .env or docker-compose).
+ * The server record itself is auto-created by index.ts on startup,
+ * so this script only seeds template content (channels, roles).
  *
  * Idempotent: uses upsert so re-running is safe.
  * Run via: npx prisma db seed
  */
 
+import "dotenv/config";
 import { PrismaClient, ChannelType } from "@prisma/client";
 
 const prisma = new PrismaClient();
 
-const DEFAULT_SERVER_ID = "00000000-0000-0000-0000-000000000001";
-
 async function main(): Promise<void> {
-    console.log("🌱 Seeding database...");
+    // ── Check opt-in flag ────────────────────────────────────────────────
+    if (process.env.SEED_DEFAULT_TEMPLATE !== "true") {
+        console.log("⏭️  SEED_DEFAULT_TEMPLATE is not 'true' — skipping seed.");
+        return;
+    }
 
-    // ── Default Server ────────────────────────────────────────────────────
-    const server = await prisma.server.upsert({
-        where: { id: DEFAULT_SERVER_ID },
-        update: {},
-        create: {
-            id: DEFAULT_SERVER_ID,
-            name: "Reson8 Server",
-            address: "localhost:9800",
-            maxClients: 32,
-        },
-    });
-    console.log(`  ✅ Server: ${server.name}`);
+    console.log("🌱 Seeding default template...");
+
+    // ── Resolve the server ID from the existing record ──────────────────
+    const server = await prisma.server.findFirst();
+    if (!server) {
+        console.log("⚠️  No server record found. Start the server first to auto-create it.");
+        return;
+    }
+
+    const serverId = server.id;
+    console.log(`  📡 Using server: ${server.name} (${serverId})`);
 
     // ── Channels ──────────────────────────────────────────────────────────
     // Category: General
@@ -34,7 +40,7 @@ async function main(): Promise<void> {
         update: {},
         create: {
             id: "chan-general",
-            serverId: DEFAULT_SERVER_ID,
+            serverId,
             name: "General",
             type: ChannelType.VOICE, // Categories are voice type with children
             parentId: null,
@@ -47,7 +53,7 @@ async function main(): Promise<void> {
         update: {},
         create: {
             id: "chan-lobby",
-            serverId: DEFAULT_SERVER_ID,
+            serverId,
             name: "Lobby",
             type: ChannelType.VOICE,
             parentId: general.id,
@@ -60,7 +66,7 @@ async function main(): Promise<void> {
         update: {},
         create: {
             id: "chan-chat",
-            serverId: DEFAULT_SERVER_ID,
+            serverId,
             name: "Chat",
             type: ChannelType.TEXT,
             parentId: general.id,
@@ -74,7 +80,7 @@ async function main(): Promise<void> {
         update: {},
         create: {
             id: "chan-gaming",
-            serverId: DEFAULT_SERVER_ID,
+            serverId,
             name: "Gaming",
             type: ChannelType.VOICE,
             parentId: null,
@@ -87,7 +93,7 @@ async function main(): Promise<void> {
         update: {},
         create: {
             id: "chan-game-room-1",
-            serverId: DEFAULT_SERVER_ID,
+            serverId,
             name: "Game Room 1",
             type: ChannelType.VOICE,
             parentId: gaming.id,
@@ -100,7 +106,7 @@ async function main(): Promise<void> {
         update: {},
         create: {
             id: "chan-game-room-2",
-            serverId: DEFAULT_SERVER_ID,
+            serverId,
             name: "Game Room 2",
             type: ChannelType.VOICE,
             parentId: gaming.id,
@@ -116,7 +122,7 @@ async function main(): Promise<void> {
         update: {},
         create: {
             id: "role-default",
-            serverId: DEFAULT_SERVER_ID,
+            serverId,
             name: "Member",
             permissions: BigInt(0b111), // CONNECT | SPEAK | SEND_MESSAGES
             powerLevel: 0,
@@ -129,7 +135,7 @@ async function main(): Promise<void> {
         update: {},
         create: {
             id: "role-admin",
-            serverId: DEFAULT_SERVER_ID,
+            serverId,
             name: "Server Admin",
             permissions: BigInt(0b111111111), // All permissions
             powerLevel: 100,

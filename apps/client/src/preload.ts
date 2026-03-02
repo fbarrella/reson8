@@ -26,9 +26,6 @@ ipcRenderer.invoke("get-instance-id").then((id: string) => {
     instanceId = id;
 });
 
-// Default server ID — matches the seed
-const DEFAULT_SERVER_ID = "00000000-0000-0000-0000-000000000001";
-
 // ── Callback registry ────────────────────────────────────────────────────
 
 type Callback = (...args: any[]) => void;
@@ -107,7 +104,7 @@ const api = {
 
     // ── Connection ──────────────────────────────────────────────────────────
 
-    async connect(host: string, port: number, nickname: string): Promise<void> {
+    async connect(host: string, port: number | undefined, nickname: string): Promise<void> {
         if (socket?.connected) {
             socket.disconnect();
         }
@@ -117,7 +114,8 @@ const api = {
             instanceId = await ipcRenderer.invoke("get-instance-id");
         }
 
-        socket = io(`http://${host}:${port}`, {
+        const serverUrl = port ? `http://${host}:${port}` : `http://${host}`;
+        socket = io(serverUrl, {
             transports: ["websocket"],
             reconnection: true,
             reconnectionAttempts: 5,
@@ -128,13 +126,13 @@ const api = {
         voiceService = new VoiceService(createSignaling());
 
         socket.on("connect", () => {
-            // Auto-join the default server
+            // Join the server — let the server decide the serverId
             socket!.emit(
                 "USER_JOIN_SERVER",
-                { serverId: DEFAULT_SERVER_ID, nickname, instanceId },
+                { nickname, instanceId },
                 (res) => {
-                    if (res.success) {
-                        emit("connected", { serverId: DEFAULT_SERVER_ID, instanceId });
+                    if (res.success && res.serverId) {
+                        emit("connected", { serverId: res.serverId, instanceId });
                     } else {
                         emit("error", {
                             code: "JOIN_FAILED",

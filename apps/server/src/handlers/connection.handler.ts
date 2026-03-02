@@ -48,7 +48,9 @@ export function registerConnectionHandlers(
         // ── USER_JOIN_SERVER ────────────────────────────────────────────────
         socket.on("USER_JOIN_SERVER", async (payload, ack) => {
             try {
-                const { serverId, nickname, instanceId } = payload;
+                const { nickname, instanceId } = payload;
+                // Use provided serverId or fall back to the bootstrapped one
+                const serverId = payload.serverId || app.serverId;
 
                 // Use the persistent instance ID as userId
                 socket.data.serverId = serverId;
@@ -139,7 +141,7 @@ export function registerConnectionHandlers(
 
                 socket.emit("CHANNEL_TREE_UPDATE", { serverId, tree });
 
-                ack({ success: true });
+                ack({ success: true, serverId });
                 app.log.info(
                     { socketId: socket.id, nickname, serverId, instanceId },
                     "User joined server",

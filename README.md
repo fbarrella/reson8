@@ -105,6 +105,8 @@ REDIS_URL=redis://localhost:6379
 PORT=9800
 HOST=0.0.0.0
 MEDIASOUP_ANNOUNCED_IP=127.0.0.1
+SERVER_NAME="Reson8 Server"
+SEED_DEFAULT_TEMPLATE=true
 ```
 
 </details>
@@ -127,10 +129,20 @@ Deploy everything with a single command:
 docker compose up --build
 ```
 
-For VPS deployments, set your public IP:
+For VPS deployments, set your public IP so WebRTC can route:
 
 ```bash
 MEDIASOUP_ANNOUNCED_IP=<your-public-ip> docker compose up --build
+```
+
+#### Deploying behind Cloudflare Tunnels (or strict NATs)
+Because Cloudflare Tunnels only proxy TCP, WebRTC voice (UDP) requires a **TURN server relay**. Reson8 includes an optional `coturn` configuration for this exact scenario:
+
+1. Uncomment `TURN_URL`, `TURN_USERNAME`, and `TURN_CREDENTIAL` in your `.env`
+2. Run with the optional TURN override file:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.turn.yml up --build
 ```
 
 ---
