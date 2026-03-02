@@ -68,6 +68,15 @@
       color: var(--accent);
       margin-right: 12px;
       letter-spacing: -0.5px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    #toolbar .brand img {
+      height: 20px;
+      width: 20px;
+      object-fit: contain;
     }
 
     #toolbar input {
@@ -923,8 +932,8 @@
 <body>
   <!-- ── Toolbar ─────────────────────────────────────────────────────── -->
   <div id="toolbar">
-    <span class="brand">🎧 Reson8</span>
-    <input type="text" id="server-url" placeholder="Server URL (e.g. localhost:9800)" value="localhost:9800">
+    <span class="brand"><img src="logo.png" alt="Reson8 Logo">Reson8</span>
+    <input type="text" id="server-url" placeholder="Server URL (e.g. server.reson8.com or localhost:9800)">
     <input type="text" id="nickname" placeholder="Nickname" value="User">
     <button class="btn btn-connect" id="btn-connect">Connect</button>
     <button class="btn btn-disconnect" id="btn-disconnect" disabled>Disconnect</button>

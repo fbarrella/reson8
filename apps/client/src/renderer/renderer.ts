@@ -18,7 +18,7 @@ interface ChatMessage {
 
 interface Reson8Api {
     getInstanceId(): string;
-    connect(host: string, port: number, nickname: string): Promise<void>;
+    connect(host: string, port: number | undefined, nickname: string): Promise<void>;
     disconnect(): void;
     joinVoiceChannel(channelId: string): Promise<{ success: boolean; error?: string }>;
     leaveVoiceChannel(): void;
@@ -160,7 +160,7 @@ function log(message: string, type: "info" | "success" | "error" | "" = ""): voi
 
 // ── Connection ──────────────────────────────────────────────────────────
 
-function parseServerUrl(raw: string): { host: string; port: number } {
+function parseServerUrl(raw: string): { host: string; port: number | undefined } {
     let url = raw.trim();
     // Strip protocol if provided
     url = url.replace(/^https?:\/\//, "").replace(/^wss?:\/\//, "");
@@ -169,7 +169,7 @@ function parseServerUrl(raw: string): { host: string; port: number } {
 
     const parts = url.split(":");
     const host = parts[0] || "localhost";
-    const port = parts[1] ? parseInt(parts[1], 10) : 9800;
+    const port = parts[1] ? parseInt(parts[1], 10) : undefined;
     return { host, port };
 }
 
@@ -182,7 +182,7 @@ btnConnect.addEventListener("click", () => {
         return;
     }
 
-    log(`Connecting to ${host}:${port} as "${nickname}"...`, "info");
+    log(`Connecting to ${host}${port ? `:${port}` : ""} as "${nickname}"...`, "info");
     api.connect(host, port, nickname);
 });
 

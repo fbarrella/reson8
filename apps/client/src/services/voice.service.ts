@@ -29,6 +29,7 @@ export interface VoiceSignaling {
             iceCandidates: any[];
             dtlsParameters: any;
         };
+        iceServers?: Array<{ urls: string | string[]; username?: string; credential?: string }>;
         error?: string;
     }>;
 
@@ -139,6 +140,7 @@ export class VoiceService {
             iceParameters: tp.iceParameters,
             iceCandidates: tp.iceCandidates,
             dtlsParameters: tp.dtlsParameters,
+            ...(res.iceServers ? { iceServers: res.iceServers } : {}),
         });
 
         this.sendTransport.on(
@@ -191,6 +193,7 @@ export class VoiceService {
             iceParameters: tp.iceParameters,
             iceCandidates: tp.iceCandidates,
             dtlsParameters: tp.dtlsParameters,
+            ...(res.iceServers ? { iceServers: res.iceServers } : {}),
         });
 
         this.recvTransport.on(

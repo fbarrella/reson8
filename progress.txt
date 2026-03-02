@@ -311,3 +311,32 @@ Key Files:
 ================================================================================
   ALL 6 PHASES COMPLETE 🎉
 ================================================================================
+
+
+================================================================================
+  POST-PHASE 6: REFINEMENTS & WEBRTC TUNNELING  ✅ COMPLETE
+================================================================================
+
+Deliverables:
+  - Client URL parsing fix: Connecting to "server.domain.com" no longer forces
+    an arbitrary ":9800" port if omitted, allowing standard HTTP/HTTPS defaults.
+  - Dynamic Server Bootstrap: The server now auto-creates its `Server` database
+    record on startup with a random UUID, `SERVER_NAME`, and `SERVER_ADDRESS`.
+  - Dynamic Seed: Default channels/roles seeding is now entirely opt-in via
+    the `SEED_DEFAULT_TEMPLATE=true` env var.
+  - Client Identity Decoupling: The client no longer hardcodes a server UUID.
+    Instead, the `USER_JOIN_SERVER` ack response dictates the server ID.
+  - Optional TURN Server Integration: For deployments behind UDP-blocking
+    networks (like Cloudflare Tunnels), `TURN_URL`, `TURN_USERNAME`, and
+    `TURN_CREDENTIAL` env vars can be used to inject ICE servers into the
+    `CREATE_WEBRTC_TRANSPORT` signaling payload, making the client automatically
+    fallback to the coturn relay. Include `docker-compose.turn.yml` to spin it up.
+
+Key Files Modified:
+  apps/client/src/renderer/renderer.ts           — URL port fallback logic removed
+  apps/client/src/preload.ts                     — Dynamic server ID on connect
+  apps/server/src/index.ts                       — Server DB record bootstrap
+  apps/server/prisma/seed.ts                     — Skippable & dynamic seed
+  apps/server/src/handlers/voice.handler.ts       — iceServers injected into transport
+  apps/client/src/services/voice.service.ts      — Pass iceServers to mediasoup
+  docker-compose.turn.yml                        — Optional coturn configuration

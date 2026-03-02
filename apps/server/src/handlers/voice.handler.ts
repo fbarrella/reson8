@@ -84,6 +84,18 @@ export function registerVoiceHandlers(
                     session.recvTransport = transport;
                 }
 
+                // Build ICE servers list (optional — only when TURN is configured)
+                let iceServers: Array<{ urls: string | string[]; username?: string; credential?: string }> | undefined;
+                if (process.env.TURN_URL) {
+                    iceServers = [
+                        { urls: process.env.TURN_URL },
+                    ];
+                    if (process.env.TURN_USERNAME && process.env.TURN_CREDENTIAL) {
+                        iceServers[0].username = process.env.TURN_USERNAME;
+                        iceServers[0].credential = process.env.TURN_CREDENTIAL;
+                    }
+                }
+
                 ack({
                     success: true,
                     transport: {
@@ -92,6 +104,7 @@ export function registerVoiceHandlers(
                         iceCandidates: transport.iceCandidates,
                         dtlsParameters: transport.dtlsParameters,
                     },
+                    ...(iceServers ? { iceServers } : {}),
                 });
 
                 app.log.info(

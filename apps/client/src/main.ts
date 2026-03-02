@@ -5,7 +5,7 @@
  * This is the entry point for the Electron desktop client.
  */
 
-import { app, BrowserWindow, session, ipcMain, globalShortcut } from "electron";
+import { app, BrowserWindow, session, ipcMain, globalShortcut, Menu } from "electron";
 import path from "node:path";
 import { getInstanceId } from "./instance-id.js";
 
@@ -76,6 +76,11 @@ function unregisterPttShortcut(): void {
 // ── App lifecycle ────────────────────────────────────────────────────────
 
 app.whenReady().then(() => {
+    // Disable the default application menu in production builds
+    if (process.env.NODE_ENV !== "development") {
+        Menu.setApplicationMenu(null);
+    }
+
     // Expose instance ID to renderer/preload
     const instanceId = getInstanceId();
     ipcMain.handle("get-instance-id", () => instanceId);

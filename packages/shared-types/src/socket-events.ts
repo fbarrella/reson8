@@ -27,8 +27,8 @@ export interface ClientToServerEvents {
      * Client requests to join a server instance.
      */
     USER_JOIN_SERVER: (
-        payload: { serverId: string; nickname: string; instanceId: string },
-        ack: (response: { success: boolean; error?: string }) => void,
+        payload: { serverId?: string; nickname: string; instanceId: string },
+        ack: (response: { success: boolean; serverId?: string; error?: string }) => void,
     ) => void;
 
     /** Client signals they are leaving the server. */
@@ -127,6 +127,7 @@ export interface ClientToServerEvents {
         ack: (response: {
             success: boolean;
             transport?: ITransportOptions;
+            iceServers?: Array<{ urls: string | string[]; username?: string; credential?: string }>;
             error?: string;
         }) => void,
     ) => void;

@@ -14,6 +14,9 @@ services:
       HOST: "0.0.0.0"
       DATABASE_URL: "postgresql://reson8:reson8@postgres:5432/reson8?schema=public"
       REDIS_URL: "redis://redis:6379"
+      SERVER_NAME: "Reson8 Server"
+      SERVER_ADDRESS: "localhost:9800"
+      SEED_DEFAULT_TEMPLATE: "true"
       MEDIASOUP_ANNOUNCED_IP: "${MEDIASOUP_ANNOUNCED_IP:-127.0.0.1}"
       ADMIN_INSTANCE_ID: "${ADMIN_INSTANCE_ID:-}"
     depends_on:
