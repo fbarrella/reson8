@@ -1,6 +1,9 @@
 {
   "name": "reson8",
   "version": "0.1.0",
+  "author": "Felipe B. Netto",
+  "email": "f.netto01@gmail.com",
+  "homepage": "https://github.com/fbarrella/reson8",
   "private": true,
   "description": "Self-hosted voice and text communication platform",
   "workspaces": [
