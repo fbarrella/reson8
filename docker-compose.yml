@@ -1,8 +1,6 @@
 services:
   reson8-server:
-    build:
-      context: .
-      dockerfile: apps/server/Dockerfile
+    image: febarrella/reson8:latest
     container_name: reson8-server
     restart: unless-stopped
     ports:
