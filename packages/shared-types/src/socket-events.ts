@@ -268,4 +268,6 @@ export interface SocketData {
     serverId: string;
     /** The channel the user is currently in (if any). */
     currentChannelId: string | null;
+    /** Lock to prevent concurrent channel join attempts */
+    joiningChannel?: boolean;
 }
