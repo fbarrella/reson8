@@ -32,9 +32,8 @@ apps/client/release/
 npm-debug.log*
 
 # Starter Files
-PRD.md
+app-planning/
 ui-reference.jpg
 reson8-logo.png
-progress.txt
 walkthrough.md*
 implementation_plan.md*

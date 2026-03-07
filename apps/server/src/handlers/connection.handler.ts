@@ -174,6 +174,12 @@ export function registerConnectionHandlers(
         // ── USER_JOIN_CHANNEL ───────────────────────────────────────────────
         socket.on("USER_JOIN_CHANNEL", async (payload, ack) => {
             try {
+                if (socket.data.joiningChannel) {
+                    ack({ success: false, error: "Already joining a channel" });
+                    return;
+                }
+                socket.data.joiningChannel = true;
+
                 const { channelId } = payload;
                 const userId = socket.data.userId;
 
@@ -237,6 +243,8 @@ export function registerConnectionHandlers(
             } catch (err) {
                 app.log.error({ err }, "Error in USER_JOIN_CHANNEL");
                 ack({ success: false, error: "Failed to join channel" });
+            } finally {
+                socket.data.joiningChannel = false;
             }
         });
 

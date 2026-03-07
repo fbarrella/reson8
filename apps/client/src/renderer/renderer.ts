@@ -51,6 +51,7 @@ let currentChannelId: string | null = null;
 let isInVoice = false;
 let isMuted = false;
 let isDeafened = false;
+let isJoiningVoice = false;
 
 // Store the current tree for parent selection in the modal
 let currentTree: any[] = [];
@@ -333,10 +334,15 @@ async function handleChannelClick(node: TreeNode): Promise<void> {
             isInVoice = false;
         }
 
+        if (isJoiningVoice) return;
+        isJoiningVoice = true;
+
         currentChannelId = node.id;
         log(`Joining voice channel: ${node.name}...`, "info");
 
         const result = await api.joinVoiceChannel(node.id);
+        isJoiningVoice = false;
+
         if (result.success) {
             isInVoice = true;
             isMuted = false;
