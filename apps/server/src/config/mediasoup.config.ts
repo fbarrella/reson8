@@ -40,21 +40,37 @@ export const MEDIA_CODECS = [
  * Uses MEDIASOUP_ANNOUNCED_IP env var for NAT traversal on VPS deployments.
  */
 export function getTransportOptions(): mediasoupTypes.WebRtcTransportOptions {
-    const announcedAddress = process.env.MEDIASOUP_ANNOUNCED_IP || "127.0.0.1";
+    const publicIp = process.env.MEDIASOUP_ANNOUNCED_IP || "127.0.0.1";
+    const privateIp = process.env.MEDIASOUP_PRIVATE_ANNOUNCED_IP;
+
+    const listenInfos: mediasoupTypes.TransportListenInfo[] = [
+        {
+            protocol: "udp" as const,
+            ip: "0.0.0.0",
+            announcedAddress: publicIp,
+        },
+        {
+            protocol: "tcp" as const,
+            ip: "0.0.0.0",
+            announcedAddress: publicIp,
+        },
+    ];
+
+    if (privateIp) {
+        listenInfos.push({
+            protocol: "udp" as const,
+            ip: "0.0.0.0",
+            announcedAddress: privateIp,
+        });
+        listenInfos.push({
+            protocol: "tcp" as const,
+            ip: "0.0.0.0",
+            announcedAddress: privateIp,
+        });
+    }
 
     return {
-        listenInfos: [
-            {
-                protocol: "udp" as const,
-                ip: "0.0.0.0",
-                announcedAddress,
-            },
-            {
-                protocol: "tcp" as const,
-                ip: "0.0.0.0",
-                announcedAddress,
-            },
-        ],
+        listenInfos,
         enableUdp: true,
         enableTcp: true,
         preferUdp: true,
