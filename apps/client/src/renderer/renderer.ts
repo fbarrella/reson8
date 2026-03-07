@@ -21,8 +21,9 @@ interface Reson8Api {
     connect(host: string, port: number | undefined, nickname: string): Promise<void>;
     disconnect(): void;
     joinVoiceChannel(channelId: string): Promise<{ success: boolean; error?: string }>;
-    leaveVoiceChannel(): void;
+    leaveVoiceChannel(joiningNext?: boolean): void;
     toggleMute(): boolean;
+    setMuted(muted: boolean): boolean;
     toggleDeafen(): boolean;
     createChannel(
         serverId: string,
@@ -52,6 +53,7 @@ let isInVoice = false;
 let isMuted = false;
 let isDeafened = false;
 let isJoiningVoice = false;
+let isPttMode = false;
 
 // Store the current tree for parent selection in the modal
 let currentTree: any[] = [];
@@ -129,6 +131,8 @@ const settingsTabRoles = document.getElementById("settings-tab-roles") as HTMLBu
 // Audio device selects (inside settings modal voice tab)
 const audioInputSelect = document.getElementById("audio-input-select") as HTMLSelectElement;
 const audioOutputSelect = document.getElementById("audio-output-select") as HTMLSelectElement;
+const btnSaveVoiceDevices = document.getElementById("btn-save-voice-devices") as HTMLButtonElement;
+const voiceDeviceUnsaved = document.getElementById("voice-device-unsaved") as HTMLSpanElement;
 
 // State for pending delete
 let pendingDeleteChannelId: string | null = null;
@@ -328,9 +332,12 @@ async function handleChannelClick(node: TreeNode): Promise<void> {
         // If already in this voice channel, do nothing
         if (currentChannelId === node.id && isInVoice) return;
 
-        // Leave previous voice channel first
+        // Leave previous voice channel first.
+        // Pass joiningNext=true so USER_LEAVE_CHANNEL is NOT emitted —
+        // USER_JOIN_CHANNEL on the server handles the atomic leave+join,
+        // avoiding interleaved PRESENCE_UPDATE events that cause dual-channel glitch.
         if (isInVoice) {
-            api.leaveVoiceChannel();
+            api.leaveVoiceChannel(true);
             isInVoice = false;
         }
 
@@ -345,8 +352,14 @@ async function handleChannelClick(node: TreeNode): Promise<void> {
 
         if (result.success) {
             isInVoice = true;
-            isMuted = false;
             isDeafened = false;
+            // If PTT Mode is on, force-mute the mic immediately on join
+            if (isPttMode) {
+                api.setMuted(true);
+                isMuted = true;
+            } else {
+                isMuted = false;
+            }
             updateVoiceUI(node.name);
             log(`Joined voice channel: ${node.name}`, "success");
         } else {
@@ -895,6 +908,10 @@ if (savedInputDevice) {
 }
 
 async function populateAudioDevices(): Promise<void> {
+    // Read fresh from localStorage every time so saved choices are reflected on re-open
+    const currentInputDevice = localStorage.getItem("reson8-audio-input") || "";
+    const currentOutputDevice = localStorage.getItem("reson8-audio-output") || "";
+
     const { inputs, outputs } = await api.enumerateAudioDevices();
 
     audioInputSelect.innerHTML = '<option value="">System Default</option>';
@@ -902,7 +919,7 @@ async function populateAudioDevices(): Promise<void> {
         const opt = document.createElement("option");
         opt.value = d.deviceId;
         opt.textContent = d.label;
-        if (d.deviceId === savedInputDevice) opt.selected = true;
+        if (d.deviceId === currentInputDevice) opt.selected = true;
         audioInputSelect.appendChild(opt);
     }
 
@@ -911,19 +928,27 @@ async function populateAudioDevices(): Promise<void> {
         const opt = document.createElement("option");
         opt.value = d.deviceId;
         opt.textContent = d.label;
-        if (d.deviceId === savedOutputDevice) opt.selected = true;
+        if (d.deviceId === currentOutputDevice) opt.selected = true;
         audioOutputSelect.appendChild(opt);
     }
 }
 
-audioInputSelect.addEventListener("change", () => {
-    const deviceId = audioInputSelect.value || null;
-    api.setAudioInputDevice(deviceId);
-    localStorage.setItem("reson8-audio-input", audioInputSelect.value);
-    log(`Microphone set to: ${audioInputSelect.selectedOptions[0]?.textContent}`, "info");
-});
+// Mark unsaved changes when the user changes either device selector
+function markVoiceDevicesDirty(): void {
+    voiceDeviceUnsaved.style.display = "inline";
+}
 
-audioOutputSelect.addEventListener("change", () => {
+audioInputSelect.addEventListener("change", markVoiceDevicesDirty);
+audioOutputSelect.addEventListener("change", markVoiceDevicesDirty);
+
+// Save button — applies + persists both device selections
+btnSaveVoiceDevices.addEventListener("click", () => {
+    // Apply microphone change
+    const inputId = audioInputSelect.value || null;
+    api.setAudioInputDevice(inputId);
+    localStorage.setItem("reson8-audio-input", audioInputSelect.value);
+
+    // Apply speaker change (can be done live for existing audio elements)
     localStorage.setItem("reson8-audio-output", audioOutputSelect.value);
     const audioEls = document.querySelectorAll("audio");
     for (const el of audioEls) {
@@ -931,7 +956,17 @@ audioOutputSelect.addEventListener("change", () => {
             (el as any).setSinkId(audioOutputSelect.value).catch(() => { });
         }
     }
-    log(`Speaker set to: ${audioOutputSelect.selectedOptions[0]?.textContent}`, "info");
+
+    // Dismiss the unsaved indicator
+    voiceDeviceUnsaved.style.display = "none";
+
+    const inputLabel = audioInputSelect.selectedOptions[0]?.textContent ?? "System Default";
+    const outputLabel = audioOutputSelect.selectedOptions[0]?.textContent ?? "System Default";
+    log(`Voice devices saved — Mic: ${inputLabel} | Speaker: ${outputLabel}`, "success");
+
+    if (isInVoice) {
+        log("Microphone change will apply when you next join a voice channel.", "info");
+    }
 });
 
 // ── Multi-Key Combo Shortcuts ───────────────────────────────────────
@@ -987,6 +1022,16 @@ function setsEqual(a: Set<string>, b: Set<string>): boolean {
     }
     return true;
 }
+
+// Load PTT Mode toggle
+const pttModeToggle = document.getElementById("ptt-mode-toggle") as HTMLInputElement;
+isPttMode = localStorage.getItem("reson8-ptt-mode") === "true";
+pttModeToggle.checked = isPttMode;
+pttModeToggle.addEventListener("change", () => {
+    isPttMode = pttModeToggle.checked;
+    localStorage.setItem("reson8-ptt-mode", String(isPttMode));
+    log(`PTT Mode ${isPttMode ? "enabled" : "disabled"}`, "info");
+});
 
 // Load saved shortcuts
 for (const slot of Object.keys(shortcuts) as ShortcutSlot[]) {
@@ -1052,9 +1097,12 @@ document.addEventListener("keydown", (e) => {
             updateVoiceUI();
             log("Disconnected from voice (shortcut)", "info");
         }
-        // PTT keydown → unmute
-        if (shortcuts.ptt && setsEqual(heldKeys, shortcuts.ptt.keys)) {
-            api.toggleMute(); // unmute
+        // PTT keydown → unmute only when PTT Mode is active
+        if (isPttMode && shortcuts.ptt && setsEqual(heldKeys, shortcuts.ptt.keys)) {
+            if (isMuted) {
+                isMuted = api.toggleMute(); // unmute
+                updateVoiceUI();
+            }
         }
     }
 });
@@ -1077,28 +1125,31 @@ document.addEventListener("keyup", (e) => {
         return;
     }
 
-    // PTT keyup → mute
-    if (shortcuts.ptt && heldKeys.has(e.code)) {
+    // PTT keyup → re-mute only when PTT Mode is active
+    if (isPttMode && shortcuts.ptt && heldKeys.has(e.code)) {
         // Check if releasing breaks the combo
         const wasMatching = setsEqual(heldKeys, shortcuts.ptt.keys);
         heldKeys.delete(e.code);
-        if (wasMatching) {
-            api.toggleMute(); // mute
+        if (wasMatching && !isMuted) {
+            isMuted = api.toggleMute(); // mute
+            updateVoiceUI();
         }
     } else {
         heldKeys.delete(e.code);
     }
 });
 
-// Global PTT from main process
+// Global PTT from main process (system-wide shortcut)
 api.on("ptt-pressed", () => {
-    if (shortcuts.ptt) {
-        api.toggleMute(); // unmute
+    if (isPttMode && shortcuts.ptt && isInVoice && isMuted) {
+        isMuted = api.toggleMute(); // unmute
+        updateVoiceUI();
     }
 });
 
 api.on("ptt-released", () => {
-    if (shortcuts.ptt) {
-        api.toggleMute(); // mute
+    if (isPttMode && shortcuts.ptt && isInVoice && !isMuted) {
+        isMuted = api.toggleMute(); // mute
+        updateVoiceUI();
     }
 });

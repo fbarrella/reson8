@@ -831,6 +831,55 @@
       color: var(--accent);
     }
 
+    /* Toggle switch */
+    .toggle-switch {
+      position: relative;
+      display: inline-block;
+      width: 36px;
+      height: 20px;
+      flex-shrink: 0;
+      cursor: pointer;
+    }
+
+    .toggle-switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+      position: absolute;
+      margin: 0;
+    }
+
+    .toggle-slider {
+      position: absolute;
+      inset: 0;
+      background: var(--bg-primary);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      transition: all 0.2s;
+    }
+
+    .toggle-slider:before {
+      content: "";
+      position: absolute;
+      height: 14px;
+      width: 14px;
+      left: 2px;
+      top: 2px;
+      background: var(--text-muted);
+      border-radius: 50%;
+      transition: all 0.2s;
+    }
+
+    .toggle-switch input:checked+.toggle-slider {
+      background: var(--accent);
+      border-color: var(--accent);
+    }
+
+    .toggle-switch input:checked+.toggle-slider:before {
+      transform: translateX(16px);
+      background: #000;
+    }
+
     .settings-select {
       width: 100%;
       margin-bottom: 12px;
@@ -1065,9 +1114,32 @@
           <option value="">System Default</option>
         </select>
 
-        <label style="margin-bottom:8px; display:block; margin-top:6px;">Keyboard Shortcuts</label>
+        <div id="voice-device-save-row"
+          style="display:flex; align-items:center; justify-content:flex-end; gap:10px; margin-bottom:16px;">
+          <span id="voice-device-unsaved" style="font-size:10px; color:var(--danger); display:none;">● Unsaved
+            changes</span>
+          <button class="btn btn-create" id="btn-save-voice-devices"
+            style="font-size:11px; padding:5px 16px;">Save</button>
+        </div>
+
+        <!-- PTT Mode — standalone section -->
+        <div
+          style="display:flex; align-items:center; justify-content:space-between; margin-bottom:16px; padding-bottom:14px; border-bottom:1px solid var(--border);">
+          <div>
+            <div style="font-size:12px; color:var(--text-primary); margin-bottom:2px;">Push-to-Talk Mode</div>
+            <div style="font-size:10px; color:var(--text-muted);">Mic is muted by default; unmutes only while PTT key is
+              held</div>
+          </div>
+          <label class="toggle-switch" style="margin-left:16px;">
+            <input type="checkbox" id="ptt-mode-toggle">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+
+        <!-- Keyboard Shortcuts -->
+        <label style="margin-bottom:8px; display:block;">Keyboard Shortcuts</label>
         <div class="shortcut-row">
-          <label>Push-to-Talk</label>
+          <label>Push-to-Talk key</label>
           <input type="text" class="shortcut-input" id="shortcut-ptt" readonly placeholder="Not set">
           <button class="btn btn-create" style="font-size:10px; padding:3px 10px;" data-shortcut-set="ptt">Set</button>
           <button class="btn btn-cancel" style="font-size:10px; padding:3px 10px;"

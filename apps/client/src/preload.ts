@@ -221,9 +221,15 @@ const api = {
         }
     },
 
-    leaveVoiceChannel(): void {
-        if (socket?.connected) {
-            // Notify server we're leaving the channel
+    /**
+     * Leave the current voice channel.
+     * @param joiningNext - When true, we are switching to another channel immediately.
+     *   Skip USER_LEAVE_CHANNEL since USER_JOIN_CHANNEL atomically handles the leave+join
+     *   on the server, avoiding interleaved PRESENCE_UPDATE races.
+     */
+    leaveVoiceChannel(joiningNext = false): void {
+        if (!joiningNext && socket?.connected) {
+            // Only emit USER_LEAVE_CHANNEL when truly leaving (not switching)
             const channelId = voiceService?.currentChannelId;
             if (channelId) {
                 socket.emit("USER_LEAVE_CHANNEL", { channelId });
@@ -238,6 +244,10 @@ const api = {
 
     toggleMute(): boolean {
         return voiceService?.toggleMute() ?? false;
+    },
+
+    setMuted(muted: boolean): boolean {
+        return voiceService?.setMuted(muted) ?? false;
     },
 
     toggleDeafen(): boolean {
