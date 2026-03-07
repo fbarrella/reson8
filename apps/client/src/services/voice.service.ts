@@ -325,6 +325,14 @@ export class VoiceService {
         return this.producer.paused;
     }
 
+    /** Deterministically set mute state (true = muted/paused). */
+    setMuted(muted: boolean): boolean {
+        if (!this.producer) return false;
+        if (muted && !this.producer.paused) this.producer.pause();
+        if (!muted && this.producer.paused) this.producer.resume();
+        return this.producer.paused;
+    }
+
     /** Toggle deafen (mutes/unmutes all audio elements). */
     toggleDeafen(): boolean {
         this._isDeafened = !this._isDeafened;

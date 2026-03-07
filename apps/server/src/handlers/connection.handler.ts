@@ -182,36 +182,61 @@ export function registerConnectionHandlers(
 
                 const { channelId } = payload;
                 const userId = socket.data.userId;
+                const previousChannelId = socket.data.currentChannelId;
 
-                // Leave previous channel room if any
-                if (socket.data.currentChannelId) {
-                    await socket.leave(`channel:${socket.data.currentChannelId}`);
+                // ── 1. Move socket rooms ─────────────────────────────────────
+                // Leave old room first, then join new — Socket.io room membership
+                // becomes the single source of truth for who is in which channel.
+                if (previousChannelId && previousChannelId !== channelId) {
+                    await socket.leave(`channel:${previousChannelId}`);
+
+                    // Notify peers in old channel that producer is gone
+                    const producerId = mediasoup.getSession(previousChannelId, userId)?.producer?.id;
+                    if (producerId) {
+                        socket.to(`channel:${previousChannelId}`).emit("PRODUCER_CLOSED", {
+                            userId,
+                            producerId,
+                        });
+                    }
+                    mediasoup.cleanupUserSession(previousChannelId, userId);
                 }
 
-                // Join new channel
                 socket.data.currentChannelId = channelId;
                 await socket.join(`channel:${channelId}`);
-                await presence.joinChannel(userId, channelId);
 
-                // Get current occupants and broadcast presence update
-                const occupantIds = await presence.getChannelOccupants(channelId);
-                const occupants: IUserPresence[] = await Promise.all(
-                    occupantIds.map(async (uid) => {
-                        const p = await presence.getUserPresence(uid);
-                        return {
-                            userId: uid,
-                            nickname: p?.nickname ?? "Unknown",
-                            isMuted: false,
-                            isDeafened: false,
-                            isAway: false,
-                        };
-                    }),
-                );
+                // ── 2. Broadcast PRESENCE_UPDATE for old channel ─────────────
+                // Build occupant list directly from Socket.io room — no Redis
+                if (previousChannelId && previousChannelId !== channelId) {
+                    const prevSockets = await io.in(`channel:${previousChannelId}`).fetchSockets();
+                    const prevOccupants: IUserPresence[] = prevSockets.map((s) => ({
+                        userId: s.data.userId ?? "",
+                        nickname: s.data.nickname ?? "Unknown",
+                        isMuted: false,
+                        isDeafened: false,
+                        isAway: false,
+                    }));
+                    io.to(`server:${socket.data.serverId}`).emit("PRESENCE_UPDATE", {
+                        channelId: previousChannelId,
+                        occupants: prevOccupants,
+                    });
+                }
 
+                // ── 3. Broadcast PRESENCE_UPDATE for new channel ─────────────
+                const newSockets = await io.in(`channel:${channelId}`).fetchSockets();
+                const occupants: IUserPresence[] = newSockets.map((s) => ({
+                    userId: s.data.userId ?? "",
+                    nickname: s.data.nickname ?? "Unknown",
+                    isMuted: false,
+                    isDeafened: false,
+                    isAway: false,
+                }));
                 io.to(`server:${socket.data.serverId}`).emit("PRESENCE_UPDATE", {
                     channelId,
                     occupants,
                 });
+
+                // Also update Redis presence (for server-level tracking)
+                await presence.joinChannel(userId, channelId);
 
                 ack({ success: true });
 
@@ -269,20 +294,15 @@ export function registerConnectionHandlers(
 
                 socket.data.currentChannelId = null;
 
-                // Broadcast updated occupants
-                const occupantIds = await presence.getChannelOccupants(channelId);
-                const occupants: IUserPresence[] = await Promise.all(
-                    occupantIds.map(async (uid) => {
-                        const p = await presence.getUserPresence(uid);
-                        return {
-                            userId: uid,
-                            nickname: p?.nickname ?? "Unknown",
-                            isMuted: false,
-                            isDeafened: false,
-                            isAway: false,
-                        };
-                    }),
-                );
+                // Broadcast updated occupants using Socket.io room (ground truth)
+                const remainingSockets = await io.in(`channel:${channelId}`).fetchSockets();
+                const occupants: IUserPresence[] = remainingSockets.map((s) => ({
+                    userId: s.data.userId ?? "",
+                    nickname: s.data.nickname ?? "Unknown",
+                    isMuted: false,
+                    isDeafened: false,
+                    isAway: false,
+                }));
 
                 io.to(`server:${socket.data.serverId}`).emit("PRESENCE_UPDATE", {
                     channelId,
