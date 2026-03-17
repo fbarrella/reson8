@@ -130,6 +130,7 @@ const settingsTabRoles = document.getElementById("settings-tab-roles") as HTMLBu
 // Audio device selects (inside settings modal voice tab)
 const audioInputSelect = document.getElementById("audio-input-select") as HTMLSelectElement;
 const audioOutputSelect = document.getElementById("audio-output-select") as HTMLSelectElement;
+const btnSaveDevices = document.getElementById("btn-save-devices") as HTMLButtonElement;
 
 // State for pending delete
 let pendingDeleteChannelId: string | null = null;
@@ -910,14 +911,29 @@ adminModal.addEventListener("click", (e) => {
 
 // ── Audio Device Selection ─────────────────────────────────────────
 
-const savedInputDevice = localStorage.getItem("reson8-audio-input") || "";
-const savedOutputDevice = localStorage.getItem("reson8-audio-output") || "";
+let savedInputDevice = localStorage.getItem("reson8-audio-input") || "";
+let savedOutputDevice = localStorage.getItem("reson8-audio-output") || "";
+
+// Pending (staged) values — only applied on Save
+let pendingInputDevice: string | null = null;
+let pendingOutputDevice: string | null = null;
 
 if (savedInputDevice) {
     api.setAudioInputDevice(savedInputDevice);
 }
 
+function updateSaveBtnVisibility(): void {
+    const inputChanged = pendingInputDevice !== null && pendingInputDevice !== savedInputDevice;
+    const outputChanged = pendingOutputDevice !== null && pendingOutputDevice !== savedOutputDevice;
+    btnSaveDevices.style.display = inputChanged || outputChanged ? "" : "none";
+}
+
 async function populateAudioDevices(): Promise<void> {
+    // Reset pending state on every panel open
+    pendingInputDevice = null;
+    pendingOutputDevice = null;
+    btnSaveDevices.style.display = "none";
+
     const { inputs, outputs } = await api.enumerateAudioDevices();
 
     audioInputSelect.innerHTML = '<option value="">System Default</option>';
@@ -939,22 +955,45 @@ async function populateAudioDevices(): Promise<void> {
     }
 }
 
+// Stage selection — do NOT apply yet
 audioInputSelect.addEventListener("change", () => {
-    const deviceId = audioInputSelect.value || null;
-    api.setAudioInputDevice(deviceId);
-    localStorage.setItem("reson8-audio-input", audioInputSelect.value);
-    log(`Microphone set to: ${audioInputSelect.selectedOptions[0]?.textContent}`, "info");
+    pendingInputDevice = audioInputSelect.value;
+    updateSaveBtnVisibility();
 });
 
 audioOutputSelect.addEventListener("change", () => {
-    localStorage.setItem("reson8-audio-output", audioOutputSelect.value);
-    const audioEls = document.querySelectorAll("audio");
-    for (const el of audioEls) {
-        if ((el as any).setSinkId) {
-            (el as any).setSinkId(audioOutputSelect.value).catch(() => { });
-        }
+    pendingOutputDevice = audioOutputSelect.value;
+    updateSaveBtnVisibility();
+});
+
+// Apply staged devices on Save
+btnSaveDevices.addEventListener("click", () => {
+    // Apply input device
+    if (pendingInputDevice !== null && pendingInputDevice !== savedInputDevice) {
+        const deviceId = pendingInputDevice || null;
+        api.setAudioInputDevice(deviceId);
+        localStorage.setItem("reson8-audio-input", pendingInputDevice);
+        savedInputDevice = pendingInputDevice;
+        log(`Microphone set to: ${audioInputSelect.selectedOptions[0]?.textContent}`, "info");
     }
-    log(`Speaker set to: ${audioOutputSelect.selectedOptions[0]?.textContent}`, "info");
+
+    // Apply output device
+    if (pendingOutputDevice !== null && pendingOutputDevice !== savedOutputDevice) {
+        localStorage.setItem("reson8-audio-output", pendingOutputDevice);
+        savedOutputDevice = pendingOutputDevice;
+        const audioEls = document.querySelectorAll("audio");
+        for (const el of audioEls) {
+            if ((el as any).setSinkId) {
+                (el as any).setSinkId(pendingOutputDevice).catch(() => { });
+            }
+        }
+        log(`Speaker set to: ${audioOutputSelect.selectedOptions[0]?.textContent}`, "info");
+    }
+
+    // Reset pending state
+    pendingInputDevice = null;
+    pendingOutputDevice = null;
+    btnSaveDevices.style.display = "none";
 });
 
 // ── Multi-Key Combo Shortcuts ───────────────────────────────────────
