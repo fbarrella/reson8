@@ -37,24 +37,30 @@ export const MEDIA_CODECS = [
 
 /**
  * WebRtcTransport options factory.
- * Uses MEDIASOUP_ANNOUNCED_IP env var for NAT traversal on VPS deployments.
+ * Uses MEDIASOUP_ANNOUNCED_IP for the public/primary IP and optionally
+ * MEDIASOUP_PRIVATE_ANNOUNCED_IP for a LAN/private IP to solve hairpin NAT.
+ * When both are set, ICE candidates are generated for both IPs and WebRTC
+ * connectivity checks automatically select whichever is reachable.
  */
 export function getTransportOptions(): mediasoupTypes.WebRtcTransportOptions {
     const announcedAddress = process.env.MEDIASOUP_ANNOUNCED_IP || "127.0.0.1";
+    const privateAnnouncedAddress = process.env.MEDIASOUP_PRIVATE_ANNOUNCED_IP;
+
+    const listenInfos: mediasoupTypes.TransportListenInfo[] = [
+        { protocol: "udp" as const, ip: "0.0.0.0", announcedAddress },
+        { protocol: "tcp" as const, ip: "0.0.0.0", announcedAddress },
+    ];
+
+    // Add private/LAN ICE candidates for hairpin NAT scenarios
+    if (privateAnnouncedAddress) {
+        listenInfos.push(
+            { protocol: "udp" as const, ip: "0.0.0.0", announcedAddress: privateAnnouncedAddress },
+            { protocol: "tcp" as const, ip: "0.0.0.0", announcedAddress: privateAnnouncedAddress },
+        );
+    }
 
     return {
-        listenInfos: [
-            {
-                protocol: "udp" as const,
-                ip: "0.0.0.0",
-                announcedAddress,
-            },
-            {
-                protocol: "tcp" as const,
-                ip: "0.0.0.0",
-                announcedAddress,
-            },
-        ],
+        listenInfos,
         enableUdp: true,
         enableTcp: true,
         preferUdp: true,

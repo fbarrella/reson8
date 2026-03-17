@@ -1,6 +1,6 @@
 {
     "name": "@reson8/client",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "description": "Reson8 — Voice and text communication client",
     "author": {
         "name": "Felipe B. Netto",
