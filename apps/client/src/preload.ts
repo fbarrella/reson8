@@ -199,9 +199,13 @@ const api = {
         channelId: string,
     ): Promise<{ success: boolean; error?: string }> {
         try {
-            if (!voiceService || !socket?.connected) {
+            if (!socket?.connected) {
                 return { success: false, error: "Not connected" };
             }
+
+            // Clean up any existing voice session before starting a new one
+            voiceService?.cleanup();
+            voiceService = new VoiceService(createSignaling());
 
             // First, join the channel via Socket.io so the server sets currentChannelId
             const joinRes = await new Promise<{ success: boolean; error?: string }>(
