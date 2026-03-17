@@ -325,6 +325,16 @@ export class VoiceService {
         return this.producer.paused;
     }
 
+    /** Explicitly set the mute state (used by PTT mode). */
+    setMuted(muted: boolean): void {
+        if (!this.producer) return;
+        if (muted && !this.producer.paused) {
+            this.producer.pause();
+        } else if (!muted && this.producer.paused) {
+            this.producer.resume();
+        }
+    }
+
     /** Toggle deafen (mutes/unmutes all audio elements). */
     toggleDeafen(): boolean {
         this._isDeafened = !this._isDeafened;
