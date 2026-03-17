@@ -926,6 +926,11 @@
     ::-webkit-scrollbar-thumb:hover {
       background: var(--text-muted);
     }
+
+    #remember-me {
+      accent-color: var(--accent);
+      cursor: pointer;
+    }
   </style>
 </head>
 
@@ -935,6 +940,10 @@
     <span class="brand"><img src="logo.png" alt="Reson8 Logo">Reson8</span>
     <input type="text" id="server-url" placeholder="Server URL (e.g. server.reson8.com or localhost:9800)">
     <input type="text" id="nickname" placeholder="Nickname" value="User">
+    <label id="remember-me-label" style="display:flex; align-items:center; gap:4px; font-size:11px; color:var(--text-secondary); cursor:pointer; user-select:none;">
+      <input type="checkbox" id="remember-me">
+      Remember
+    </label>
     <button class="btn btn-connect" id="btn-connect">Connect</button>
     <button class="btn btn-disconnect" id="btn-disconnect" disabled>Disconnect</button>
   </div>

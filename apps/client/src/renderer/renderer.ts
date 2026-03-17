@@ -63,6 +63,7 @@ const serverUrlInput = document.getElementById("server-url") as HTMLInputElement
 const nicknameInput = document.getElementById("nickname") as HTMLInputElement;
 const btnConnect = document.getElementById("btn-connect") as HTMLButtonElement;
 const btnDisconnect = document.getElementById("btn-disconnect") as HTMLButtonElement;
+const rememberMeCheckbox = document.getElementById("remember-me") as HTMLInputElement;
 
 const channelTree = document.getElementById("channel-tree") as HTMLDivElement;
 const eventLog = document.getElementById("event-log") as HTMLDivElement;
@@ -88,6 +89,24 @@ setTimeout(() => {
     const id = api.getInstanceId();
     if (id) statusInstance.textContent = `ID: ${id}`;
 }, 100);
+
+// ── Remember Me: auto-populate saved server info ──────────────────────────
+if (localStorage.getItem("reson8-remember-me") === "true") {
+    rememberMeCheckbox.checked = true;
+    const savedUrl = localStorage.getItem("reson8-server-url");
+    const savedNick = localStorage.getItem("reson8-nickname");
+    if (savedUrl) serverUrlInput.value = savedUrl;
+    if (savedNick) nicknameInput.value = savedNick;
+}
+
+// When unchecked, immediately clear saved data
+rememberMeCheckbox.addEventListener("change", () => {
+    if (!rememberMeCheckbox.checked) {
+        localStorage.removeItem("reson8-remember-me");
+        localStorage.removeItem("reson8-server-url");
+        localStorage.removeItem("reson8-nickname");
+    }
+});
 
 // Copy instance ID to clipboard
 btnCopyId.addEventListener("click", () => {
@@ -183,6 +202,17 @@ btnConnect.addEventListener("click", () => {
     if (!host) {
         log("Please enter a server URL", "error");
         return;
+    }
+
+    // Persist or clear server info based on Remember Me checkbox
+    if (rememberMeCheckbox.checked) {
+        localStorage.setItem("reson8-remember-me", "true");
+        localStorage.setItem("reson8-server-url", serverUrlInput.value.trim());
+        localStorage.setItem("reson8-nickname", nickname);
+    } else {
+        localStorage.removeItem("reson8-remember-me");
+        localStorage.removeItem("reson8-server-url");
+        localStorage.removeItem("reson8-nickname");
     }
 
     log(`Connecting to ${host}${port ? `:${port}` : ""} as "${nickname}"...`, "info");
