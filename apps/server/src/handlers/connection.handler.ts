@@ -139,6 +139,36 @@ export function registerConnectionHandlers(
 
                 const tree = buildChannelTree(channelDtos);
 
+                // Hydrate occupants from Redis presence so joining
+                // clients see who is already in voice channels
+                async function hydrateOccupants(
+                    nodes: typeof tree,
+                ): Promise<void> {
+                    for (const node of nodes) {
+                        const occupantIds =
+                            await presence.getChannelOccupants(node.id);
+                        if (occupantIds.length > 0) {
+                            node.occupants = await Promise.all(
+                                occupantIds.map(async (uid) => {
+                                    const p =
+                                        await presence.getUserPresence(uid);
+                                    return {
+                                        userId: uid,
+                                        nickname: p?.nickname ?? "Unknown",
+                                        isMuted: false,
+                                        isDeafened: false,
+                                        isAway: false,
+                                    };
+                                }),
+                            );
+                        }
+                        if (node.children.length > 0) {
+                            await hydrateOccupants(node.children);
+                        }
+                    }
+                }
+                await hydrateOccupants(tree);
+
                 socket.emit("CHANNEL_TREE_UPDATE", { serverId, tree });
 
                 ack({ success: true, serverId });
