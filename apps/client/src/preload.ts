@@ -104,7 +104,7 @@ const api = {
 
     // ── Connection ──────────────────────────────────────────────────────────
 
-    async connect(host: string, port: number | undefined, nickname: string): Promise<void> {
+    async connect(host: string, port: number | undefined, nickname: string, password?: string): Promise<void> {
         if (socket?.connected) {
             socket.disconnect();
         }
@@ -129,7 +129,7 @@ const api = {
             // Join the server — let the server decide the serverId
             socket!.emit(
                 "USER_JOIN_SERVER",
-                { nickname, instanceId },
+                { nickname, instanceId, password },
                 (res) => {
                     if (res.success && res.serverId) {
                         emit("connected", { serverId: res.serverId, instanceId });
@@ -138,6 +138,13 @@ const api = {
                             code: "JOIN_FAILED",
                             message: res.error ?? "Failed to join server",
                         });
+                        // Tear down the transport-level socket so a
+                        // subsequent connect() doesn't fire a spurious
+                        // "Disconnected" event for a session that never
+                        // logically connected.
+                        socket?.removeAllListeners();
+                        socket?.disconnect();
+                        socket = null;
                     }
                 },
             );

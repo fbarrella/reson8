@@ -48,7 +48,15 @@ export function registerConnectionHandlers(
         // ── USER_JOIN_SERVER ────────────────────────────────────────────────
         socket.on("USER_JOIN_SERVER", async (payload, ack) => {
             try {
-                const { nickname, instanceId } = payload;
+                const { nickname, instanceId, password } = payload;
+
+                // Password check (if SERVER_PRIVATE_PASSWORD is set)
+                const serverPassword = process.env.SERVER_PRIVATE_PASSWORD;
+                if (serverPassword && password !== serverPassword) {
+                    ack({ success: false, error: "Invalid server password" });
+                    return;
+                }
+
                 // Use provided serverId or fall back to the bootstrapped one
                 const serverId = payload.serverId || app.serverId;
 

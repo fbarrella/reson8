@@ -27,7 +27,7 @@ export interface ClientToServerEvents {
      * Client requests to join a server instance.
      */
     USER_JOIN_SERVER: (
-        payload: { serverId?: string; nickname: string; instanceId: string },
+        payload: { serverId?: string; nickname: string; instanceId: string; password?: string },
         ack: (response: { success: boolean; serverId?: string; error?: string }) => void,
     ) => void;
 
