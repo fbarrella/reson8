@@ -177,9 +177,42 @@ export function registerConnectionHandlers(
                 const { channelId } = payload;
                 const userId = socket.data.userId;
 
-                // Leave previous channel room if any
+                // Full cleanup of previous channel if any
                 if (socket.data.currentChannelId) {
-                    await socket.leave(`channel:${socket.data.currentChannelId}`);
+                    const prevChannelId = socket.data.currentChannelId;
+
+                    // Clean up mediasoup voice session in old channel
+                    const producerId = mediasoup.getSession(prevChannelId, userId)?.producer?.id;
+                    if (producerId) {
+                        socket.to(`channel:${prevChannelId}`).emit("PRODUCER_CLOSED", {
+                            userId,
+                            producerId,
+                        });
+                    }
+                    mediasoup.cleanupUserSession(prevChannelId, userId);
+
+                    // Leave old channel presence + room
+                    await presence.leaveChannel(userId, prevChannelId);
+                    await socket.leave(`channel:${prevChannelId}`);
+
+                    // Broadcast updated occupants for the old channel
+                    const oldOccupantIds = await presence.getChannelOccupants(prevChannelId);
+                    const oldOccupants: IUserPresence[] = await Promise.all(
+                        oldOccupantIds.map(async (uid) => {
+                            const p = await presence.getUserPresence(uid);
+                            return {
+                                userId: uid,
+                                nickname: p?.nickname ?? "Unknown",
+                                isMuted: false,
+                                isDeafened: false,
+                                isAway: false,
+                            };
+                        }),
+                    );
+                    io.to(`server:${socket.data.serverId}`).emit("PRESENCE_UPDATE", {
+                        channelId: prevChannelId,
+                        occupants: oldOccupants,
+                    });
                 }
 
                 // Join new channel

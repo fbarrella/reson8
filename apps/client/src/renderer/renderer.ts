@@ -320,12 +320,17 @@ function addParentOptions(nodes: TreeNode[], depth: number): void {
 
 // ── Channel Interaction ───────────────────────────────────────────────────
 
+let isJoiningChannel = false;
+
 async function handleChannelClick(node: TreeNode): Promise<void> {
     if (!isConnected) return;
+    if (isJoiningChannel) return; // prevent rapid double-clicks
 
     if (node.type === "VOICE") {
         // If already in this voice channel, do nothing
         if (currentChannelId === node.id && isInVoice) return;
+
+        isJoiningChannel = true;
 
         // Leave previous voice channel first
         if (isInVoice) {
@@ -336,16 +341,20 @@ async function handleChannelClick(node: TreeNode): Promise<void> {
         currentChannelId = node.id;
         log(`Joining voice channel: ${node.name}...`, "info");
 
-        const result = await api.joinVoiceChannel(node.id);
-        if (result.success) {
-            isInVoice = true;
-            isMuted = false;
-            isDeafened = false;
-            updateVoiceUI(node.name);
-            log(`Joined voice channel: ${node.name}`, "success");
-        } else {
-            log(`Failed to join voice: ${result.error}`, "error");
-            currentChannelId = null;
+        try {
+            const result = await api.joinVoiceChannel(node.id);
+            if (result.success) {
+                isInVoice = true;
+                isMuted = false;
+                isDeafened = false;
+                updateVoiceUI(node.name);
+                log(`Joined voice channel: ${node.name}`, "success");
+            } else {
+                log(`Failed to join voice: ${result.error}`, "error");
+                currentChannelId = null;
+            }
+        } finally {
+            isJoiningChannel = false;
         }
     } else {
         // Text channel — open (or focus) a chat tab
