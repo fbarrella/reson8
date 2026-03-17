@@ -24,6 +24,7 @@ interface Reson8Api {
     leaveVoiceChannel(): void;
     toggleMute(): boolean;
     toggleDeafen(): boolean;
+    setMuted(muted: boolean): void;
     createChannel(
         serverId: string,
         name: string,
@@ -51,6 +52,7 @@ let currentChannelId: string | null = null;
 let isInVoice = false;
 let isMuted = false;
 let isDeafened = false;
+let pttModeEnabled = localStorage.getItem("reson8-ptt-mode") === "true";
 
 // Store the current tree for parent selection in the modal
 let currentTree: any[] = [];
@@ -345,8 +347,17 @@ async function handleChannelClick(node: TreeNode): Promise<void> {
             const result = await api.joinVoiceChannel(node.id);
             if (result.success) {
                 isInVoice = true;
-                isMuted = false;
                 isDeafened = false;
+
+                // In PTT mode, mic starts muted (resting state) but isMuted=false
+                // so PTT key can activate it. isMuted=true means "PTT locked".
+                if (pttModeEnabled) {
+                    api.setMuted(true);
+                    isMuted = false;
+                } else {
+                    isMuted = false;
+                }
+
                 updateVoiceUI(node.name);
                 log(`Joined voice channel: ${node.name}`, "success");
             } else {
@@ -394,7 +405,16 @@ function updateVoiceUI(channelName?: string): void {
 }
 
 btnMute.addEventListener("click", () => {
-    isMuted = api.toggleMute();
+    if (pttModeEnabled) {
+        // In PTT mode: mute = lock PTT (block key), unmute = unlock PTT (allow key)
+        isMuted = !isMuted;
+        if (isMuted) {
+            api.setMuted(true); // ensure hard-muted while locked
+        }
+        // When unlocking (isMuted=false), mic stays muted — PTT resting state
+    } else {
+        isMuted = api.toggleMute();
+    }
     updateVoiceUI();
 });
 
@@ -1041,7 +1061,14 @@ document.addEventListener("keydown", (e) => {
     // Check shortcuts (skip PTT which uses press/release)
     if (!e.repeat) {
         if (shortcuts.mute && setsEqual(heldKeys, shortcuts.mute.keys)) {
-            isMuted = api.toggleMute();
+            if (pttModeEnabled) {
+                isMuted = !isMuted;
+                if (isMuted) {
+                    api.setMuted(true);
+                }
+            } else {
+                isMuted = api.toggleMute();
+            }
             updateVoiceUI();
         }
         if (shortcuts.deafen && setsEqual(heldKeys, shortcuts.deafen.keys)) {
@@ -1055,9 +1082,10 @@ document.addEventListener("keydown", (e) => {
             updateVoiceUI();
             log("Disconnected from voice (shortcut)", "info");
         }
-        // PTT keydown → unmute
-        if (shortcuts.ptt && setsEqual(heldKeys, shortcuts.ptt.keys)) {
-            api.toggleMute(); // unmute
+        // PTT keydown → unmute (only in PTT mode, and only if not locked/muted)
+        if (shortcuts.ptt && setsEqual(heldKeys, shortcuts.ptt.keys) && pttModeEnabled && isInVoice && !isMuted) {
+            api.setMuted(false);
+            updateVoiceUI();
         }
     }
 });
@@ -1080,13 +1108,14 @@ document.addEventListener("keyup", (e) => {
         return;
     }
 
-    // PTT keyup → mute
+    // PTT keyup → mute (only in PTT mode)
     if (shortcuts.ptt && heldKeys.has(e.code)) {
         // Check if releasing breaks the combo
         const wasMatching = setsEqual(heldKeys, shortcuts.ptt.keys);
         heldKeys.delete(e.code);
-        if (wasMatching) {
-            api.toggleMute(); // mute
+        if (wasMatching && pttModeEnabled && isInVoice && !isMuted) {
+            api.setMuted(true);
+            updateVoiceUI();
         }
     } else {
         heldKeys.delete(e.code);
@@ -1095,13 +1124,63 @@ document.addEventListener("keyup", (e) => {
 
 // Global PTT from main process
 api.on("ptt-pressed", () => {
-    if (shortcuts.ptt) {
-        api.toggleMute(); // unmute
+    if (shortcuts.ptt && pttModeEnabled && isInVoice && !isMuted) {
+        api.setMuted(false);
+        updateVoiceUI();
     }
 });
 
 api.on("ptt-released", () => {
-    if (shortcuts.ptt) {
-        api.toggleMute(); // mute
+    if (shortcuts.ptt && pttModeEnabled && isInVoice && !isMuted) {
+        api.setMuted(true);
+        updateVoiceUI();
     }
+});
+
+// ── PTT Mode Toggle ───────────────────────────────────────────────────
+
+const btnVoiceActivation = document.getElementById("btn-voice-activation") as HTMLButtonElement;
+const btnPttMode = document.getElementById("btn-ptt-mode") as HTMLButtonElement;
+
+function updatePttModeUI(): void {
+    if (pttModeEnabled) {
+        btnPttMode.style.borderColor = "var(--accent)";
+        btnPttMode.style.color = "var(--accent)";
+        btnVoiceActivation.style.borderColor = "var(--border)";
+        btnVoiceActivation.style.color = "var(--text-secondary)";
+    } else {
+        btnVoiceActivation.style.borderColor = "var(--accent)";
+        btnVoiceActivation.style.color = "var(--accent)";
+        btnPttMode.style.borderColor = "var(--border)";
+        btnPttMode.style.color = "var(--text-secondary)";
+    }
+}
+
+// Set initial UI state
+updatePttModeUI();
+
+btnVoiceActivation.addEventListener("click", () => {
+    pttModeEnabled = false;
+    localStorage.setItem("reson8-ptt-mode", "false");
+    updatePttModeUI();
+    // If currently in voice, unmute mic so it streams immediately
+    if (isInVoice) {
+        api.setMuted(false);
+        isMuted = false;
+        updateVoiceUI();
+    }
+    log("Voice input mode: Voice Activation", "info");
+});
+
+btnPttMode.addEventListener("click", () => {
+    pttModeEnabled = true;
+    localStorage.setItem("reson8-ptt-mode", "true");
+    updatePttModeUI();
+    // If currently in voice, mute mic (PTT resting state) but don't lock
+    if (isInVoice) {
+        api.setMuted(true);
+        isMuted = false; // not locked, PTT key works
+        updateVoiceUI();
+    }
+    log("Voice input mode: Push-To-Talk", "info");
 });

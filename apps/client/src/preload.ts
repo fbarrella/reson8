@@ -248,6 +248,10 @@ const api = {
         return voiceService?.toggleDeafen() ?? false;
     },
 
+    setMuted(muted: boolean): void {
+        voiceService?.setMuted(muted);
+    },
+
     // ── Audio Settings ──────────────────────────────────────────────────────
 
     async enumerateAudioDevices(): Promise<{ inputs: { deviceId: string; label: string }[]; outputs: { deviceId: string; label: string }[] }> {
