@@ -18,7 +18,7 @@ interface ChatMessage {
 
 interface Reson8Api {
     getInstanceId(): string;
-    connect(host: string, port: number | undefined, nickname: string): Promise<void>;
+    connect(host: string, port: number | undefined, nickname: string, password?: string): Promise<void>;
     disconnect(): void;
     joinVoiceChannel(channelId: string): Promise<{ success: boolean; error?: string }>;
     leaveVoiceChannel(): void;
@@ -61,6 +61,7 @@ let currentTree: any[] = [];
 
 const serverUrlInput = document.getElementById("server-url") as HTMLInputElement;
 const nicknameInput = document.getElementById("nickname") as HTMLInputElement;
+const serverPasswordInput = document.getElementById("server-password") as HTMLInputElement;
 const btnConnect = document.getElementById("btn-connect") as HTMLButtonElement;
 const btnDisconnect = document.getElementById("btn-disconnect") as HTMLButtonElement;
 const rememberMeCheckbox = document.getElementById("remember-me") as HTMLInputElement;
@@ -95,8 +96,10 @@ if (localStorage.getItem("reson8-remember-me") === "true") {
     rememberMeCheckbox.checked = true;
     const savedUrl = localStorage.getItem("reson8-server-url");
     const savedNick = localStorage.getItem("reson8-nickname");
+    const savedPassword = localStorage.getItem("reson8-server-password");
     if (savedUrl) serverUrlInput.value = savedUrl;
     if (savedNick) nicknameInput.value = savedNick;
+    if (savedPassword) serverPasswordInput.value = savedPassword;
 }
 
 // When unchecked, immediately clear saved data
@@ -105,6 +108,7 @@ rememberMeCheckbox.addEventListener("change", () => {
         localStorage.removeItem("reson8-remember-me");
         localStorage.removeItem("reson8-server-url");
         localStorage.removeItem("reson8-nickname");
+        localStorage.removeItem("reson8-server-password");
     }
 });
 
@@ -198,6 +202,7 @@ function parseServerUrl(raw: string): { host: string; port: number | undefined }
 btnConnect.addEventListener("click", () => {
     const { host, port } = parseServerUrl(serverUrlInput.value);
     const nickname = nicknameInput.value.trim() || "User";
+    const password = serverPasswordInput.value || undefined;
 
     if (!host) {
         log("Please enter a server URL", "error");
@@ -209,14 +214,16 @@ btnConnect.addEventListener("click", () => {
         localStorage.setItem("reson8-remember-me", "true");
         localStorage.setItem("reson8-server-url", serverUrlInput.value.trim());
         localStorage.setItem("reson8-nickname", nickname);
+        localStorage.setItem("reson8-server-password", serverPasswordInput.value);
     } else {
         localStorage.removeItem("reson8-remember-me");
         localStorage.removeItem("reson8-server-url");
         localStorage.removeItem("reson8-nickname");
+        localStorage.removeItem("reson8-server-password");
     }
 
     log(`Connecting to ${host}${port ? `:${port}` : ""} as "${nickname}"...`, "info");
-    api.connect(host, port, nickname);
+    api.connect(host, port, nickname, password);
 });
 
 btnDisconnect.addEventListener("click", () => {
@@ -548,6 +555,7 @@ api.on("connected", (data: { serverId: string; instanceId: string }) => {
     btnDisconnect.disabled = false;
     serverUrlInput.disabled = true;
     nicknameInput.disabled = true;
+    serverPasswordInput.disabled = true;
     statusDot.classList.add("connected");
     statusText.textContent = `Connected as ${nicknameInput.value.trim() || "User"}`;
     statusText.classList.add("connected");
@@ -577,6 +585,7 @@ api.on("disconnected", () => {
     btnDisconnect.disabled = true;
     serverUrlInput.disabled = false;
     nicknameInput.disabled = false;
+    serverPasswordInput.disabled = false;
     statusDot.classList.remove("connected");
     statusText.textContent = "Disconnected";
     statusText.classList.remove("connected");
