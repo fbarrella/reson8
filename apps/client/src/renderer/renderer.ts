@@ -77,6 +77,10 @@ let pttModeEnabled = localStorage.getItem("reson8-ptt-mode") === "true";
 let pendingAttachmentUrl: string | null = null;
 let serverBaseUrl: string = "";
 
+// Active speakers state
+const activeSpeakers = new Set<string>();
+const speakerHoldTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
 // Store the current tree for parent selection in the modal
 let currentTree: any[] = [];
 
@@ -371,6 +375,10 @@ function renderOccupants(container: HTMLElement, node: TreeNode): void {
     for (const occ of node.occupants) {
         const el = document.createElement("div");
         el.className = "tree-occupant";
+        if (activeSpeakers.has(occ.userId)) {
+            el.classList.add("speaking");
+        }
+        el.setAttribute("data-user-id", occ.userId);
         el.innerHTML = `<span class="occ-dot"></span>${escapeHtml(occ.nickname)}`;
         container.appendChild(el);
     }
@@ -629,6 +637,9 @@ api.on("disconnected", () => {
     currentChannelId = null;
     currentServerId = "";
     currentTree = [];
+    activeSpeakers.clear();
+    for (const timer of speakerHoldTimers.values()) clearTimeout(timer);
+    speakerHoldTimers.clear();
     btnConnect.disabled = false;
     btnDisconnect.disabled = true;
     serverUrlInput.disabled = false;
@@ -675,6 +686,42 @@ api.on("user-joined", (data: { nickname: string }) => {
 api.on("user-left", (data: { userId: string }) => {
     log(`A user left the server`, "info");
     updateOnlineDot();
+});
+
+// ── Active Speaker Indicator ──────────────────────────────────────────────
+
+api.on("active-speakers", (data: { channelId: string; speakers: string[] }) => {
+    const newSpeakers = new Set(data.speakers);
+
+    // Users who stopped speaking: start hold timer
+    for (const userId of activeSpeakers) {
+        if (!newSpeakers.has(userId)) {
+            // Only start a hold timer if there isn't one already
+            if (!speakerHoldTimers.has(userId)) {
+                const timer = setTimeout(() => {
+                    activeSpeakers.delete(userId);
+                    speakerHoldTimers.delete(userId);
+                    // Remove .speaking class from DOM
+                    const els = document.querySelectorAll(`.tree-occupant[data-user-id="${userId}"]`);
+                    els.forEach((el) => el.classList.remove("speaking"));
+                }, 300);
+                speakerHoldTimers.set(userId, timer);
+            }
+        }
+    }
+
+    // Users who are speaking: add immediately (cancel any pending removal)
+    for (const userId of newSpeakers) {
+        const existingTimer = speakerHoldTimers.get(userId);
+        if (existingTimer) {
+            clearTimeout(existingTimer);
+            speakerHoldTimers.delete(userId);
+        }
+        activeSpeakers.add(userId);
+        // Add .speaking class to DOM
+        const els = document.querySelectorAll(`.tree-occupant[data-user-id="${userId}"]`);
+        els.forEach((el) => el.classList.add("speaking"));
+    }
 });
 
 api.on("channel-deleted", (data: { channelId: string }) => {

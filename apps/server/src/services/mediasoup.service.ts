@@ -26,6 +26,12 @@ export interface UserVoiceSession {
     consumers: Map<string, mediasoupTypes.Consumer>; // keyed by consumerId
 }
 
+/** Callback for audio level volume events. */
+export type AudioLevelCallback = (volumes: Array<{ producerId: string; volume: number }>) => void;
+
+/** Callback for silence events (no speakers detected). */
+export type SilenceCallback = () => void;
+
 export class MediasoupService {
     private workers: mediasoupTypes.Worker[] = [];
     private nextWorkerIdx = 0;
@@ -35,6 +41,9 @@ export class MediasoupService {
 
     /** channelId → Map<userId, UserVoiceSession> */
     private sessions = new Map<string, Map<string, UserVoiceSession>>();
+
+    /** channelId → AudioLevelObserver */
+    private audioLevelObservers = new Map<string, mediasoupTypes.AudioLevelObserver>();
 
     // ── Initialization ────────────────────────────────────────────────────
 
@@ -82,6 +91,13 @@ export class MediasoupService {
 
     /** Removes a Router when no users are left in the channel. */
     removeRouter(channelId: string): void {
+        // Clean up audio level observer first
+        const observer = this.audioLevelObservers.get(channelId);
+        if (observer) {
+            observer.close();
+            this.audioLevelObservers.delete(channelId);
+        }
+
         const router = this.routers.get(channelId);
         if (router) {
             router.close();
@@ -94,6 +110,55 @@ export class MediasoupService {
     /** Returns the Router for a channel, or undefined. */
     getRouter(channelId: string): mediasoupTypes.Router | undefined {
         return this.routers.get(channelId);
+    }
+
+    // ── AudioLevelObserver management ─────────────────────────────────────
+
+    /**
+     * Gets or creates an AudioLevelObserver for a channel.
+     * The observer monitors RTP audio levels and emits events when
+     * speakers are detected or silence resumes.
+     */
+    async getOrCreateAudioLevelObserver(
+        channelId: string,
+        onVolumes: AudioLevelCallback,
+        onSilence: SilenceCallback,
+    ): Promise<mediasoupTypes.AudioLevelObserver> {
+        let observer = this.audioLevelObservers.get(channelId);
+        if (observer) return observer;
+
+        const router = this.routers.get(channelId);
+        if (!router) throw new Error(`No router for channel ${channelId}`);
+
+        observer = await router.createAudioLevelObserver({
+            maxEntries: 10,
+            threshold: -50,
+            interval: 300,
+        });
+
+        observer.on("volumes", (volumes: Array<{ producer: mediasoupTypes.Producer; volume: number }>) => {
+            const mapped = volumes.map((v) => ({
+                producerId: v.producer.id,
+                volume: v.volume,
+            }));
+            onVolumes(mapped);
+        });
+
+        observer.on("silence", () => {
+            onSilence();
+        });
+
+        this.audioLevelObservers.set(channelId, observer);
+        console.log(`[mediasoup] AudioLevelObserver created for channel ${channelId}`);
+        return observer;
+    }
+
+    /** Adds a producer to the channel's AudioLevelObserver. */
+    async addProducerToObserver(channelId: string, producer: mediasoupTypes.Producer): Promise<void> {
+        const observer = this.audioLevelObservers.get(channelId);
+        if (observer) {
+            await observer.addProducer({ producerId: producer.id });
+        }
     }
 
     // ── Transport management ──────────────────────────────────────────────
@@ -198,8 +263,25 @@ export class MediasoupService {
         );
     }
 
+    // ── Producer-to-User mapping ──────────────────────────────────────────
+
+    /** Finds the userId that owns a given producer in a channel. */
+    getUserIdByProducerId(channelId: string, producerId: string): string | undefined {
+        const channelSessions = this.sessions.get(channelId);
+        if (!channelSessions) return undefined;
+        for (const [userId, session] of channelSessions) {
+            if (session.producer?.id === producerId) return userId;
+        }
+        return undefined;
+    }
+
     /** Closes all Workers on shutdown. */
     close(): void {
+        for (const observer of this.audioLevelObservers.values()) {
+            observer.close();
+        }
+        this.audioLevelObservers.clear();
+
         for (const worker of this.workers) {
             worker.close();
         }
