@@ -187,6 +187,35 @@ export function registerVoiceHandlers(
                     session.producer = null;
                 });
 
+                // Ensure AudioLevelObserver exists for this channel and add producer
+                try {
+                    await mediasoup.getOrCreateAudioLevelObserver(
+                        channelId,
+                        (volumes) => {
+                            // Map producerIds to userIds
+                            const speakers: string[] = [];
+                            for (const v of volumes) {
+                                const uid = mediasoup.getUserIdByProducerId(channelId, v.producerId);
+                                if (uid) speakers.push(uid);
+                            }
+                            io.to(`channel:${channelId}`).emit("ACTIVE_SPEAKERS", {
+                                channelId,
+                                speakers,
+                            });
+                        },
+                        () => {
+                            // Silence — no speakers
+                            io.to(`channel:${channelId}`).emit("ACTIVE_SPEAKERS", {
+                                channelId,
+                                speakers: [],
+                            });
+                        },
+                    );
+                    await mediasoup.addProducerToObserver(channelId, producer);
+                } catch (observerErr) {
+                    app.log.warn({ err: observerErr }, "Failed to setup AudioLevelObserver");
+                }
+
                 // Notify other users in the channel about the new producer
                 socket.to(`channel:${channelId}`).emit("NEW_PRODUCER", {
                     userId: socket.data.userId,

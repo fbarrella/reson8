@@ -281,6 +281,13 @@ export interface ServerToClientEvents {
             producerId: string;
         }>;
     }) => void;
+
+    /** Notifies clients about active speakers in a voice channel. */
+    ACTIVE_SPEAKERS: (payload: {
+        channelId: string;
+        /** userIds of users currently speaking (volume above threshold). */
+        speakers: string[];
+    }) => void;
 }
 
 // ---------------------------------------------------------------------------

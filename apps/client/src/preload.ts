@@ -171,6 +171,7 @@ const api = {
         socket.on("DIRECT_MESSAGE_RECEIVED", (payload) => emit("dm-received", payload));
         socket.on("CHANNEL_DELETED", (payload) => emit("channel-deleted", payload));
         socket.on("ERROR", (payload) => emit("error", payload));
+        socket.on("ACTIVE_SPEAKERS", (payload) => emit("active-speakers", payload));
 
         // Voice-specific events
         socket.on("NEW_PRODUCER", (payload) => {
