@@ -94,6 +94,12 @@ app.whenReady().then(() => {
         unregisterPttShortcut();
     });
 
+    ipcMain.handle("download-image", (_event, url: string) => {
+        if (mainWindow) {
+            mainWindow.webContents.downloadURL(url);
+        }
+    });
+
     createWindow();
 });
 

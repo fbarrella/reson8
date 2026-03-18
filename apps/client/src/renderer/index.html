@@ -5,7 +5,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy"
-    content="default-src 'self'; connect-src ws: wss: http: https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; media-src 'self' blob:;">
+    content="default-src 'self'; connect-src ws: wss: http: https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; media-src 'self' blob:; img-src 'self' http: https: data:;">
   <title>Reson8</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -537,6 +537,21 @@
       color: var(--text-primary);
     }
 
+    .msg-image {
+      display: block;
+      max-width: 300px;
+      max-height: 200px;
+      border-radius: 6px;
+      margin-top: 4px;
+      cursor: pointer;
+      transition: opacity 0.15s;
+      object-fit: cover;
+    }
+
+    .msg-image:hover {
+      opacity: 0.85;
+    }
+
     /* Chat input */
     #chat-input-bar {
       display: none;
@@ -584,6 +599,116 @@
 
     #btn-send:hover {
       background: var(--accent-hover);
+    }
+
+    #btn-attach {
+      padding: 7px 10px;
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+      border-radius: var(--radius);
+      cursor: pointer;
+      transition: all 0.15s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    #btn-attach:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    /* Attachment preview bar */
+    #attachment-preview {
+      display: none;
+      align-items: center;
+      gap: 8px;
+      padding: 4px 12px;
+      background: var(--bg-tertiary);
+      border-top: 1px solid var(--border);
+      font-size: 11px;
+      color: var(--text-secondary);
+      flex-shrink: 0;
+    }
+
+    .attachment-name {
+      flex: 1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      color: var(--accent);
+    }
+
+    .attachment-remove {
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      font-size: 12px;
+      cursor: pointer;
+      padding: 2px 6px;
+      border-radius: 4px;
+      transition: all 0.15s;
+    }
+
+    .attachment-remove:hover {
+      color: var(--danger);
+      background: rgba(255, 107, 107, 0.1);
+    }
+
+    /* ── Image Lightbox ────────────────────────────────────────── */
+    #image-lightbox-modal {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.85);
+      z-index: 200;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      -webkit-app-region: no-drag;
+    }
+
+    #image-lightbox-modal.visible {
+      display: flex;
+    }
+
+    #lightbox-image {
+      max-width: 90vw;
+      max-height: 90vh;
+      border-radius: 8px;
+      object-fit: contain;
+      cursor: default;
+      box-shadow: 0 4px 40px rgba(0, 0, 0, 0.5);
+    }
+
+    #btn-lightbox-download {
+      position: fixed;
+      top: 16px;
+      right: 16px;
+      background: rgba(255, 255, 255, 0.15);
+      border: 1px solid rgba(255, 255, 255, 0.25);
+      color: #fff;
+      border-radius: 8px;
+      padding: 8px 14px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      font-family: var(--font);
+      font-weight: 500;
+      transition: all 0.15s;
+      z-index: 201;
+    }
+
+    #btn-lightbox-download:hover {
+      background: rgba(255, 255, 255, 0.3);
+      border-color: rgba(255, 255, 255, 0.5);
     }
 
     /* ── Status Bar ───────────────────────────────────────────────────── */
@@ -1144,9 +1269,12 @@
         </div>
       </div>
       <div id="chat-input-bar">
+        <input type="file" id="file-input" accept="image/jpeg,image/png,image/gif,image/webp" style="display:none;">
+        <button id="btn-attach" title="Attach Image"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></button>
         <input type="text" id="chat-input" placeholder="Type a message...">
         <button id="btn-send">Send</button>
       </div>
+      <div id="attachment-preview"></div>
     </div>
   </div>
 
@@ -1282,6 +1410,19 @@
         <button class="btn btn-cancel" id="btn-online-close">Close</button>
       </div>
     </div>
+  </div>
+
+  <!-- ── Image Lightbox Modal ───────────────────────────────────── -->
+  <div id="image-lightbox-modal">
+    <img id="lightbox-image" src="" alt="Expanded image">
+    <button id="btn-lightbox-download" title="Download Image">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+        <polyline points="7 10 12 15 17 10"/>
+        <line x1="12" y1="15" x2="12" y2="3"/>
+      </svg>
+      Download
+    </button>
   </div>
 
   <script src="renderer.js"></script>

@@ -77,7 +77,7 @@ export interface ClientToServerEvents {
 
     /** Client sends a text message to their current channel. */
     SEND_MESSAGE: (
-        payload: { channelId: string; content: string },
+        payload: { channelId: string; content: string; attachmentUrl?: string },
         ack: (response: { success: boolean; messageId?: string }) => void,
     ) => void;
 
@@ -91,7 +91,7 @@ export interface ClientToServerEvents {
 
     /** Client sends a direct message to another user. */
     SEND_DIRECT_MESSAGE: (
-        payload: { recipientId: string; content: string },
+        payload: { recipientId: string; content: string; attachmentUrl?: string },
         ack: (response: { success: boolean; messageId?: string; error?: string }) => void,
     ) => void;
 

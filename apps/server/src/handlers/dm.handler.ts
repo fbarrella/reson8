@@ -45,9 +45,9 @@ export function registerDMHandlers(
         // ── SEND_DIRECT_MESSAGE ────────────────────────────────────────────
         socket.on("SEND_DIRECT_MESSAGE", async (payload, ack) => {
             try {
-                const { recipientId, content } = payload;
+                const { recipientId, content, attachmentUrl } = payload;
 
-                if (!content || content.trim().length === 0) {
+                if ((!content || content.trim().length === 0) && !attachmentUrl) {
                     ack({ success: false, error: "Message content is empty" });
                     return;
                 }
@@ -72,7 +72,8 @@ export function registerDMHandlers(
                     data: {
                         senderId: socket.data.userId,
                         receiverId: recipientId,
-                        content: content.trim(),
+                        content: content?.trim() ?? "",
+                        attachmentUrl: attachmentUrl ?? null,
                     },
                 });
 
@@ -82,6 +83,7 @@ export function registerDMHandlers(
                     senderNickname: socket.data.nickname,
                     receiverId: dm.receiverId,
                     content: dm.content,
+                    attachmentUrl: dm.attachmentUrl,
                     createdAt: dm.createdAt.toISOString(),
                     readAt: null,
                 };
@@ -144,6 +146,7 @@ export function registerDMHandlers(
                         senderNickname: m.sender.nickname,
                         receiverId: m.receiverId,
                         content: m.content,
+                        attachmentUrl: m.attachmentUrl,
                         createdAt: m.createdAt.toISOString(),
                         readAt: m.readAt?.toISOString() ?? null,
                     }));

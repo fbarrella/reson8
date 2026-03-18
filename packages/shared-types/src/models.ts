@@ -118,6 +118,7 @@ export interface IMessage {
     userId: string;
     nickname: string;
     content: string;
+    attachmentUrl?: string | null;
     createdAt: string;
 }
 
@@ -131,6 +132,7 @@ export interface IDirectMessage {
     senderNickname: string;
     receiverId: string;
     content: string;
+    attachmentUrl?: string | null;
     createdAt: string;
     readAt?: string | null;
 }

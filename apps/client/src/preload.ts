@@ -21,6 +21,7 @@ type TypedSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 let socket: TypedSocket | null = null;
 let instanceId: string = "";
 let voiceService: VoiceService | null = null;
+let serverBaseUrl: string = "";
 
 // Eagerly fetch instance ID so it's available before any connection
 ipcRenderer.invoke("get-instance-id").then((id: string) => {
@@ -116,6 +117,7 @@ const api = {
         }
 
         const serverUrl = port ? `http://${host}:${port}` : `http://${host}`;
+        serverBaseUrl = serverUrl;
         socket = io(serverUrl, {
             transports: ["websocket"],
             reconnection: true,
@@ -316,13 +318,14 @@ const api = {
     sendMessage(
         channelId: string,
         content: string,
+        attachmentUrl?: string,
     ): Promise<{ success: boolean; messageId?: string }> {
         return new Promise((resolve) => {
             if (!socket?.connected) {
                 resolve({ success: false });
                 return;
             }
-            socket.emit("SEND_MESSAGE", { channelId, content }, resolve);
+            socket.emit("SEND_MESSAGE", { channelId, content, attachmentUrl }, resolve);
         });
     },
 
@@ -389,13 +392,14 @@ const api = {
     sendDirectMessage(
         recipientId: string,
         content: string,
+        attachmentUrl?: string,
     ): Promise<{ success: boolean; messageId?: string; error?: string }> {
         return new Promise((resolve) => {
             if (!socket?.connected) {
                 resolve({ success: false, error: "Not connected" });
                 return;
             }
-            socket.emit("SEND_DIRECT_MESSAGE", { recipientId, content }, resolve);
+            socket.emit("SEND_DIRECT_MESSAGE", { recipientId, content, attachmentUrl }, resolve);
         });
     },
 
@@ -445,6 +449,47 @@ const api = {
             }
             socket.emit("GET_UNREAD_DM_PARTNERS", resolve);
         });
+    },
+
+    // ── File Upload ──────────────────────────────────────────────────────
+
+    async uploadFile(
+        fileBuffer: ArrayBuffer,
+        fileName: string,
+        mimeType: string,
+    ): Promise<{ url: string }> {
+        if (!serverBaseUrl) {
+            throw new Error("Not connected to a server");
+        }
+
+        const formData = new FormData();
+        const blob = new Blob([fileBuffer], { type: mimeType });
+        formData.append("file", blob, fileName);
+
+        const response = await fetch(`${serverBaseUrl}/api/upload`, {
+            method: "POST",
+            body: formData,
+        });
+
+        if (!response.ok) {
+            const errBody = await response.json().catch(() => ({ error: "Upload failed" }));
+            throw new Error(errBody.error || `Upload failed (${response.status})`);
+        }
+
+        const result = await response.json();
+
+        // If the URL is relative (local storage), prepend the server base URL
+        if (result.url && result.url.startsWith("/")) {
+            result.url = `${serverBaseUrl}${result.url}`;
+        }
+
+        return result;
+    },
+
+    // ── Image Download ───────────────────────────────────────────────────
+
+    downloadImage(url: string): void {
+        ipcRenderer.invoke("download-image", url);
     },
 };
 

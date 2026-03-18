@@ -7,8 +7,11 @@
 
 import "dotenv/config";
 import { randomUUID } from "node:crypto";
+import path from "node:path";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
+import multipart from "@fastify/multipart";
+import fastifyStatic from "@fastify/static";
 import { Server as SocketIOServer } from "socket.io";
 import type {
     ClientToServerEvents,
@@ -24,6 +27,7 @@ import { registerChannelHandlers } from "./handlers/channel.handler.js";
 import { registerMessageHandlers } from "./handlers/message.handler.js";
 import { registerAdminHandlers } from "./handlers/admin.handler.js";
 import { registerDMHandlers } from "./handlers/dm.handler.js";
+import { registerUploadRoute } from "./routes/upload.route.js";
 import { MediasoupService } from "./services/mediasoup.service.js";
 
 // Augment Fastify with the resolved server ID
@@ -51,9 +55,15 @@ async function main(): Promise<void> {
     // CORS — allow any origin in dev; lock down in production
     await app.register(cors, { origin: true });
 
-    // ── Plugins (Prisma + Redis) ───────────────────────────────────────────
+    // ── Plugins (Prisma + Redis + Multipart + Static) ──────────────────────
     await app.register(prismaPlugin);
     await app.register(redisPlugin);
+    await app.register(multipart, { limits: { fileSize: 5 * 1024 * 1024 } });
+    await app.register(fastifyStatic, {
+        root: path.resolve(process.cwd(), "uploads"),
+        prefix: "/uploads/",
+        decorateReply: false,
+    });
 
     // ── Server Bootstrap ──────────────────────────────────────────────────
     // Auto-create (or reuse) the server record in the database.
@@ -85,6 +95,9 @@ async function main(): Promise<void> {
 
     // ── Health-check route ─────────────────────────────────────────────────
     app.get("/health", async () => ({ status: "ok", uptime: process.uptime() }));
+
+    // ── Upload route ──────────────────────────────────────────────────────
+    await registerUploadRoute(app);
 
     // ── Socket.io ──────────────────────────────────────────────────────────
     const io = new SocketIOServer<
