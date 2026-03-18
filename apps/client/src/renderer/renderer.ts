@@ -58,6 +58,8 @@ interface Reson8Api {
     getUnreadDmPartners(): Promise<{ success: boolean; partners?: { partnerId: string; partnerNickname: string; unreadCount: number }[]; error?: string }>;
     uploadFile(fileBuffer: ArrayBuffer, fileName: string, mimeType: string): Promise<{ url: string }>;
     downloadImage(url: string): void;
+    setTrayPrefs(prefs: { minimizeToTray: boolean; closeToTray: boolean }): void;
+    getTrayPrefs(): Promise<{ minimizeToTray: boolean; closeToTray: boolean }>;
     on(event: string, callback: (...args: any[]) => void): void;
 }
 
@@ -194,6 +196,10 @@ const onlineUsersModal = document.getElementById("online-users-modal") as HTMLDi
 const onlineUserList = document.getElementById("online-user-list") as HTMLDivElement;
 const btnOnlineClose = document.getElementById("btn-online-close") as HTMLButtonElement;
 const onlineDot = document.getElementById("online-dot") as HTMLSpanElement;
+
+// System tray checkboxes
+const chkMinimizeToTray = document.getElementById("chk-minimize-to-tray") as HTMLInputElement;
+const chkCloseToTray = document.getElementById("chk-close-to-tray") as HTMLInputElement;
 
 // State for pending delete
 let pendingDeleteChannelId: string | null = null;
@@ -1698,4 +1704,31 @@ document.addEventListener("keydown", (e) => {
         imageLightboxModal.classList.remove("visible");
         lightboxImage.src = "";
     }
+});
+
+// ── System Tray Preferences ───────────────────────────────────────────────
+
+// Initialize tray prefs from localStorage and sync to main process
+{
+    const savedMinToTray = localStorage.getItem("reson8-minimize-to-tray") === "true";
+    const savedCloseToTray = localStorage.getItem("reson8-close-to-tray") === "true";
+    chkMinimizeToTray.checked = savedMinToTray;
+    chkCloseToTray.checked = savedCloseToTray;
+    api.setTrayPrefs({ minimizeToTray: savedMinToTray, closeToTray: savedCloseToTray });
+}
+
+chkMinimizeToTray.addEventListener("change", () => {
+    localStorage.setItem("reson8-minimize-to-tray", String(chkMinimizeToTray.checked));
+    api.setTrayPrefs({
+        minimizeToTray: chkMinimizeToTray.checked,
+        closeToTray: chkCloseToTray.checked,
+    });
+});
+
+chkCloseToTray.addEventListener("change", () => {
+    localStorage.setItem("reson8-close-to-tray", String(chkCloseToTray.checked));
+    api.setTrayPrefs({
+        minimizeToTray: chkMinimizeToTray.checked,
+        closeToTray: chkCloseToTray.checked,
+    });
 });

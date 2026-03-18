@@ -492,6 +492,16 @@ const api = {
     downloadImage(url: string): void {
         ipcRenderer.invoke("download-image", url);
     },
+
+    // ── System Tray Preferences ──────────────────────────────────────────
+
+    setTrayPrefs(prefs: { minimizeToTray: boolean; closeToTray: boolean }): void {
+        ipcRenderer.send("set-tray-prefs", prefs);
+    },
+
+    async getTrayPrefs(): Promise<{ minimizeToTray: boolean; closeToTray: boolean }> {
+        return ipcRenderer.invoke("get-tray-prefs");
+    },
 };
 
 contextBridge.exposeInMainWorld("reson8Api", api);

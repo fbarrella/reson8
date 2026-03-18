@@ -1214,6 +1214,108 @@
       letter-spacing: 0.5px;
       white-space: nowrap;
     }
+
+    /* ── Toggle Switch ────────────────────────────────────────────── */
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 12px;
+      border-radius: var(--radius);
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      margin-bottom: 10px;
+      transition: border-color 0.2s;
+    }
+
+    .toggle-row:hover {
+      border-color: var(--accent-dim);
+    }
+
+    .toggle-row-info {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex: 1;
+      min-width: 0;
+    }
+
+    .toggle-row-icon {
+      width: 28px;
+      height: 28px;
+      border-radius: 6px;
+      background: var(--bg-tertiary);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      color: var(--text-secondary);
+    }
+
+    .toggle-row-text {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
+    }
+
+    .toggle-row-title {
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text-primary);
+    }
+
+    .toggle-row-desc {
+      font-size: 10px;
+      color: var(--text-muted);
+      line-height: 1.3;
+    }
+
+    .toggle-switch {
+      position: relative;
+      width: 36px;
+      height: 20px;
+      flex-shrink: 0;
+      margin-left: 12px;
+    }
+
+    .toggle-switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+      position: absolute;
+    }
+
+    .toggle-slider {
+      position: absolute;
+      inset: 0;
+      background: var(--border);
+      border-radius: 10px;
+      cursor: pointer;
+      transition: background 0.25s, box-shadow 0.25s;
+    }
+
+    .toggle-slider::before {
+      content: '';
+      position: absolute;
+      width: 14px;
+      height: 14px;
+      left: 3px;
+      top: 3px;
+      background: var(--text-muted);
+      border-radius: 50%;
+      transition: transform 0.25s, background 0.25s;
+    }
+
+    .toggle-switch input:checked + .toggle-slider {
+      background: var(--accent);
+      box-shadow: 0 0 8px rgba(79, 195, 247, 0.3);
+    }
+
+    .toggle-switch input:checked + .toggle-slider::before {
+      transform: translateX(16px);
+      background: #fff;
+    }
   </style>
 </head>
 
@@ -1348,6 +1450,7 @@
       <div class="settings-tab-bar">
         <button class="settings-tab-btn active" data-settings-tab="roles" id="settings-tab-roles">👑 Roles</button>
         <button class="settings-tab-btn" data-settings-tab="voice">🎤 Voice & Shortcuts</button>
+        <button class="settings-tab-btn" data-settings-tab="app">🖥 Application</button>
       </div>
 
       <!-- Roles Tab -->
@@ -1407,6 +1510,43 @@
             data-shortcut-set="disconnect">Set</button>
           <button class="btn btn-cancel" style="font-size:10px; padding:3px 10px;"
             data-shortcut-clear="disconnect">Clear</button>
+        </div>
+      </div>
+
+      <!-- Application Tab -->
+      <div class="settings-panel" data-settings-panel="app">
+        <label style="font-size:11px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px; display:block; margin-bottom:10px;">System Tray</label>
+
+        <div class="toggle-row">
+          <div class="toggle-row-info">
+            <div class="toggle-row-icon">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 9l7-7 7 7"/><path d="M12 16V2"/><path d="M3 20h18"/></svg>
+            </div>
+            <div class="toggle-row-text">
+              <span class="toggle-row-title">Minimize to system tray</span>
+              <span class="toggle-row-desc">Hide the window from the taskbar when minimized</span>
+            </div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="chk-minimize-to-tray">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+
+        <div class="toggle-row">
+          <div class="toggle-row-info">
+            <div class="toggle-row-icon">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </div>
+            <div class="toggle-row-text">
+              <span class="toggle-row-title">Close button minimizes to tray</span>
+              <span class="toggle-row-desc">Clicking the X button hides to tray instead of quitting</span>
+            </div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="chk-close-to-tray">
+            <span class="toggle-slider"></span>
+          </label>
         </div>
       </div>
 
