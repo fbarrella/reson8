@@ -5,7 +5,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy"
-    content="default-src 'self'; connect-src ws: wss: http: https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; media-src 'self' blob:; img-src 'self' http: https: data:;">
+    content="default-src 'self'; connect-src ws: wss: http: https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; media-src 'self' blob: http: https:; img-src 'self' http: https: data:; frame-src https:;">
   <title>Reson8</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -569,6 +569,115 @@
       opacity: 0.85;
     }
 
+    /* ── Link Preview Card ─────────────────────────────────────── */
+    .msg-link {
+      color: var(--accent);
+      text-decoration: none;
+      word-break: break-all;
+    }
+
+    .msg-link:hover {
+      text-decoration: underline;
+    }
+
+    .link-preview-card {
+      display: flex;
+      flex-direction: column;
+      max-width: 420px;
+      margin-top: 6px;
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--accent);
+      border-radius: var(--radius);
+      cursor: pointer;
+      overflow: hidden;
+      transition: filter 0.15s, opacity 0.3s;
+      opacity: 0;
+      animation: lpc-fade-in 0.3s ease forwards;
+    }
+
+    .link-preview-card:hover {
+      filter: brightness(1.15);
+    }
+
+    @keyframes lpc-fade-in {
+      from { opacity: 0; transform: translateY(4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .lpc-body {
+      padding: 10px 12px 6px;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .lpc-site-name {
+      font-size: 10px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+    }
+
+    .lpc-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--accent);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .lpc-desc {
+      font-size: 12px;
+      color: var(--text-secondary);
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      line-clamp: 3;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      line-height: 1.4;
+    }
+
+    .lpc-image {
+      width: 100%;
+      max-height: 300px;
+      object-fit: cover;
+      display: block;
+    }
+
+    .lpc-video {
+      width: 100%;
+      max-height: 300px;
+      display: block;
+      background: #000;
+    }
+
+    .lpc-media-wrap {
+      position: relative;
+      cursor: pointer;
+    }
+
+    .lpc-play-overlay {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      pointer-events: none;
+      opacity: 0.85;
+      transition: opacity 0.15s;
+    }
+
+    .lpc-media-wrap:hover .lpc-play-overlay {
+      opacity: 1;
+    }
+
+    .lpc-domain {
+      font-size: 10px;
+      color: var(--text-muted);
+      padding: 4px 12px 8px;
+    }
+
     /* Chat input */
     #chat-input-bar {
       display: none;
@@ -726,6 +835,44 @@
     #btn-lightbox-download:hover {
       background: rgba(255, 255, 255, 0.3);
       border-color: rgba(255, 255, 255, 0.5);
+    }
+
+    /* ── Video Lightbox ──────────────────────────────────────────────── */
+    #video-lightbox-modal {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.9);
+      z-index: 200;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      -webkit-app-region: no-drag;
+    }
+
+    #video-lightbox-modal.visible {
+      display: flex;
+    }
+
+    #video-lightbox-iframe {
+      width: 80vw;
+      height: 80vh;
+      max-width: 1280px;
+      max-height: 720px;
+      border: none;
+      border-radius: 8px;
+      cursor: default;
+    }
+
+    #video-lightbox-video {
+      max-width: 90vw;
+      max-height: 90vh;
+      border-radius: 8px;
+      cursor: default;
+      box-shadow: 0 4px 40px rgba(0, 0, 0, 0.5);
     }
 
     /* ── Status Bar ───────────────────────────────────────────────────── */
@@ -1580,6 +1727,14 @@
       </svg>
       Download
     </button>
+  </div>
+
+  <!-- ── Video Lightbox Modal ───────────────────────────────────── -->
+  <div id="video-lightbox-modal">
+    <iframe id="video-lightbox-iframe" src="" frameborder="0"
+      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
+      allowfullscreen style="display:none;"></iframe>
+    <video id="video-lightbox-video" controls style="display:none;"></video>
   </div>
 
   <script src="renderer.js"></script>

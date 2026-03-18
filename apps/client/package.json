@@ -55,6 +55,12 @@
     "dependencies": {
         "@reson8/shared-types": "*",
         "mediasoup-client": "^3.18.7",
+        "metascraper": "^5.49.25",
+        "metascraper-description": "^5.49.25",
+        "metascraper-image": "^5.49.25",
+        "metascraper-title": "^5.49.25",
+        "metascraper-url": "^5.49.25",
+        "metascraper-video": "^5.49.25",
         "socket.io-client": "^4.8.0"
     },
     "devDependencies": {

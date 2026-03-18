@@ -493,6 +493,12 @@ const api = {
         ipcRenderer.invoke("download-image", url);
     },
 
+    // ── Link Preview ─────────────────────────────────────────────────────
+
+    async fetchLinkPreview(url: string): Promise<{ title?: string; description?: string; image?: string; url?: string; domain?: string } | null> {
+        return ipcRenderer.invoke("fetch-link-preview", url);
+    },
+
     // ── System Tray Preferences ──────────────────────────────────────────
 
     setTrayPrefs(prefs: { minimizeToTray: boolean; closeToTray: boolean }): void {

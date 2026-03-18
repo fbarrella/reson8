@@ -28,6 +28,17 @@ interface DirectMessage {
     readAt?: string | null;
 }
 
+interface LinkPreviewData {
+    title?: string;
+    description?: string;
+    image?: string;
+    video?: string;
+    videoType?: string;
+    url?: string;
+    domain?: string;
+    siteName?: string;
+}
+
 interface Reson8Api {
     getInstanceId(): string;
     connect(host: string, port: number | undefined, nickname: string, password?: string): Promise<void>;
@@ -58,6 +69,7 @@ interface Reson8Api {
     getUnreadDmPartners(): Promise<{ success: boolean; partners?: { partnerId: string; partnerNickname: string; unreadCount: number }[]; error?: string }>;
     uploadFile(fileBuffer: ArrayBuffer, fileName: string, mimeType: string): Promise<{ url: string }>;
     downloadImage(url: string): void;
+    fetchLinkPreview(url: string): Promise<LinkPreviewData | null>;
     setTrayPrefs(prefs: { minimizeToTray: boolean; closeToTray: boolean }): void;
     getTrayPrefs(): Promise<{ minimizeToTray: boolean; closeToTray: boolean }>;
     on(event: string, callback: (...args: any[]) => void): void;
@@ -82,6 +94,9 @@ let serverBaseUrl: string = "";
 // Active speakers state
 const activeSpeakers = new Set<string>();
 const speakerHoldTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+// Link preview cache (renderer-side to avoid redundant IPC calls)
+const linkPreviewCache = new Map<string, LinkPreviewData | null>();
 
 // Store the current tree for parent selection in the modal
 let currentTree: any[] = [];
@@ -773,6 +788,197 @@ function escapeHtml(text: string): string {
     return div.innerHTML;
 }
 
+/** Build HTML for message text with clickable URL links.
+ * Operates on raw (unescaped) text so the URL regex works correctly,
+ * then escapes each non-URL segment independently. */
+function linkifyContent(text: string): string {
+    const urlRegex = /https?:\/\/[^\s<>"'`,;)\]]+/gi;
+    let lastIndex = 0;
+    let result = "";
+    let match;
+
+    while ((match = urlRegex.exec(text)) !== null) {
+        // Escape text before the URL
+        result += escapeHtml(text.slice(lastIndex, match.index));
+        // Add the URL as a clickable link
+        const url = match[0];
+        result += `<a href="${escapeHtml(url)}" target="_blank" class="msg-link">${escapeHtml(url)}</a>`;
+        lastIndex = match.index + url.length;
+    }
+
+    // Escape remaining text after last URL
+    result += escapeHtml(text.slice(lastIndex));
+    return result;
+}
+
+// ── Link Preview Utilities ────────────────────────────────────────────────
+
+const URL_REGEX = /https?:\/\/[^\s<>"'`,;)\]]+/i;
+
+function extractFirstUrl(text: string): string | null {
+    const match = text.match(URL_REGEX);
+    return match ? match[0] : null;
+}
+
+// Video lightbox references
+const videoLightboxModal = document.getElementById("video-lightbox-modal") as HTMLDivElement;
+const videoLightboxIframe = document.getElementById("video-lightbox-iframe") as HTMLIFrameElement;
+const videoLightboxVideo = document.getElementById("video-lightbox-video") as HTMLVideoElement;
+
+function openVideoLightbox(videoUrl: string, videoType?: string): void {
+    if (videoType === "text/html" || videoUrl.includes("/embed/") || videoUrl.includes("player")) {
+        // Iframe embed (YouTube, etc.)
+        videoLightboxIframe.src = videoUrl;
+        videoLightboxIframe.style.display = "block";
+        videoLightboxVideo.style.display = "none";
+        videoLightboxVideo.src = "";
+    } else {
+        // Direct video (mp4, webm, etc.)
+        videoLightboxVideo.src = videoUrl;
+        videoLightboxVideo.style.display = "block";
+        videoLightboxIframe.style.display = "none";
+        videoLightboxIframe.src = "";
+    }
+    videoLightboxModal.classList.add("visible");
+}
+
+function closeVideoLightbox(): void {
+    videoLightboxModal.classList.remove("visible");
+    videoLightboxIframe.src = "";
+    videoLightboxVideo.pause();
+    videoLightboxVideo.src = "";
+}
+
+videoLightboxModal.addEventListener("click", (e) => {
+    if (e.target === videoLightboxModal) {
+        closeVideoLightbox();
+    }
+});
+
+function createPreviewCard(data: LinkPreviewData): HTMLDivElement {
+    const card = document.createElement("div");
+    card.className = "link-preview-card";
+
+    // ── Text body (top) ──
+    const body = document.createElement("div");
+    body.className = "lpc-body";
+
+    if (data.siteName) {
+        const siteEl = document.createElement("div");
+        siteEl.className = "lpc-site-name";
+        siteEl.textContent = data.siteName;
+        body.appendChild(siteEl);
+    }
+
+    if (data.title) {
+        const titleEl = document.createElement("div");
+        titleEl.className = "lpc-title";
+        titleEl.textContent = data.title;
+        body.appendChild(titleEl);
+    }
+
+    if (data.description) {
+        const descEl = document.createElement("div");
+        descEl.className = "lpc-desc";
+        descEl.textContent = data.description;
+        body.appendChild(descEl);
+    }
+
+    card.appendChild(body);
+
+    // ── Media (below text) ──
+    const isDirectVideo = data.video && data.videoType && data.videoType.startsWith("video/");
+    const isEmbedVideo = data.video && (!data.videoType || data.videoType === "text/html");
+
+    if (isDirectVideo) {
+        // Direct video — render <video> with controls and poster
+        const videoEl = document.createElement("video");
+        videoEl.className = "lpc-video";
+        videoEl.src = data.video!;
+        videoEl.controls = true;
+        if (data.image) videoEl.poster = data.image;
+        videoEl.preload = "metadata";
+        videoEl.addEventListener("click", (e) => e.stopPropagation());
+        card.appendChild(videoEl);
+    } else if (isEmbedVideo && data.image) {
+        // Embed video (YouTube, etc.) — show image with play overlay
+        const mediaWrap = document.createElement("div");
+        mediaWrap.className = "lpc-media-wrap";
+
+        const img = document.createElement("img");
+        img.className = "lpc-image";
+        img.src = data.image;
+        img.alt = data.title || "Preview";
+        img.loading = "lazy";
+        img.addEventListener("error", () => { mediaWrap.style.display = "none"; });
+        mediaWrap.appendChild(img);
+
+        // Play button overlay
+        const playBtn = document.createElement("div");
+        playBtn.className = "lpc-play-overlay";
+        playBtn.innerHTML = `<svg width="48" height="48" viewBox="0 0 48 48" fill="none"><circle cx="24" cy="24" r="24" fill="rgba(0,0,0,0.6)"/><polygon points="18,14 36,24 18,34" fill="white"/></svg>`;
+        mediaWrap.appendChild(playBtn);
+
+        mediaWrap.addEventListener("click", (e) => {
+            e.stopPropagation();
+            // Open in external browser — iframe embeds don't work in Electron (file:// origin)
+            window.open(data.url!, "_blank");
+        });
+
+        card.appendChild(mediaWrap);
+    } else if (data.image) {
+        // Static image — full width
+        const img = document.createElement("img");
+        img.className = "lpc-image";
+        img.src = data.image;
+        img.alt = data.title || "Preview";
+        img.loading = "lazy";
+        img.addEventListener("error", () => { img.style.display = "none"; });
+        card.appendChild(img);
+    }
+
+    // ── Domain footer ──
+    if (data.domain) {
+        const domainEl = document.createElement("div");
+        domainEl.className = "lpc-domain";
+        domainEl.textContent = data.domain;
+        card.appendChild(domainEl);
+    }
+
+    // Click card (non-media areas) to open URL in external browser
+    if (data.url) {
+        card.addEventListener("click", () => {
+            window.open(data.url!, "_blank");
+        });
+    }
+
+    return card;
+}
+
+function injectLinkPreview(messageEl: HTMLElement, messagesContainer: HTMLElement, url: string): void {
+    // Check renderer-side cache first
+    const cached = linkPreviewCache.get(url);
+    if (cached !== undefined) {
+        if (cached) {
+            messageEl.appendChild(createPreviewCard(cached));
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        }
+        return;
+    }
+
+    // Fetch asynchronously — don't block message rendering
+    api.fetchLinkPreview(url).then((data) => {
+        linkPreviewCache.set(url, data);
+        if (!data) return;
+        // Guard: ensure the message is still in the DOM (tab may have been closed)
+        if (!messageEl.isConnected) return;
+        messageEl.appendChild(createPreviewCard(data));
+        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    }).catch(() => {
+        linkPreviewCache.set(url, null);
+    });
+}
+
 // ── Admin Panel (renderAdminUsers only — open/close handled by openSettingsPanel) ──
 
 function renderAdminUsers(users: any[]): void {
@@ -1039,7 +1245,7 @@ function renderChatMessage(tab: ChatTab, msg: ChatMessage): void {
     let html = `<span class="msg-time">${time}</span><span class="msg-nick">${escapeHtml(msg.nickname)}</span>`;
 
     if (msg.content) {
-        html += `<span class="msg-text">${escapeHtml(msg.content)}</span>`;
+        html += `<span class="msg-text">${linkifyContent(msg.content)}</span>`;
     }
 
     el.innerHTML = html;
@@ -1056,6 +1262,14 @@ function renderChatMessage(tab: ChatTab, msg: ChatMessage): void {
 
     tab.messagesEl.appendChild(el);
     tab.messagesEl.scrollTop = tab.messagesEl.scrollHeight;
+
+    // Async link preview injection
+    if (msg.content) {
+        const url = extractFirstUrl(msg.content);
+        if (url) {
+            injectLinkPreview(el, tab.messagesEl, url);
+        }
+    }
 }
 
 // ── Chat Input ────────────────────────────────────────────────────────────
@@ -1118,7 +1332,7 @@ function renderDmMessage(tab: ChatTab, msg: DirectMessage): void {
     let html = `<span class="msg-time">${time}</span><span class="msg-nick">${escapeHtml(msg.senderNickname)}</span>`;
 
     if (msg.content) {
-        html += `<span class="msg-text">${escapeHtml(msg.content)}</span>`;
+        html += `<span class="msg-text">${linkifyContent(msg.content)}</span>`;
     }
 
     el.innerHTML = html;
@@ -1135,6 +1349,14 @@ function renderDmMessage(tab: ChatTab, msg: DirectMessage): void {
 
     tab.messagesEl.appendChild(el);
     tab.messagesEl.scrollTop = tab.messagesEl.scrollHeight;
+
+    // Async link preview injection
+    if (msg.content) {
+        const url = extractFirstUrl(msg.content);
+        if (url) {
+            injectLinkPreview(el, tab.messagesEl, url);
+        }
+    }
 }
 
 api.on("dm-received", (msg: DirectMessage) => {
@@ -1703,6 +1925,9 @@ document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && imageLightboxModal.classList.contains("visible")) {
         imageLightboxModal.classList.remove("visible");
         lightboxImage.src = "";
+    }
+    if (e.key === "Escape" && videoLightboxModal.classList.contains("visible")) {
+        closeVideoLightbox();
     }
 });
 

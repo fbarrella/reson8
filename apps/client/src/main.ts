@@ -5,9 +5,149 @@
  * This is the entry point for the Electron desktop client.
  */
 
-import { app, BrowserWindow, session, ipcMain, globalShortcut, Menu, Tray, nativeImage } from "electron";
+import { app, BrowserWindow, session, ipcMain, globalShortcut, Menu, Tray, nativeImage, shell } from "electron";
 import path from "node:path";
 import { getInstanceId } from "./instance-id.js";
+
+// ── Link Preview (metascraper) ───────────────────────────────────────────
+// @ts-ignore — metascraper packages lack type declarations
+import metascraperModule from "metascraper";
+// @ts-ignore
+import metascraperTitle from "metascraper-title";
+// @ts-ignore
+import metascraperDescription from "metascraper-description";
+// @ts-ignore
+import metascraperImage from "metascraper-image";
+// @ts-ignore
+import metascraperUrl from "metascraper-url";
+// @ts-ignore
+import metascraperVideo from "metascraper-video";
+
+const metascraper = metascraperModule([
+    metascraperTitle(),
+    metascraperDescription(),
+    metascraperImage(),
+    metascraperUrl(),
+    metascraperVideo(),
+]);
+
+interface LinkPreviewData {
+    title?: string;
+    description?: string;
+    image?: string;
+    video?: string;
+    videoType?: string;
+    url?: string;
+    domain?: string;
+    siteName?: string;
+}
+
+// In-memory cache: URL → metadata (null = attempted but failed)
+const linkPreviewCache = new Map<string, LinkPreviewData | null>();
+
+function sanitizeText(text: string | undefined | null): string | undefined {
+    if (!text) return undefined;
+    // Strip HTML tags
+    return text.replace(/<[^>]*>/g, "").trim() || undefined;
+}
+
+function isValidImageUrl(url: string | undefined | null): boolean {
+    if (!url) return false;
+    return url.startsWith("http://") || url.startsWith("https://");
+}
+
+/** Extract OpenGraph meta tags from HTML as a fallback when metascraper returns incomplete data. */
+function extractOgTags(html: string): Record<string, string> {
+    const tags: Record<string, string> = {};
+    const regex = /<meta\s+(?:property|name)=["'](og:[^"']+|twitter:[^"']+)["']\s+content=["']([^"']*)["']\s*\/?>/gi;
+    const reverseRegex = /<meta\s+content=["']([^"']*)["']\s+(?:property|name)=["'](og:[^"']+|twitter:[^"']+)["']\s*\/?>/gi;
+
+    let match;
+    while ((match = regex.exec(html)) !== null) {
+        tags[match[1].toLowerCase()] = match[2];
+    }
+    while ((match = reverseRegex.exec(html)) !== null) {
+        tags[match[2].toLowerCase()] = match[1];
+    }
+    return tags;
+}
+
+async function fetchLinkPreview(url: string): Promise<LinkPreviewData | null> {
+    // Check cache first
+    if (linkPreviewCache.has(url)) {
+        return linkPreviewCache.get(url) ?? null;
+    }
+
+    try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 5000);
+
+        const response = await fetch(url, {
+            signal: controller.signal,
+            headers: {
+                // Bot-like UA so embed-focused sites (fxtwitter, etc.) serve OG tags
+                "User-Agent": "Mozilla/5.0 (compatible; Reson8Bot/1.0; +https://github.com/fbarrella/reson8)",
+            },
+        });
+        clearTimeout(timeout);
+
+        if (!response.ok) {
+            linkPreviewCache.set(url, null);
+            return null;
+        }
+
+        const html = await response.text();
+        const metadata = await metascraper({ html, url });
+
+        let title = sanitizeText(metadata.title);
+        let rawDesc = sanitizeText(metadata.description);
+        let image = isValidImageUrl(metadata.image) ? metadata.image : undefined;
+        let video = isValidImageUrl(metadata.video) ? metadata.video : undefined;
+        let videoType: string | undefined;
+        let siteName: string | undefined;
+
+        // Manual OG tag fallback — extract if metascraper missed key fields
+        const ogTags = extractOgTags(html);
+
+        if (!title) {
+            title = sanitizeText(ogTags["og:title"] || ogTags["twitter:title"]);
+        }
+        if (!rawDesc) {
+            rawDesc = sanitizeText(ogTags["og:description"] || ogTags["twitter:description"]);
+        }
+        if (!image) {
+            const ogImage = ogTags["og:image"] || ogTags["twitter:image"] || ogTags["twitter:image:src"];
+            if (isValidImageUrl(ogImage)) image = ogImage;
+        }
+        if (!video) {
+            const ogVideo = ogTags["og:video:url"] || ogTags["og:video:secure_url"] || ogTags["og:video"];
+            if (isValidImageUrl(ogVideo)) video = ogVideo;
+        }
+        videoType = ogTags["og:video:type"] || undefined;
+        siteName = sanitizeText(ogTags["og:site_name"]) || undefined;
+
+        const description = rawDesc && rawDesc.length > 200 ? rawDesc.slice(0, 200) + "…" : rawDesc;
+
+        let domain: string | undefined;
+        try {
+            domain = new URL(url).hostname.replace(/^www\./, "");
+        } catch { /* ignore */ }
+
+        const result: LinkPreviewData = { title, description, image, video, videoType, url: metadata.url || url, domain, siteName };
+
+        // Cache if we got at least a title or image
+        if (title || image) {
+            linkPreviewCache.set(url, result);
+            return result;
+        }
+
+        linkPreviewCache.set(url, null);
+        return null;
+    } catch {
+        linkPreviewCache.set(url, null);
+        return null;
+    }
+}
 
 let mainWindow: BrowserWindow | null = null;
 let pttKey: string | null = null;
@@ -42,6 +182,14 @@ function createWindow(): void {
     });
 
     mainWindow.loadFile(path.join(__dirname, "renderer", "index.html"));
+
+    // ── Open external links in system browser ────────────────────────────
+    mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+        if (url.startsWith("http://") || url.startsWith("https://")) {
+            shell.openExternal(url);
+        }
+        return { action: "deny" };
+    });
 
     // Open DevTools in development
     if (process.env.NODE_ENV === "development") {
@@ -154,6 +302,10 @@ app.whenReady().then(() => {
         if (mainWindow) {
             mainWindow.webContents.downloadURL(url);
         }
+    });
+
+    ipcMain.handle("fetch-link-preview", async (_event, url: string) => {
+        return fetchLinkPreview(url);
     });
 
     // ── Tray preferences IPC ─────────────────────────────────────────────
