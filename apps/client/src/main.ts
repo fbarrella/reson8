@@ -5,12 +5,18 @@
  * This is the entry point for the Electron desktop client.
  */
 
-import { app, BrowserWindow, session, ipcMain, globalShortcut, Menu } from "electron";
+import { app, BrowserWindow, session, ipcMain, globalShortcut, Menu, Tray, nativeImage } from "electron";
 import path from "node:path";
 import { getInstanceId } from "./instance-id.js";
 
 let mainWindow: BrowserWindow | null = null;
 let pttKey: string | null = null;
+
+// ── System Tray State ────────────────────────────────────────────────────
+let tray: Tray | null = null;
+let isQuitting = false;
+let minimizeToTray = false;
+let closeToTray = false;
 
 function createWindow(): void {
     // Grant mic/camera permission requests automatically
@@ -42,8 +48,58 @@ function createWindow(): void {
         mainWindow.webContents.openDevTools();
     }
 
+    // ── Close-to-tray interception ───────────────────────────────────────
+    mainWindow.on("close", (event) => {
+        if (closeToTray && !isQuitting) {
+            event.preventDefault();
+            mainWindow?.hide();
+        }
+    });
+
+    // ── Minimize-to-tray interception ────────────────────────────────────
+    (mainWindow as any).on("minimize", () => {
+        if (minimizeToTray) {
+            mainWindow?.hide();
+        }
+    });
+
     mainWindow.on("closed", () => {
         mainWindow = null;
+    });
+}
+
+// ── System Tray Setup ────────────────────────────────────────────────────
+
+function createTray(): void {
+    const iconPath = path.join(__dirname, "..", "assets", "tray-icon.png");
+    const trayIcon = nativeImage.createFromPath(iconPath);
+
+    tray = new Tray(trayIcon);
+    tray.setToolTip("Reson8");
+
+    const contextMenu = Menu.buildFromTemplate([
+        {
+            label: "Restore",
+            click: () => {
+                mainWindow?.show();
+                mainWindow?.focus();
+            },
+        },
+        { type: "separator" },
+        {
+            label: "Quit",
+            click: () => {
+                isQuitting = true;
+                app.quit();
+            },
+        },
+    ]);
+    tray.setContextMenu(contextMenu);
+
+    // Single-click on tray icon restores the window
+    tray.on("click", () => {
+        mainWindow?.show();
+        mainWindow?.focus();
     });
 }
 
@@ -100,7 +156,24 @@ app.whenReady().then(() => {
         }
     });
 
+    // ── Tray preferences IPC ─────────────────────────────────────────────
+    ipcMain.on("set-tray-prefs", (_event, prefs: { minimizeToTray: boolean; closeToTray: boolean }) => {
+        minimizeToTray = prefs.minimizeToTray;
+        closeToTray = prefs.closeToTray;
+    });
+
+    ipcMain.handle("get-tray-prefs", () => ({
+        minimizeToTray,
+        closeToTray,
+    }));
+
+    createTray();
     createWindow();
+});
+
+// Ensure native quit signals (Cmd+Q, Alt+F4) bypass close-to-tray
+app.on("before-quit", () => {
+    isQuitting = true;
 });
 
 app.on("window-all-closed", () => {
@@ -117,4 +190,8 @@ app.on("activate", () => {
 
 app.on("will-quit", () => {
     globalShortcut.unregisterAll();
+    if (tray) {
+        tray.destroy();
+        tray = null;
+    }
 });
