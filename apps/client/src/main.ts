@@ -191,6 +191,18 @@ function createWindow(): void {
         return { action: "deny" };
     });
 
+    // ── Right-click context menu ─────────────────────────────────────────
+    mainWindow.webContents.on("context-menu", (_event, params) => {
+        const menu = Menu.buildFromTemplate([
+            { label: "Cut",        role: "cut",       enabled: params.editFlags.canCut },
+            { label: "Copy",       role: "copy",      enabled: params.editFlags.canCopy },
+            { label: "Paste",      role: "paste",     enabled: params.editFlags.canPaste },
+            { type: "separator" },
+            { label: "Select All", role: "selectAll", enabled: params.editFlags.canSelectAll },
+        ]);
+        menu.popup();
+    });
+
     // Open DevTools in development
     if (process.env.NODE_ENV === "development") {
         mainWindow.webContents.openDevTools();
