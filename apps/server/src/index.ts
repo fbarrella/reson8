@@ -23,6 +23,7 @@ import { registerVoiceHandlers } from "./handlers/voice.handler.js";
 import { registerChannelHandlers } from "./handlers/channel.handler.js";
 import { registerMessageHandlers } from "./handlers/message.handler.js";
 import { registerAdminHandlers } from "./handlers/admin.handler.js";
+import { registerDMHandlers } from "./handlers/dm.handler.js";
 import { MediasoupService } from "./services/mediasoup.service.js";
 
 // Augment Fastify with the resolved server ID
@@ -103,6 +104,7 @@ async function main(): Promise<void> {
     registerChannelHandlers(io, app);
     registerMessageHandlers(io, app);
     registerAdminHandlers(io, app);
+    registerDMHandlers(io, app);
 
     // ── Start ──────────────────────────────────────────────────────────────
     try {
