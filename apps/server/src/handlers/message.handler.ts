@@ -43,9 +43,9 @@ export function registerMessageHandlers(
         // ── SEND_MESSAGE ───────────────────────────────────────────────────
         socket.on("SEND_MESSAGE", async (payload, ack) => {
             try {
-                const { channelId, content } = payload;
+                const { channelId, content, attachmentUrl } = payload;
 
-                if (!content || content.trim().length === 0) {
+                if ((!content || content.trim().length === 0) && !attachmentUrl) {
                     ack({ success: false });
                     return;
                 }
@@ -75,7 +75,8 @@ export function registerMessageHandlers(
                     data: {
                         channelId,
                         userId: socket.data.userId,
-                        content: content.trim(),
+                        content: content?.trim() ?? "",
+                        attachmentUrl: attachmentUrl ?? null,
                     },
                 });
 
@@ -85,6 +86,7 @@ export function registerMessageHandlers(
                     userId: message.userId,
                     nickname: socket.data.nickname,
                     content: message.content,
+                    attachmentUrl: message.attachmentUrl,
                     createdAt: message.createdAt.toISOString(),
                 };
 
@@ -136,6 +138,7 @@ export function registerMessageHandlers(
                         userId: m.userId,
                         nickname: m.user.nickname,
                         content: m.content,
+                        attachmentUrl: m.attachmentUrl,
                         createdAt: m.createdAt.toISOString(),
                     }));
 

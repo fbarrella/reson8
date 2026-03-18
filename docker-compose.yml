@@ -19,6 +19,11 @@ services:
       MEDIASOUP_PRIVATE_ANNOUNCED_IP: "${MEDIASOUP_PRIVATE_ANNOUNCED_IP:-}"
       ADMIN_INSTANCE_ID: "${ADMIN_INSTANCE_ID:-}"
       SERVER_PRIVATE_PASSWORD: "${SERVER_PRIVATE_PASSWORD:-}"
+      CLOUDINARY_CLOUD_NAME: "${CLOUDINARY_CLOUD_NAME:-}"
+      CLOUDINARY_API_KEY: "${CLOUDINARY_API_KEY:-}"
+      CLOUDINARY_API_SECRET: "${CLOUDINARY_API_SECRET:-}"
+    volumes:
+      - reson8_uploads:/app/uploads
     depends_on:
       postgres:
         condition: service_healthy
@@ -56,3 +61,4 @@ services:
 volumes:
   reson8_pgdata:
   reson8_redisdata:
+  reson8_uploads:

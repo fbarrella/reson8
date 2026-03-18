@@ -13,6 +13,7 @@ interface ChatMessage {
     userId: string;
     nickname: string;
     content: string;
+    attachmentUrl?: string | null;
     createdAt: string;
 }
 
@@ -22,6 +23,7 @@ interface DirectMessage {
     senderNickname: string;
     receiverId: string;
     content: string;
+    attachmentUrl?: string | null;
     createdAt: string;
     readAt?: string | null;
 }
@@ -42,18 +44,20 @@ interface Reson8Api {
         parentId?: string | null,
     ): Promise<{ success: boolean; channelId?: string; error?: string }>;
     deleteChannel(channelId: string): Promise<{ success: boolean; error?: string }>;
-    sendMessage(channelId: string, content: string): Promise<{ success: boolean; messageId?: string }>;
+    sendMessage(channelId: string, content: string, attachmentUrl?: string): Promise<{ success: boolean; messageId?: string }>;
     fetchMessages(channelId: string, before?: string, limit?: number): Promise<{ success: boolean; messages?: ChatMessage[]; error?: string }>;
     getAllUsers(serverId: string): Promise<{ success: boolean; users?: any[]; error?: string }>;
     getRoles(serverId: string): Promise<{ success: boolean; roles?: any[]; error?: string }>;
     assignRole(userId: string, roleId: string, action: "add" | "remove"): Promise<{ success: boolean; error?: string }>;
     enumerateAudioDevices(): Promise<{ inputs: { deviceId: string; label: string }[]; outputs: { deviceId: string; label: string }[] }>;
     setAudioInputDevice(deviceId: string | null): void;
-    sendDirectMessage(recipientId: string, content: string): Promise<{ success: boolean; messageId?: string; error?: string }>;
+    sendDirectMessage(recipientId: string, content: string, attachmentUrl?: string): Promise<{ success: boolean; messageId?: string; error?: string }>;
     fetchDirectMessages(partnerId: string, before?: string, limit?: number): Promise<{ success: boolean; messages?: DirectMessage[]; error?: string }>;
     getOnlineUsers(): Promise<{ success: boolean; users?: { userId: string; nickname: string }[]; error?: string }>;
     markDmsRead(partnerId: string): Promise<{ success: boolean; error?: string }>;
     getUnreadDmPartners(): Promise<{ success: boolean; partners?: { partnerId: string; partnerNickname: string; unreadCount: number }[]; error?: string }>;
+    uploadFile(fileBuffer: ArrayBuffer, fileName: string, mimeType: string): Promise<{ url: string }>;
+    downloadImage(url: string): void;
     on(event: string, callback: (...args: any[]) => void): void;
 }
 
@@ -68,6 +72,10 @@ let isInVoice = false;
 let isMuted = false;
 let isDeafened = false;
 let pttModeEnabled = localStorage.getItem("reson8-ptt-mode") === "true";
+
+// Attachment state
+let pendingAttachmentUrl: string | null = null;
+let serverBaseUrl: string = "";
 
 // Store the current tree for parent selection in the modal
 let currentTree: any[] = [];
@@ -88,6 +96,12 @@ const tabContentArea = document.getElementById("tab-content-area") as HTMLDivEle
 const chatInputBar = document.getElementById("chat-input-bar") as HTMLDivElement;
 const chatInput = document.getElementById("chat-input") as HTMLInputElement;
 const btnSend = document.getElementById("btn-send") as HTMLButtonElement;
+const btnAttach = document.getElementById("btn-attach") as HTMLButtonElement;
+const fileInput = document.getElementById("file-input") as HTMLInputElement;
+const attachmentPreview = document.getElementById("attachment-preview") as HTMLDivElement;
+const imageLightboxModal = document.getElementById("image-lightbox-modal") as HTMLDivElement;
+const lightboxImage = document.getElementById("lightbox-image") as HTMLImageElement;
+const btnLightboxDownload = document.getElementById("btn-lightbox-download") as HTMLButtonElement;
 
 const voicePanel = document.getElementById("voice-panel") as HTMLDivElement;
 const voiceChannelName = document.getElementById("voice-channel-name") as HTMLSpanElement;
@@ -245,6 +259,7 @@ btnConnect.addEventListener("click", () => {
     }
 
     log(`Connecting to ${host}${port ? `:${port}` : ""} as "${nickname}"...`, "info");
+    serverBaseUrl = `http://${host}${port ? `:${port}` : ""}`;
     api.connect(host, port, nickname, password);
 });
 
@@ -968,7 +983,23 @@ function renderChatMessage(tab: ChatTab, msg: ChatMessage): void {
     el.className = "chat-msg";
 
     const time = new Date(msg.createdAt).toLocaleTimeString();
-    el.innerHTML = `<span class="msg-time">${time}</span><span class="msg-nick">${escapeHtml(msg.nickname)}</span><span class="msg-text">${escapeHtml(msg.content)}</span>`;
+    let html = `<span class="msg-time">${time}</span><span class="msg-nick">${escapeHtml(msg.nickname)}</span>`;
+
+    if (msg.content) {
+        html += `<span class="msg-text">${escapeHtml(msg.content)}</span>`;
+    }
+
+    el.innerHTML = html;
+
+    if (msg.attachmentUrl) {
+        const img = document.createElement("img");
+        img.src = msg.attachmentUrl;
+        img.className = "msg-image";
+        img.loading = "lazy";
+        img.alt = "Shared image";
+        img.addEventListener("click", () => openLightbox(msg.attachmentUrl!));
+        el.appendChild(img);
+    }
 
     tab.messagesEl.appendChild(el);
     tab.messagesEl.scrollTop = tab.messagesEl.scrollHeight;
@@ -978,21 +1009,23 @@ function renderChatMessage(tab: ChatTab, msg: ChatMessage): void {
 
 async function sendChatMessage(): Promise<void> {
     const content = chatInput.value.trim();
-    if (!content || activeTabId === "server-log") return;
+    if ((!content && !pendingAttachmentUrl) || activeTabId === "server-log") return;
 
     chatInput.value = "";
+    const attachmentUrl = pendingAttachmentUrl;
+    clearAttachmentPreview();
 
     if (activeTabId.startsWith("dm:")) {
         // DM tab — send direct message
         const recipientId = activeTabId.slice(3);
-        const result = await api.sendDirectMessage(recipientId, content);
+        const result = await api.sendDirectMessage(recipientId, content, attachmentUrl ?? undefined);
         if (!result.success) {
             log(`Failed to send DM: ${result.error ?? "Unknown error"}`, "error");
         }
     } else {
         // Channel tab — send channel message
         const channelId = activeTabId;
-        const result = await api.sendMessage(channelId, content);
+        const result = await api.sendMessage(channelId, content, attachmentUrl ?? undefined);
         if (!result.success) {
             log("Failed to send message", "error");
         }
@@ -1029,7 +1062,23 @@ function renderDmMessage(tab: ChatTab, msg: DirectMessage): void {
     el.className = "chat-msg";
 
     const time = new Date(msg.createdAt).toLocaleTimeString();
-    el.innerHTML = `<span class="msg-time">${time}</span><span class="msg-nick">${escapeHtml(msg.senderNickname)}</span><span class="msg-text">${escapeHtml(msg.content)}</span>`;
+    let html = `<span class="msg-time">${time}</span><span class="msg-nick">${escapeHtml(msg.senderNickname)}</span>`;
+
+    if (msg.content) {
+        html += `<span class="msg-text">${escapeHtml(msg.content)}</span>`;
+    }
+
+    el.innerHTML = html;
+
+    if (msg.attachmentUrl) {
+        const img = document.createElement("img");
+        img.src = msg.attachmentUrl;
+        img.className = "msg-image";
+        img.loading = "lazy";
+        img.alt = "Shared image";
+        img.addEventListener("click", () => openLightbox(msg.attachmentUrl!));
+        el.appendChild(img);
+    }
 
     tab.messagesEl.appendChild(el);
     tab.messagesEl.scrollTop = tab.messagesEl.scrollHeight;
@@ -1499,4 +1548,107 @@ btnPttMode.addEventListener("click", () => {
         updateVoiceUI();
     }
     log("Voice input mode: Push-To-Talk", "info");
+});
+
+// ── Attachment / File Upload ──────────────────────────────────────────────
+
+btnAttach.addEventListener("click", () => {
+    fileInput.click();
+});
+
+fileInput.addEventListener("change", async () => {
+    const file = fileInput.files?.[0];
+    if (!file) return;
+    fileInput.value = ""; // reset for re-selection
+    await handleFileUpload(file);
+});
+
+// Clipboard paste handler — detect pasted images
+chatInput.addEventListener("paste", async (e) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+
+    for (const item of items) {
+        if (item.type.startsWith("image/")) {
+            e.preventDefault();
+            const file = item.getAsFile();
+            if (file) {
+                await handleFileUpload(file);
+            }
+            return;
+        }
+    }
+});
+
+async function handleFileUpload(file: File): Promise<void> {
+    if (!isConnected) {
+        log("Not connected — cannot upload", "error");
+        return;
+    }
+
+    // Validate file type
+    if (!file.type.startsWith("image/")) {
+        log("Only image files are supported", "error");
+        return;
+    }
+
+    // Validate size (5MB)
+    if (file.size > 5 * 1024 * 1024) {
+        log("Image too large (max 5MB)", "error");
+        return;
+    }
+
+    try {
+        log(`Uploading ${file.name}...`, "info");
+        const buffer = await file.arrayBuffer();
+        const result = await api.uploadFile(buffer, file.name, file.type);
+        pendingAttachmentUrl = result.url;
+        showAttachmentPreview(file.name);
+        log(`Image ready to send: ${file.name}`, "success");
+    } catch (err: any) {
+        log(`Upload failed: ${err.message}`, "error");
+    }
+}
+
+function showAttachmentPreview(fileName: string): void {
+    attachmentPreview.innerHTML = `
+        <span class="attachment-name">📎 ${escapeHtml(fileName)}</span>
+        <button class="attachment-remove" id="btn-remove-attachment">✕</button>
+    `;
+    attachmentPreview.style.display = "flex";
+    document.getElementById("btn-remove-attachment")?.addEventListener("click", clearAttachmentPreview);
+}
+
+function clearAttachmentPreview(): void {
+    pendingAttachmentUrl = null;
+    attachmentPreview.style.display = "none";
+    attachmentPreview.innerHTML = "";
+}
+
+// ── Lightbox ───────────────────────────────────────────────────────────
+
+function openLightbox(imageUrl: string): void {
+    lightboxImage.src = imageUrl;
+    imageLightboxModal.classList.add("visible");
+}
+
+imageLightboxModal.addEventListener("click", (e) => {
+    if (e.target === imageLightboxModal) {
+        imageLightboxModal.classList.remove("visible");
+        lightboxImage.src = "";
+    }
+});
+
+btnLightboxDownload.addEventListener("click", () => {
+    const url = lightboxImage.src;
+    if (url) {
+        api.downloadImage(url);
+    }
+});
+
+document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && imageLightboxModal.classList.contains("visible")) {
+        imageLightboxModal.classList.remove("visible");
+        lightboxImage.src = "";
+    }
 });
