@@ -48,7 +48,7 @@
             "icon": "assets/icon.png"
         },
         "mac": {
-            "target": "dmg",
+            "target": "zip",
             "icon": "assets/icon.icns"
         }
     },
