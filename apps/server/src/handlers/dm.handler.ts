@@ -159,23 +159,62 @@ export function registerDMHandlers(
         });
 
         // ── GET_ONLINE_USERS ───────────────────────────────────────────────
+        // Returns all online users on this server PLUS offline users who
+        // have an existing DM conversation with the requesting user.
         socket.on("GET_ONLINE_USERS", async (ack) => {
             try {
                 const serverId = socket.data.serverId;
                 const userId = socket.data.userId;
 
-                const onlineIds = await presence.getOnlineUsers(serverId);
+                // 1. Get currently online users from Redis
+                const onlineIdList = await presence.getOnlineUsers(serverId);
+                const onlineIds = new Set(onlineIdList);
 
-                // Exclude the requesting user
-                const otherIds = onlineIds.filter((id) => id !== userId);
+                // 2. Get distinct DM partner userIds from the database
+                const dmRows = await app.prisma.directMessage.findMany({
+                    where: {
+                        OR: [
+                            { senderId: userId },
+                            { receiverId: userId },
+                        ],
+                    },
+                    select: { senderId: true, receiverId: true },
+                    distinct: ["senderId", "receiverId"],
+                });
 
+                const partnerIdSet = new Set<string>();
+                for (const dm of dmRows) {
+                    if (dm.senderId !== userId) partnerIdSet.add(dm.senderId);
+                    if (dm.receiverId !== userId) partnerIdSet.add(dm.receiverId);
+                }
+
+                // 3. Merge: online users (for first-contact) + offline DM partners
+                for (const oid of onlineIds) {
+                    if (oid !== userId) partnerIdSet.add(oid);
+                }
+
+                // 4. Resolve each user entry
                 const users = await Promise.all(
-                    otherIds.map(async (uid) => {
-                        const p = await presence.getUserPresence(uid);
-                        return {
-                            userId: uid,
-                            nickname: p?.nickname ?? "Unknown",
-                        };
+                    [...partnerIdSet].map(async (uid) => {
+                        const isOnline = onlineIds.has(uid);
+                        if (isOnline) {
+                            const p = await presence.getUserPresence(uid);
+                            return {
+                                userId: uid,
+                                nickname: p?.nickname ?? "Unknown",
+                                isOnline: true,
+                            };
+                        } else {
+                            const dbUser = await app.prisma.user.findUnique({
+                                where: { id: uid },
+                                select: { nickname: true },
+                            });
+                            return {
+                                userId: uid,
+                                nickname: dbUser?.nickname ?? "Unknown",
+                                isOnline: false,
+                            };
+                        }
                     }),
                 );
 

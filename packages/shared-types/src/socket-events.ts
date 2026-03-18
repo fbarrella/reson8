@@ -8,6 +8,7 @@
  */
 
 import type {
+    IBannedUser,
     IChannel,
     IChannelTreeNode,
     IMessage,
@@ -139,6 +140,31 @@ export interface ClientToServerEvents {
     ASSIGN_ROLE: (
         payload: { userId: string; roleId: string; action: "add" | "remove" },
         ack: (response: { success: boolean; error?: string }) => void,
+    ) => void;
+
+    // ── Moderation ───────────────────────────────────────────────────────────
+
+    /** Admin kicks a user from a voice channel (they can rejoin). */
+    KICK_USER: (
+        payload: { userId: string; channelId: string },
+        ack: (response: { success: boolean; error?: string }) => void,
+    ) => void;
+
+    /** Admin bans a user from the server (blacklist by instance ID). */
+    BAN_USER: (
+        payload: { userId: string },
+        ack: (response: { success: boolean; error?: string }) => void,
+    ) => void;
+
+    /** Admin unbans a previously banned user. */
+    UNBAN_USER: (
+        payload: { userId: string },
+        ack: (response: { success: boolean; error?: string }) => void,
+    ) => void;
+
+    /** Admin requests the list of banned users on this server. */
+    GET_BANNED_USERS: (
+        ack: (response: { success: boolean; users?: IBannedUser[]; error?: string }) => void,
     ) => void;
 
     // ── WebRTC / Voice signaling (mediasoup) ────────────────────────────────
@@ -288,6 +314,14 @@ export interface ServerToClientEvents {
         /** userIds of users currently speaking (volume above threshold). */
         speakers: string[];
     }) => void;
+
+    // ── Moderation events ─────────────────────────────────────────────────
+
+    /** Notifies a user that they have been kicked from a voice channel. */
+    USER_KICKED: (payload: { channelId: string }) => void;
+
+    /** Notifies a user that they have been banned from the server. */
+    USER_BANNED: (payload: {}) => void;
 }
 
 // ---------------------------------------------------------------------------

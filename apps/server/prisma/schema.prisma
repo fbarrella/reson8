@@ -173,3 +173,18 @@ model DirectMessage {
   @@index([receiverId, senderId, createdAt])
   @@map("direct_messages")
 }
+
+// ---------------------------------------------------------------------------
+// BannedUser — blacklist of banned instance IDs per server
+// ---------------------------------------------------------------------------
+
+model BannedUser {
+  id       String   @id @default(uuid())
+  serverId String
+  userId   String   // instance ID of the banned user
+  nickname String   // nickname at time of ban (for display)
+  bannedAt DateTime @default(now())
+
+  @@unique([serverId, userId])
+  @@map("banned_users")
+}

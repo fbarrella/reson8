@@ -60,6 +60,15 @@ export function registerConnectionHandlers(
                 // Use provided serverId or fall back to the bootstrapped one
                 const serverId = payload.serverId || app.serverId;
 
+                // Ban check — reject blacklisted instance IDs
+                const banned = await app.prisma.bannedUser.findUnique({
+                    where: { serverId_userId: { serverId, userId: instanceId } },
+                });
+                if (banned) {
+                    ack({ success: false, error: "You are banned from this server" });
+                    return;
+                }
+
                 // Use the persistent instance ID as userId
                 socket.data.serverId = serverId;
                 socket.data.nickname = nickname;

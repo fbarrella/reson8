@@ -25,19 +25,34 @@ and private server ownership.
 
 ## ✨ Features
 
-🔊 **Crystal-Clear Voice** — Low-latency SFU-based audio via mediasoup. No peer-to-peer bottlenecks, even in large groups.
+### 🔊 Voice & Audio
+- **Crystal-Clear Voice** — Low-latency SFU-based audio via mediasoup. No peer-to-peer bottlenecks, even in large groups.
+- **Push-to-Talk** — Configurable global hotkey with voice-activity fallback. Toggle freely from the settings panel.
+- **Active Speaker Indicator** — Animated green halo highlights users who are currently speaking in the channel tree.
+- **Audio Device Selection** — Choose microphone and speaker devices from settings. Save and apply with a dedicated button.
 
-🌳 **Channel Tree** — Hierarchical channel structure with categories, voice rooms, and text channels — just like TeamSpeak.
+### 🌳 Channels & Presence
+- **Channel Tree** — Hierarchical channel structure with categories, voice rooms, and text channels — just like TeamSpeak.
+- **Channel Management** — Create, rename, and delete channels on the fly. Changes propagate to all clients in real-time.
+- **Real-Time Presence** — See who's online and in which channel, instantly updated across all connected clients.
 
-👥 **Real-Time Presence** — See who's online and in which channel, instantly updated across all connected clients.
+### 💬 Text & Messaging
+- **Tabbed Text Chat** — Per-channel text messaging with rich formatting, file attachments, and message history.
+- **Direct Messages** — Private 1-on-1 messaging with unread indicators, read receipts, and automatic tab management.
+- **Persistent DMs (Offline Access)** — DM conversations remain accessible even when the other user is offline.
+- **Emoji Picker** — Browse and insert emojis from a searchable picker with categorized sections.
+- **Link Previews** — URLs in chat auto-expand with title, description, and image. YouTube/video embeds supported.
 
-🎛️ **Full Voice Controls** — Mute, deafen, and leave voice with a single click. Tooltips for every action.
+### 🛡️ Administration & Security
+- **Role-Based Permissions** — Bitwise permission system with admin role management. Fine-grained access control.
+- **Server Password Protection** — Optional `SERVER_PRIVATE_PASSWORD` env var with client-side password input.
+- **Kick & Ban** — Admin right-click to kick users from voice channels. Ban button in the Users modal blacklists by instance ID with persistent unban support.
 
-➕ **Channel Management** — Create, rename, and delete channels on the fly. Changes propagate to all clients in real-time.
-
-🐳 **One-Command Server** — Spin up the entire stack with `docker compose up`. Postgres, Redis, and the Reson8 server, all containerized.
-
-🔒 **Self-Hosted** — Your data stays on your hardware. No third-party servers, no telemetry, no compromises.
+### 🖥️ Desktop Experience
+- **System Tray** — Minimize-to-tray and close-to-tray options with a tray context menu (Restore / Quit).
+- **Remember Me** — Save server URL, nickname, and password across sessions with a single checkbox.
+- **Self-Hosted** — Your data stays on your hardware. No third-party servers, no telemetry, no compromises.
+- **One-Command Server** — Spin up the entire stack with `docker compose up`. Postgres, Redis, and the Reson8 server, all containerized.
 
 ---
 
@@ -60,7 +75,7 @@ and private server ownership.
 | **Desktop Shell** | Electron | Native desktop app with system integration |
 | **Voice Engine** | mediasoup (SFU) | WebRTC audio routing — scalable many-to-many |
 | **Signaling** | Socket.io + Fastify | Real-time events & WebRTC handshake |
-| **Database** | PostgreSQL + Prisma | Channels, users, roles, messages |
+| **Database** | PostgreSQL + Prisma | Channels, users, roles, messages, bans |
 | **Presence** | Redis | Fast online/channel tracking |
 | **Containerization** | Docker Compose | One-command server deployment |
 
@@ -107,6 +122,11 @@ HOST=0.0.0.0
 MEDIASOUP_ANNOUNCED_IP=127.0.0.1
 SERVER_NAME="Reson8 Server"
 SEED_DEFAULT_TEMPLATE=true
+
+# Optional
+ADMIN_INSTANCE_ID=<your-instance-id>            # Grants admin role on connect
+SERVER_PRIVATE_PASSWORD=<server-password>        # Password-protects the server
+MEDIASOUP_PRIVATE_ANNOUNCED_IP=<lan-ip>          # For LAN/WAN dual-announce
 ```
 
 </details>
@@ -153,27 +173,28 @@ The client features a **three-pane TeamSpeak-style layout**:
 
 ```
 ┌──────────────────────────────────────────────────┐
-│ 🎧 Reson8  [host] [port] [nick] [Connect]       │
+│ 🎧 Reson8  [host] [nick] [🔑] [Connect]         │
 ├──────────────┬───────────────────────────────────┤
-│              │                                   │
-│  ▾ General   │  Server Log                       │
+│              │ Server Log │ 💬 Chat │ ✉ DM       │
+│  ▾ General   ├───────────────────────────────────┤
 │    🔊 Lobby  │  [12:30:01] Connected to server   │
-│      └ You   │  [12:30:05] Joined voice: Lobby   │
-│    💬 Chat   │  [12:30:12] Alpha joined Lobby    │
+│     🟢 You   │  [12:30:05] Joined voice: Lobby   │
+│     🟢 Alpha │  [12:30:12] Alpha joined Lobby    │
+│    💬 Chat   │                                   │
 │  ▾ Gaming    │                                   │
-│    🔊 Game 1 │                                   │
+│    🔊 Game 1 │      📎 [Emoji] [Send]            │
 │    🔊 Game 2 │                                   │
 │              │                                   │
 ├──────────────┤                                   │
 │ 🟢 Lobby     │                                   │
-│ [Mute][Deaf] │ Connected as You                  │
+│ [🔇][🔕][📞]│ 🟢 Connected as You    [⚙][👥]   │
 └──────────────┴───────────────────────────────────┘
 ```
 
-- **Left Pane** — Collapsible channel tree with live occupant indicators
-- **Right Pane** — Server event log
-- **Bottom Left** — Voice controls (mute, deafen, leave)
-- **Status Bar** — Connection status and nickname
+- **Left Pane** — Collapsible channel tree with live occupant indicators and active speaker halos
+- **Right Pane** — Tabbed content: Server log, text chat per channel, DM conversations
+- **Bottom Left** — Voice controls (mute, deafen, leave) with channel name
+- **Status Bar** — Connection status, nickname, settings gear, and users button with online indicator
 
 ---
 
@@ -184,8 +205,8 @@ reson8/
 ├── apps/
 │   ├── client/                 # Electron desktop client
 │   │   ├── src/
-│   │   │   ├── main.ts         # Electron main process
-│   │   │   ├── preload.ts      # contextBridge API
+│   │   │   ├── main.ts         # Electron main process (tray, PTT, link preview)
+│   │   │   ├── preload.ts      # contextBridge API (60+ methods)
 │   │   │   ├── renderer/       # UI (HTML + TypeScript)
 │   │   │   └── services/
 │   │   │       └── voice.service.ts  # mediasoup-client engine
@@ -194,12 +215,19 @@ reson8/
 │       ├── src/
 │       │   ├── index.ts        # Server entry point
 │       │   ├── handlers/       # Socket.io event handlers
-│       │   ├── services/       # mediasoup, presence, channel-tree
+│       │   │   ├── connection.handler.ts   # Join/leave/disconnect + ban check
+│       │   │   ├── voice.handler.ts        # WebRTC/mediasoup signaling
+│       │   │   ├── channel.handler.ts      # Channel CRUD
+│       │   │   ├── message.handler.ts      # Text messages
+│       │   │   ├── dm.handler.ts           # Direct messages + online users
+│       │   │   ├── admin.handler.ts        # Role management
+│       │   │   └── moderation.handler.ts   # Kick & ban
+│       │   ├── services/       # mediasoup, presence, permissions
 │       │   ├── config/         # mediasoup configuration
 │       │   └── plugins/        # Prisma, Redis Fastify plugins
 │       ├── prisma/
-│       │   ├── schema.prisma   # Database schema
-│       │   └── seed.ts         # Default server + channels
+│       │   ├── schema.prisma   # Database schema (8 models)
+│       │   └── seed.ts         # Default server + channels + roles
 │       ├── Dockerfile
 │       └── entrypoint.sh
 ├── packages/
@@ -218,9 +246,10 @@ reson8/
 | 1 | **Signaling & Presence** — Socket.io server, Redis presence, Electron shell | ✅ Done |
 | 2 | **Voice Bridge** — mediasoup SFU, WebRTC audio, mute/deafen | ✅ Done |
 | 3 | **Relational Logic & Hierarchy** — Channel tree UI, CRUD, Docker | ✅ Done |
-| 4 | **Permissions & Text Chat** — Bitwise roles, tabbed chat, message persistence | 🔜 Next |
-| 5 | **Desktop UX & Audio** — Push-to-Talk, details pane, audio device selection | ⬜ Planned |
-| 6 | **Deployment & Packaging** — Electron Builder for Win/Linux/macOS | ⬜ Planned |
+| 4 | **Permissions & Text Chat** — Bitwise roles, tabbed chat, message persistence | ✅ Done |
+| 5 | **Desktop UX & Audio** — Push-to-Talk, audio device selection, system tray | ✅ Done |
+| 6 | **Deployment & Packaging** — Docker Compose, Cloudflare Tunnels, TURN relay | ✅ Done |
+| 7 | **Evolutions** — DMs, link previews, emoji picker, active speaker, moderation, password protection, remember me | ✅ Done |
 
 ---
 

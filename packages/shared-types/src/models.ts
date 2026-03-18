@@ -137,10 +137,18 @@ export interface IDirectMessage {
     readAt?: string | null;
 }
 
-/** Lightweight online user record for the DM user list. */
+/** Lightweight user record for the DM user list (includes offline DM partners). */
 export interface IOnlineUser {
     userId: string;
     nickname: string;
+    isOnline: boolean;
+}
+
+/** Banned user record for the moderation panel. */
+export interface IBannedUser {
+    userId: string;
+    nickname: string;
+    bannedAt: string;
 }
 
 // ---------------------------------------------------------------------------

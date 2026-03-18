@@ -172,6 +172,8 @@ const api = {
         socket.on("CHANNEL_DELETED", (payload) => emit("channel-deleted", payload));
         socket.on("ERROR", (payload) => emit("error", payload));
         socket.on("ACTIVE_SPEAKERS", (payload) => emit("active-speakers", payload));
+        socket.on("USER_KICKED", (payload) => emit("user-kicked", payload));
+        socket.on("USER_BANNED", () => emit("user-banned", null));
 
         // Voice-specific events
         socket.on("NEW_PRODUCER", (payload) => {
@@ -422,7 +424,7 @@ const api = {
         });
     },
 
-    getOnlineUsers(): Promise<{ success: boolean; users?: { userId: string; nickname: string }[]; error?: string }> {
+    getOnlineUsers(): Promise<{ success: boolean; users?: { userId: string; nickname: string; isOnline: boolean }[]; error?: string }> {
         return new Promise((resolve) => {
             if (!socket?.connected) {
                 resolve({ success: false, error: "Not connected" });
@@ -449,6 +451,48 @@ const api = {
                 return;
             }
             socket.emit("GET_UNREAD_DM_PARTNERS", resolve);
+        });
+    },
+
+    // ── Moderation ───────────────────────────────────────────────────────
+
+    kickUser(userId: string, channelId: string): Promise<{ success: boolean; error?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.emit("KICK_USER", { userId, channelId }, resolve);
+        });
+    },
+
+    banUser(userId: string): Promise<{ success: boolean; error?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.emit("BAN_USER", { userId }, resolve);
+        });
+    },
+
+    unbanUser(userId: string): Promise<{ success: boolean; error?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.emit("UNBAN_USER", { userId }, resolve);
+        });
+    },
+
+    getBannedUsers(): Promise<{ success: boolean; users?: { userId: string; nickname: string; bannedAt: string }[]; error?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.emit("GET_BANNED_USERS", resolve);
         });
     },
 
