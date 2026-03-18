@@ -483,9 +483,13 @@ interface Reson8Api {
     setAudioInputDevice(deviceId: string | null): void;
     sendDirectMessage(recipientId: string, content: string, attachmentUrl?: string): Promise<{ success: boolean; messageId?: string; error?: string }>;
     fetchDirectMessages(partnerId: string, before?: string, limit?: number): Promise<{ success: boolean; messages?: DirectMessage[]; error?: string }>;
-    getOnlineUsers(): Promise<{ success: boolean; users?: { userId: string; nickname: string }[]; error?: string }>;
+    getOnlineUsers(): Promise<{ success: boolean; users?: { userId: string; nickname: string; isOnline: boolean }[]; error?: string }>;
     markDmsRead(partnerId: string): Promise<{ success: boolean; error?: string }>;
     getUnreadDmPartners(): Promise<{ success: boolean; partners?: { partnerId: string; partnerNickname: string; unreadCount: number }[]; error?: string }>;
+    kickUser(userId: string, channelId: string): Promise<{ success: boolean; error?: string }>;
+    banUser(userId: string): Promise<{ success: boolean; error?: string }>;
+    unbanUser(userId: string): Promise<{ success: boolean; error?: string }>;
+    getBannedUsers(): Promise<{ success: boolean; users?: { userId: string; nickname: string; bannedAt: string }[]; error?: string }>;
     uploadFile(fileBuffer: ArrayBuffer, fileName: string, mimeType: string): Promise<{ url: string }>;
     downloadImage(url: string): void;
     fetchLinkPreview(url: string): Promise<LinkPreviewData | null>;
@@ -825,6 +829,46 @@ function renderOccupants(container: HTMLElement, node: TreeNode): void {
         }
         el.setAttribute("data-user-id", occ.userId);
         el.innerHTML = `<span class="occ-dot"></span>${escapeHtml(occ.nickname)}`;
+
+        // Admin right-click → Kick from Channel
+        el.addEventListener("contextmenu", (e) => {
+            const myId = api.getInstanceId();
+            if (!isAdminUser || occ.userId === myId) return;
+            e.preventDefault();
+            e.stopPropagation();
+
+            // Remove any existing context menu
+            document.querySelector(".occupant-ctx-menu")?.remove();
+
+            const menu = document.createElement("div");
+            menu.className = "occupant-ctx-menu";
+            menu.style.left = `${e.clientX}px`;
+            menu.style.top = `${e.clientY}px`;
+            menu.innerHTML = `<button class="ctx-kick-btn">🚫 Kick from Channel</button>`;
+
+            const kickBtn = menu.querySelector(".ctx-kick-btn") as HTMLButtonElement;
+            kickBtn.addEventListener("click", async () => {
+                menu.remove();
+                const result = await api.kickUser(occ.userId, node.id);
+                if (result.success) {
+                    log(`Kicked ${escapeHtml(occ.nickname)} from channel`, "success");
+                } else {
+                    log(`Failed to kick: ${result.error}`, "error");
+                }
+            });
+
+            document.body.appendChild(menu);
+
+            // Close on click outside
+            const closeCtx = (ev: MouseEvent) => {
+                if (!menu.contains(ev.target as Node)) {
+                    menu.remove();
+                    document.removeEventListener("click", closeCtx, true);
+                }
+            };
+            setTimeout(() => document.addEventListener("click", closeCtx, true), 0);
+        });
+
         container.appendChild(el);
     }
 }
@@ -1057,13 +1101,10 @@ api.on("connected", (data: { serverId: string; instanceId: string }) => {
     btnOnlineUsers.style.display = "";
     updateOnlineDot();
 
-    // Check if user is admin to enable/disable the Roles tab
+    // Check if user is admin on connect (enables kick/ban UI immediately)
     api.getAllUsers(data.serverId).then((res) => {
-        if (res.success) {
-            settingsTabRoles.disabled = false;
-        } else {
-            settingsTabRoles.disabled = true;
-        }
+        isAdminUser = res.success;
+        settingsTabRoles.disabled = !isAdminUser;
     });
 
     // Auto-open DM tabs for partners with unread messages
@@ -1110,8 +1151,27 @@ api.on("disconnected", () => {
     log("Disconnected from server", "error");
 });
 
-api.on("error", (data: { message: string }) => {
+api.on("error", (data: { code?: string; message: string }) => {
+    // Suppress permission-denied errors — they are already handled
+    // gracefully by ack callbacks (e.g., disabling the Roles tab).
+    if (data.code === "PERMISSION_DENIED") return;
     log(`Error: ${data.message}`, "error");
+});
+
+api.on("user-kicked", (data: { channelId: string }) => {
+    log("You were kicked from the voice channel", "error");
+    // Leave voice state
+    if (isInVoice && currentChannelId === data.channelId) {
+        isInVoice = false;
+        currentChannelId = null;
+        voiceChannelName.textContent = "";
+        voicePanel.classList.remove("in-voice");
+    }
+});
+
+api.on("user-banned", () => {
+    log("You have been banned from this server", "error");
+    api.disconnect();
 });
 
 api.on("channel-tree", (data: { serverId: string; tree: TreeNode[] }) => {
@@ -1822,6 +1882,48 @@ btnOnlineUsers.addEventListener("click", async () => {
     } else {
         onlineUserList.innerHTML = '<div class="admin-empty">Failed to load users.</div>';
     }
+
+    // Append banned users section (admin only)
+    if (isAdminUser) {
+        const bannedResult = await api.getBannedUsers();
+        if (bannedResult.success && bannedResult.users && bannedResult.users.length > 0) {
+            const separator = document.createElement("div");
+            separator.className = "online-users-separator banned";
+            separator.textContent = "Banned Users";
+            onlineUserList.appendChild(separator);
+
+            for (const banned of bannedResult.users) {
+                const row = document.createElement("div");
+                row.className = "online-user-row";
+
+                const info = document.createElement("div");
+                info.className = "online-user-info";
+                info.innerHTML = `<span class="online-user-dot banned"></span><span class="online-user-nick banned">${escapeHtml(banned.nickname)}</span>`;
+                row.appendChild(info);
+
+                const unbanBtn = document.createElement("button");
+                unbanBtn.className = "btn-unban";
+                unbanBtn.textContent = "Unban";
+                unbanBtn.addEventListener("click", async () => {
+                    const res = await api.unbanUser(banned.userId);
+                    if (res.success) {
+                        log(`Unbanned ${escapeHtml(banned.nickname)}`, "success");
+                        row.remove();
+                        // Remove separator if no more banned users
+                        const remaining = onlineUserList.querySelectorAll(".btn-unban");
+                        if (remaining.length === 0) {
+                            separator.remove();
+                        }
+                    } else {
+                        log(`Failed to unban: ${res.error}`, "error");
+                    }
+                });
+                row.appendChild(unbanBtn);
+
+                onlineUserList.appendChild(row);
+            }
+        }
+    }
 });
 
 btnOnlineClose.addEventListener("click", () => {
@@ -1834,34 +1936,85 @@ onlineUsersModal.addEventListener("click", (e) => {
     }
 });
 
-function renderOnlineUsers(users: { userId: string; nickname: string }[]): void {
+function renderOnlineUsers(users: { userId: string; nickname: string; isOnline: boolean }[]): void {
     onlineUserList.innerHTML = "";
 
     if (users.length === 0) {
-        onlineUserList.innerHTML = '<div class="admin-empty">No other users online.</div>';
+        onlineUserList.innerHTML = '<div class="admin-empty">No users available.</div>';
         return;
     }
 
-    for (const user of users) {
-        const row = document.createElement("div");
-        row.className = "online-user-row";
+    // Sort: online first, then offline; alphabetical within each group
+    const sorted = [...users].sort((a, b) => {
+        if (a.isOnline !== b.isOnline) return a.isOnline ? -1 : 1;
+        return a.nickname.localeCompare(b.nickname);
+    });
 
-        const info = document.createElement("div");
-        info.className = "online-user-info";
-        info.innerHTML = `<span class="online-user-dot"></span><span class="online-user-nick">${escapeHtml(user.nickname)}</span>`;
-        row.appendChild(info);
+    const onlineUsers = sorted.filter((u) => u.isOnline);
+    const offlineUsers = sorted.filter((u) => !u.isOnline);
 
-        const dmBtn = document.createElement("button");
-        dmBtn.className = "btn-dm";
-        dmBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg> DM';
-        dmBtn.addEventListener("click", () => {
-            onlineUsersModal.classList.remove("visible");
-            openDmTab(user.userId, user.nickname);
-        });
-        row.appendChild(dmBtn);
-
-        onlineUserList.appendChild(row);
+    // Render online users
+    for (const user of onlineUsers) {
+        onlineUserList.appendChild(createUserRow(user));
     }
+
+    // Render offline separator + offline users
+    if (offlineUsers.length > 0) {
+        if (onlineUsers.length > 0) {
+            const separator = document.createElement("div");
+            separator.className = "online-users-separator";
+            separator.textContent = "Offline";
+            onlineUserList.appendChild(separator);
+        }
+        for (const user of offlineUsers) {
+            onlineUserList.appendChild(createUserRow(user));
+        }
+    }
+}
+
+function createUserRow(user: { userId: string; nickname: string; isOnline: boolean }): HTMLDivElement {
+    const row = document.createElement("div");
+    row.className = "online-user-row";
+
+    const info = document.createElement("div");
+    info.className = "online-user-info";
+    const dotClass = user.isOnline ? "online-user-dot" : "online-user-dot offline";
+    const nickClass = user.isOnline ? "online-user-nick" : "online-user-nick offline";
+    info.innerHTML = `<span class="${dotClass}"></span><span class="${nickClass}">${escapeHtml(user.nickname)}</span>`;
+    row.appendChild(info);
+
+    const btnGroup = document.createElement("div");
+    btnGroup.className = "online-user-btns";
+
+    const dmBtn = document.createElement("button");
+    dmBtn.className = "btn-dm";
+    dmBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg> DM';
+    dmBtn.addEventListener("click", () => {
+        onlineUsersModal.classList.remove("visible");
+        openDmTab(user.userId, user.nickname);
+    });
+    btnGroup.appendChild(dmBtn);
+
+    // Admin-only ban button (don't show for self)
+    const myId = api.getInstanceId();
+    if (isAdminUser && user.userId !== myId) {
+        const banBtn = document.createElement("button");
+        banBtn.className = "btn-ban";
+        banBtn.textContent = "Ban";
+        banBtn.addEventListener("click", async () => {
+            const res = await api.banUser(user.userId);
+            if (res.success) {
+                log(`Banned ${escapeHtml(user.nickname)} from server`, "success");
+                row.remove();
+            } else {
+                log(`Failed to ban: ${res.error}`, "error");
+            }
+        });
+        btnGroup.appendChild(banBtn);
+    }
+
+    row.appendChild(btnGroup);
+    return row;
 }
 
 /** Checks online user count and toggles the green dot on the Online Users button. */
@@ -1871,7 +2024,7 @@ async function updateOnlineDot(): Promise<void> {
         return;
     }
     const result = await api.getOnlineUsers();
-    if (result.success && result.users && result.users.length > 0) {
+    if (result.success && result.users && result.users.some((u) => u.isOnline)) {
         onlineDot.classList.add("active");
     } else {
         onlineDot.classList.remove("active");
