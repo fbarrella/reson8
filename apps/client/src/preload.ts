@@ -12,6 +12,7 @@ import type {
     ClientToServerEvents,
     ServerToClientEvents,
     IMessage,
+    IDirectMessage,
 } from "@reson8/shared-types";
 import { VoiceService, VoiceSignaling } from "./services/voice.service";
 
@@ -165,6 +166,7 @@ const api = {
         socket.on("CHANNEL_TREE_UPDATE", (payload) => emit("channel-tree", payload));
         socket.on("PRESENCE_UPDATE", (payload) => emit("presence", payload));
         socket.on("MESSAGE_RECEIVED", (payload) => emit("message", payload));
+        socket.on("DIRECT_MESSAGE_RECEIVED", (payload) => emit("dm-received", payload));
         socket.on("CHANNEL_DELETED", (payload) => emit("channel-deleted", payload));
         socket.on("ERROR", (payload) => emit("error", payload));
 
@@ -379,6 +381,69 @@ const api = {
                 return;
             }
             socket.emit("ASSIGN_ROLE", { userId, roleId, action }, resolve);
+        });
+    },
+
+    // ── Direct Messaging ────────────────────────────────────────────────
+
+    sendDirectMessage(
+        recipientId: string,
+        content: string,
+    ): Promise<{ success: boolean; messageId?: string; error?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.emit("SEND_DIRECT_MESSAGE", { recipientId, content }, resolve);
+        });
+    },
+
+    fetchDirectMessages(
+        partnerId: string,
+        before?: string,
+        limit?: number,
+    ): Promise<{ success: boolean; messages?: IDirectMessage[]; error?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.emit(
+                "FETCH_DIRECT_MESSAGES",
+                { partnerId, before, limit },
+                resolve,
+            );
+        });
+    },
+
+    getOnlineUsers(): Promise<{ success: boolean; users?: { userId: string; nickname: string }[]; error?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.emit("GET_ONLINE_USERS", resolve);
+        });
+    },
+
+    markDmsRead(partnerId: string): Promise<{ success: boolean; error?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.emit("MARK_DMS_READ", { partnerId }, resolve);
+        });
+    },
+
+    getUnreadDmPartners(): Promise<{ success: boolean; partners?: { partnerId: string; partnerNickname: string; unreadCount: number }[]; error?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.emit("GET_UNREAD_DM_PARTNERS", resolve);
         });
     },
 };

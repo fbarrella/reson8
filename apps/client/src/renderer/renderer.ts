@@ -16,6 +16,16 @@ interface ChatMessage {
     createdAt: string;
 }
 
+interface DirectMessage {
+    id: string;
+    senderId: string;
+    senderNickname: string;
+    receiverId: string;
+    content: string;
+    createdAt: string;
+    readAt?: string | null;
+}
+
 interface Reson8Api {
     getInstanceId(): string;
     connect(host: string, port: number | undefined, nickname: string, password?: string): Promise<void>;
@@ -39,6 +49,11 @@ interface Reson8Api {
     assignRole(userId: string, roleId: string, action: "add" | "remove"): Promise<{ success: boolean; error?: string }>;
     enumerateAudioDevices(): Promise<{ inputs: { deviceId: string; label: string }[]; outputs: { deviceId: string; label: string }[] }>;
     setAudioInputDevice(deviceId: string | null): void;
+    sendDirectMessage(recipientId: string, content: string): Promise<{ success: boolean; messageId?: string; error?: string }>;
+    fetchDirectMessages(partnerId: string, before?: string, limit?: number): Promise<{ success: boolean; messages?: DirectMessage[]; error?: string }>;
+    getOnlineUsers(): Promise<{ success: boolean; users?: { userId: string; nickname: string }[]; error?: string }>;
+    markDmsRead(partnerId: string): Promise<{ success: boolean; error?: string }>;
+    getUnreadDmPartners(): Promise<{ success: boolean; partners?: { partnerId: string; partnerNickname: string; unreadCount: number }[]; error?: string }>;
     on(event: string, callback: (...args: any[]) => void): void;
 }
 
@@ -154,6 +169,13 @@ const settingsTabRoles = document.getElementById("settings-tab-roles") as HTMLBu
 const audioInputSelect = document.getElementById("audio-input-select") as HTMLSelectElement;
 const audioOutputSelect = document.getElementById("audio-output-select") as HTMLSelectElement;
 const btnSaveDevices = document.getElementById("btn-save-devices") as HTMLButtonElement;
+
+// Online Users modal
+const btnOnlineUsers = document.getElementById("btn-online-users") as HTMLButtonElement;
+const onlineUsersModal = document.getElementById("online-users-modal") as HTMLDivElement;
+const onlineUserList = document.getElementById("online-user-list") as HTMLDivElement;
+const btnOnlineClose = document.getElementById("btn-online-close") as HTMLButtonElement;
+const onlineDot = document.getElementById("online-dot") as HTMLSpanElement;
 
 // State for pending delete
 let pendingDeleteChannelId: string | null = null;
@@ -562,8 +584,10 @@ api.on("connected", (data: { serverId: string; instanceId: string }) => {
     statusInstance.textContent = `ID: ${data.instanceId}`;
     log("Connected to server", "success");
 
-    // Always show the settings button
+    // Always show the settings button and online users button
     btnServerSettings.style.display = "";
+    btnOnlineUsers.style.display = "";
+    updateOnlineDot();
 
     // Check if user is admin to enable/disable the Roles tab
     api.getAllUsers(data.serverId).then((res) => {
@@ -571,6 +595,15 @@ api.on("connected", (data: { serverId: string; instanceId: string }) => {
             settingsTabRoles.disabled = false;
         } else {
             settingsTabRoles.disabled = true;
+        }
+    });
+
+    // Auto-open DM tabs for partners with unread messages
+    api.getUnreadDmPartners().then((res) => {
+        if (res.success && res.partners && res.partners.length > 0) {
+            for (const p of res.partners) {
+                openDmTab(p.partnerId, p.partnerNickname);
+            }
         }
     });
 });
@@ -590,15 +623,17 @@ api.on("disconnected", () => {
     statusText.textContent = "Disconnected";
     statusText.classList.remove("connected");
     btnServerSettings.style.display = "none";
+    btnOnlineUsers.style.display = "none";
+    onlineDot.classList.remove("active");
     updateVoiceUI();
     channelTree.innerHTML = `
         <div style="padding: 20px 12px; color: var(--text-muted); font-size: 12px; text-align: center;">
             Connect to a server to see channels
         </div>
     `;
-    // Close all chat tabs
-    for (const [channelId] of chatTabs) {
-        closeTab(channelId);
+    // Close all chat tabs (including DM tabs)
+    for (const [tabId] of chatTabs) {
+        closeTab(tabId);
     }
     switchTab("server-log");
     log("Disconnected from server", "error");
@@ -619,10 +654,12 @@ api.on("presence", (data: { channelId: string; occupants: any[] }) => {
 
 api.on("user-joined", (data: { nickname: string }) => {
     log(`${data.nickname} joined the server`, "info");
+    updateOnlineDot();
 });
 
 api.on("user-left", (data: { userId: string }) => {
     log(`A user left the server`, "info");
+    updateOnlineDot();
 });
 
 api.on("channel-deleted", (data: { channelId: string }) => {
@@ -814,6 +851,62 @@ function openChatTab(channelId: string, channelName: string): void {
     loadChatHistory(chatTab);
 }
 
+// ── DM Tab Management ─────────────────────────────────────────────────────
+
+function openDmTab(userId: string, nickname: string): void {
+    const tabKey = `dm:${userId}`;
+
+    // If tab already exists, just switch to it
+    if (chatTabs.has(tabKey)) {
+        switchTab(tabKey);
+        return;
+    }
+
+    // Create tab button
+    const tabEl = document.createElement("div");
+    tabEl.className = "tab";
+    tabEl.dataset.tabId = tabKey;
+    tabEl.innerHTML = `✉️ ${escapeHtml(nickname)} <span class="tab-close">✕</span>`;
+
+    tabEl.addEventListener("click", (e) => {
+        if ((e.target as HTMLElement).classList.contains("tab-close")) {
+            closeTab(tabKey);
+        } else {
+            switchTab(tabKey);
+        }
+    });
+
+    tabBar.appendChild(tabEl);
+
+    // Create tab content
+    const contentEl = document.createElement("div");
+    contentEl.className = "tab-content";
+    contentEl.dataset.tabId = tabKey;
+
+    const messagesEl = document.createElement("div");
+    messagesEl.className = "chat-messages";
+    contentEl.appendChild(messagesEl);
+
+    tabContentArea.appendChild(contentEl);
+
+    // Store tab state
+    const chatTab: ChatTab = {
+        channelId: tabKey,
+        channelName: nickname,
+        tabEl,
+        contentEl,
+        messagesEl,
+        loaded: false,
+    };
+    chatTabs.set(tabKey, chatTab);
+
+    // Switch to the new tab
+    switchTab(tabKey);
+
+    // Fetch DM history
+    loadChatHistory(chatTab);
+}
+
 function closeTab(channelId: string): void {
     const tab = chatTabs.get(channelId);
     if (!tab) return;
@@ -832,10 +925,40 @@ async function loadChatHistory(tab: ChatTab): Promise<void> {
     if (tab.loaded) return;
     tab.loaded = true;
 
-    const result = await api.fetchMessages(tab.channelId);
-    if (result.success && result.messages) {
-        for (const msg of result.messages) {
-            renderChatMessage(tab, msg);
+    if (tab.channelId.startsWith("dm:")) {
+        // DM tab — fetch direct messages
+        const partnerId = tab.channelId.slice(3);
+        const myId = api.getInstanceId();
+        const result = await api.fetchDirectMessages(partnerId);
+        if (result.success && result.messages) {
+            // Find the first unread message (sent by the partner, not by us)
+            const firstUnreadIndex = result.messages.findIndex(
+                (msg) => msg.senderId !== myId && !msg.readAt,
+            );
+
+            for (let i = 0; i < result.messages.length; i++) {
+                // Insert "Unread Messages" separator before the first unread message
+                if (i === firstUnreadIndex) {
+                    const separator = document.createElement("div");
+                    separator.className = "unread-separator";
+                    separator.innerHTML = "<span>Unread Messages</span>";
+                    tab.messagesEl.appendChild(separator);
+                }
+                renderDmMessage(tab, result.messages[i]);
+            }
+
+            // Mark messages as read now that the tab is open
+            if (firstUnreadIndex !== -1) {
+                api.markDmsRead(partnerId);
+            }
+        }
+    } else {
+        // Channel tab — fetch channel messages
+        const result = await api.fetchMessages(tab.channelId);
+        if (result.success && result.messages) {
+            for (const msg of result.messages) {
+                renderChatMessage(tab, msg);
+            }
         }
     }
 }
@@ -857,12 +980,22 @@ async function sendChatMessage(): Promise<void> {
     const content = chatInput.value.trim();
     if (!content || activeTabId === "server-log") return;
 
-    const channelId = activeTabId;
     chatInput.value = "";
 
-    const result = await api.sendMessage(channelId, content);
-    if (!result.success) {
-        log("Failed to send message", "error");
+    if (activeTabId.startsWith("dm:")) {
+        // DM tab — send direct message
+        const recipientId = activeTabId.slice(3);
+        const result = await api.sendDirectMessage(recipientId, content);
+        if (!result.success) {
+            log(`Failed to send DM: ${result.error ?? "Unknown error"}`, "error");
+        }
+    } else {
+        // Channel tab — send channel message
+        const channelId = activeTabId;
+        const result = await api.sendMessage(channelId, content);
+        if (!result.success) {
+            log("Failed to send message", "error");
+        }
     }
 }
 
@@ -888,6 +1021,111 @@ api.on("message", (msg: ChatMessage) => {
         renderChatMessage(tab, msg);
     }
 });
+
+// ── DM Event Listener ─────────────────────────────────────────────────────
+
+function renderDmMessage(tab: ChatTab, msg: DirectMessage): void {
+    const el = document.createElement("div");
+    el.className = "chat-msg";
+
+    const time = new Date(msg.createdAt).toLocaleTimeString();
+    el.innerHTML = `<span class="msg-time">${time}</span><span class="msg-nick">${escapeHtml(msg.senderNickname)}</span><span class="msg-text">${escapeHtml(msg.content)}</span>`;
+
+    tab.messagesEl.appendChild(el);
+    tab.messagesEl.scrollTop = tab.messagesEl.scrollHeight;
+}
+
+api.on("dm-received", (msg: DirectMessage) => {
+    const myId = api.getInstanceId();
+    // Determine who the DM partner is (the other user)
+    const partnerId = msg.senderId === myId ? msg.receiverId : msg.senderId;
+    const partnerNick = msg.senderNickname; // sender nickname for display purposes
+    const tabKey = `dm:${partnerId}`;
+
+    const tab = chatTabs.get(tabKey);
+    if (tab) {
+        renderDmMessage(tab, msg);
+        // Mark as read immediately if the message is from someone else
+        if (msg.senderId !== myId) {
+            api.markDmsRead(partnerId);
+        }
+    } else {
+        // Auto-open a DM tab for incoming messages from others
+        if (msg.senderId !== myId) {
+            openDmTab(partnerId, partnerNick);
+            // The tab's history will load via loadChatHistory, which includes this message
+        }
+    }
+});
+
+// ── Online Users Modal ────────────────────────────────────────────────────
+
+btnOnlineUsers.addEventListener("click", async () => {
+    if (!isConnected) return;
+    onlineUsersModal.classList.add("visible");
+    onlineUserList.innerHTML = '<div class="admin-empty">Loading users...</div>';
+
+    const result = await api.getOnlineUsers();
+    if (result.success && result.users) {
+        renderOnlineUsers(result.users);
+    } else {
+        onlineUserList.innerHTML = '<div class="admin-empty">Failed to load users.</div>';
+    }
+});
+
+btnOnlineClose.addEventListener("click", () => {
+    onlineUsersModal.classList.remove("visible");
+});
+
+onlineUsersModal.addEventListener("click", (e) => {
+    if (e.target === onlineUsersModal) {
+        onlineUsersModal.classList.remove("visible");
+    }
+});
+
+function renderOnlineUsers(users: { userId: string; nickname: string }[]): void {
+    onlineUserList.innerHTML = "";
+
+    if (users.length === 0) {
+        onlineUserList.innerHTML = '<div class="admin-empty">No other users online.</div>';
+        return;
+    }
+
+    for (const user of users) {
+        const row = document.createElement("div");
+        row.className = "online-user-row";
+
+        const info = document.createElement("div");
+        info.className = "online-user-info";
+        info.innerHTML = `<span class="online-user-dot"></span><span class="online-user-nick">${escapeHtml(user.nickname)}</span>`;
+        row.appendChild(info);
+
+        const dmBtn = document.createElement("button");
+        dmBtn.className = "btn-dm";
+        dmBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg> DM';
+        dmBtn.addEventListener("click", () => {
+            onlineUsersModal.classList.remove("visible");
+            openDmTab(user.userId, user.nickname);
+        });
+        row.appendChild(dmBtn);
+
+        onlineUserList.appendChild(row);
+    }
+}
+
+/** Checks online user count and toggles the green dot on the Online Users button. */
+async function updateOnlineDot(): Promise<void> {
+    if (!isConnected) {
+        onlineDot.classList.remove("active");
+        return;
+    }
+    const result = await api.getOnlineUsers();
+    if (result.success && result.users && result.users.length > 0) {
+        onlineDot.classList.add("active");
+    } else {
+        onlineDot.classList.remove("active");
+    }
+}
 
 // ── Unified Settings Modal (Tabs) ─────────────────────────────────────
 

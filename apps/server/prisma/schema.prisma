@@ -73,9 +73,11 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  servers  UserServer[]
-  roles    UserRole[]
-  messages Message[]
+  servers     UserServer[]
+  roles       UserRole[]
+  messages    Message[]
+  sentDMs     DirectMessage[] @relation("SentDMs")
+  receivedDMs DirectMessage[] @relation("ReceivedDMs")
 
   @@map("users")
 }
@@ -148,4 +150,24 @@ model Message {
 
   @@index([channelId, createdAt])
   @@map("messages")
+}
+
+// ---------------------------------------------------------------------------
+// DirectMessage — 1-to-1 private messages between users
+// ---------------------------------------------------------------------------
+
+model DirectMessage {
+  id         String   @id @default(uuid())
+  senderId   String
+  receiverId String
+  content    String
+  createdAt  DateTime @default(now())
+  readAt     DateTime?
+
+  sender   User @relation("SentDMs", fields: [senderId], references: [id], onDelete: Cascade)
+  receiver User @relation("ReceivedDMs", fields: [receiverId], references: [id], onDelete: Cascade)
+
+  @@index([senderId, receiverId, createdAt])
+  @@index([receiverId, senderId, createdAt])
+  @@map("direct_messages")
 }

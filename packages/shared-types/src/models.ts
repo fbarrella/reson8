@@ -122,6 +122,26 @@ export interface IMessage {
 }
 
 // ---------------------------------------------------------------------------
+// Direct Message
+// ---------------------------------------------------------------------------
+
+export interface IDirectMessage {
+    id: string;
+    senderId: string;
+    senderNickname: string;
+    receiverId: string;
+    content: string;
+    createdAt: string;
+    readAt?: string | null;
+}
+
+/** Lightweight online user record for the DM user list. */
+export interface IOnlineUser {
+    userId: string;
+    nickname: string;
+}
+
+// ---------------------------------------------------------------------------
 // WebRTC / mediasoup DTOs
 // ---------------------------------------------------------------------------
 

@@ -11,6 +11,8 @@ import type {
     IChannel,
     IChannelTreeNode,
     IMessage,
+    IDirectMessage,
+    IOnlineUser,
     IRole,
     IUser,
     IUserPresence,
@@ -83,6 +85,36 @@ export interface ClientToServerEvents {
     FETCH_MESSAGES: (
         payload: { channelId: string; before?: string; limit?: number },
         ack: (response: { success: boolean; messages?: IMessage[]; error?: string }) => void,
+    ) => void;
+
+    // ── Direct Messaging ─────────────────────────────────────────────────
+
+    /** Client sends a direct message to another user. */
+    SEND_DIRECT_MESSAGE: (
+        payload: { recipientId: string; content: string },
+        ack: (response: { success: boolean; messageId?: string; error?: string }) => void,
+    ) => void;
+
+    /** Client requests paginated DM history with another user. */
+    FETCH_DIRECT_MESSAGES: (
+        payload: { partnerId: string; before?: string; limit?: number },
+        ack: (response: { success: boolean; messages?: IDirectMessage[]; error?: string }) => void,
+    ) => void;
+
+    /** Client requests the list of currently online users on this server. */
+    GET_ONLINE_USERS: (
+        ack: (response: { success: boolean; users?: IOnlineUser[]; error?: string }) => void,
+    ) => void;
+
+    /** Client marks all DMs from a specific partner as read. */
+    MARK_DMS_READ: (
+        payload: { partnerId: string },
+        ack: (response: { success: boolean; error?: string }) => void,
+    ) => void;
+
+    /** Client requests the list of partners who have sent unread DMs. */
+    GET_UNREAD_DM_PARTNERS: (
+        ack: (response: { success: boolean; partners?: { partnerId: string; partnerNickname: string; unreadCount: number }[]; error?: string }) => void,
     ) => void;
 
     // ── Admin / Role Management ──────────────────────────────────────────────
@@ -203,6 +235,9 @@ export interface ServerToClientEvents {
 
     /** Delivers a new text message to channel subscribers. */
     MESSAGE_RECEIVED: (payload: IMessage) => void;
+
+    /** Delivers a direct message to the recipient in real-time. */
+    DIRECT_MESSAGE_RECEIVED: (payload: IDirectMessage) => void;
 
     /** Broadcasts that a new channel was created. */
     CHANNEL_CREATED: (payload: {

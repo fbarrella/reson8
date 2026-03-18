@@ -177,7 +177,8 @@
     }
 
     #btn-create-channel,
-    #btn-server-settings {
+    #btn-server-settings,
+    #btn-online-users {
       background: none;
       border: 1px solid var(--border);
       color: var(--text-secondary);
@@ -193,7 +194,8 @@
     }
 
     #btn-create-channel:hover,
-    #btn-server-settings:hover {
+    #btn-server-settings:hover,
+    #btn-online-users:hover {
       border-color: var(--accent);
       color: var(--accent);
     }
@@ -935,6 +937,141 @@
       accent-color: var(--accent);
       cursor: pointer;
     }
+
+    /* ── Online Users Modal ────────────────────────────────────────── */
+    #online-users-modal {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.6);
+      z-index: 100;
+      align-items: center;
+      justify-content: center;
+      -webkit-app-region: no-drag;
+    }
+
+    #online-users-modal.visible {
+      display: flex;
+    }
+
+    .online-user-list {
+      flex: 1;
+      overflow-y: auto;
+      margin: 8px 0;
+      max-height: 50vh;
+    }
+
+    .online-user-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--border);
+      gap: 10px;
+    }
+
+    .online-user-row:last-child {
+      border-bottom: none;
+    }
+
+    .online-user-info {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex: 1;
+      min-width: 0;
+    }
+
+    .online-user-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--success);
+      flex-shrink: 0;
+    }
+
+    .online-user-nick {
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text-primary);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .btn-dm {
+      background: var(--accent);
+      border: 1px solid var(--accent);
+      color: #000;
+      font-size: 12px;
+      padding: 6px 16px;
+      border-radius: var(--radius);
+      cursor: pointer;
+      transition: all 0.15s;
+      flex-shrink: 0;
+      font-weight: 500;
+    }
+
+    .btn-dm:hover {
+      background: var(--accent-hover);
+      border-color: var(--accent-hover);
+    }
+
+    /* Green dot on Online Users button */
+    #btn-online-users {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 4px 8px !important;
+      width: auto !important;
+    }
+
+    #btn-online-users svg {
+      flex-shrink: 0;
+    }
+
+    .online-indicator {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--text-muted);
+      flex-shrink: 0;
+      transition: background 0.2s;
+    }
+
+    .online-indicator.active {
+      background: var(--success);
+    }
+
+    /* \u2500\u2500 Unread Messages Separator \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */
+    .unread-separator {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 8px 0;
+      user-select: none;
+    }
+
+    .unread-separator::before,
+    .unread-separator::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: var(--accent);
+      opacity: 0.5;
+    }
+
+    .unread-separator span {
+      font-size: 10px;
+      font-weight: 600;
+      color: var(--accent);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      white-space: nowrap;
+    }
   </style>
 </head>
 
@@ -960,6 +1097,14 @@
       <div id="tree-header">
         <span>Channels</span>
         <div style="display:flex; gap:4px;">
+          <button id="btn-online-users" title="Online Users" style="display:none;"><svg width="14" height="14"
+              viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+              stroke-linejoin="round">
+              <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+              <circle cx="9" cy="7" r="4" />
+              <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+              <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+            </svg><span class="online-indicator" id="online-dot"></span></button>
           <button id="btn-server-settings" title="Server Settings" style="display:none;"><svg width="14" height="14"
               viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
               stroke-linejoin="round">
@@ -1122,6 +1267,19 @@
 
       <div class="modal-actions">
         <button class="btn btn-cancel" id="btn-admin-close">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Online Users Modal ──────────────────────────────────────────── -->
+  <div id="online-users-modal">
+    <div class="modal-content wide">
+      <h3><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle; margin-right: 6px;"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M23 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" /></svg>Online Users</h3>
+      <div id="online-user-list" class="online-user-list">
+        <div class="admin-empty">Loading users...</div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-cancel" id="btn-online-close">Close</button>
       </div>
     </div>
   </div>
