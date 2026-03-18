@@ -1,6 +1,6 @@
 <div align="center">
 
-# <img src="./logo_512x512.png" width="36" align="center" alt="Reson8 Logo"> Reson8
+# <img src="./logo_512x512.png" width="36" align="absmiddle" alt="Reson8 Logo"> Reson8
 
 **Self-hosted voice & text communication — your server, your rules.**
 
