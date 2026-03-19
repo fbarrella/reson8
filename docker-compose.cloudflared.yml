@@ -1,0 +1,14 @@
+# Docker Compose Override — Cloudflare Tunnel Server (cloudflared)
+#
+# Enables tunneled deployments (with Cloudflare Tunnel).
+# Usage: docker compose -f docker-compose.yml -f docker-compose.cloudflared.yml up --build
+#
+# Without this file, connection must be handled through the servers public IP (standard deployment).
+
+services:
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel run
+    environment:
+      TUNNEL_TOKEN: "${YOUR_TUNNEL_TOKEN_HERE:-}"
