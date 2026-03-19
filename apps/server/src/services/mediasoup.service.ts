@@ -167,7 +167,7 @@ export class MediasoupService {
     async createWebRtcTransport(
         router: mediasoupTypes.Router,
     ): Promise<mediasoupTypes.WebRtcTransport> {
-        const transport = await router.createWebRtcTransport(getTransportOptions());
+        const transport = await router.createWebRtcTransport(await getTransportOptions());
 
         transport.on("dtlsstatechange", (state: mediasoupTypes.DtlsState) => {
             if (state === "failed" || state === "closed") {
