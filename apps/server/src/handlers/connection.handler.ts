@@ -33,6 +33,28 @@ type TypedSocket = Socket<
 >;
 
 /**
+ * Resolves a user's nickname with a database fallback.
+ *
+ * Fast path: Redis presence (available 99% of the time).
+ * Slow path: Prisma User table (covers the race-condition window
+ *            where presence was just deleted / not yet written).
+ */
+async function resolveNickname(
+    userId: string,
+    presence: PresenceService,
+    prisma: FastifyInstance["prisma"],
+): Promise<string> {
+    const p = await presence.getUserPresence(userId);
+    if (p?.nickname) return p.nickname;
+
+    const user = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { nickname: true },
+    });
+    return user?.nickname ?? "Unknown";
+}
+
+/**
  * Registers all Socket.io connection event handlers.
  */
 export function registerConnectionHandlers(
@@ -167,11 +189,9 @@ export function registerConnectionHandlers(
                         if (occupantIds.length > 0) {
                             node.occupants = await Promise.all(
                                 occupantIds.map(async (uid) => {
-                                    const p =
-                                        await presence.getUserPresence(uid);
                                     return {
                                         userId: uid,
-                                        nickname: p?.nickname ?? "Unknown",
+                                        nickname: await resolveNickname(uid, presence, app.prisma),
                                         isMuted: false,
                                         isDeafened: false,
                                         isAway: false,
@@ -246,10 +266,9 @@ export function registerConnectionHandlers(
                     const oldOccupantIds = await presence.getChannelOccupants(prevChannelId);
                     const oldOccupants: IUserPresence[] = await Promise.all(
                         oldOccupantIds.map(async (uid) => {
-                            const p = await presence.getUserPresence(uid);
                             return {
                                 userId: uid,
-                                nickname: p?.nickname ?? "Unknown",
+                                nickname: await resolveNickname(uid, presence, app.prisma),
                                 isMuted: false,
                                 isDeafened: false,
                                 isAway: false,
@@ -271,10 +290,9 @@ export function registerConnectionHandlers(
                 const occupantIds = await presence.getChannelOccupants(channelId);
                 const occupants: IUserPresence[] = await Promise.all(
                     occupantIds.map(async (uid) => {
-                        const p = await presence.getUserPresence(uid);
                         return {
                             userId: uid,
-                            nickname: p?.nickname ?? "Unknown",
+                            nickname: await resolveNickname(uid, presence, app.prisma),
                             isMuted: false,
                             isDeafened: false,
                             isAway: false,
@@ -345,10 +363,9 @@ export function registerConnectionHandlers(
                 const occupantIds = await presence.getChannelOccupants(channelId);
                 const occupants: IUserPresence[] = await Promise.all(
                     occupantIds.map(async (uid) => {
-                        const p = await presence.getUserPresence(uid);
                         return {
                             userId: uid,
-                            nickname: p?.nickname ?? "Unknown",
+                            nickname: await resolveNickname(uid, presence, app.prisma),
                             isMuted: false,
                             isDeafened: false,
                             isAway: false,
@@ -392,10 +409,9 @@ export function registerConnectionHandlers(
                             await presence.getChannelOccupants(currentChannelId);
                         const occupants: IUserPresence[] = await Promise.all(
                             occupantIds.map(async (uid) => {
-                                const p = await presence.getUserPresence(uid);
                                 return {
                                     userId: uid,
-                                    nickname: p?.nickname ?? "Unknown",
+                                    nickname: await resolveNickname(uid, presence, app.prisma),
                                     isMuted: false,
                                     isDeafened: false,
                                     isAway: false,
