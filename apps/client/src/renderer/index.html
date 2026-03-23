@@ -1726,6 +1726,81 @@
       font-size: 12px;
       padding: 24px 8px;
     }
+
+    /* ── Mic Sensitivity Slider & Meter ─────────────────────── */
+    #mic-sensitivity-slider-wrap {
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 12px;
+      margin-bottom: 14px;
+    }
+
+    .sensitivity-slider-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .sensitivity-slider-row input[type="range"] {
+      flex: 1;
+      -webkit-appearance: none;
+      appearance: none;
+      height: 4px;
+      background: var(--border);
+      border-radius: 2px;
+      outline: none;
+      cursor: pointer;
+    }
+
+    .sensitivity-slider-row input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: var(--accent);
+      cursor: pointer;
+      box-shadow: 0 0 6px rgba(79, 195, 247, 0.4);
+      transition: transform 0.1s;
+    }
+
+    .sensitivity-slider-row input[type="range"]::-webkit-slider-thumb:hover {
+      transform: scale(1.2);
+    }
+
+    .sensitivity-labels {
+      display: flex;
+      justify-content: space-between;
+      font-size: 9px;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+
+    .sensitivity-value {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--accent);
+      min-width: 48px;
+      text-align: right;
+      flex-shrink: 0;
+    }
+
+    .mic-level-meter {
+      height: 4px;
+      background: var(--bg-tertiary);
+      border-radius: 2px;
+      overflow: hidden;
+      margin-top: 10px;
+    }
+
+    .mic-level-meter-bar {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, var(--accent), #4caf50);
+      border-radius: 2px;
+      transition: width 0.05s linear;
+    }
   </style>
 </head>
 
@@ -1897,6 +1972,39 @@
         <div style="display:flex; gap:8px; margin-bottom:14px;">
           <button class="btn" id="btn-voice-activation" style="flex:1; font-size:11px; padding:5px 0; border:1px solid var(--border); background:var(--bg-input); color:var(--text-secondary); border-radius:var(--radius); cursor:pointer; transition:all 0.15s;">🎤 Voice Activation</button>
           <button class="btn" id="btn-ptt-mode" style="flex:1; font-size:11px; padding:5px 0; border:1px solid var(--border); background:var(--bg-input); color:var(--text-secondary); border-radius:var(--radius); cursor:pointer; transition:all 0.15s;">🔘 Push-To-Talk</button>
+        </div>
+
+        <!-- Mic Sensitivity / Noise Gate -->
+        <div id="mic-sensitivity-section">
+          <div class="toggle-row" id="mic-sensitivity-toggle-row">
+            <div class="toggle-row-info">
+              <div class="toggle-row-icon">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+              </div>
+              <div class="toggle-row-text">
+                <span class="toggle-row-title">Noise Gate</span>
+                <span class="toggle-row-desc">Only transmit audio above a dB threshold</span>
+              </div>
+            </div>
+            <label class="toggle-switch">
+              <input type="checkbox" id="chk-mic-sensitivity">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+
+          <div id="mic-sensitivity-slider-wrap" style="display:none;">
+            <div class="sensitivity-slider-row">
+              <input type="range" id="mic-sensitivity-slider" min="-60" max="0" value="-40" step="1">
+              <span class="sensitivity-value" id="mic-sensitivity-value">-40 dB</span>
+            </div>
+            <div class="sensitivity-labels">
+              <span>-60 dB (more sensitive)</span>
+              <span>0 dB (less sensitive)</span>
+            </div>
+            <div class="mic-level-meter">
+              <div class="mic-level-meter-bar" id="mic-level-bar"></div>
+            </div>
+          </div>
         </div>
 
         <label style="margin-bottom:8px; display:block; margin-top:6px;">Keyboard Shortcuts</label>

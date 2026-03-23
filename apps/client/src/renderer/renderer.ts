@@ -496,6 +496,11 @@ interface Reson8Api {
     setTrayPrefs(prefs: { minimizeToTray: boolean; closeToTray: boolean }): void;
     getTrayPrefs(): Promise<{ minimizeToTray: boolean; closeToTray: boolean }>;
     isWindowFocused(): Promise<boolean>;
+    setMicSensitivity(enabled: boolean, threshold: number): void;
+    setMicThreshold(threshold: number): void;
+    startMicPreview(): Promise<void>;
+    stopMicPreview(): void;
+    getMicLevel(): number;
     on(event: string, callback: (...args: any[]) => void): void;
 }
 
@@ -547,6 +552,10 @@ let previousOccupantIds: Set<string> = new Set();
 
 // Suppress presence-based join/leave sounds after a kick (avoids double sound)
 let suppressNextPresenceSound = false;
+
+// Mic sensitivity / noise gate state
+let micSensitivityEnabled = localStorage.getItem("reson8-mic-sensitivity-enabled") === "true";
+let micLevelAnimId: number | null = null;
 
 // Link preview cache (renderer-side to avoid redundant IPC calls)
 const linkPreviewCache = new Map<string, LinkPreviewData | null>();
@@ -677,6 +686,14 @@ const chkCloseToTray = document.getElementById("chk-close-to-tray") as HTMLInput
 // Sound alerts mute checkbox
 const chkMuteAlerts = document.getElementById("chk-mute-alerts") as HTMLInputElement;
 let soundAlertsMuted = localStorage.getItem("reson8-mute-alerts") === "true";
+
+// Mic sensitivity DOM refs
+const chkMicSensitivity = document.getElementById("chk-mic-sensitivity") as HTMLInputElement;
+const micSensitivitySliderWrap = document.getElementById("mic-sensitivity-slider-wrap") as HTMLDivElement;
+const micSensitivitySlider = document.getElementById("mic-sensitivity-slider") as HTMLInputElement;
+const micSensitivityValue = document.getElementById("mic-sensitivity-value") as HTMLSpanElement;
+const micLevelBar = document.getElementById("mic-level-bar") as HTMLDivElement;
+const micSensitivitySection = document.getElementById("mic-sensitivity-section") as HTMLDivElement;
 
 // State for pending delete
 let pendingDeleteChannelId: string | null = null;
@@ -966,6 +983,12 @@ async function handleChannelClick(node: TreeNode): Promise<void> {
                     isMuted = false;
                 } else {
                     isMuted = false;
+                    // Enable noise gate if setting is on
+                    if (micSensitivityEnabled) {
+                        const threshold = parseInt(micSensitivitySlider.value, 10);
+                        api.setMicSensitivity(true, threshold);
+                        startMicLevelMeter();
+                    }
                 }
 
                 updateVoiceUI(node.name);
@@ -1043,6 +1066,7 @@ btnLeaveVoice.addEventListener("click", () => {
     isInVoice = false;
     currentChannelId = null;
     previousOccupantIds = new Set();
+    stopMicLevelMeter();
     updateVoiceUI();
     log("Left voice channel", "info");
     SoundAlert.play("leaving-channel.mp3");
@@ -2488,11 +2512,19 @@ btnVoiceActivation.addEventListener("click", () => {
     pttModeEnabled = false;
     localStorage.setItem("reson8-ptt-mode", "false");
     updatePttModeUI();
+    // Re-enable noise gate section
+    if (micSensitivitySection) micSensitivitySection.style.display = "";
     // If currently in voice, unmute mic so it streams immediately
     if (isInVoice) {
         api.setMuted(false);
         isMuted = false;
         updateVoiceUI();
+        // Re-enable noise gate if it was on
+        if (micSensitivityEnabled) {
+            const threshold = parseInt(micSensitivitySlider.value, 10);
+            api.setMicSensitivity(true, threshold);
+            startMicLevelMeter();
+        }
     }
     log("Voice input mode: Voice Activation", "info");
 });
@@ -2501,6 +2533,13 @@ btnPttMode.addEventListener("click", () => {
     pttModeEnabled = true;
     localStorage.setItem("reson8-ptt-mode", "true");
     updatePttModeUI();
+    // Disable noise gate section when in PTT mode
+    if (micSensitivitySection) micSensitivitySection.style.display = "none";
+    // Disable noise gate if active
+    if (micSensitivityEnabled && isInVoice) {
+        api.setMicSensitivity(false, 0);
+        stopMicLevelMeter();
+    }
     // If currently in voice, mute mic (PTT resting state) but don't lock
     if (isInVoice) {
         api.setMuted(true);
@@ -2803,4 +2842,78 @@ chkMuteAlerts.checked = soundAlertsMuted;
 chkMuteAlerts.addEventListener("change", () => {
     soundAlertsMuted = chkMuteAlerts.checked;
     localStorage.setItem("reson8-mute-alerts", String(soundAlertsMuted));
+});
+
+// ── Mic Sensitivity / Noise Gate ──────────────────────────────────────────
+
+function startMicLevelMeter(): void {
+    stopMicLevelMeter(); // clear any previous
+    function tick() {
+        const dB = api.getMicLevel();
+        // Map dB range [-60, 0] to [0%, 100%]
+        const pct = Math.max(0, Math.min(100, ((dB + 60) / 60) * 100));
+        if (micLevelBar) micLevelBar.style.width = `${pct}%`;
+        micLevelAnimId = requestAnimationFrame(tick);
+    }
+    micLevelAnimId = requestAnimationFrame(tick);
+}
+
+function stopMicLevelMeter(): void {
+    if (micLevelAnimId !== null) {
+        cancelAnimationFrame(micLevelAnimId);
+        micLevelAnimId = null;
+    }
+    if (micLevelBar) micLevelBar.style.width = "0%";
+}
+
+// Initialize noise gate from localStorage
+{
+    const savedThreshold = localStorage.getItem("reson8-mic-sensitivity-threshold");
+    if (savedThreshold && micSensitivitySlider) {
+        micSensitivitySlider.value = savedThreshold;
+    }
+    if (micSensitivityValue && micSensitivitySlider) {
+        micSensitivityValue.textContent = `${micSensitivitySlider.value} dB`;
+    }
+    if (chkMicSensitivity) {
+        chkMicSensitivity.checked = micSensitivityEnabled;
+    }
+    if (micSensitivitySliderWrap) {
+        micSensitivitySliderWrap.style.display = micSensitivityEnabled ? "block" : "none";
+    }
+    // Hide noise gate section if PTT mode is active
+    if (pttModeEnabled && micSensitivitySection) {
+        micSensitivitySection.style.display = "none";
+    }
+}
+
+chkMicSensitivity?.addEventListener("change", () => {
+    micSensitivityEnabled = chkMicSensitivity.checked;
+    if (micSensitivityEnabled) {
+        localStorage.setItem("reson8-mic-sensitivity-enabled", "true");
+        micSensitivitySliderWrap.style.display = "block";
+        if (isInVoice && !pttModeEnabled) {
+            const threshold = parseInt(micSensitivitySlider.value, 10);
+            api.setMicSensitivity(true, threshold);
+        } else if (!isInVoice) {
+            // Start preview so the meter works outside a voice channel
+            api.startMicPreview();
+        }
+        startMicLevelMeter();
+    } else {
+        localStorage.removeItem("reson8-mic-sensitivity-enabled");
+        micSensitivitySliderWrap.style.display = "none";
+        api.setMicSensitivity(false, 0);
+        api.stopMicPreview();
+        stopMicLevelMeter();
+    }
+});
+
+micSensitivitySlider?.addEventListener("input", () => {
+    const val = micSensitivitySlider.value;
+    micSensitivityValue.textContent = `${val} dB`;
+    localStorage.setItem("reson8-mic-sensitivity-threshold", val);
+    if (micSensitivityEnabled && isInVoice && !pttModeEnabled) {
+        api.setMicThreshold(parseInt(val, 10));
+    }
 });
