@@ -22,6 +22,7 @@ let socket: TypedSocket | null = null;
 let instanceId: string = "";
 let voiceService: VoiceService | null = null;
 let serverBaseUrl: string = "";
+let joinServerInFlight = false;
 
 // Eagerly fetch instance ID so it's available before any connection
 ipcRenderer.invoke("get-instance-id").then((id: string) => {
@@ -129,11 +130,16 @@ const api = {
         voiceService = new VoiceService(createSignaling());
 
         socket.on("connect", () => {
+            // Guard against duplicate emissions from Socket.io auto-reconnect
+            if (joinServerInFlight) return;
+            joinServerInFlight = true;
+
             // Join the server — let the server decide the serverId
             socket!.emit(
                 "USER_JOIN_SERVER",
                 { nickname, instanceId, password },
                 (res) => {
+                    joinServerInFlight = false;
                     if (res.success && res.serverId) {
                         emit("connected", { serverId: res.serverId, instanceId });
                     } else {
@@ -194,6 +200,7 @@ const api = {
     },
 
     disconnect(): void {
+        joinServerInFlight = false;
         voiceService?.cleanup();
         voiceService = null;
         socket?.disconnect();
