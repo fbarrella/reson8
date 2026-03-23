@@ -517,6 +517,7 @@ const SoundAlert = {
     },
 
     play(filename: string): void {
+        if (soundAlertsMuted) return;
         const audio = this._getAudio(filename);
         audio.currentTime = 0;
         audio.play().catch(() => {}); // Ignore autoplay restrictions
@@ -672,6 +673,10 @@ const onlineDot = document.getElementById("online-dot") as HTMLSpanElement;
 // System tray checkboxes
 const chkMinimizeToTray = document.getElementById("chk-minimize-to-tray") as HTMLInputElement;
 const chkCloseToTray = document.getElementById("chk-close-to-tray") as HTMLInputElement;
+
+// Sound alerts mute checkbox
+const chkMuteAlerts = document.getElementById("chk-mute-alerts") as HTMLInputElement;
+let soundAlertsMuted = localStorage.getItem("reson8-mute-alerts") === "true";
 
 // State for pending delete
 let pendingDeleteChannelId: string | null = null;
@@ -2789,4 +2794,13 @@ chkCloseToTray.addEventListener("change", () => {
         minimizeToTray: chkMinimizeToTray.checked,
         closeToTray: chkCloseToTray.checked,
     });
+});
+
+// ── Sound Alerts Mute Preference ──────────────────────────────────────────
+
+chkMuteAlerts.checked = soundAlertsMuted;
+
+chkMuteAlerts.addEventListener("change", () => {
+    soundAlertsMuted = chkMuteAlerts.checked;
+    localStorage.setItem("reson8-mute-alerts", String(soundAlertsMuted));
 });
