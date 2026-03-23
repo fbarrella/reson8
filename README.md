@@ -8,6 +8,7 @@ A high-performance desktop communication platform inspired by TeamSpeak 3,
 built with modern technology for low-latency voice, hierarchical channel trees,
 and private server ownership.
 
+[![Version](https://img.shields.io/badge/version-1.1.0-blue.svg)](#)
 [![Electron](https://img.shields.io/badge/Electron-33-47848F?logo=electron&logoColor=white)](https://www.electronjs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D20-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
@@ -30,6 +31,8 @@ and private server ownership.
 - **Push-to-Talk** — Configurable global hotkey with voice-activity fallback. Toggle freely from the settings panel.
 - **Active Speaker Indicator** — Animated green halo highlights users who are currently speaking in the channel tree.
 - **Audio Device Selection** — Choose microphone and speaker devices from settings. Save and apply with a dedicated button.
+- **Mic Sensitivity (Noise Gate)** — Configurable decibel threshold to selectively filter out background noise.
+- **Voice Session Timers** — Live elapsed timers indicating how long a voice conversation has been active.
 
 ### 🌳 Channels & Presence
 - **Channel Tree** — Hierarchical channel structure with categories, voice rooms, and text channels — just like TeamSpeak.
@@ -40,7 +43,7 @@ and private server ownership.
 - **Tabbed Text Chat** — Per-channel text messaging with rich formatting, file attachments, and message history.
 - **Direct Messages** — Private 1-on-1 messaging with unread indicators, read receipts, and automatic tab management.
 - **Persistent DMs (Offline Access)** — DM conversations remain accessible even when the other user is offline.
-- **Emoji Picker** — Browse and insert emojis from a searchable picker with categorized sections.
+- **Emoji Picker & Reactions** — Insert emojis into chat or react directly to messages with persistent, tallied emoji pills.
 - **Link Previews** — URLs in chat auto-expand with title, description, and image. YouTube/video embeds supported.
 
 ### 🛡️ Administration & Security
@@ -51,6 +54,8 @@ and private server ownership.
 ### 🖥️ Desktop Experience
 - **System Tray** — Minimize-to-tray and close-to-tray options with a tray context menu (Restore / Quit).
 - **Remember Me** — Save server URL, nickname, and password across sessions with a single checkbox.
+- **Sound Alerts & Connectivity** — Audible notifications for key events and a real-time latency ping display.
+- **Always-Accessible Settings** — Tweak audio devices and application preferences even when disconnected.
 - **Self-Hosted** — Your data stays on your hardware. No third-party servers, no telemetry, no compromises.
 - **One-Command Server** — Spin up the entire stack with `docker compose up`. Postgres, Redis, and the Reson8 server, all containerized.
 
@@ -250,6 +255,7 @@ reson8/
 | 5 | **Desktop UX & Audio** — Push-to-Talk, audio device selection, system tray | ✅ Done |
 | 6 | **Deployment & Packaging** — Docker Compose, Cloudflare Tunnels, TURN relay | ✅ Done |
 | 7 | **Evolutions** — DMs, link previews, emoji picker, active speaker, moderation, password protection, remember me | ✅ Done |
+| 8 | **Improvements** — Sound alerts, noise gate, session timers, emoji reactions, latency display | ✅ Done |
 
 ---
 
