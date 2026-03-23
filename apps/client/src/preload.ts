@@ -23,6 +23,7 @@ let instanceId: string = "";
 let voiceService: VoiceService | null = null;
 let serverBaseUrl: string = "";
 let joinServerInFlight = false;
+let latencyMs: number = -1;
 
 // Eagerly fetch instance ID so it's available before any connection
 ipcRenderer.invoke("get-instance-id").then((id: string) => {
@@ -129,6 +130,9 @@ const api = {
         // Initialize voice service with signaling adapter
         voiceService = new VoiceService(createSignaling());
 
+        // Latency measurement — started after connect, cleared on disconnect
+        let latencyInterval: ReturnType<typeof setInterval> | null = null;
+
         socket.on("connect", () => {
             // Guard against duplicate emissions from Socket.io auto-reconnect
             if (joinServerInFlight) return;
@@ -142,6 +146,21 @@ const api = {
                     joinServerInFlight = false;
                     if (res.success && res.serverId) {
                         emit("connected", { serverId: res.serverId, instanceId });
+
+                        // Start latency measurement interval
+                        if (latencyInterval) clearInterval(latencyInterval);
+                        latencyInterval = setInterval(() => {
+                            if (!socket?.connected) return;
+                            const start = Date.now();
+                            socket.emit("PING_LATENCY", () => {
+                                latencyMs = Date.now() - start;
+                            });
+                        }, 3000);
+                        // Measure immediately on connect
+                        const start0 = Date.now();
+                        socket!.emit("PING_LATENCY", () => {
+                            latencyMs = Date.now() - start0;
+                        });
                     } else {
                         emit("error", {
                             code: "JOIN_FAILED",
@@ -160,6 +179,11 @@ const api = {
         });
 
         socket.on("disconnect", (reason) => {
+            latencyMs = -1;
+            if (latencyInterval) {
+                clearInterval(latencyInterval);
+                latencyInterval = null;
+            }
             voiceService?.cleanup();
             emit("disconnected", { reason });
         });
@@ -181,6 +205,7 @@ const api = {
         socket.on("USER_KICKED", (payload) => emit("user-kicked", payload));
         socket.on("CHANNEL_USER_KICKED", (payload) => emit("channel-user-kicked", payload));
         socket.on("USER_BANNED", () => emit("user-banned", null));
+        socket.on("REACTION_UPDATED", (payload) => emit("reaction-updated", payload));
 
         // Voice-specific events
         socket.on("NEW_PRODUCER", (payload) => {
@@ -580,7 +605,19 @@ const api = {
     },
 
     async startMicPreview(): Promise<void> {
-        await voiceService?.startPreview();
+        // Lazily create VoiceService if not yet connected
+        if (!voiceService) {
+            const dummySignaling: VoiceSignaling = {
+                getRouterCapabilities: () => Promise.resolve({ success: false }),
+                createTransport: () => Promise.resolve({ success: false }),
+                connectTransport: () => Promise.resolve({ success: false }),
+                produce: () => Promise.resolve({ success: false }),
+                consume: () => Promise.resolve({ success: false }),
+                resumeConsumer: () => Promise.resolve({ success: false }),
+            };
+            voiceService = new VoiceService(dummySignaling);
+        }
+        await voiceService.startPreview();
     },
 
     stopMicPreview(): void {
@@ -589,6 +626,24 @@ const api = {
 
     getMicLevel(): number {
         return voiceService?.getCurrentLevel() ?? -Infinity;
+    },
+
+    getLatency(): number {
+        return latencyMs;
+    },
+
+    toggleReaction(
+        messageId: string,
+        emoji: string,
+        isDm: boolean,
+    ): Promise<{ success: boolean; error?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.emit("TOGGLE_REACTION", { messageId, emoji, isDm }, resolve);
+        });
     },
 };
 

@@ -15,6 +15,7 @@ interface ChatMessage {
     content: string;
     attachmentUrl?: string | null;
     createdAt: string;
+    reactions?: Array<{ emoji: string; count: number; userIds: string[] }>;
 }
 
 interface DirectMessage {
@@ -26,6 +27,7 @@ interface DirectMessage {
     attachmentUrl?: string | null;
     createdAt: string;
     readAt?: string | null;
+    reactions?: Array<{ emoji: string; count: number; userIds: string[] }>;
 }
 
 interface LinkPreviewData {
@@ -501,6 +503,8 @@ interface Reson8Api {
     startMicPreview(): Promise<void>;
     stopMicPreview(): void;
     getMicLevel(): number;
+    getLatency(): number;
+    toggleReaction(messageId: string, emoji: string, isDm: boolean): Promise<{ success: boolean; error?: string }>;
     on(event: string, callback: (...args: any[]) => void): void;
 }
 
@@ -613,6 +617,7 @@ const btnLeaveVoice = document.getElementById("btn-leave-voice") as HTMLButtonEl
 
 const statusDot = document.getElementById("status-dot") as HTMLSpanElement;
 const statusText = document.getElementById("status-text") as HTMLSpanElement;
+const statusLatency = document.getElementById("status-latency") as HTMLSpanElement;
 const statusInstance = document.getElementById("status-instance") as HTMLSpanElement;
 const btnCopyId = document.getElementById("btn-copy-id") as HTMLButtonElement;
 
@@ -1189,8 +1194,7 @@ api.on("connected", (data: { serverId: string; instanceId: string }) => {
     log("Connected to server", "success");
     SoundAlert.play("connected.mp3");
 
-    // Always show the settings button and online users button
-    btnServerSettings.style.display = "";
+    // Always show the online users button when connected
     btnOnlineUsers.style.display = "";
     updateOnlineDot();
 
@@ -1231,7 +1235,8 @@ api.on("disconnected", () => {
     statusDot.classList.remove("connected");
     statusText.textContent = "Disconnected";
     statusText.classList.remove("connected");
-    btnServerSettings.style.display = "none";
+    statusLatency.textContent = "";
+    statusLatency.className = "status-latency";
     btnOnlineUsers.style.display = "none";
     onlineDot.classList.remove("active");
     updateVoiceUI();
@@ -1410,6 +1415,20 @@ setInterval(() => {
         }
     }
 }, 1000);
+
+// ── Latency Display — poll every 3 seconds ───────────────────────────────
+
+setInterval(() => {
+    if (!isConnected) return;
+    const raw = api.getLatency();
+    const ms = typeof raw === "number" && !isNaN(raw) ? raw : -1;
+    if (ms < 0) {
+        statusLatency.textContent = "";
+        return;
+    }
+    statusLatency.textContent = `${ms}ms`;
+    statusLatency.className = "status-latency " + (ms <= 80 ? "good" : ms <= 150 ? "warn" : "bad");
+}, 3000);
 
 // ── Tree Update Helpers ───────────────────────────────────────────────────
 
@@ -1897,6 +1916,8 @@ async function loadChatHistory(tab: ChatTab): Promise<void> {
 function renderChatMessage(tab: ChatTab, msg: ChatMessage): void {
     const el = document.createElement("div");
     el.className = "chat-msg";
+    el.setAttribute("data-msg-id", msg.id);
+    el.setAttribute("data-msg-type", "channel");
 
     const time = new Date(msg.createdAt).toLocaleTimeString();
     let html = `<span class="msg-time">${time}</span><span class="msg-nick">${escapeHtml(msg.nickname)}</span>`;
@@ -1916,6 +1937,10 @@ function renderChatMessage(tab: ChatTab, msg: ChatMessage): void {
         img.addEventListener("click", () => openLightbox(msg.attachmentUrl!));
         el.appendChild(img);
     }
+
+    // Reaction bar
+    const reactBar = buildReactionBar(msg.id, false, msg.reactions);
+    el.appendChild(reactBar);
 
     tab.messagesEl.appendChild(el);
     tab.messagesEl.scrollTop = tab.messagesEl.scrollHeight;
@@ -1984,6 +2009,8 @@ api.on("message", (msg: ChatMessage) => {
 function renderDmMessage(tab: ChatTab, msg: DirectMessage): void {
     const el = document.createElement("div");
     el.className = "chat-msg";
+    el.setAttribute("data-msg-id", msg.id);
+    el.setAttribute("data-msg-type", "dm");
 
     const time = new Date(msg.createdAt).toLocaleTimeString();
     let html = `<span class="msg-time">${time}</span><span class="msg-nick">${escapeHtml(msg.senderNickname)}</span>`;
@@ -2003,6 +2030,10 @@ function renderDmMessage(tab: ChatTab, msg: DirectMessage): void {
         img.addEventListener("click", () => openLightbox(msg.attachmentUrl!));
         el.appendChild(img);
     }
+
+    // Reaction bar
+    const reactBar = buildReactionBar(msg.id, true, msg.reactions);
+    el.appendChild(reactBar);
 
     tab.messagesEl.appendChild(el);
     tab.messagesEl.scrollTop = tab.messagesEl.scrollHeight;
@@ -2240,25 +2271,49 @@ async function openSettingsPanel(): Promise<void> {
     // Populate audio devices
     await populateAudioDevices();
 
-    // Fetch users and roles concurrently
-    const [usersRes, rolesRes] = await Promise.all([
-        api.getAllUsers(currentServerId),
-        api.getRoles(currentServerId),
-    ]);
+    // Start mic preview for meter if sensitivity is enabled and not already in voice
+    if (micSensitivityEnabled && !isInVoice) {
+        api.startMicPreview();
+        startMicLevelMeter();
+    }
 
-    isAdminUser = usersRes.success;
-    settingsTabRoles.disabled = !isAdminUser;
+    if (isConnected) {
+        // Fetch users and roles concurrently
+        const [usersRes, rolesRes] = await Promise.all([
+            api.getAllUsers(currentServerId),
+            api.getRoles(currentServerId),
+        ]);
 
-    if (isAdminUser) {
-        allServerRoles = rolesRes.roles ?? [];
-        renderAdminUsers(usersRes.users ?? []);
+        isAdminUser = usersRes.success;
+
+        if (isAdminUser) {
+            // Show Roles tab for admins
+            settingsTabRoles.style.display = "";
+            allServerRoles = rolesRes.roles ?? [];
+            renderAdminUsers(usersRes.users ?? []);
+        } else {
+            // Hide Roles tab for non-admins
+            settingsTabRoles.style.display = "none";
+            adminUserList.innerHTML = '<div class="admin-empty">You don\'t have permission to manage roles.</div>';
+        }
     } else {
-        adminUserList.innerHTML = '<div class="admin-empty">You don\'t have permission to manage roles.</div>';
+        // Not connected — hide Roles tab entirely and default to Voice tab
+        settingsTabRoles.style.display = "none";
+        adminUserList.innerHTML = '<div class="admin-empty">Connect to a server to manage roles.</div>';
+    }
+
+    // If Roles tab is hidden and it was active, switch to Voice tab
+    if (settingsTabRoles.style.display === "none" && settingsTabRoles.classList.contains("active")) {
+        settingsTabBtns.forEach((b) => b.classList.remove("active"));
+        settingsPanels.forEach((p) => p.classList.remove("active"));
+        const voiceBtn = document.querySelector('.settings-tab-btn[data-settings-tab="voice"]');
+        const voicePanel = document.querySelector('.settings-panel[data-settings-panel="voice"]');
+        voiceBtn?.classList.add("active");
+        voicePanel?.classList.add("active");
     }
 }
 
 btnServerSettings.addEventListener("click", () => {
-    if (!isConnected) return;
     openSettingsPanel();
 });
 
@@ -2713,11 +2768,102 @@ document.addEventListener("keydown", (e) => {
     }
 });
 
+// ── Reaction Helpers ──────────────────────────────────────────────────────
+
+// Track reaction-mode state for the emoji picker
+let reactionTargetMsgId: string | null = null;
+let reactionTargetIsDm = false;
+
+function buildReactionBar(
+    msgId: string,
+    isDm: boolean,
+    reactions?: Array<{ emoji: string; count: number; userIds: string[] }>,
+): HTMLDivElement {
+    const bar = document.createElement("div");
+    bar.className = "msg-reactions";
+    bar.setAttribute("data-react-bar", msgId);
+
+    const myId = api.getInstanceId();
+
+    if (reactions && reactions.length > 0) {
+        for (const r of reactions) {
+            const pill = document.createElement("button");
+            pill.className = "reaction-pill" + (r.userIds.includes(myId) ? " mine" : "");
+            pill.innerHTML = `${r.emoji} <span class="reaction-count">${r.count}</span>`;
+            pill.title = `Reacted by ${r.count} user${r.count > 1 ? "s" : ""}`;
+            pill.addEventListener("click", (e) => {
+                e.stopPropagation();
+                api.toggleReaction(msgId, r.emoji, isDm);
+            });
+            bar.appendChild(pill);
+        }
+    }
+
+    // Add react button (small smiley icon)
+    const btnReact = document.createElement("button");
+    btnReact.className = "btn-react";
+    btnReact.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>`;
+    btnReact.title = "Add reaction";
+    btnReact.addEventListener("click", (e) => {
+        e.stopPropagation();
+        openReactionPicker(msgId, isDm, btnReact);
+    });
+    bar.appendChild(btnReact);
+
+    return bar;
+}
+
+function openReactionPicker(msgId: string, isDm: boolean, anchor: HTMLElement): void {
+    reactionTargetMsgId = msgId;
+    reactionTargetIsDm = isDm;
+
+    // Position the emoji picker near the anchor button
+    const rect = anchor.getBoundingClientRect();
+    emojiPicker.style.position = "fixed";
+    emojiPicker.style.bottom = "auto";
+    emojiPicker.style.left = `${rect.left}px`;
+    emojiPicker.style.top = `${Math.max(4, rect.top - 390)}px`;
+
+    emojiPicker.classList.add("visible");
+    emojiSearch.value = "";
+    renderEmojiGrid();
+    buildEmojiCategoryTabs();
+    emojiSearch.focus();
+}
+
+function updateReactionBar(
+    msgId: string,
+    isDm: boolean,
+    reactions: Array<{ emoji: string; count: number; userIds: string[] }>,
+): void {
+    // Find all reaction bars for this message (could be in multiple open tabs)
+    const bars = document.querySelectorAll(`[data-react-bar="${msgId}"]`);
+    for (const bar of bars) {
+        const parent = bar.parentElement;
+        if (!parent) continue;
+        // Rebuild the bar
+        const newBar = buildReactionBar(msgId, isDm, reactions);
+        parent.replaceChild(newBar, bar);
+    }
+}
+
+// Listen for reaction updates from server
+api.on("reaction-updated", (data: { messageId: string; isDm: boolean; reactions: Array<{ emoji: string; count: number; userIds: string[] }> }) => {
+    updateReactionBar(data.messageId, data.isDm, data.reactions);
+});
+
 // ── Emoji Picker ──────────────────────────────────────────────────────────
 
 function closeEmojiPicker(): void {
     emojiPicker.classList.remove("visible");
     btnEmoji.classList.remove("active");
+    // Reset reaction mode
+    reactionTargetMsgId = null;
+    // Reset positioning to default (for chat input picker)
+    emojiPicker.style.position = "";
+    emojiPicker.style.bottom = "";
+    emojiPicker.style.left = "";
+    emojiPicker.style.top = "";
 }
 
 function openEmojiPicker(): void {
@@ -2819,8 +2965,14 @@ function renderEmojiGrid(filter?: string): void {
     }
 }
 
-// Insert emoji at cursor position in chat input
+// Insert emoji at cursor position in chat input or toggle reaction
 function insertEmojiAtCursor(emoji: string): void {
+    if (reactionTargetMsgId) {
+        // Reaction mode — toggle reaction on the target message
+        api.toggleReaction(reactionTargetMsgId, emoji, reactionTargetIsDm);
+        closeEmojiPicker();
+        return;
+    }
     const start = chatInput.selectionStart ?? chatInput.value.length;
     const end = chatInput.selectionEnd ?? start;
     chatInput.setRangeText(emoji, start, end, "end");

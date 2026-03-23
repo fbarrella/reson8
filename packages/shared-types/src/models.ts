@@ -120,6 +120,7 @@ export interface IMessage {
     content: string;
     attachmentUrl?: string | null;
     createdAt: string;
+    reactions?: Array<{ emoji: string; count: number; userIds: string[] }>;
 }
 
 // ---------------------------------------------------------------------------
@@ -135,6 +136,7 @@ export interface IDirectMessage {
     attachmentUrl?: string | null;
     createdAt: string;
     readAt?: string | null;
+    reactions?: Array<{ emoji: string; count: number; userIds: string[] }>;
 }
 
 /** Lightweight user record for the DM user list (includes offline DM partners). */

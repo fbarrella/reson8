@@ -577,6 +577,70 @@
       opacity: 0.85;
     }
 
+    /* ── Message Reactions ──────────────────────────────────────── */
+    .msg-reactions {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 4px;
+      margin-top: 2px;
+      min-height: 20px;
+    }
+
+    .reaction-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      padding: 1px 6px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--text-secondary);
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.15s;
+      line-height: 1.3;
+    }
+
+    .reaction-pill:hover {
+      border-color: var(--accent);
+      background: rgba(99, 102, 241, 0.1);
+    }
+
+    .reaction-pill.mine {
+      border-color: var(--accent);
+      background: rgba(99, 102, 241, 0.2);
+    }
+
+    .reaction-count {
+      font-size: 10px;
+      font-variant-numeric: tabular-nums;
+      color: var(--text-muted);
+    }
+
+    .btn-react {
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      padding: 2px;
+      border-radius: 4px;
+      opacity: 0;
+      transition: all 0.15s;
+      display: flex;
+      align-items: center;
+    }
+
+    .chat-msg:hover .btn-react {
+      opacity: 0.6;
+    }
+
+    .btn-react:hover {
+      opacity: 1 !important;
+      color: var(--accent);
+      background: rgba(99, 102, 241, 0.1);
+    }
+
     /* ── Link Preview Card ─────────────────────────────────────── */
     .msg-link {
       color: var(--accent);
@@ -915,6 +979,18 @@
     #status-bar .status-text.connected {
       color: var(--success);
     }
+
+    .status-latency {
+      font-size: 10px;
+      font-family: monospace;
+      font-variant-numeric: tabular-nums;
+      margin-left: 6px;
+      opacity: 0.85;
+    }
+
+    .status-latency.good { color: var(--success); }
+    .status-latency.warn { color: #f0ad4e; }
+    .status-latency.bad { color: var(--danger); }
 
     #status-instance-area {
       display: flex;
@@ -1842,7 +1918,7 @@
               <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
               <path d="M16 3.13a4 4 0 0 1 0 7.75" />
             </svg><span class="online-indicator" id="online-dot"></span></button>
-          <button id="btn-server-settings" title="Server Settings" style="display:none;"><svg width="14" height="14"
+          <button id="btn-server-settings" title="Server Settings"><svg width="14" height="14"
               viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
               stroke-linejoin="round">
               <circle cx="12" cy="12" r="3" />
@@ -1907,6 +1983,7 @@
     <div>
       <span class="status-dot" id="status-dot"></span>
       <span class="status-text" id="status-text">Disconnected</span>
+      <span class="status-latency" id="status-latency"></span>
     </div>
     <div id="status-instance-area">
       <span id="status-instance"></span>

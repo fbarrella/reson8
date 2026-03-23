@@ -70,6 +70,9 @@ export function registerConnectionHandlers(
     io.on("connection", (socket: TypedSocket) => {
         app.log.info({ socketId: socket.id }, "Client connected");
 
+        // ── PING_LATENCY — instant ack for client-side RTT measurement ────
+        socket.on("PING_LATENCY", (ack) => { ack(); });
+
         // ── USER_JOIN_SERVER ────────────────────────────────────────────────
         socket.on("USER_JOIN_SERVER", async (payload, ack) => {
             try {

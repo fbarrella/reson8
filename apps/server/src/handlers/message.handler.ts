@@ -126,21 +126,36 @@ export function registerMessageHandlers(
                     take,
                     include: {
                         user: { select: { nickname: true } },
+                        reactions: { select: { emoji: true, userId: true }, orderBy: { createdAt: "asc" } },
                     },
                 });
 
                 // Convert to DTOs in chronological order
                 const dtos: IMessage[] = messages
                     .reverse()
-                    .map((m) => ({
-                        id: m.id,
-                        channelId: m.channelId,
-                        userId: m.userId,
-                        nickname: m.user.nickname,
-                        content: m.content,
-                        attachmentUrl: m.attachmentUrl,
-                        createdAt: m.createdAt.toISOString(),
-                    }));
+                    .map((m) => {
+                        // Aggregate reactions by emoji
+                        const rMap = new Map<string, string[]>();
+                        for (const r of m.reactions) {
+                            let list = rMap.get(r.emoji);
+                            if (!list) { list = []; rMap.set(r.emoji, list); }
+                            list.push(r.userId);
+                        }
+                        const reactions = Array.from(rMap.entries()).map(([emoji, userIds]) => ({
+                            emoji, count: userIds.length, userIds,
+                        }));
+
+                        return {
+                            id: m.id,
+                            channelId: m.channelId,
+                            userId: m.userId,
+                            nickname: m.user.nickname,
+                            content: m.content,
+                            attachmentUrl: m.attachmentUrl,
+                            createdAt: m.createdAt.toISOString(),
+                            reactions,
+                        };
+                    });
 
                 ack({ success: true, messages: dtos });
             } catch (err) {
