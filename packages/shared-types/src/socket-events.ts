@@ -230,6 +230,17 @@ export interface ClientToServerEvents {
     CLOSE_PRODUCER: (
         payload: { producerId: string },
     ) => void;
+
+    /** Toggle an emoji reaction on a message (channel or DM). */
+    TOGGLE_REACTION: (
+        payload: { messageId: string; emoji: string; isDm: boolean },
+        ack: (response: { success: boolean; error?: string }) => void,
+    ) => void;
+
+    /** Lightweight ping for client-side latency measurement. */
+    PING_LATENCY: (
+        ack: () => void,
+    ) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -326,6 +337,13 @@ export interface ServerToClientEvents {
 
     /** Notifies a user that they have been banned from the server. */
     USER_BANNED: (payload: {}) => void;
+
+    /** Broadcasts updated reactions on a message. */
+    REACTION_UPDATED: (payload: {
+        messageId: string;
+        isDm: boolean;
+        reactions: Array<{ emoji: string; count: number; userIds: string[] }>;
+    }) => void;
 }
 
 // ---------------------------------------------------------------------------

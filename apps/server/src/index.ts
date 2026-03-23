@@ -28,6 +28,7 @@ import { registerMessageHandlers } from "./handlers/message.handler.js";
 import { registerAdminHandlers } from "./handlers/admin.handler.js";
 import { registerDMHandlers } from "./handlers/dm.handler.js";
 import { registerModerationHandlers } from "./handlers/moderation.handler.js";
+import { registerReactionHandlers } from "./handlers/reaction.handler.js";
 import { registerUploadRoute } from "./routes/upload.route.js";
 import { MediasoupService } from "./services/mediasoup.service.js";
 
@@ -120,6 +121,7 @@ async function main(): Promise<void> {
     registerAdminHandlers(io, app);
     registerDMHandlers(io, app);
     registerModerationHandlers(io, app, mediasoupService);
+    registerReactionHandlers(io, app);
 
     // ── Start ──────────────────────────────────────────────────────────────
     try {

@@ -148,6 +148,7 @@ model Message {
 
   channel Channel @relation(fields: [channelId], references: [id], onDelete: Cascade)
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reactions Reaction[] @relation("MessageReactions")
 
   @@index([channelId, createdAt])
   @@map("messages")
@@ -168,6 +169,7 @@ model DirectMessage {
 
   sender   User @relation("SentDMs", fields: [senderId], references: [id], onDelete: Cascade)
   receiver User @relation("ReceivedDMs", fields: [receiverId], references: [id], onDelete: Cascade)
+  reactions Reaction[] @relation("DmReactions")
 
   @@index([senderId, receiverId, createdAt])
   @@index([receiverId, senderId, createdAt])
@@ -187,4 +189,24 @@ model BannedUser {
 
   @@unique([serverId, userId])
   @@map("banned_users")
+}
+
+// ---------------------------------------------------------------------------
+// Reaction — emoji reactions on messages and DMs
+// ---------------------------------------------------------------------------
+
+model Reaction {
+  id        String   @id @default(uuid())
+  messageId String?
+  dmId      String?
+  userId    String
+  emoji     String
+  createdAt DateTime @default(now())
+
+  message       Message?       @relation("MessageReactions", fields: [messageId], references: [id], onDelete: Cascade)
+  directMessage DirectMessage? @relation("DmReactions", fields: [dmId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId, emoji])
+  @@unique([dmId, userId, emoji])
+  @@map("reactions")
 }
