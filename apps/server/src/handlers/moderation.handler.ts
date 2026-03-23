@@ -100,6 +100,13 @@ export function registerModerationHandlers(
                     }),
                 );
 
+                // Notify all remaining channel occupants that a user was kicked
+                // (so they can suppress the presence-based leave sound)
+                io.to(`channel:${channelId}`).emit("CHANNEL_USER_KICKED", {
+                    channelId,
+                    userId,
+                });
+
                 io.to(`server:${serverId}`).emit("PRESENCE_UPDATE", {
                     channelId,
                     occupants,

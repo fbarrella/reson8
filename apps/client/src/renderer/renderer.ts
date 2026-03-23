@@ -495,10 +495,34 @@ interface Reson8Api {
     fetchLinkPreview(url: string): Promise<LinkPreviewData | null>;
     setTrayPrefs(prefs: { minimizeToTray: boolean; closeToTray: boolean }): void;
     getTrayPrefs(): Promise<{ minimizeToTray: boolean; closeToTray: boolean }>;
+    isWindowFocused(): Promise<boolean>;
     on(event: string, callback: (...args: any[]) => void): void;
 }
 
 const api = (window as any).reson8Api as Reson8Api;
+
+// ── Sound Alerts ──────────────────────────────────────────────────────────
+
+const SoundAlert = {
+    _cache: new Map<string, HTMLAudioElement>(),
+
+    _getAudio(filename: string): HTMLAudioElement {
+        if (!this._cache.has(filename)) {
+            const audio = document.createElement("audio");
+            audio.src = `../../assets/sound-alerts/${filename}`;
+            audio.preload = "auto";
+            this._cache.set(filename, audio);
+        }
+        return this._cache.get(filename)!;
+    },
+
+    play(filename: string): void {
+        if (soundAlertsMuted) return;
+        const audio = this._getAudio(filename);
+        audio.currentTime = 0;
+        audio.play().catch(() => {}); // Ignore autoplay restrictions
+    },
+};
 
 // ── State ─────────────────────────────────────────────────────────────────
 
@@ -517,6 +541,12 @@ let serverBaseUrl: string = "";
 // Active speakers state
 const activeSpeakers = new Set<string>();
 const speakerHoldTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+// Track previous occupants per voice channel for join/leave sound detection
+let previousOccupantIds: Set<string> = new Set();
+
+// Suppress presence-based join/leave sounds after a kick (avoids double sound)
+let suppressNextPresenceSound = false;
 
 // Link preview cache (renderer-side to avoid redundant IPC calls)
 const linkPreviewCache = new Map<string, LinkPreviewData | null>();
@@ -643,6 +673,10 @@ const onlineDot = document.getElementById("online-dot") as HTMLSpanElement;
 // System tray checkboxes
 const chkMinimizeToTray = document.getElementById("chk-minimize-to-tray") as HTMLInputElement;
 const chkCloseToTray = document.getElementById("chk-close-to-tray") as HTMLInputElement;
+
+// Sound alerts mute checkbox
+const chkMuteAlerts = document.getElementById("chk-mute-alerts") as HTMLInputElement;
+let soundAlertsMuted = localStorage.getItem("reson8-mute-alerts") === "true";
 
 // State for pending delete
 let pendingDeleteChannelId: string | null = null;
@@ -854,6 +888,7 @@ function renderOccupants(container: HTMLElement, node: TreeNode): void {
                     log(`Kicked ${escapeHtml(occ.nickname)} from channel`, "success");
                 } else {
                     log(`Failed to kick: ${result.error}`, "error");
+                    if (result.error && /permission|denied/i.test(result.error)) SoundAlert.play("insufficient_perms.mp3");
                 }
             });
 
@@ -921,6 +956,9 @@ async function handleChannelClick(node: TreeNode): Promise<void> {
                 isInVoice = true;
                 isDeafened = false;
 
+                // Initialize previous occupants for join/leave sound detection
+                previousOccupantIds = new Set(node.occupants.map((o: any) => o.userId));
+
                 // In PTT mode, mic starts muted (resting state) but isMuted=false
                 // so PTT key can activate it. isMuted=true means "PTT locked".
                 if (pttModeEnabled) {
@@ -932,6 +970,7 @@ async function handleChannelClick(node: TreeNode): Promise<void> {
 
                 updateVoiceUI(node.name);
                 log(`Joined voice channel: ${node.name}`, "success");
+                SoundAlert.play("joining-channel.mp3");
             } else {
                 log(`Failed to join voice: ${result.error}`, "error");
                 currentChannelId = null;
@@ -954,8 +993,10 @@ async function deleteChannel(channelId: string): Promise<void> {
     const result = await api.deleteChannel(channelId);
     if (result.success) {
         log("Channel deleted", "success");
+        SoundAlert.play("channel_deleted.mp3");
     } else {
         log(`Failed to delete channel: ${result.error}`, "error");
+        if (result.error && /permission|denied/i.test(result.error)) SoundAlert.play("insufficient_perms.mp3");
     }
 }
 
@@ -988,19 +1029,23 @@ btnMute.addEventListener("click", () => {
         isMuted = api.toggleMute();
     }
     updateVoiceUI();
+    if (isInVoice) SoundAlert.play(isMuted ? "mic_muted.mp3" : "mic_activated.mp3");
 });
 
 btnDeafen.addEventListener("click", () => {
     isDeafened = api.toggleDeafen();
     updateVoiceUI();
+    if (isInVoice) SoundAlert.play(isDeafened ? "sound_muted.mp3" : "sound_resumed.mp3");
 });
 
 btnLeaveVoice.addEventListener("click", () => {
     api.leaveVoiceChannel();
     isInVoice = false;
     currentChannelId = null;
+    previousOccupantIds = new Set();
     updateVoiceUI();
     log("Left voice channel", "info");
+    SoundAlert.play("leaving-channel.mp3");
     if (currentTree.length > 0) {
         renderTree(currentTree);
     }
@@ -1046,9 +1091,11 @@ btnModalCreate.addEventListener("click", async () => {
     const result = await api.createChannel(currentServerId, name, type, parentId);
     if (result.success) {
         log(`Channel "${name}" created`, "success");
+        SoundAlert.play("channel_created.mp3");
         createChannelModal.classList.remove("visible");
     } else {
         log(`Failed to create channel: ${result.error}`, "error");
+        if (result.error && /permission|denied/i.test(result.error)) SoundAlert.play("insufficient_perms.mp3");
     }
 });
 
@@ -1095,6 +1142,7 @@ api.on("connected", (data: { serverId: string; instanceId: string }) => {
     statusText.classList.add("connected");
     statusInstance.textContent = `ID: ${data.instanceId}`;
     log("Connected to server", "success");
+    SoundAlert.play("connected.mp3");
 
     // Always show the settings button and online users button
     btnServerSettings.style.display = "";
@@ -1123,6 +1171,7 @@ api.on("disconnected", () => {
     currentChannelId = null;
     currentServerId = "";
     currentTree = [];
+    previousOccupantIds = new Set();
     activeSpeakers.clear();
     for (const timer of speakerHoldTimers.values()) clearTimeout(timer);
     speakerHoldTimers.clear();
@@ -1149,6 +1198,7 @@ api.on("disconnected", () => {
     }
     switchTab("server-log");
     log("Disconnected from server", "error");
+    SoundAlert.play("disconnected.mp3");
 });
 
 api.on("error", (data: { code?: string; message: string }) => {
@@ -1160,12 +1210,24 @@ api.on("error", (data: { code?: string; message: string }) => {
 
 api.on("user-kicked", (data: { channelId: string }) => {
     log("You were kicked from the voice channel", "error");
+    SoundAlert.play("you_were_kicked_from_channel.mp3");
+    suppressNextPresenceSound = true;
     // Leave voice state
     if (isInVoice && currentChannelId === data.channelId) {
         isInVoice = false;
         currentChannelId = null;
+        previousOccupantIds = new Set();
         voiceChannelName.textContent = "";
         voicePanel.classList.remove("in-voice");
+    }
+});
+
+api.on("channel-user-kicked", (data: { channelId: string; userId: string }) => {
+    // Another user was kicked from the channel — play kick sound, suppress
+    // the presence-based leave sound that will follow immediately.
+    if (isInVoice && data.channelId === currentChannelId && data.userId !== api.getInstanceId()) {
+        SoundAlert.play("user_kicked_from_channel.mp3");
+        suppressNextPresenceSound = true;
     }
 });
 
@@ -1181,6 +1243,35 @@ api.on("channel-tree", (data: { serverId: string; tree: TreeNode[] }) => {
 api.on("presence", (data: { channelId: string; occupants: any[] }) => {
     // Update occupants in the current tree
     updateOccupants(data.channelId, data.occupants);
+
+    // Detect user join/leave in YOUR current voice channel
+    if (isInVoice && data.channelId === currentChannelId) {
+        const myId = api.getInstanceId();
+        const newIds = new Set(data.occupants.map((o: any) => o.userId));
+
+        // Skip sounds if a kick just occurred (avoids double sound)
+        if (suppressNextPresenceSound) {
+            suppressNextPresenceSound = false;
+            previousOccupantIds = newIds;
+            return;
+        }
+
+        // Detect users who joined (in new but not in previous, excluding self)
+        for (const uid of newIds) {
+            if (!previousOccupantIds.has(uid) && uid !== myId) {
+                SoundAlert.play("user_joined_channel.mp3");
+                break; // one sound per event
+            }
+        }
+        // Detect users who left (in previous but not in new, excluding self)
+        for (const uid of previousOccupantIds) {
+            if (!newIds.has(uid) && uid !== myId) {
+                SoundAlert.play("user_disconnected_from_channel.mp3");
+                break;
+            }
+        }
+        previousOccupantIds = newIds;
+    }
 });
 
 api.on("user-joined", (data: { nickname: string }) => {
@@ -1846,7 +1937,7 @@ function renderDmMessage(tab: ChatTab, msg: DirectMessage): void {
     }
 }
 
-api.on("dm-received", (msg: DirectMessage) => {
+api.on("dm-received", async (msg: DirectMessage) => {
     const myId = api.getInstanceId();
     // Determine who the DM partner is (the other user)
     const partnerId = msg.senderId === myId ? msg.receiverId : msg.senderId;
@@ -1865,6 +1956,16 @@ api.on("dm-received", (msg: DirectMessage) => {
         if (msg.senderId !== myId) {
             openDmTab(partnerId, partnerNick);
             // The tab's history will load via loadChatHistory, which includes this message
+        }
+    }
+
+    // DM notification sound: play when message is from someone else AND
+    // the DM tab is not focused OR the window is not focused
+    if (msg.senderId !== myId) {
+        const isTabActive = activeTabId === tabKey;
+        const isFocused = await api.isWindowFocused();
+        if (!isTabActive || !isFocused) {
+            SoundAlert.play("hey_wake_up.mp3");
         }
     }
 });
@@ -1908,6 +2009,7 @@ btnOnlineUsers.addEventListener("click", async () => {
                     const res = await api.unbanUser(banned.userId);
                     if (res.success) {
                         log(`Unbanned ${escapeHtml(banned.nickname)}`, "success");
+                        SoundAlert.play("user_unbanned_from_server.mp3");
                         row.remove();
                         // Remove separator if no more banned users
                         const remaining = onlineUserList.querySelectorAll(".btn-unban");
@@ -1916,6 +2018,7 @@ btnOnlineUsers.addEventListener("click", async () => {
                         }
                     } else {
                         log(`Failed to unban: ${res.error}`, "error");
+                        if (res.error && /permission|denied/i.test(res.error)) SoundAlert.play("insufficient_perms.mp3");
                     }
                 });
                 row.appendChild(unbanBtn);
@@ -2005,9 +2108,11 @@ function createUserRow(user: { userId: string; nickname: string; isOnline: boole
             const res = await api.banUser(user.userId);
             if (res.success) {
                 log(`Banned ${escapeHtml(user.nickname)} from server`, "success");
+                SoundAlert.play("user_banned_from_server.mp3");
                 row.remove();
             } else {
                 log(`Failed to ban: ${res.error}`, "error");
+                if (res.error && /permission|denied/i.test(res.error)) SoundAlert.play("insufficient_perms.mp3");
             }
         });
         btnGroup.appendChild(banBtn);
@@ -2689,4 +2794,13 @@ chkCloseToTray.addEventListener("change", () => {
         minimizeToTray: chkMinimizeToTray.checked,
         closeToTray: chkCloseToTray.checked,
     });
+});
+
+// ── Sound Alerts Mute Preference ──────────────────────────────────────────
+
+chkMuteAlerts.checked = soundAlertsMuted;
+
+chkMuteAlerts.addEventListener("change", () => {
+    soundAlertsMuted = chkMuteAlerts.checked;
+    localStorage.setItem("reson8-mute-alerts", String(soundAlertsMuted));
 });

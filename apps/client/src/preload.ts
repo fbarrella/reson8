@@ -179,6 +179,7 @@ const api = {
         socket.on("ERROR", (payload) => emit("error", payload));
         socket.on("ACTIVE_SPEAKERS", (payload) => emit("active-speakers", payload));
         socket.on("USER_KICKED", (payload) => emit("user-kicked", payload));
+        socket.on("CHANNEL_USER_KICKED", (payload) => emit("channel-user-kicked", payload));
         socket.on("USER_BANNED", () => emit("user-banned", null));
 
         // Voice-specific events
@@ -558,6 +559,10 @@ const api = {
 
     async getTrayPrefs(): Promise<{ minimizeToTray: boolean; closeToTray: boolean }> {
         return ipcRenderer.invoke("get-tray-prefs");
+    },
+
+    async isWindowFocused(): Promise<boolean> {
+        return ipcRenderer.invoke("is-window-focused");
     },
 };
 
