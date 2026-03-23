@@ -325,6 +325,14 @@
       color: var(--accent);
     }
 
+    .session-timer {
+      font-size: 9px;
+      color: var(--text-muted);
+      margin-left: 4px;
+      font-variant-numeric: tabular-nums;
+      opacity: 0.7;
+    }
+
     /* ── Voice Controls (bottom of left pane) ─────────────────────────── */
     #voice-panel {
       border-top: 1px solid var(--border);
@@ -1852,7 +1860,10 @@
       <div id="voice-panel">
         <div class="voice-info">
           <span class="dot"></span>
-          <span id="voice-channel-name">Voice Connected</span>
+          <div style="display:flex; flex-direction:column;">
+            <span id="voice-channel-name">Voice Connected</span>
+            <span id="voice-session-timer" class="session-timer"></span>
+          </div>
         </div>
         <div id="voice-controls">
           <button class="voice-btn" id="btn-mute" title="Mute">🎤 Mute</button>
