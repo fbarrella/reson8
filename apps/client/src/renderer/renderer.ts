@@ -560,6 +560,20 @@ let micLevelAnimId: number | null = null;
 // Link preview cache (renderer-side to avoid redundant IPC calls)
 const linkPreviewCache = new Map<string, LinkPreviewData | null>();
 
+// Voice session timers: channelId → ISO startedAt
+const sessionTimers = new Map<string, string>();
+
+function formatDuration(ms: number): string {
+    const totalSeconds = Math.floor(ms / 1000);
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    if (hours > 0) {
+        return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+    }
+    return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+}
+
 // Store the current tree for parent selection in the modal
 let currentTree: any[] = [];
 
@@ -854,9 +868,16 @@ function renderChannel(node: TreeNode): HTMLDivElement {
     const count = node.occupants.length;
     const countBadge = count > 0 ? `<span class="ch-count">${count}</span>` : "";
 
+    // Session timer badge for active voice sessions
+    let timerBadge = "";
+    if (isVoice && sessionTimers.has(node.id)) {
+        timerBadge = `<span class="session-timer" data-session-channel="${node.id}"></span>`;
+    }
+
     channel.innerHTML = `
         <span class="ch-icon ${iconClass}">${icon}</span>
         <span class="ch-name">${escapeHtml(node.name)}</span>
+        ${timerBadge}
         ${countBadge}
     `;
 
@@ -1199,6 +1220,9 @@ api.on("disconnected", () => {
     activeSpeakers.clear();
     for (const timer of speakerHoldTimers.values()) clearTimeout(timer);
     speakerHoldTimers.clear();
+    sessionTimers.clear();
+    const panelTimer = document.getElementById("voice-session-timer");
+    if (panelTimer) panelTimer.textContent = "";
     btnConnect.disabled = false;
     btnDisconnect.disabled = true;
     serverUrlInput.disabled = false;
@@ -1264,7 +1288,14 @@ api.on("channel-tree", (data: { serverId: string; tree: TreeNode[] }) => {
     renderTree(data.tree);
 });
 
-api.on("presence", (data: { channelId: string; occupants: any[] }) => {
+api.on("presence", (data: { channelId: string; occupants: any[]; sessionStartedAt?: string }) => {
+    // Track voice session timers
+    if (data.sessionStartedAt && data.occupants.length > 0) {
+        sessionTimers.set(data.channelId, data.sessionStartedAt);
+    } else {
+        sessionTimers.delete(data.channelId);
+    }
+
     // Update occupants in the current tree
     updateOccupants(data.channelId, data.occupants);
 
@@ -1345,6 +1376,7 @@ api.on("active-speakers", (data: { channelId: string; speakers: string[] }) => {
 });
 
 api.on("channel-deleted", (data: { channelId: string }) => {
+    sessionTimers.delete(data.channelId);
     if (currentChannelId === data.channelId) {
         currentChannelId = null;
         if (isInVoice) {
@@ -1355,6 +1387,29 @@ api.on("channel-deleted", (data: { channelId: string }) => {
         log("Your current channel was deleted", "error");
     }
 });
+
+// ── Voice Session Timer — tick every second ──────────────────────────────
+
+setInterval(() => {
+    const now = Date.now();
+    for (const [chId, startedAt] of sessionTimers) {
+        const treeEl = document.querySelector(
+            `[data-session-channel="${chId}"]`,
+        ) as HTMLSpanElement | null;
+        if (treeEl) {
+            treeEl.textContent = formatDuration(now - new Date(startedAt).getTime());
+        }
+    }
+    // Update the voice panel timer
+    if (currentChannelId && sessionTimers.has(currentChannelId)) {
+        const panelTimer = document.getElementById("voice-session-timer");
+        if (panelTimer) {
+            panelTimer.textContent = formatDuration(
+                now - new Date(sessionTimers.get(currentChannelId)!).getTime(),
+            );
+        }
+    }
+}, 1000);
 
 // ── Tree Update Helpers ───────────────────────────────────────────────────
 

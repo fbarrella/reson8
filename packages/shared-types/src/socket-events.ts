@@ -257,6 +257,7 @@ export interface ServerToClientEvents {
     PRESENCE_UPDATE: (payload: {
         channelId: string;
         occupants: IUserPresence[];
+        sessionStartedAt?: string;
     }) => void;
 
     /** Delivers a new text message to channel subscribers. */

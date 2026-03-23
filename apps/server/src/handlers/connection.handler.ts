@@ -54,6 +54,9 @@ async function resolveNickname(
     return user?.nickname ?? "Unknown";
 }
 
+/** In-memory voice session start times (channelId → Date). */
+const voiceSessionStartedAt = new Map<string, Date>();
+
 /**
  * Registers all Socket.io connection event handlers.
  */
@@ -198,6 +201,12 @@ export function registerConnectionHandlers(
                                     };
                                 }),
                             );
+                            // Bootstrap voice session start time for occupied voice channels
+                            // (approximate — covers server-restart recovery)
+                            const chMeta = channelDtos.find((c: { id: string }) => c.id === node.id);
+                            if (chMeta && (chMeta.type as string) === "VOICE" && !voiceSessionStartedAt.has(node.id)) {
+                                voiceSessionStartedAt.set(node.id, new Date());
+                            }
                         }
                         if (node.children.length > 0) {
                             await hydrateOccupants(node.children);
@@ -264,6 +273,9 @@ export function registerConnectionHandlers(
 
                     // Broadcast updated occupants for the old channel
                     const oldOccupantIds = await presence.getChannelOccupants(prevChannelId);
+                    if (oldOccupantIds.length === 0) {
+                        voiceSessionStartedAt.delete(prevChannelId);
+                    }
                     const oldOccupants: IUserPresence[] = await Promise.all(
                         oldOccupantIds.map(async (uid) => {
                             return {
@@ -278,6 +290,7 @@ export function registerConnectionHandlers(
                     io.to(`server:${socket.data.serverId}`).emit("PRESENCE_UPDATE", {
                         channelId: prevChannelId,
                         occupants: oldOccupants,
+                        sessionStartedAt: voiceSessionStartedAt.get(prevChannelId)?.toISOString(),
                     });
                 }
 
@@ -288,6 +301,18 @@ export function registerConnectionHandlers(
 
                 // Get current occupants and broadcast presence update
                 const occupantIds = await presence.getChannelOccupants(channelId);
+
+                // Start a new voice session if this is the first occupant in a voice channel
+                if (occupantIds.length === 1) {
+                    const ch = await app.prisma.channel.findUnique({
+                        where: { id: channelId },
+                        select: { type: true },
+                    });
+                    if (ch && ch.type === "VOICE") {
+                        voiceSessionStartedAt.set(channelId, new Date());
+                    }
+                }
+
                 const occupants: IUserPresence[] = await Promise.all(
                     occupantIds.map(async (uid) => {
                         return {
@@ -303,6 +328,7 @@ export function registerConnectionHandlers(
                 io.to(`server:${socket.data.serverId}`).emit("PRESENCE_UPDATE", {
                     channelId,
                     occupants,
+                    sessionStartedAt: voiceSessionStartedAt.get(channelId)?.toISOString(),
                 });
 
                 ack({ success: true });
@@ -361,6 +387,9 @@ export function registerConnectionHandlers(
 
                 // Broadcast updated occupants
                 const occupantIds = await presence.getChannelOccupants(channelId);
+                if (occupantIds.length === 0) {
+                    voiceSessionStartedAt.delete(channelId);
+                }
                 const occupants: IUserPresence[] = await Promise.all(
                     occupantIds.map(async (uid) => {
                         return {
@@ -376,6 +405,7 @@ export function registerConnectionHandlers(
                 io.to(`server:${socket.data.serverId}`).emit("PRESENCE_UPDATE", {
                     channelId,
                     occupants,
+                    sessionStartedAt: voiceSessionStartedAt.get(channelId)?.toISOString(),
                 });
 
                 app.log.info({ socketId: socket.id, channelId }, "User left channel");
@@ -407,6 +437,9 @@ export function registerConnectionHandlers(
                         // Broadcast updated occupants for the channel they were in
                         const occupantIds =
                             await presence.getChannelOccupants(currentChannelId);
+                        if (occupantIds.length === 0) {
+                            voiceSessionStartedAt.delete(currentChannelId);
+                        }
                         const occupants: IUserPresence[] = await Promise.all(
                             occupantIds.map(async (uid) => {
                                 return {
@@ -422,6 +455,7 @@ export function registerConnectionHandlers(
                         io.to(`server:${serverId}`).emit("PRESENCE_UPDATE", {
                             channelId: currentChannelId,
                             occupants,
+                            sessionStartedAt: voiceSessionStartedAt.get(currentChannelId)?.toISOString(),
                         });
                     }
 
