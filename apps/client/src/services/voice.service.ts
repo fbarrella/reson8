@@ -75,6 +75,16 @@ export class VoiceService {
     private localStream: MediaStream | null = null;
     private _isDeafened = false;
 
+    // ── Mic sensitivity / noise gate ──────────────────────────────────────
+    private analyser: AnalyserNode | null = null;
+    private audioContext: AudioContext | null = null;
+    private _analysisTrack: MediaStreamTrack | null = null;
+    private _previewStream: MediaStream | null = null;
+    private silenceCheckInterval: number | null = null;
+    private sensitivityThreshold: number = -40; // dB
+    private sensitivityEnabled: boolean = false;
+    private _isManuallyMuted: boolean = false;
+
     /** Producers that arrived before recv transport was ready. */
     private pendingProducers: string[] = [];
 
@@ -240,6 +250,11 @@ export class VoiceService {
 
         const track = this.localStream.getAudioTracks()[0];
         this.producer = await this.sendTransport.produce({ track });
+
+        // If sensitivity was already enabled, reconnect analyser to the new stream
+        if (this.sensitivityEnabled && this.localStream) {
+            this.hookAnalyser();
+        }
     }
 
     // ── Consume remote audio ──────────────────────────────────────────────
@@ -319,8 +334,10 @@ export class VoiceService {
 
         if (this.producer.paused) {
             this.producer.resume();
+            this._isManuallyMuted = false;
         } else {
             this.producer.pause();
+            this._isManuallyMuted = true;
         }
         return this.producer.paused;
     }
@@ -328,6 +345,7 @@ export class VoiceService {
     /** Explicitly set the mute state (used by PTT mode). */
     setMuted(muted: boolean): void {
         if (!this.producer) return;
+        this._isManuallyMuted = muted;
         if (muted && !this.producer.paused) {
             this.producer.pause();
         } else if (!muted && this.producer.paused) {
@@ -344,10 +362,205 @@ export class VoiceService {
         return this._isDeafened;
     }
 
+    // ── Mic Sensitivity / Noise Gate ────────────────────────────────────────
+
+    /** Hook the AnalyserNode to the current localStream. */
+    private hookAnalyser(): void {
+        // Stop preview mode if it was running
+        this.stopPreview();
+
+        // Tear down any previous analyser
+        if (this.silenceCheckInterval !== null) {
+            clearInterval(this.silenceCheckInterval);
+            this.silenceCheckInterval = null;
+        }
+        if (this._analysisTrack) {
+            this._analysisTrack.stop();
+            this._analysisTrack = null;
+        }
+        if (this.audioContext) {
+            this.audioContext.close().catch(() => {});
+            this.audioContext = null;
+            this.analyser = null;
+        }
+
+        if (!this.localStream) return;
+
+        // Clone the track for analysis so the AnalyserNode always reads
+        // the raw mic signal, even when the original track is disabled
+        // by the noise gate (track.enabled = false sends silence).
+        const originalTrack = this.localStream.getAudioTracks()[0];
+        if (!originalTrack) return;
+        this._analysisTrack = originalTrack.clone();
+        const analysisStream = new MediaStream([this._analysisTrack]);
+
+        this.audioContext = new AudioContext();
+        this.analyser = this.audioContext.createAnalyser();
+        this.analyser.fftSize = 2048;
+
+        const source = this.audioContext.createMediaStreamSource(analysisStream);
+        source.connect(this.analyser);
+
+        const bufferLength = this.analyser.fftSize;
+        const dataArray = new Float32Array(bufferLength);
+
+        this.silenceCheckInterval = window.setInterval(() => {
+            if (!this.analyser || !this.producer) return;
+
+            this.analyser.getFloatTimeDomainData(dataArray);
+
+            // Compute RMS → dB
+            let sumSquares = 0;
+            for (let i = 0; i < bufferLength; i++) {
+                sumSquares += dataArray[i] * dataArray[i];
+            }
+            const rms = Math.sqrt(sumSquares / bufferLength);
+            const dB = rms > 0 ? 20 * Math.log10(rms) : -Infinity;
+
+            // Don't override manual mute
+            if (this._isManuallyMuted) return;
+
+            const track = this.localStream?.getAudioTracks()[0];
+            if (!track) return;
+
+            if (dB > this.sensitivityThreshold) {
+                if (!track.enabled) track.enabled = true;
+            } else {
+                if (track.enabled) track.enabled = false;
+            }
+        }, 50) as unknown as number;
+    }
+
+    /** Enable noise gate with the given dB threshold. */
+    enableSensitivity(threshold: number): void {
+        this.sensitivityEnabled = true;
+        this.sensitivityThreshold = threshold;
+        if (this.localStream) {
+            this.hookAnalyser();
+        }
+    }
+
+    /** Disable the noise gate. */
+    disableSensitivity(): void {
+        this.sensitivityEnabled = false;
+        if (this.silenceCheckInterval !== null) {
+            clearInterval(this.silenceCheckInterval);
+            this.silenceCheckInterval = null;
+        }
+        if (this._analysisTrack) {
+            this._analysisTrack.stop();
+            this._analysisTrack = null;
+        }
+        if (this.audioContext) {
+            this.audioContext.close().catch(() => {});
+            this.audioContext = null;
+            this.analyser = null;
+        }
+        // Re-enable track if not manually muted
+        if (!this._isManuallyMuted) {
+            const track = this.localStream?.getAudioTracks()[0];
+            if (track) track.enabled = true;
+        }
+    }
+
+    /** Update the noise gate threshold (while enabled). */
+    setThreshold(threshold: number): void {
+        this.sensitivityThreshold = threshold;
+    }
+
+    /** Returns the current mic input level in dB (for meter visualization). */
+    getCurrentLevel(): number {
+        if (!this.analyser) return -Infinity;
+        const bufferLength = this.analyser.fftSize;
+        const dataArray = new Float32Array(bufferLength);
+        this.analyser.getFloatTimeDomainData(dataArray);
+        let sumSquares = 0;
+        for (let i = 0; i < bufferLength; i++) {
+            sumSquares += dataArray[i] * dataArray[i];
+        }
+        const rms = Math.sqrt(sumSquares / bufferLength);
+        return rms > 0 ? 20 * Math.log10(rms) : -Infinity;
+    }
+
+    // ── Preview mode (meter without voice channel) ────────────────────────
+
+    /**
+     * Start a preview mic capture for meter visualization only.
+     * Used when the noise gate is enabled outside a voice channel so
+     * the user can calibrate the threshold before joining.
+     */
+    async startPreview(): Promise<void> {
+        // Don't start preview if already in a voice channel (hookAnalyser handles that)
+        if (this.localStream) return;
+        // Don't start if preview already running
+        if (this._previewStream) return;
+
+        const audioConstraints: MediaTrackConstraints = {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+        };
+        if (this._audioDeviceId) {
+            audioConstraints.deviceId = { exact: this._audioDeviceId };
+        }
+
+        this._previewStream = await navigator.mediaDevices.getUserMedia({
+            audio: audioConstraints,
+        });
+
+        // Set up analyser from preview stream
+        const track = this._previewStream.getAudioTracks()[0];
+        if (!track) { this.stopPreview(); return; }
+
+        this.audioContext = new AudioContext();
+        this.analyser = this.audioContext.createAnalyser();
+        this.analyser.fftSize = 2048;
+
+        const source = this.audioContext.createMediaStreamSource(this._previewStream);
+        source.connect(this.analyser);
+    }
+
+    /** Stop the preview mic capture. */
+    stopPreview(): void {
+        if (this._previewStream) {
+            for (const track of this._previewStream.getTracks()) {
+                track.stop();
+            }
+            this._previewStream = null;
+        }
+        // Only tear down AudioContext if we're in preview mode (no localStream)
+        // If localStream exists, hookAnalyser owns the AudioContext
+        if (!this.localStream) {
+            if (this.audioContext) {
+                this.audioContext.close().catch(() => {});
+                this.audioContext = null;
+                this.analyser = null;
+            }
+        }
+    }
+
     // ── Cleanup ───────────────────────────────────────────────────────────
 
     /** Leave voice — clean up all resources. */
     cleanup(): void {
+        // Clean up preview if running
+        this.stopPreview();
+
+        // Clean up sensitivity / noise gate
+        if (this.silenceCheckInterval !== null) {
+            clearInterval(this.silenceCheckInterval);
+            this.silenceCheckInterval = null;
+        }
+        if (this._analysisTrack) {
+            this._analysisTrack.stop();
+            this._analysisTrack = null;
+        }
+        if (this.audioContext) {
+            this.audioContext.close().catch(() => {});
+            this.audioContext = null;
+            this.analyser = null;
+        }
+
         if (this.localStream) {
             for (const track of this.localStream.getTracks()) {
                 track.stop();
@@ -384,6 +597,7 @@ export class VoiceService {
         this.device = null;
         this.channelId = null;
         this._isDeafened = false;
+        this._isManuallyMuted = false;
         this.pendingProducers = [];
     }
 

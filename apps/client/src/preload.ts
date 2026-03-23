@@ -564,6 +564,32 @@ const api = {
     async isWindowFocused(): Promise<boolean> {
         return ipcRenderer.invoke("is-window-focused");
     },
+
+    // ── Mic Sensitivity / Noise Gate ──────────────────────────────────────
+
+    setMicSensitivity(enabled: boolean, threshold: number): void {
+        if (enabled) {
+            voiceService?.enableSensitivity(threshold);
+        } else {
+            voiceService?.disableSensitivity();
+        }
+    },
+
+    setMicThreshold(threshold: number): void {
+        voiceService?.setThreshold(threshold);
+    },
+
+    async startMicPreview(): Promise<void> {
+        await voiceService?.startPreview();
+    },
+
+    stopMicPreview(): void {
+        voiceService?.stopPreview();
+    },
+
+    getMicLevel(): number {
+        return voiceService?.getCurrentLevel() ?? -Infinity;
+    },
 };
 
 contextBridge.exposeInMainWorld("reson8Api", api);
