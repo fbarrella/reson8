@@ -331,6 +331,8 @@ app.whenReady().then(() => {
         closeToTray,
     }));
 
+    ipcMain.handle("is-window-focused", () => mainWindow?.isFocused() ?? false);
+
     createTray();
     createWindow();
 });

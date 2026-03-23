@@ -320,6 +320,9 @@ export interface ServerToClientEvents {
     /** Notifies a user that they have been kicked from a voice channel. */
     USER_KICKED: (payload: { channelId: string }) => void;
 
+    /** Broadcasts to all channel occupants that a user was kicked. */
+    CHANNEL_USER_KICKED: (payload: { channelId: string; userId: string }) => void;
+
     /** Notifies a user that they have been banned from the server. */
     USER_BANNED: (payload: {}) => void;
 }
