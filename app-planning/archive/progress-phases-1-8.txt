@@ -1,0 +1,1717 @@
+================================================================================
+  RESON8 — Development Progress Log
+  Generated: 2026-02-27
+================================================================================
+
+PROJECT OVERVIEW
+================
+Reson8 is a high-performance, self-hosted voice and text communication platform
+for desktop (Electron). It replicates the TeamSpeak 3 experience — low-latency
+voice, hierarchical channel trees, and private server ownership — while
+integrating modern persistent text channels.
+
+Tech Stack: Electron + TypeScript, Fastify + Socket.io, mediasoup (SFU),
+PostgreSQL + Prisma, Redis, Docker.
+
+Monorepo structure:
+  apps/client/      — Electron desktop client
+  apps/server/      — Node.js signaling + SFU server
+  packages/shared-types/  — Shared DTOs, enums, and Socket.io event types
+
+
+================================================================================
+  PHASE 1: SIGNALING & PRESENCE (Foundation)  ✅ COMPLETE
+================================================================================
+
+Deliverables:
+  - Fastify + Socket.io signaling server on port 9800
+  - Redis-backed presence tracking (who is in which channel)
+  - Electron shell that connects to the signaling server
+  - Socket.io typed event system (ClientToServerEvents, ServerToClientEvents)
+  - Prisma schema defined: Server, Channel (tree), User, Role, Message
+  - Channel tree service: O(n) map-based algorithm to build nested tree from flat rows
+  - Presence service: Redis hash-based tracking (joinServer, leaveServer,
+    joinChannel, leaveChannel, getChannelOccupants)
+
+Key Files:
+  apps/server/src/index.ts              — Server entry point (Fastify + Socket.io + mediasoup)
+  apps/server/src/handlers/connection.handler.ts — USER_JOIN/LEAVE_SERVER/CHANNEL, disconnect
+  apps/server/src/services/presence.service.ts   — Redis presence tracking
+  apps/server/src/services/channel-tree.service.ts — Flat→nested tree builder
+  apps/server/src/plugins/prisma.ts     — Prisma plugin for Fastify
+  apps/server/src/plugins/redis.ts      — Redis (ioredis) plugin for Fastify
+  apps/server/prisma/schema.prisma      — Full database schema
+  apps/client/src/main.ts               — Electron main process
+  apps/client/src/preload.ts            — contextBridge API (reson8Api)
+  apps/client/src/renderer/             — UI (index.html + renderer.ts)
+  packages/shared-types/src/models.ts   — IServer, IChannel, IChannelTreeNode, IUser, IRole, etc.
+  packages/shared-types/src/socket-events.ts — Typed Socket.io event maps
+
+
+================================================================================
+  PHASE 2: THE VOICE BRIDGE (mediasoup)  ✅ COMPLETE
+================================================================================
+
+Deliverables:
+  - mediasoup SFU integrated into the Node.js backend
+  - Full WebRTC handshake: 6-step signaling flow
+  - Two-way audio: two users in the same room can hear each other
+  - Mute/Unmute and Deafen/Undeafen controls
+  - Voice control tooltips for better UX
+
+6-Step WebRTC Handshake:
+  1. GET_ROUTER_CAPABILITIES — client gets Router's RTP capabilities
+  2. CREATE_WEBRTC_TRANSPORT — client creates send + recv transports
+  3. CONNECT_TRANSPORT — DTLS handshake for each transport
+  4. PRODUCE — client starts sending mic audio
+  5. CONSUME — client receives remote audio
+  6. RESUME_CONSUMER — consumer starts paused, client resumes after setup
+
+Key Files:
+  apps/server/src/services/mediasoup.service.ts — Worker pool, Router/Transport/Session management
+  apps/server/src/config/mediasoup.config.ts    — Worker, Router, Transport settings (Opus codec)
+  apps/server/src/handlers/voice.handler.ts     — All 6 signaling events + CLOSE_PRODUCER
+  apps/client/src/services/voice.service.ts     — Client-side mediasoup-client engine
+
+Bugs Fixed During Phase 2:
+  1. No Mic Permission Prompt (Electron)
+     - Electron silently blocks getUserMedia by default
+     - Fix: session.defaultSession.setPermissionRequestHandler in main.ts
+       to auto-grant "media", "audioCapture", "microphone" permissions
+
+  2. Silent Audio — Race Condition (EXISTING_PRODUCERS before recv transport)
+     - EXISTING_PRODUCERS event fired before client's recv transport was ready
+     - Fix: queueConsumeProducer() in VoiceService defers consumption until
+       recv transport is created, then drains the queue
+
+  3. Silent Audio — ICE Candidate IP
+     - Server used "0.0.0.0" as announcedAddress → ICE candidates couldn't route
+     - Fix: default announcedAddress to "127.0.0.1" in mediasoup.config.ts
+     - For VPS deployments: set MEDIASOUP_ANNOUNCED_IP env var
+
+  4. Silent Audio — Audio Element in Electron
+     - Detached `new Audio()` elements don't output audio in preload context
+     - Fix: use document.createElement("audio"), append to document.body, cleanup with audio.remove()
+
+  5. Deafen Toggle Not Toggling Back
+     - consumer.paused was unreliable with zero consumers
+     - Fix: explicit _isDeafened boolean flag in VoiceService
+
+  6. Voice Controls UI Overflow
+     - Buttons overflowed the header area
+     - Fix: moved voice controls to dedicated panel, added tooltips
+
+
+================================================================================
+  PHASE 3: RELATIONAL LOGIC & HIERARCHY  ✅ COMPLETE
+================================================================================
+
+Deliverables:
+  - Database seeding: default server + 6 channels + 2 roles
+  - Channel CRUD via Socket.io: CREATE_CHANNEL, DELETE_CHANNEL, UPDATE_CHANNEL
+  - Three-pane TeamSpeak-style UI (channel tree + event log + status bar)
+  - Click-to-join voice channels with occupant display in tree
+  - Create channel modal + delete channel confirmation modal
+  - Production Docker Compose: Reson8 server + Postgres + Redis
+
+Database Seed (apps/server/prisma/seed.ts):
+  Default Server: "Reson8 Server" (localhost:9800, max 32 clients)
+  Channels:
+    📁 General (category)
+    ├── 🔊 Lobby (voice)
+    └── 💬 Chat (text)
+    📁 Gaming (category)
+    ├── 🔊 Game Room 1 (voice)
+    └── 🔊 Game Room 2 (voice)
+  Roles:
+    Member (CONNECT | SPEAK | SEND_MESSAGES, power 0)
+    Server Admin (all permissions, power 100)
+
+New Socket Events:
+  Client→Server: CREATE_CHANNEL, DELETE_CHANNEL, UPDATE_CHANNEL
+  Server→Client: CHANNEL_CREATED, CHANNEL_DELETED
+
+Client UI Layout:
+  ┌──────────────────────────────────────────────────┐
+  │ 🎧 Reson8  [host] [port] [nick] [Connect] [Disc]│
+  ├──────────────┬───────────────────────────────────┤
+  │ Channel Tree │  Server Log / Events              │
+  │  🔊 Lobby    │  > Alpha joined Lobby             │
+  │    └ Alpha   │  > Channel "Music" created        │
+  │  💬 Chat     │                                   │
+  │  🔊 Game 1   │                                   │
+  ├──────────────┼───────────────────────────────────┤
+  │ Voice Panel  │ Connected as Alpha                │
+  │ [Mute][Deaf] │                                   │
+  └──────────────┴───────────────────────────────────┘
+
+Key Files:
+  apps/server/prisma/seed.ts            — Idempotent seed (upsert)
+  apps/server/src/handlers/channel.handler.ts — Channel CRUD + tree broadcasting
+  apps/client/src/renderer/index.html   — Three-pane layout + modals
+  apps/client/src/renderer/renderer.ts  — Tree rendering, channel nav, voice controls
+  apps/client/src/preload.ts            — Auto-join server, channel CRUD API
+  apps/server/Dockerfile                — Multi-stage build (mediasoup native deps)
+  docker-compose.yml                    — Production: server + Postgres + Redis
+  apps/server/entrypoint.sh             — Migrate → seed → start
+
+Docker Setup:
+  Development:  docker compose -f docker-compose.dev.yml up -d  (Postgres + Redis only)
+  Production:   docker compose up --build  (full stack: server + Postgres + Redis)
+  VPS deploy:   MEDIASOUP_ANNOUNCED_IP=<public-ip> docker compose up --build
+
+Bugs Fixed During Phase 3:
+  1. window.confirm() not clickable in Electron renderer
+     - Fix: replaced with custom delete confirmation modal
+
+  2. Create channel modal inputs not clickable
+     - Fix: added pointer-events: auto, -webkit-app-region: no-drag,
+       and stopPropagation on .modal-content
+
+
+================================================================================
+  ENVIRONMENT & CONFIGURATION
+================================================================================
+
+Server .env (apps/server/.env):
+  DATABASE_URL=postgresql://reson8:reson8@localhost:5432/reson8?schema=public
+  REDIS_URL=redis://localhost:6379
+  PORT=9800
+  HOST=0.0.0.0
+  MEDIASOUP_ANNOUNCED_IP=127.0.0.1  (set to public IP for VPS)
+
+Key Ports:
+  9800         — Fastify + Socket.io signaling
+  10000-10100  — mediasoup WebRTC media (UDP + TCP)
+  5432         — PostgreSQL
+  6379         — Redis
+
+Build Commands:
+  cd packages/shared-types && npx tsc --build      # Build shared types
+  cd apps/server && npx tsc                         # Build server
+  cd apps/client && npx tsc --build && node scripts/copy-html.mjs  # Build client
+
+Run Commands:
+  cd apps/server && npm run dev                     # Start server (tsx watch)
+  cd apps/client && npx electron .                  # Start client
+
+
+================================================================================
+  PHASE 4: PERMISSIONS & PERSISTENT TEXT  ✅ COMPLETE
+================================================================================
+
+Deliverables:
+  - Instance-based identity: each Electron client generates a persistent UUID
+    stored in app.getPath('userData')/instance-id.txt. Sent on connect, used
+    as the userId for all permission and message lookups. Server auto-creates
+    User + assigns the default "Member" role via upsert.
+    * Dev quality-of-life: Generates a fresh UUID every launch if running in
+      dev mode, allowing easy local multi-client testing.
+    * Server admin: Automatically grants the "Server Admin" role if the client's
+      instance ID matches the ADMIN_INSTANCE_ID in `.env`.
+  - Bitwise permission service: hasPermission, hasAnyPermission, isAdmin
+    (ADMIN flag bypasses all checks), getUserPermissions (aggregates roles)
+  - Permission middleware: requirePermission() guard for Socket.io events
+  - Permission guards on channel CRUD:
+    CREATE_CHANNEL → requires CREATE_CHANNEL permission
+    DELETE_CHANNEL → requires MANAGE_CHANNELS permission
+    UPDATE_CHANNEL → requires MANAGE_CHANNELS permission
+  - Message handler: SEND_MESSAGE (permission-checked, persisted, broadcast)
+    and FETCH_MESSAGES (paginated history, cursor-based, max 100 per page)
+  - Tabbed chat UI: Server Log tab always present + dynamic per-channel chat
+    tabs with close buttons. Chat input bar (hidden on log tab). Messages
+    render with timestamp, nickname, and content.
+  - Text channel click opens (or focuses) a chat tab + loads history
+  - Real-time messages via MESSAGE_RECEIVED event
+
+Socket Events Added/Modified:
+  Client→Server: SEND_MESSAGE (existed), FETCH_MESSAGES (new)
+  Server→Client: MESSAGE_RECEIVED (existed, now wired)
+  USER_JOIN_SERVER payload now includes instanceId field
+
+Unit Tests:
+  11 new tests in permissions.test.ts:
+    - hasPermission: matching flag, missing flag, zero perms, ADMIN bypass
+    - hasAnyPermission: partial match, no match, ADMIN bypass
+    - isAdmin: with flag, without flag, zero perms
+
+Key Files:
+  apps/client/src/instance-id.ts                  — Persistent UUID generator
+  apps/client/src/main.ts                         — IPC handler for instance ID
+  apps/server/src/services/permissions.service.ts  — Bitwise permission utilities
+  apps/server/src/middleware/permissions.middleware.ts — requirePermission guard
+  apps/server/src/handlers/message.handler.ts      — SEND_MESSAGE + FETCH_MESSAGES
+  apps/server/src/handlers/channel.handler.ts      — Permission-guarded CRUD
+  apps/server/src/handlers/connection.handler.ts   — Instance ID + auto role
+  apps/client/src/preload.ts                       — sendMessage/fetchMessages API
+  apps/client/src/renderer/index.html              — Tabbed UI + chat styles
+  apps/client/src/renderer/renderer.ts             — Tab management + chat logic
+  packages/shared-types/src/socket-events.ts       — FETCH_MESSAGES + instanceId
+
+
+================================================================================
+  PHASE 5: DESKTOP UX, AUDIO POLISH & ADMIN  ✅ COMPLETE
+================================================================================
+
+Deliverables:
+  - Unified Settings Modal: Single ⚙ button in channel header opens a tabbed
+    modal with "👑 Roles" and "🎤 Voice & Shortcuts" tabs.
+    Settings button visible to all connected users; Roles tab disabled for
+    non-admin users.
+  - Role Management: Lists all known users with clickable role badges to toggle
+    Member / Server Admin assignments. Admins cannot remove their own role.
+  - Socket events: GET_ALL_USERS, GET_ROLES, ASSIGN_ROLE (permission-guarded)
+  - Audio Device Selection: Microphone (input) and Speaker (output) device
+    selection using enumerateDevices() with localStorage persistence.
+    Output applied via setSinkId(), input via getUserMedia() deviceId.
+  - Multi-Key Combo Shortcuts (e.g. L-Ctrl + L-Shift + G):
+      Push-to-Talk, Mute/Unmute, Deafen/Undeafen, Disconnect Voice.
+    All saved/restored from localStorage.
+  - Electron globalShortcut in main.ts for system-wide PTT press detection.
+  - URL-based Connection: Single server-url input (supports host:port and URLs).
+  - Instance ID always visible in footer with Copy button.
+  - Status bar colors: red for disconnected, green for connected.
+
+Key Files:
+  apps/server/src/handlers/admin.handler.ts          — Admin CRUD events
+  apps/client/src/services/voice.service.ts          — Audio device selection
+  apps/client/src/main.ts                            — globalShortcut PTT
+  apps/client/src/preload.ts                         — enumerateDevices + PTT IPC
+  apps/client/src/renderer/index.html                — Unified Settings modal
+  apps/client/src/renderer/renderer.ts               — Settings tabs + shortcuts
+
+
+================================================================================
+  PHASE 6: DEPLOYMENT & PACKAGING  ✅ COMPLETE
+================================================================================
+
+Deliverables:
+  - Server Docker: Already complete from Phase 3 (Dockerfile, docker-compose.yml,
+    entrypoint.sh with auto-migrations and seeding).
+  - .dockerignore: Excludes node_modules, dist, .git, apps/client for faster builds.
+  - ADMIN_INSTANCE_ID: Added as env var to docker-compose.yml for easy admin config.
+  - Electron Builder: Full build config in apps/client/package.json:
+      Windows: NSIS installer (.exe)
+      Linux: AppImage + .deb
+      macOS: .dmg
+    Build scripts: npm run build, build:win, build:linux, build:mac
+    npmRebuild disabled (no native modules needed).
+    Electron pinned to v34.5.8.
+  - Instance ID: app.isPackaged ensures persistent UUID in packaged builds;
+    random UUID only in dev mode.
+
+Key Files:
+  .dockerignore                                      — Docker build context filter
+  docker-compose.yml                                 — Server + Postgres + Redis stack
+  apps/server/Dockerfile                             — Multi-stage server build
+  apps/server/entrypoint.sh                          — Migrations + seed + start
+  apps/client/package.json                           — Electron Builder config
+
+
+================================================================================
+  ALL 6 PHASES COMPLETE 🎉
+================================================================================
+
+
+================================================================================
+  PHASE 7: EVOLUTIONS (PRD 2.x)
+================================================================================
+
+--- Entry: 16/03/2026 ---
+
+Feature/Fix: PRD 2.1 — Dual Channel Connection Bug Fix
+
+  Problem: Users could appear in two voice channels simultaneously when
+  rapidly clicking between channels. The USER_JOIN_CHANNEL handler left the
+  old Socket.io room but did NOT clean up mediasoup sessions, emit
+  PRODUCER_CLOSED to old-channel peers, or broadcast a PRESENCE_UPDATE
+  for the old channel.
+
+  Server Fix (connection.handler.ts):
+    - USER_JOIN_CHANNEL now performs FULL cleanup of the previous channel:
+      1. Retrieves and closes the user's mediasoup producer in the old channel
+      2. Emits PRODUCER_CLOSED to old-channel peers so they remove the
+         dead audio consumer
+      3. Calls mediasoup.cleanupUserSession() for old channel
+      4. Calls presence.leaveChannel() for old channel (Redis)
+      5. Leaves old Socket.io room
+      6. Broadcasts PRESENCE_UPDATE with updated occupants for old channel
+
+  Client Fix (renderer.ts):
+    - Added isJoiningChannel boolean lock to handleChannelClick()
+    - Prevents concurrent join attempts from rapid double-clicking
+    - Lock is released in a finally{} block (success or failure)
+
+  Client Fix (preload.ts):
+    - joinVoiceChannel() now calls voiceService.cleanup() and recreates
+      VoiceService with fresh signaling BEFORE starting the new handshake
+    - Prevents stale transports from the old channel surviving into the
+      new join attempt
+
+  Protocol Changes: None (uses existing PRODUCER_CLOSED, PRESENCE_UPDATE)
+
+  Key Files Modified:
+    apps/server/src/handlers/connection.handler.ts
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/preload.ts
+
+  Next Step: PRD 2.2 — Advanced Server Connection Flow (Public/Private IPs)
+
+--- Entry: 16/03/2026 ---
+
+Feature/Fix: PRD 2.2 — Advanced Server Connection Flow (Public/Private Announce IPs)
+
+  Problem: When a server host exposes their server publicly via
+  MEDIASOUP_ANNOUNCED_IP, they cannot connect from inside their own
+  network due to hairpin NAT restrictions.
+
+  Fix (mediasoup.config.ts):
+    - Added MEDIASOUP_PRIVATE_ANNOUNCED_IP env var support
+    - getTransportOptions() now generates listenInfos entries for both
+      the public and private IPs when the private var is set
+    - WebRTC ICE connectivity checks automatically select whichever
+      IP is reachable (public for WAN, private for LAN)
+    - Backward compatible: if only MEDIASOUP_ANNOUNCED_IP is set,
+      behavior is identical to before
+
+  Environment Changes:
+    - New env var: MEDIASOUP_PRIVATE_ANNOUNCED_IP (optional)
+    - Added to .env.example with documentation
+    - Added to docker-compose.yml as pass-through
+
+  Protocol Changes: None (ICE candidate generation is transparent)
+
+  Key Files Modified:
+    apps/server/src/config/mediasoup.config.ts
+    apps/server/.env.example
+    docker-compose.yml
+
+  Next Step: PRD 2.3 — Push-To-Talk (PTT) Mode Toggle
+
+--- Entry: 17/03/2026 ---
+
+Feature/Fix: PRD 2.3 — Push-To-Talk (PTT) Mode Toggle
+
+  Problem: The PTT shortcut acted as a simple mute toggle — pressing
+  toggled mute, releasing toggled back. There was no overarching "PTT
+  Mode" concept. The mic always started unmuted on voice join, and the
+  PTT key worked regardless of mode setting, causing confusing behavior.
+
+  Solution: Introduced a "Voice Input Mode" toggle with two modes:
+    - Voice Activation (default): Mic starts unmuted on join. PTT
+      shortcut is ignored. Standard mute button works as before.
+    - Push-To-Talk: Mic starts MUTED on join. Holding the PTT key
+      unmutes; releasing re-mutes. Standard mute button still works.
+
+  Client Changes:
+    1. voice.service.ts — Added setMuted(muted: boolean) for
+       deterministic mute state control (avoids toggle drift from
+       rapid press/release events)
+    2. preload.ts — Exposed setMuted() on the reson8Api bridge
+    3. renderer.ts — Added pttModeEnabled state (persisted to
+       localStorage), auto-mute on voice join when PTT mode active,
+       rewired all PTT keydown/keyup and global ptt-pressed/released
+       events to use setMuted() with mode guard, added toggle button
+       click handlers with mode-switch-while-in-voice support
+    4. index.html — Added Voice Input Mode toggle buttons
+       (🎤 Voice Activation / 🔘 Push-To-Talk) to Voice & Shortcuts
+       settings panel, between audio device selects and shortcuts
+
+  Server Changes: None (PTT mode is purely client-side)
+
+  Key Files Modified:
+    apps/client/src/services/voice.service.ts
+    apps/client/src/preload.ts
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/renderer/index.html
+
+  Next Step: PRD 2.4 — Explicit Save Action for Voice Devices
+
+--- Entry: 17/03/2026 ---
+
+Bug Fix: Channel Tree Occupant Visibility on Initial Connect
+
+  Problem: When a new client joined a server, the channel tree showed
+  all channels but with empty occupant lists. Users already in voice
+  channels were invisible until they switched channels or the new
+  client joined the same channel and received a PRESENCE_UPDATE.
+
+  Root Cause: USER_JOIN_SERVER built the channel tree via
+  buildChannelTree() which initializes occupants: []. The tree was
+  emitted immediately without hydrating occupants from Redis presence.
+
+  Fix (connection.handler.ts):
+    - Added hydrateOccupants() function that recursively walks the
+      tree and populates each channel node's occupants array from
+      presence.getChannelOccupants() + presence.getUserPresence()
+    - Called before emitting CHANNEL_TREE_UPDATE to the new client
+
+  Key Files Modified:
+    apps/server/src/handlers/connection.handler.ts
+
+  Next Step: PRD 2.4 — Explicit Save Action for Voice Devices
+
+--- Entry: 17/03/2026 ---
+
+Feature/Fix: PRD 2.4 — Explicit Save Action for Voice Devices
+
+  Problem: Changing microphone or speaker devices in the Voice &
+  Shortcuts settings panel applied immediately without confirmation.
+  There was no dedicated "Save" button, creating ambiguity about
+  whether changes were applied.
+
+  Solution: Device selections are now staged in temporary variables
+  (pendingInputDevice, pendingOutputDevice) and only applied when
+  the user clicks the "💾 Save Audio Devices" button. The button is
+  hidden by default and only appears when the user changes a device
+  dropdown to a value different from the currently saved value.
+
+  Client Changes:
+    1. renderer.ts — Replaced immediate change listeners on
+       audioInputSelect and audioOutputSelect with staging-only logic.
+       Added updateSaveBtnVisibility() helper that compares pending
+       vs saved values. Added btnSaveDevices click handler that
+       applies both input (setAudioInputDevice) and output (setSinkId)
+       devices, writes to localStorage, and resets pending state.
+       populateAudioDevices() now resets pending state on panel open.
+    2. index.html — Added "💾 Save Audio Devices" button between the
+       speaker output select and the Voice Input Mode toggle in the
+       Voice & Shortcuts settings panel. Hidden by default via
+       display:none, uses existing btn-create class for accent styling.
+
+  Server Changes: None (audio device selection is purely client-side)
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/renderer/index.html
+
+  Next Step: PRD 2.5 — Server Information Persistence
+
+--- Entry: 17/03/2026 ---
+
+Feature/Fix: PRD 2.5 — Server Information Persistence
+
+  Problem: Users had to manually re-type the Server URL and Nickname
+  every time the Reson8 client was launched, causing friction.
+
+  Solution: Added a "Remember" checkbox to the connection toolbar.
+  When checked and the user clicks Connect, the Server URL and
+  Nickname are saved to localStorage. On subsequent launches, saved
+  values are auto-populated into the input fields. Unchecking the
+  checkbox immediately clears all saved data.
+
+  localStorage Keys:
+    reson8-remember-me    — "true" or absent
+    reson8-server-url     — raw server URL string
+    reson8-nickname       — nickname string
+
+  Client Changes:
+    1. index.html — Added #remember-me checkbox with label between
+       the Nickname input and Connect button in the toolbar. Added
+       accent-color CSS for themed checkbox appearance.
+    2. renderer.ts — Added rememberMeCheckbox DOM ref. On page load:
+       checks localStorage for saved state and auto-populates fields.
+       In btnConnect handler: saves or clears localStorage based on
+       checkbox state. Added change listener to immediately clear
+       saved data when checkbox is unchecked.
+
+  Server Changes: None (persistence is purely client-side)
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/renderer/index.html
+
+  Next Step: PRD 2.6 — Private Server Access (Password Field)
+
+--- Entry: 17/03/2026 ---
+
+Feature/Fix: PRD 2.6 — Private Server Access (Password Field)
+
+  Problem: Servers were accessible to anyone who simply knew the address.
+  There was no mechanism to restrict access via a shared secret.
+
+  Solution: Introduced optional server-level password protection via a
+  SERVER_PRIVATE_PASSWORD environment variable. When set, the server
+  rejects USER_JOIN_SERVER handshakes that do not include the correct
+  password. When unset, behavior remains open (backward compatible).
+
+  Server Changes:
+    1. connection.handler.ts — Added password validation gate at the
+       top of USER_JOIN_SERVER handler, before any database writes or
+       presence tracking. Destructures `password` from payload,
+       compares against process.env.SERVER_PRIVATE_PASSWORD. Returns
+       { success: false, error: "Invalid server password" } on mismatch.
+    2. .env.example — Added documented SERVER_PRIVATE_PASSWORD entry
+       (commented out by default).
+    3. docker-compose.yml — Added SERVER_PRIVATE_PASSWORD env var
+       pass-through for Docker deployments.
+
+  Shared Types Changes:
+    1. socket-events.ts — Added optional `password?: string` field
+       to the USER_JOIN_SERVER payload type.
+
+  Client Changes:
+    1. index.html — Added <input type="password" id="server-password">
+       between Nickname and Remember checkbox in toolbar. Added CSS
+       width rule for the new input.
+    2. renderer.ts — Added serverPasswordInput DOM ref. Updated
+       Reson8Api.connect() interface to accept optional password.
+       Integrated password with Remember Me: auto-populates from
+       localStorage(reson8-server-password) on launch, saves on
+       connect when Remember is checked, clears when unchecked.
+       Threads password through api.connect() call. Disables/enables
+       password input on connect/disconnect.
+    3. preload.ts — Updated connect() signature to accept optional
+       password parameter. Threads password into USER_JOIN_SERVER
+       Socket.io emit payload.
+
+  localStorage Keys (added):
+    reson8-server-password — password string (saved when Remember
+    Me is checked)
+
+  Key Files Modified:
+    packages/shared-types/src/socket-events.ts
+    apps/server/src/handlers/connection.handler.ts
+    apps/server/.env.example
+    docker-compose.yml
+    apps/client/src/renderer/index.html
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/preload.ts
+
+  Next Step: PRD 2.7 — Direct Messaging (Whisper / Private Chat)
+
+--- Entry: 17/03/2026 ---
+
+Feature/Fix: PRD 2.7 — Direct Messaging (Whisper / Private Chat)
+
+  Problem: All text communication was limited to public server-wide text
+  channels. There was no mechanism for private 1-to-1 messaging between
+  users connected to the same server.
+
+  Solution: Implemented full 1-to-1 direct messaging with persistence,
+  real-time delivery, and a dedicated UI for managing DM conversations.
+
+  Database Changes:
+    1. schema.prisma — Added DirectMessage model with senderId,
+       receiverId, content, createdAt fields. Composite indexes on
+       (senderId, receiverId, createdAt) and (receiverId, senderId,
+       createdAt) for efficient bidirectional conversation queries.
+       Added sentDMs/receivedDMs relations on User model.
+    2. Migration: 20260317233605_add_direct_messages — creates
+       direct_messages table with indexes.
+
+  Shared Types Changes:
+    1. models.ts — Added IDirectMessage interface (id, senderId,
+       senderNickname, receiverId, content, createdAt) and IOnlineUser
+       interface (userId, nickname).
+    2. socket-events.ts — Added three Client→Server events:
+       SEND_DIRECT_MESSAGE, FETCH_DIRECT_MESSAGES, GET_ONLINE_USERS.
+       Added one Server→Client event: DIRECT_MESSAGE_RECEIVED.
+
+  Server Changes:
+    1. dm.handler.ts (NEW) — Handler for all DM socket events:
+       - SEND_DIRECT_MESSAGE: validates input, prevents self-DM,
+         persists to DB, delivers to recipient's socket(s) and echoes
+         back to sender for tab updates.
+       - FETCH_DIRECT_MESSAGES: cursor-based pagination of DM history
+         between two users (bidirectional query with OR).
+       - GET_ONLINE_USERS: reads online user IDs from Redis presence,
+         resolves nicknames, excludes the requesting user.
+    2. index.ts — Imported and registered registerDMHandlers.
+
+  Client Changes:
+    1. preload.ts — Added sendDirectMessage(), fetchDirectMessages(),
+       getOnlineUsers() bridge methods. Wired DIRECT_MESSAGE_RECEIVED
+       socket event to emit "dm-received" to the renderer.
+    2. index.html — Added SVG "contacts/people" icon button
+       (#btn-online-users) in tree header matching existing button
+       style (gear, +). Added #online-users-modal with scrollable
+       user list, green dot indicators, and DM buttons per user.
+       Added CSS for online-user-row, online-user-dot, btn-dm classes.
+    3. renderer.ts — Major additions:
+       - DirectMessage interface + Reson8Api interface extensions
+       - Online Users modal: open/close handlers, renderOnlineUsers()
+       - openDmTab(): creates DM tabs keyed as "dm:{userId}" with
+         envelope icon prefix. Reuses existing ChatTab infrastructure.
+       - loadChatHistory(): detects "dm:" prefix and calls
+         fetchDirectMessages() instead of fetchMessages()
+       - sendChatMessage(): detects "dm:" activeTabId and calls
+         sendDirectMessage() instead of sendMessage()
+       - renderDmMessage(): renders DM messages in the same chat-msg
+         format as channel messages
+       - dm-received event listener: renders incoming DMs in existing
+         tabs or auto-opens a new DM tab for incoming messages
+       - Show/hide #btn-online-users on connect/disconnect
+       - Disconnect cleanup closes DM tabs along with channel tabs
+
+  Key Files Modified:
+    packages/shared-types/src/models.ts
+    packages/shared-types/src/socket-events.ts
+    apps/server/prisma/schema.prisma
+    apps/server/src/handlers/dm.handler.ts (NEW)
+    apps/server/src/index.ts
+    apps/client/src/preload.ts
+    apps/client/src/renderer/index.html
+    apps/client/src/renderer/renderer.ts
+
+  Next Step: PRD 2.8 — Rich Media Support (Image Sharing)
+
+--- Entry: 17/03/2026 (continued) ---
+
+Feature/Fix: PRD 2.7 — DM Final Polish (Read Receipts & UI)
+
+  1. Green dot repositioned to bottom-right of Online Users button
+     with a border for better visibility against the dark background.
+  2. Added readAt field to DirectMessage model (migration applied).
+  3. Added MARK_DMS_READ and GET_UNREAD_DM_PARTNERS socket events.
+  4. Server handler: MARK_DMS_READ bulk-updates unread DMs from a
+     partner, GET_UNREAD_DM_PARTNERS returns grouped unread counts
+     with sender nicknames.
+  5. Client: auto-opens DM tabs for partners with unread messages
+     on connect. "Unread Messages" separator shown in DM chat before
+     first unread message (only on first open; closing and reopening
+     does not re-show it since messages are now marked read).
+     markDmsRead called when DM tab is opened.
+  6. Online Users modal header now uses SVG icon instead of emoji.
+     DM button restyled to accent-colored and same size as Close.
+
+  Key Files Modified:
+    packages/shared-types/src/models.ts
+    packages/shared-types/src/socket-events.ts
+    apps/server/prisma/schema.prisma
+    apps/server/src/handlers/dm.handler.ts
+    apps/client/src/preload.ts
+    apps/client/src/renderer/index.html
+    apps/client/src/renderer/renderer.ts
+
+--- Entry: 18/03/2026 ---
+
+Feature/Fix: PRD 2.8 — Rich Media Support (Image Sharing)
+
+  Problem: All text communication (server text channels and direct
+  messages) was strictly textual. Users could not share images or
+  other visual content.
+
+  Solution: Implemented image upload and inline display for both
+  channel messages and DMs, with dual storage backend.
+
+  Database Changes:
+    1. schema.prisma — Added optional attachmentUrl String? field to
+       both Message and DirectMessage models.
+    2. Migration: 20260318030019_add_attachment_url — adds
+       attachment_url column to messages and direct_messages tables.
+
+  Server Changes:
+    1. upload.route.ts (NEW) — POST /api/upload endpoint:
+       - Accepts multipart form data with a single image file
+       - Validates MIME type (jpeg, png, gif, webp) and 5MB size limit
+       - Dual storage: local filesystem (./uploads/) by default,
+         Cloudinary CDN when CLOUDINARY_* env vars are present
+       - Returns { url: string } on success
+    2. index.ts — Registered @fastify/multipart (5MB limit),
+       @fastify/static (serves ./uploads/), and upload route.
+    3. message.handler.ts — SEND_MESSAGE now accepts optional
+       attachmentUrl, allows attachment-only messages (no text
+       required), persists and broadcasts attachmentUrl.
+       FETCH_MESSAGES includes attachmentUrl in DTOs.
+    4. dm.handler.ts — SEND_DIRECT_MESSAGE now accepts optional
+       attachmentUrl, same attachment-only support. FETCH_DIRECT_MESSAGES
+       includes attachmentUrl in DTOs.
+
+  Shared Types Changes:
+    1. models.ts — Added attachmentUrl?: string | null to IMessage
+       and IDirectMessage interfaces.
+    2. socket-events.ts — Added attachmentUrl?: string to
+       SEND_MESSAGE and SEND_DIRECT_MESSAGE payloads.
+
+  Client Changes:
+    1. preload.ts — Added uploadFile() bridge method (HTTP POST with
+       FormData to /api/upload, auto-prepends server base URL for
+       local storage paths). Updated sendMessage() and
+       sendDirectMessage() to accept optional attachmentUrl param.
+       Tracks serverBaseUrl for upload endpoint.
+    2. renderer.ts — Major additions:
+       - ChatMessage and DirectMessage interfaces: added attachmentUrl
+       - Reson8Api interface: added uploadFile(), updated send sigs
+       - pendingAttachmentUrl state and serverBaseUrl tracking
+       - handleFileUpload(): validates type/size, uploads via API,
+         stores URL in pending state, shows preview
+       - Attachment button (#btn-attach): opens file picker via
+         hidden <input type="file"> with image accept filter
+       - Clipboard paste handler: detects image/* items in paste event,
+         triggers upload flow automatically
+       - showAttachmentPreview() / clearAttachmentPreview(): preview
+         bar below chat input showing pending file name with remove btn
+       - sendChatMessage(): includes pendingAttachmentUrl in payload,
+         allows sending messages with only an attachment
+       - renderChatMessage() / renderDmMessage(): if attachmentUrl
+         present, appends <img> with thumbnail styling
+         (300px max-width, 200px max-height), click opens lightbox
+       - openLightbox(): full-screen overlay with expanded image,
+         close on backdrop click or Escape key
+    3. index.html — UI additions:
+       - Attachment button (SVG paperclip icon) before chat input
+       - Hidden <input type="file"> for image selection
+       - <div id="attachment-preview"> below chat input bar
+       - <div id="image-lightbox-modal"> with <img id="lightbox-image">
+       - CSS: .msg-image (thumbnail), #btn-attach, #attachment-preview,
+         .attachment-name, .attachment-remove, #image-lightbox-modal,
+         #lightbox-image (90vw/90vh max, centered, box-shadow)
+
+  Environment Changes:
+    - .env.example: Added Cloudinary CDN section (commented out):
+      CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET
+    - docker-compose.yml: Added Cloudinary env var pass-throughs,
+      reson8_uploads volume for persistent local storage.
+
+  Dependencies Added:
+    - @fastify/multipart — multipart form data parsing
+    - @fastify/static — static file serving for local uploads
+    - cloudinary — Cloudinary SDK for optional CDN storage
+
+  Key Files Modified:
+    packages/shared-types/src/models.ts
+    packages/shared-types/src/socket-events.ts
+    apps/server/prisma/schema.prisma
+    apps/server/src/routes/upload.route.ts (NEW)
+    apps/server/src/index.ts
+    apps/server/src/handlers/message.handler.ts
+    apps/server/src/handlers/dm.handler.ts
+    apps/server/.env.example
+    docker-compose.yml
+    apps/client/src/preload.ts
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/renderer/index.html
+
+  Next Step: PRD 2.9 — Active Speaker Visual Indicator
+
+--- Entry: 18/03/2026 ---
+
+Feature/Fix: PRD 2.9 — Active Speaker Visual Indicator
+
+  Problem: The channel tree shows user presence (connected to a voice
+  channel) but provides no visual feedback on who is actively speaking.
+  Group voice conversations are difficult to follow without this cue.
+
+  Solution: Implemented server-side active speaker detection using
+  mediasoup's AudioLevelObserver API. The server monitors RTP audio
+  levels natively (no client-side audio analysis), detects speech
+  above a calibrated threshold, and broadcasts ACTIVE_SPEAKERS events
+  to all clients in the channel. Clients toggle a CSS animation on
+  the user's presence dot without re-rendering the entire tree.
+
+  Detection Approach: Server-side AudioLevelObserver
+    - threshold: -50 dBov (filters background noise, catches speech)
+    - interval: 300ms (3.3Hz sampling, responsive yet lightweight)
+    - maxEntries: 10 (supports up to 10 concurrent speakers)
+
+  Server Changes:
+    1. mediasoup.service.ts — Added AudioLevelObserver lifecycle:
+       - audioLevelObservers Map (channelId → observer)
+       - getOrCreateAudioLevelObserver(): lazy creation with
+         configurable onVolumes/onSilence callbacks
+       - addProducerToObserver(): registers new producers
+       - getUserIdByProducerId(): maps producer→user for events
+       - Cleanup in removeRouter() and close()
+    2. voice.handler.ts — PRODUCE handler now:
+       - Creates AudioLevelObserver if not exists (with callbacks
+         that map producerIds to userIds and emit ACTIVE_SPEAKERS)
+       - Adds each new producer to the observer
+       - Silence callback emits ACTIVE_SPEAKERS with empty speakers[]
+
+  Shared Types Changes:
+    1. socket-events.ts — Added ACTIVE_SPEAKERS event to
+       ServerToClientEvents: { channelId: string; speakers: string[] }
+
+  Client Changes:
+    1. preload.ts — Forwards ACTIVE_SPEAKERS socket event to renderer
+       via emit("active-speakers", payload).
+    2. renderer.ts — Active speaker state management:
+       - activeSpeakers Set<string> tracks currently speaking userIds
+       - speakerHoldTimers Map for 300ms anti-flicker delay
+       - "active-speakers" event listener: adds .speaking class
+         immediately, removes with 300ms hold timer to prevent
+         flickering during natural speech pauses
+       - renderOccupants() now adds data-user-id attribute and
+         initial .speaking class if user is in activeSpeakers set
+       - Disconnect cleanup clears activeSpeakers and hold timers
+    3. index.html — CSS for speaking indicator:
+       - .occ-dot gets transition (smooth color/shadow changes)
+       - .tree-occupant.speaking .occ-dot: accent blue color,
+         box-shadow glow ring, speaking-pulse animation
+       - @keyframes speaking-pulse: 1.2s pulsing box-shadow
+       - .tree-occupant.speaking: accent color for nickname text
+
+  Key Files Modified:
+    packages/shared-types/src/socket-events.ts
+    apps/server/src/services/mediasoup.service.ts
+    apps/server/src/handlers/voice.handler.ts
+    apps/client/src/preload.ts
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/renderer/index.html
+
+  Next Step: PRD 2.10 — System Tray Minimization
+
+--- Entry: 18/03/2026 ---
+
+Feature/Fix: PRD 2.10 — System Tray Minimization
+
+  Problem: Minimizing the Electron application merely pushed it off-screen
+  but kept the taskbar icon active. There was no system tray integration —
+  users could not minimize to tray or configure the close button to
+  minimize instead of quitting.
+
+  Solution: Added full system tray integration with two user-configurable
+  options: "Minimize to system tray" and "Close button minimizes to tray".
+  The tray icon provides a right-click context menu with Restore and Quit
+  actions. Single-clicking the tray icon also restores the window.
+
+  Tray Icon:
+    - Generated 22×22 PNG (assets/tray-icon.png) from existing app icon
+      using ImageMagick resize
+
+  Main Process (main.ts):
+    1. Imports: Added Tray, nativeImage to Electron imports.
+    2. Module state: tray, isQuitting, minimizeToTray, closeToTray flags.
+    3. createTray(): creates Tray with nativeImage, sets tooltip, builds
+       context menu (Restore / separator / Quit), registers click handler.
+    4. BrowserWindow close event: intercepted when closeToTray && !isQuitting,
+       calls event.preventDefault() + mainWindow.hide().
+    5. BrowserWindow minimize event: intercepted when minimizeToTray,
+       calls mainWindow.hide().
+    6. IPC: set-tray-prefs (sync prefs from renderer), get-tray-prefs.
+    7. before-quit: sets isQuitting = true so native quit bypasses interception.
+    8. will-quit: destroys tray on app exit.
+
+  Preload (preload.ts):
+    1. setTrayPrefs(): sends set-tray-prefs IPC to main process.
+    2. getTrayPrefs(): invokes get-tray-prefs IPC (returns current state).
+
+  Renderer (renderer.ts):
+    1. Reson8Api interface: added setTrayPrefs() and getTrayPrefs().
+    2. DOM refs: chkMinimizeToTray, chkCloseToTray checkboxes.
+    3. On page load: reads localStorage, sets checkbox state, syncs to main.
+    4. Change listeners: persist to localStorage + call setTrayPrefs().
+
+  Settings UI (index.html):
+    1. New "🖥 Application" tab in Settings modal tab bar.
+    2. Application panel with two checkboxes:
+       - "Minimize to system tray"
+       - "Close button minimizes to tray"
+    3. Styled consistently with existing settings (accent-color checkboxes).
+
+  localStorage Keys (added):
+    reson8-minimize-to-tray — "true" or "false"
+    reson8-close-to-tray   — "true" or "false"
+
+  Server Changes: None (purely client-side Electron feature)
+
+  Key Files Modified:
+    apps/client/src/main.ts
+    apps/client/src/preload.ts
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/renderer/index.html
+    apps/client/assets/tray-icon.png (NEW)
+
+  Next Step: PRD 2.11 — Rich Previews (Link Previews)
+
+--- Entry: 18/03/2026 ---
+
+Feature/Fix: PRD 2.11 — Rich Previews (Link Previews)
+
+  Problem: When users share URLs in text channels or DMs, the links
+  appear as raw text with no context. Users must click blind links.
+
+  Solution: Implemented client-side link preview cards that detect URLs
+  in chat messages, fetch metadata (title, description, image, domain)
+  via the Electron Main Process using metascraper, and render rich
+  preview cards inline below the message text.
+
+  Architecture:
+    1. Renderer detects first URL in message content via regex
+    2. Calls preload bridge fetchLinkPreview(url) → IPC to main process
+    3. Main process fetches URL HTML (5s timeout), runs metascraper
+    4. Metadata sanitized (HTML tags stripped, image URLs validated,
+       descriptions truncated to 200 chars)
+    5. Results cached in-memory (Map<string, data|null>) at both
+       main process and renderer levels
+    6. Preview card DOM injected asynchronously after message render
+
+  Dependencies Added (apps/client):
+    - metascraper — HTML metadata extraction engine
+    - metascraper-title — page title rule
+    - metascraper-description — page description rule
+    - metascraper-image — page image/thumbnail rule
+    - metascraper-url — canonical URL rule
+
+  Main Process (main.ts):
+    1. Initialized metascraper with 4 rule plugins at module scope.
+    2. In-memory cache: Map<string, LinkPreviewData | null>.
+    3. sanitizeText(): strips HTML tags via regex.
+    4. isValidImageUrl(): validates http/https schemes only.
+    5. fetchLinkPreview(): fetches URL with AbortController (5s timeout),
+       User-Agent header, runs metascraper, derives domain from hostname,
+       caches and returns { title, description, image, url, domain }.
+    6. IPC handler: ipcMain.handle("fetch-link-preview", ...).
+
+  Preload (preload.ts):
+    1. fetchLinkPreview(): invokes fetch-link-preview IPC, returns
+       metadata object or null.
+
+  Renderer (renderer.ts):
+    1. LinkPreviewData interface added.
+    2. Reson8Api interface: added fetchLinkPreview().
+    3. Renderer-side cache: Map<string, LinkPreviewData | null>.
+    4. URL_REGEX: matches https?:// URLs in message text.
+    5. extractFirstUrl(): returns first URL match or null.
+    6. createPreviewCard(): builds DOM card with optional thumbnail
+       (60x60), title (ellipsis), description (2-line clamp), domain
+       badge. Click opens URL in external browser.
+    7. injectLinkPreview(): checks renderer cache, calls IPC if miss,
+       guards against closed tabs (isConnected check).
+    8. renderChatMessage() and renderDmMessage(): both call
+       injectLinkPreview() after appending the message element.
+
+  CSS (index.html):
+    1. .link-preview-card: dark card (bg-input), accent left border
+       stripe, flex layout, 400px max-width, fade-in animation
+       (lpc-fade-in keyframe), hover brightness effect, pointer cursor.
+    2. .lpc-image: 60x60 thumbnail, rounded, object-fit cover.
+    3. .lpc-title: 13px bold, single-line ellipsis.
+    4. .lpc-desc: 11px muted, 2-line clamp.
+    5. .lpc-domain: 10px accent-colored domain text.
+
+  Server Changes: None (link preview fetching is entirely client-side)
+
+  Key Files Modified:
+    apps/client/package.json
+    apps/client/src/main.ts
+    apps/client/src/preload.ts
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/renderer/index.html
+  Improvements Applied (same session):
+    1. Clickable URLs: linkifyText() wraps URLs in <a> tags with msg-link
+       class, allowing users to click links directly in message text.
+    2. Bot UA + OG Fallback: Changed User-Agent to include "Bot" keyword
+       so embed-focused sites (fxtwitter, etc.) serve OG tags. Added
+       manual OG tag regex extraction as fallback when metascraper misses
+       key fields. Added metascraper-video plugin.
+    3. Vertical Card Layout: Rewrote preview card from horizontal (60x60
+       thumbnail) to vertical layout — text on top, full-width image
+       below (max-height 300px). Added site name display.
+    4. Video Playback: Extracts og:video URLs. Direct videos (mp4/webm)
+       render as <video> with controls. Embed videos (YouTube) show
+       play overlay on image, clicking opens a fullscreen video lightbox
+       with iframe. Added CSP frame-src https: for iframe embeds.
+
+  Next Step: PRD 2.12 — Emoji Selector
+
+--- Entry: 18/03/2026 ---
+
+Feature/Fix: PRD 2.12 — Emoji Selector
+
+  Problem: Users had no built-in way to browse and insert emojis into
+  chat messages, relying entirely on OS-level emoji keyboards (Win+.
+  on Windows, Ctrl+. on Linux/GNOME).
+
+  Solution: Implemented a dedicated Emoji Selector component embedded
+  directly in the chat interface. A smiley-face button in the chat
+  input bar toggles a floating picker panel with categorized emojis,
+  a search/filter input, and category tab navigation.
+
+  Emoji Data:
+    - ~350 curated Unicode emojis embedded as a const array in
+      renderer.ts (no external npm dependency)
+    - 9 categories: Smileys & Emotion, People & Body, Animals & Nature,
+      Food & Drink, Activities, Travel & Places, Objects, Symbols, Flags
+    - Each entry: { emoji, name, keywords[], category }
+    - Category icon map for tab bar display
+
+  HTML Changes (index.html):
+    1. #btn-emoji button with smiley SVG icon added to #chat-input-bar,
+       positioned between attachment button and chat input
+    2. .emoji-picker floating panel div added inside #chat-input-bar
+       (position:relative container), containing:
+       - #emoji-search text input with search placeholder
+       - #emoji-category-tabs horizontal tab bar
+       - #emoji-grid-container scrollable emoji grid area
+
+  CSS Changes (index.html):
+    1. #btn-emoji: matches existing #btn-attach style (dark bg, border,
+       accent hover, .active state with accent-dim background)
+    2. .emoji-picker: absolute positioning (bottom:100%), 320px width,
+       380px max-height, dark-themed (--bg-secondary), rounded corners,
+       box-shadow, z-index 50, fade+slide entrance animation
+    3. #emoji-search: full-width search input, dark-themed
+    4. .emoji-category-tabs: horizontal scrollable row, hidden scrollbar
+    5. .emoji-cat-tab: emoji icon buttons with accent underline on active
+    6. .emoji-grid: CSS grid (8 columns), 1px gap
+    7. .emoji-item: centered emoji cell with hover highlight (accent bg,
+       scale 1.15), active press (scale 0.95)
+    8. .emoji-category-header: uppercase muted text separating categories
+    9. .emoji-no-results: centered "No emojis found" message
+
+  TypeScript Changes (renderer.ts):
+    1. EmojiEntry interface + EMOJI_CATEGORIES + EMOJI_CATEGORY_ICONS +
+       EMOJI_DATA constant (~350 entries)
+    2. DOM refs: btnEmoji, emojiPicker, emojiSearch, emojiCategoryTabs,
+       emojiGridContainer
+    3. closeEmojiPicker() / openEmojiPicker() / toggleEmojiPicker()
+    4. buildEmojiCategoryTabs(): renders emoji icon buttons per category,
+       click scrolls grid to category header
+    5. renderEmojiGrid(filter?): groups emojis by category, renders
+       category headers + grids. Filter matches against name and keywords
+       (case-insensitive). Shows "No emojis found" when empty.
+    6. insertEmojiAtCursor(): uses chatInput.setRangeText() for clean
+       cursor-position insertion, returns focus to input
+    7. btnEmoji click: toggles picker with stopPropagation
+    8. Click-outside: document click listener closes picker if target
+       is not inside picker or emoji button
+    9. Escape key: added to existing keydown handler, closes picker
+    10. Tab switch: switchTab() now calls closeEmojiPicker()
+    11. Search: debounced (150ms) input handler on #emoji-search,
+        clears active category tab during search
+    12. Picker stays open after emoji insertion for multi-emoji input
+
+  Server Changes: None (purely client-side renderer feature)
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html
+    apps/client/src/renderer/renderer.ts
+
+  Next Step: PRD 2.13 — Right-Click Context Menu
+
+--- Entry: 18/03/2026 ---
+
+Feature/Fix: PRD 2.13 — Right-Click Context Menu
+
+  Problem: Right-clicking anywhere in the Electron application produced
+  no response. Users accustomed to standard desktop workflows had no
+  access to Cut, Copy, Paste, or Select All without keyboard shortcuts.
+
+  Solution: Added a native OS context menu using Electron's
+  webContents.on('context-menu') event in the main process. Uses
+  Menu.buildFromTemplate() with role-based items ('cut', 'copy',
+  'paste', 'selectAll') which auto-wire clipboard operations natively.
+  The editFlags from the context-menu event params dynamically
+  enable/disable each item based on context (e.g., Cut disabled on
+  non-editable text, Copy disabled with no selection).
+
+  Approach: Used Approach A (native Electron Menu) over custom HTML/CSS
+  menu. The role property handles all clipboard operations without
+  deprecated execCommand. OS-native styling is appropriate since context
+  menus are transient UI. Zero new dependencies — Menu was already
+  imported.
+
+  Client Changes:
+    1. main.ts — Added webContents.on('context-menu') listener inside
+       createWindow(), after setWindowOpenHandler. Builds a native menu
+       with Cut (role: 'cut'), Copy (role: 'copy'), Paste (role: 'paste'),
+       separator, and Select All (role: 'selectAll'). Each item's
+       enabled state is driven by params.editFlags (canCut, canCopy,
+       canPaste, canSelectAll). menu.popup() displays at cursor position.
+
+  Server Changes: None (purely client-side main process feature)
+
+  Key Files Modified:
+    apps/client/src/main.ts
+
+  Next Step: PRD 2.14 — Persistent DM Conversations (Offline Access)
+
+--- Entry: 18/03/2026 ---
+
+Feature/Fix: PRD 2.14 — Persistent DM Conversations (Offline Access)
+
+  Problem: DM conversations were only accessible when both users were
+  online. Once a user disconnected, their entry vanished from the
+  "Online Users" modal, making it impossible to read chat history or
+  send messages to offline peers — even if they had an existing
+  conversation.
+
+  Solution: The GET_ONLINE_USERS handler now queries the DirectMessage
+  table for all distinct DM partners and merges them with the Redis
+  online user set. Each entry includes an isOnline boolean flag. The
+  modal renders online users first (green dot), followed by offline
+  DM partners (gray dot) with an "Offline" separator. The DM button
+  remains fully functional for offline users — clicking it opens the
+  DM tab and loads history as normal. Messages sent to offline users
+  are persisted in the database and delivered when they reconnect via
+  the existing unread DM auto-open flow.
+
+  First-Contact Rule: Preserved. Online users without DM history still
+  appear for new conversations. Offline users only appear if at least
+  one message has been exchanged (queried from DirectMessage table).
+
+  Shared Types Changes:
+    1. models.ts — Added isOnline: boolean to IOnlineUser interface.
+
+  Server Changes:
+    1. dm.handler.ts — Rewrote GET_ONLINE_USERS handler:
+       - Queries DirectMessage table for distinct partner userIds
+         (senderId OR receiverId where current user is a participant)
+       - Gets online user set from Redis via presence.getOnlineUsers()
+       - Builds unified set: online users (for first-contact) ∪
+         offline DM partners (for persistent access)
+       - Excludes the requesting user
+       - Resolves nicknames from Redis (online) or User table (offline)
+       - Returns isOnline flag per entry
+       No changes needed to SEND_DIRECT_MESSAGE — it already persists
+       to DB and gracefully handles offline recipients (socket loop
+       simply has no match).
+
+  Client Changes:
+    1. preload.ts — Updated getOnlineUsers() return type to include
+       isOnline: boolean.
+    2. renderer.ts — Major updates:
+       - Reson8Api interface: getOnlineUsers() type updated
+       - renderOnlineUsers(): accepts isOnline flag, sorts online
+         first then offline (alphabetical within each group), renders
+         "Offline" separator between groups, applies .offline CSS
+         class for gray dot + muted nickname text
+       - Extracted createUserRow() helper for cleaner rendering
+       - updateOnlineDot(): now filters by isOnline to only count
+         truly online users for the green dot indicator
+       - Empty state message: "No users available" (was "No other
+         users online")
+    3. index.html — CSS additions:
+       - .online-user-dot.offline: gray background (var(--text-muted))
+       - .online-user-nick.offline: muted text color
+       - .online-users-separator: uppercase label style for section
+         divider
+       - Modal title updated from "Online Users" to "Users"
+
+  Server Changes: None beyond dm.handler.ts (no new models, migrations,
+  or dependencies)
+
+  Key Files Modified:
+    packages/shared-types/src/models.ts
+    apps/server/src/handlers/dm.handler.ts
+    apps/client/src/preload.ts
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/renderer/index.html
+
+  Next Step: Kick from Channel & Ban from Server
+
+--- Entry: 18/03/2026 ---
+
+Feature/Fix: Kick from Channel & Ban from Server (Moderation System)
+
+  Problem: Admins had no way to moderate users. Disruptive users could
+  not be removed from voice channels or prevented from accessing the
+  server.
+
+  Solution: Implemented two moderation tools for admin users:
+
+  1. Kick from Channel — Admin right-clicks a user in the channel tree
+     occupant list → "Kick from Channel" context menu appears. Clicking
+     it ejects the user from voice (mediasoup cleanup + presence removal
+     + PRESENCE_UPDATE broadcast). The kicked user can rejoin if not
+     banned. The kicked user receives a USER_KICKED event that clears
+     their voice state.
+
+  2. Ban from Server — Admin opens the Users modal → red "Ban" button
+     appears next to the DM button for each user (except self). Clicking
+     it creates a BannedUser record in the database (keyed by instance
+     ID), emits USER_BANNED to the target socket, and force-disconnects
+     them. On subsequent connection attempts, USER_JOIN_SERVER checks the
+     BannedUser table and rejects with "You are banned from this server".
+
+  3. Unban — Banned users appear permanently in a "Banned Users" section
+     at the bottom of the Users modal (admin only, red styling with
+     strikethrough text). Clicking "Unban" removes the BannedUser record
+     and the user can reconnect.
+
+  Database Changes:
+    1. schema.prisma — Added BannedUser model with serverId, userId
+       (instance ID), nickname, bannedAt. Composite unique on
+       (serverId, userId).
+    2. Migration: 20260318071448_add_banned_users — creates
+       banned_users table.
+
+  Shared Types Changes:
+    1. models.ts — Added IBannedUser interface (userId, nickname,
+       bannedAt).
+    2. socket-events.ts — Added 4 Client→Server events: KICK_USER,
+       BAN_USER, UNBAN_USER, GET_BANNED_USERS. Added 2 Server→Client
+       events: USER_KICKED, USER_BANNED.
+
+  Server Changes:
+    1. moderation.handler.ts (NEW) — 4 permission-guarded handlers:
+       KICK_USER (KICK_USER perm), BAN_USER/UNBAN_USER/GET_BANNED_USERS
+       (BAN_USER perm). KICK_USER does full mediasoup + presence cleanup.
+       BAN_USER upserts ban record + force-disconnects target.
+    2. connection.handler.ts — Added ban check in USER_JOIN_SERVER
+       after password validation, before user upsert.
+    3. index.ts — Imported and registered registerModerationHandlers.
+
+  Client Changes:
+    1. preload.ts — Added 4 bridge methods (kickUser, banUser,
+       unbanUser, getBannedUsers). Wired USER_KICKED and USER_BANNED
+       socket events to renderer.
+    2. renderer.ts — Major additions:
+       - Reson8Api interface: 4 new methods
+       - renderOccupants(): admin-only contextmenu → custom kick menu
+       - createUserRow(): admin-only red "Ban" button next to DM
+       - Modal opener: fetches and renders "Banned Users" section
+         with Unban buttons (admin only)
+       - user-kicked event: clears voice state, logs message
+       - user-banned event: disconnects client, logs message
+    3. index.html — CSS additions:
+       - .btn-ban: red danger button
+       - .btn-unban: neutral outline button
+       - .online-user-btns: flexbox group for DM + Ban buttons
+       - .occupant-ctx-menu: fixed-position context menu overlay
+       - .ctx-kick-btn: red text button for kick action
+       - .online-user-dot.banned / .online-user-nick.banned: red
+         dot + strikethrough styling for banned users
+       - .online-users-separator.banned: red section header
+
+  Key Files Modified:
+    packages/shared-types/src/models.ts
+    packages/shared-types/src/socket-events.ts
+    apps/server/prisma/schema.prisma
+    apps/server/src/handlers/moderation.handler.ts (NEW)
+    apps/server/src/handlers/connection.handler.ts
+    apps/server/src/index.ts
+    apps/client/src/preload.ts
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/renderer/index.html
+
+
+================================================================================
+  PHASE 8: IMPROVEMENTS (PRD 3.x)
+================================================================================
+
+--- Entry: 23/03/2026 ---
+
+Feature/Fix: PRD 3.1 — Tray Icon Not Visible in Production Build
+
+  Problem: The system tray icon was visible in dev mode but invisible
+  in packaged builds (AppImage, NSIS, etc.). The tray entry existed
+  (right-click context menu worked) but rendered no icon image.
+
+  Root Cause: The tray icon is loaded in main.ts via
+  path.join(__dirname, "..", "assets", "tray-icon.png"). In dev mode,
+  __dirname = apps/client/dist/ so the path resolves correctly. In
+  packaged builds, __dirname = app.asar/dist/ but the assets/ directory
+  was NOT included in electron-builder's build.files configuration —
+  only dist/ and node_modules/ were bundled. nativeImage.createFromPath()
+  received a non-existent path and produced an empty/transparent image.
+
+  Fix: Added "assets/**/*" to the build.files array in
+  apps/client/package.json. This ensures the entire assets/ directory
+  is included in the ASAR archive, making the tray icon path resolve
+  correctly in both dev and packaged builds.
+
+  This fix also unblocks PRD 3.3 (Sound Alerts), which will load .mp3
+  files from assets/sound-alerts/.
+
+  Key Files Modified:
+    apps/client/package.json — Added "assets/**/*" to build.files
+
+  Verification:
+    - TypeScript build (npx tsc --build): passed, no errors
+    - Manual: rebuild with npm run build:linux, launch AppImage,
+      verify tray icon is visible
+
+  Next Step: PRD 3.2 — Voice Call Disconnect & "Unknown" Nickname on Reconnect
+
+--- Entry: 23/03/2026 ---
+
+Feature/Fix: PRD 3.2 — Voice Call Disconnect & "Unknown" Nickname on Reconnect
+
+  Bug 1: "Unknown" Nickname After Reconnect
+
+    Problem: After a network interruption and automatic reconnection,
+    users' nicknames could display as "Unknown" in the channel tree.
+    When a user disconnects, presence.leaveServer() deletes their Redis
+    presence hash. If another client reconnects and triggers
+    hydrateOccupants() during the brief window before the reconnecting
+    user's new presence entry is written, getUserPresence() returns null
+    and the fallback "Unknown" is used. This affected 5 locations in
+    connection.handler.ts.
+
+    Fix: Created a resolveNickname() helper function that tries Redis
+    presence first (fast path, available 99% of the time), then falls
+    back to querying the Prisma User table (slow path, covers the
+    race-condition window). Replaced all 5 instances of the
+    p?.nickname ?? "Unknown" pattern with calls to resolveNickname().
+
+  Bug 2: Duplicate USER_JOIN_SERVER on Auto-Reconnect
+
+    Problem: After a network interruption, Socket.io's built-in
+    auto-reconnect (reconnection: true) fires the "connect" event
+    multiple times, causing USER_JOIN_SERVER to be emitted repeatedly
+    (up to 3 times within seconds).
+
+    Fix: Added a joinServerInFlight boolean guard at module level in
+    preload.ts. The socket.on("connect") handler now returns early if
+    the flag is already set. The flag is set to true before emitting
+    USER_JOIN_SERVER and reset to false in the acknowledgment callback
+    and in the disconnect() method.
+
+  Bug 3 (Stale Presence TTL): Already implemented — presence.service.ts
+  has USER_TTL = 60 * 60 with TTL refresh on joinServer/joinChannel
+  and a heartbeat() method. No changes needed.
+
+  Key Files Modified:
+    apps/server/src/handlers/connection.handler.ts — resolveNickname()
+      helper + 5 fallback replacements
+    apps/client/src/preload.ts — joinServerInFlight guard (3 locations)
+
+  Verification:
+    - TypeScript build (server): npx tsc --noEmit — passed, no errors
+    - TypeScript build (client): npx tsc --noEmit — passed, no errors
+    - Manual: test with network interruption (iptables drop or cable
+      pull) to verify no "Unknown" nicknames and no duplicate joins
+
+  Next Step: PRD 3.3 — Sound Alerts System
+
+--- Entry: 23/03/2026 ---
+
+Feature/Fix: PRD 3.3 — Sound Alerts System
+
+  Solution: Implemented 16 audible notification sounds for key application
+  events using a lazy-loading audio cache (SoundAlert utility). All 16
+  .mp3 files pre-exist in assets/sound-alerts/. Added an IPC bridge
+  for window focus detection (needed for DM notification gating).
+
+  SoundAlert Utility (renderer.ts):
+    - Lazy-loading Map<string, HTMLAudioElement> cache
+    - _getAudio(): creates <audio> element on first use, sets preload="auto"
+    - play(): resets currentTime to 0 and plays, ignoring autoplay errors
+    - Path resolves relative to dist/renderer/index.html → ../assets/sound-alerts/
+
+  Event-to-Sound Mapping (16 sounds):
+    Connection:
+      1. connected.mp3 → on successful server connection
+      2. disconnected.mp3 → on server disconnect (event or leave voice button)
+    Admin Actions:
+      3. channel_created.mp3 → after successful channel creation
+      4. channel_deleted.mp3 → after successful channel deletion
+    Voice Channel Presence:
+      5. user_joined_channel.mp3 → another user joins your voice channel
+      6. user_disconnected_from_channel.mp3 → another user leaves your channel
+    Moderation:
+      7. user_kicked_from_channel.mp3 → admin kicks a user (kicker hears)
+      8. you_were_kicked_from_channel.mp3 → you were kicked (kickee hears)
+      9. user_banned_from_server.mp3 → admin bans a user
+      10. user_unbanned_from_server.mp3 → admin unbans a user
+    Voice Controls:
+      11. mic_muted.mp3 → mic muted (only when in voice)
+      12. mic_activated.mp3 → mic unmuted (only when in voice)
+      13. sound_muted.mp3 → deafen activated (only when in voice)
+      14. sound_resumed.mp3 → deafen deactivated (only when in voice)
+    DM Notification:
+      15. hey_wake_up.mp3 → new DM when tab not active or window not focused
+    Permissions:
+      16. insufficient_perms.mp3 → permission-denied error on admin actions
+
+  Voice Channel Join/Leave Detection:
+    - Added previousOccupantIds: Set<string> state variable
+    - Initialized from channel occupants on voice join
+    - Cleared on voice leave, kick, and disconnect
+    - Presence handler diffs new vs previous occupants to detect
+      joins (in new but not previous) and leaves (in previous but not new)
+    - Self-join excluded, one sound per event (break after first detection)
+
+  IPC Bridge for Window Focus:
+    - main.ts: ipcMain.handle("is-window-focused") returns mainWindow.isFocused()
+    - preload.ts: isWindowFocused() method on reson8Api bridge object
+    - renderer.ts: isWindowFocused() added to Reson8Api interface
+
+  Edge Cases Handled:
+    - Mute/deafen sounds only play when isInVoice === true
+    - Self-join detection excluded via myId comparison
+    - DM notification gated: no sound if tab is active AND window is focused
+    - PTT mode: mute sound respects PTT lock state (isMuted flag)
+    - Rapid presence updates: break after first detected change per event
+    - previousOccupantIds properly initialized/cleared at all transitions
+    - Permission error detection: regex /permission|denied/i on error messages
+
+  Key Files Modified:
+    apps/client/src/main.ts — is-window-focused IPC handler
+    apps/client/src/preload.ts — isWindowFocused() bridge method
+    apps/client/src/renderer/renderer.ts — SoundAlert utility,
+      previousOccupantIds state, 16 trigger integrations
+
+  Verification:
+    - TypeScript build (client): npx tsc --noEmit — passed, no errors
+    - Manual: test each of the 16 sounds by triggering each event
+      in the application
+
+  Next Step: PRD 3.4 — Mic Sensitivity Slider
+
+--- Entry: 23/03/2026 ---
+
+Feature/Fix: PRD 3.4 — Mic Sensitivity Slider (Noise Gate)
+
+  Problem: The client always transmits all mic audio to the server,
+  including background noise. Users in noisy environments cannot filter
+  out ambient sounds without manually muting.
+
+  Solution: Added a client-side noise gate with a configurable dB
+  threshold slider to the Voice & Shortcuts settings tab. When enabled,
+  the user's mic only transmits audio when input exceeds the threshold.
+
+  VoiceService Changes (voice.service.ts):
+    - Added AnalyserNode-based silence detection with AudioContext
+    - New private fields: analyser, audioContext, silenceCheckInterval,
+      sensitivityThreshold (-40dB default), sensitivityEnabled,
+      _isManuallyMuted
+    - hookAnalyser(): creates AudioContext + AnalyserNode from
+      localStream, runs 50ms interval computing RMS→dB, pauses/resumes
+      producer based on threshold comparison
+    - enableSensitivity(threshold): enables noise gate, hooks analyser
+    - disableSensitivity(): clears interval, closes AudioContext,
+      resumes producer if not manually muted
+    - setThreshold(threshold): updates threshold value
+    - getCurrentLevel(): returns current dB for meter visualization
+    - _isManuallyMuted flag: tracks manual mute state to prevent noise
+      gate from overriding user's explicit mute action
+    - startProducing(): reconnects analyser to new stream if sensitivity
+      was already enabled (handles audio device changes)
+    - cleanup(): cleans up AudioContext and interval
+
+  Preload Bridge Changes (preload.ts):
+    - setMicSensitivity(enabled, threshold): enables/disables noise gate
+    - getMicLevel(): returns current dB from VoiceService
+
+  UI Changes (index.html):
+    - Noise Gate toggle row in Voice & Shortcuts tab (microphone SVG
+      icon, #chk-mic-sensitivity checkbox, toggle-switch pattern)
+    - Slider wrap (#mic-sensitivity-slider-wrap): range input -60 to 0
+      dB, sensitivity labels, current value display, live level meter
+    - CSS: slider styling with accent-colored thumb, level meter bar
+      with gradient, sensitivity labels and value display
+
+  Renderer Changes (renderer.ts):
+    - Reson8Api interface: added setMicSensitivity() and getMicLevel()
+    - DOM refs for all noise gate UI elements
+    - micSensitivityEnabled state + micLevelAnimId tracking
+    - startMicLevelMeter(): requestAnimationFrame loop reading
+      api.getMicLevel() and animating mic-level-bar width
+    - stopMicLevelMeter(): cancels animation loop
+    - Toggle handler: show/hide slider, call API, save to localStorage
+    - Slider handler: update display, call API, save to localStorage
+    - Voice join: enables noise gate if setting is on (non-PTT mode)
+    - Voice leave: stops meter animation
+    - PTT mode toggle: hides/shows noise gate section, disables noise
+      gate when switching to PTT, re-enables when switching back
+    - Init block: restores toggle/slider from localStorage, hides
+      section in PTT mode
+
+  Edge Cases Handled:
+    - PTT mode: noise gate section hidden, gate disabled when in PTT
+    - Manual mute: _isManuallyMuted prevents gate from resuming producer
+    - Audio device change: startProducing() re-hooks analyser
+    - Cleanup on disconnect: AudioContext and interval fully cleaned up
+
+  localStorage Keys:
+    reson8-mic-sensitivity-enabled — "true" or absent
+    reson8-mic-sensitivity-threshold — numeric dB string (e.g. "-40")
+
+  Key Files Modified:
+    apps/client/src/services/voice.service.ts — AnalyserNode noise gate
+    apps/client/src/preload.ts — setMicSensitivity + getMicLevel bridge
+    apps/client/src/renderer/index.html — noise gate UI + CSS
+    apps/client/src/renderer/renderer.ts — handlers, meter, persistence
+
+  Verification:
+    - TypeScript build (client): npx tsc --noEmit — passed, no errors
+
+  --- Post-Implementation Bug Fixes (23/03/2026) ---
+
+  Bug 1: Noise gate permanently silences mic after silence
+    Root Cause: producer.pause() (mediasoup-client) internally sets
+      track.enabled = false. The AnalyserNode read from the same track,
+      creating a feedback loop: once disabled it only saw silence, so
+      dB = -Infinity, and the producer was never resumed.
+    Fix: AnalyserNode now reads from a cloned track
+      (originalTrack.clone()) which stays always-enabled, detecting raw
+      mic input independently of the original track's enabled state.
+    Files: voice.service.ts — added _analysisTrack field, clone logic
+      in hookAnalyser(), cleanup in disableSensitivity() and cleanup()
+
+  Bug 2: Adjusting sensitivity slider kills audio capture
+    Root Cause: Slider's input handler called enableSensitivity() which
+      invokes hookAnalyser(), tearing down and recreating the entire
+      AudioContext + cloned track on every slider tick.
+    Fix: Added setMicThreshold() method that only updates the threshold
+      number without re-hooking the analyser. Exposed via preload bridge
+      as setMicThreshold(). Slider now calls this instead.
+    Files: voice.service.ts (setThreshold), preload.ts (setMicThreshold),
+      renderer.ts (slider handler updated)
+
+  Bug 3: Noise gate meter inactive outside voice channel
+    Root Cause: hookAnalyser() requires localStream, which only exists
+      after joining a voice channel via startProducing().
+    Fix: Added startPreview()/stopPreview() preview mode to VoiceService.
+      Creates a temporary mic stream + AudioContext + AnalyserNode for
+      meter visualization only. Automatically stopped when joining a
+      voice channel (hookAnalyser calls stopPreview). Exposed via
+      preload as startMicPreview()/stopMicPreview(). Renderer starts
+      preview when enabling noise gate outside a voice channel.
+    Files: voice.service.ts (startPreview/stopPreview, _previewStream),
+      preload.ts (startMicPreview/stopMicPreview), renderer.ts (toggle
+      handler starts preview when not in voice)
+
+  Next Step: PRD 3.5 — Voice Channel Session Timer
+
+--- Entry: 23/03/2026 ---
+
+Feature/Fix: PRD 3.5 — Voice Channel Session Timer
+
+  Problem: Voice channels showed no indication of how long a session
+  had been active. Users joining mid-session had no context on how
+  long others had been talking.
+
+  Solution: Added an elapsed session timer to voice channels. A
+  "session" starts when the first user joins a voice channel and ends
+  when the last user leaves. The timer is displayed in two locations:
+  (1) next to the channel name in the channel tree, and (2) in the
+  voice panel beneath the connected channel name.
+
+  Shared Types Changes:
+    1. socket-events.ts — Added sessionStartedAt?: string (ISO 8601)
+       to the PRESENCE_UPDATE payload type.
+
+  Server Changes:
+    1. connection.handler.ts — Added module-scope voiceSessionStartedAt
+       Map<string, Date> to track voice session start times.
+       - USER_JOIN_CHANNEL: queries channel type from DB; if voice
+         channel goes from 0→1 occupants, sets session start time.
+         Includes sessionStartedAt in PRESENCE_UPDATE emit.
+       - USER_JOIN_CHANNEL (old channel cleanup): if old channel
+         empties, deletes session. Includes sessionStartedAt in emit.
+       - USER_LEAVE_CHANNEL: if channel empties, deletes session.
+         Includes sessionStartedAt in emit.
+       - disconnect: if channel empties, deletes session. Includes
+         sessionStartedAt in emit.
+       - hydrateOccupants: bootstraps session start times for voice
+         channels that have occupants (approximate, covers server
+         restart recovery).
+
+  Client Changes:
+    1. renderer.ts — Major additions:
+       - sessionTimers Map<string, string> (channelId → ISO startedAt)
+       - formatDuration(ms) utility: formats as HH:MM:SS or MM:SS
+       - Presence handler: stores/deletes sessionStartedAt from data
+       - renderChannel(): appends <span class="session-timer"
+         data-session-channel="..."> for active voice sessions
+       - Global 1-second setInterval: updates all visible timer spans
+         in both the channel tree and voice panel
+       - Disconnect cleanup: clears sessionTimers map and panel timer
+       - Channel deleted: removes from sessionTimers
+    2. index.html — CSS and HTML additions:
+       - .session-timer class: 9px, tabular-nums, muted color, 0.7
+         opacity for unobtrusive display
+       - Voice panel restructured: channel name + timer wrapped in a
+         flex column, #voice-session-timer span added
+
+  Edge Cases Handled:
+    - Server restart: bootstraps approximate session times from Redis
+      occupant data during hydrateOccupants
+    - Reconnection: PRESENCE_UPDATE events include sessionStartedAt
+      so clients get synced timers immediately
+    - Text channels: session entries never created for text channels
+    - Timer cleanup on disconnect: sessionTimers map and voice panel
+      timer text cleared
+    - Channel deletion: session timer entry removed
+
+  Key Files Modified:
+    packages/shared-types/src/socket-events.ts
+    apps/server/src/handlers/connection.handler.ts
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/renderer/index.html
+
+  Verification:
+    - TypeScript build (shared-types): npx tsc --build — passed
+    - TypeScript build (server): npx tsc --noEmit — passed, no errors
+    - TypeScript build (client): npx tsc --noEmit — passed, no errors
+
+  Next Step: PRD 3.6 (next item in Improvements PRD)
+
+--- Entry: 23/03/2026 ---
+
+Feature/Fix: Settings Button Always Accessible (Extra Improvement 1)
+
+  Problem: Settings button was hidden when not connected to a server,
+  preventing users from changing Voice/Application settings.
+
+  Solution: Settings button is always visible in the tree header.
+  When not connected, Roles tab is disabled with a message. Voice
+  tab auto-selected as default when opening settings while
+  disconnected. Role fetching only happens when connected.
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html — removed display:none
+    apps/client/src/renderer/renderer.ts — conditional openSettingsPanel
+
+  Verification:
+    - TypeScript build (client): npx tsc --noEmit — passed
+
+--- Entry: 23/03/2026 ---
+
+Feature/Fix: Emoji Reactions on Messages (Extra Improvement 2)
+
+  Problem: No way to react to messages with emojis in text channels
+  or DMs. Users had to reply with text for simple acknowledgments.
+
+  Solution: Full emoji reaction system with persistent storage:
+    - Reaction model in Prisma (unique per user+emoji+message)
+    - TOGGLE_REACTION / REACTION_UPDATED socket events
+    - Server handler: create/delete reactions, broadcast aggregated
+    - Reactions included in FETCH_MESSAGES and FETCH_DIRECT_MESSAGES
+    - Client: reaction bar under each message with pills + count
+    - Reaction pills are clickable (toggle same emoji)
+    - React button (smiley) opens emoji picker in reaction mode
+    - Existing emoji picker reused, positioned near the message
+    - Own reactions highlighted with accent color
+
+  Key Files Modified:
+    apps/server/prisma/schema.prisma — Reaction model
+    packages/shared-types/src/socket-events.ts — TOGGLE_REACTION,
+      REACTION_UPDATED events
+    packages/shared-types/src/models.ts — reactions in IMessage,
+      IDirectMessage
+    apps/server/src/handlers/reaction.handler.ts — [NEW]
+    apps/server/src/handlers/message.handler.ts — include reactions
+    apps/server/src/handlers/dm.handler.ts — include reactions
+    apps/server/src/index.ts — register reaction handler
+    apps/client/src/preload.ts — toggleReaction, REACTION_UPDATED
+    apps/client/src/renderer/renderer.ts — buildReactionBar, picker
+      integration, updateReactionBar, reaction-updated listener
+    apps/client/src/renderer/index.html — reaction CSS
+
+  Verification:
+    - Prisma migration: add_reactions — applied successfully
+    - TypeScript build (shared-types): npx tsc --build — passed
+    - TypeScript build (server): npx tsc --noEmit — passed
+    - TypeScript build (client): npx tsc --noEmit — passed
+
+--- Entry: 23/03/2026 ---
+
+Feature/Fix: Latency Display (Extra Improvement 3)
+
+  Problem: No visibility into network latency between client and
+  server, making it hard to diagnose connection quality.
+
+  Solution: Display ping latency (ms) in the status bar next to
+  "Connected as User" label, color-coded by quality:
+    - Green (≤80ms): good connection
+    - Yellow (≤150ms): moderate latency
+    - Red (>150ms): poor connection
+  Uses Socket.io engine's pong event for RTT measurement,
+  polled every 3 seconds. Cleared on disconnect.
+
+  Key Files Modified:
+    apps/client/src/preload.ts — latencyMs, engine pong, getLatency()
+    apps/client/src/renderer/renderer.ts — Reson8Api interface,
+      statusLatency DOM ref, 3s interval, disconnect cleanup
+    apps/client/src/renderer/index.html — #status-latency span + CSS
+
+  Verification:
+    - TypeScript build (client): npx tsc --noEmit — passed
+
+  ALL THREE EXTRA IMPROVEMENTS COMPLETE — Ready for manual testing.
