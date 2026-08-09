@@ -1,0 +1,144 @@
+================================================================================
+  RESON8 — Development Progress Log
+  Summary regenerated: 09/08/2026 (condensed from the original phase 1-8 log)
+================================================================================
+
+PROJECT OVERVIEW
+================
+Reson8 is a high-performance, self-hosted voice and text communication platform
+for desktop (Electron). It replicates the TeamSpeak 3 experience — low-latency
+voice, hierarchical channel trees, and private server ownership — while
+integrating modern persistent text channels.
+
+Tech Stack: Electron + TypeScript, Fastify + Socket.io, mediasoup (SFU),
+PostgreSQL + Prisma, Redis, Docker.
+
+Monorepo structure:
+  apps/client/            — Electron desktop client
+  apps/server/             — Node.js signaling + SFU server
+  packages/shared-types/    — Shared DTOs, enums, and Socket.io event types
+
+For build commands, environment variables, ports, and architecture details,
+see the root CLAUDE.md (and apps/client/CLAUDE.md, apps/server/CLAUDE.md) —
+not duplicated here to avoid drift between docs.
+
+Full unabridged entry-by-entry history (every bug's root cause, every file
+touched, every verification step) for everything summarized below lives in
+app-planning/archive/progress-phases-1-8.txt. The original PRDs that drove
+this work are in app-planning/archive/ (PRD.md, Reson8_Evolutions_PRD.md,
+Reson8_Improvements_PRD.md). Reach for the archive when you need the "why"
+behind a specific decision that this summary compresses away.
+
+
+================================================================================
+  PHASES 1-8 SUMMARY — ALL COMPLETE ✅  (current version: 1.1.0)
+================================================================================
+
+PHASE 1 — Signaling & Presence (Foundation)
+  Fastify + Socket.io server (port 9800), Redis-backed presence tracking,
+  Electron shell, typed Socket.io event maps, initial Prisma schema
+  (Server/Channel/User/Role/Message), flat→nested channel-tree builder.
+
+PHASE 2 — The Voice Bridge (mediasoup)
+  mediasoup SFU integrated; full 6-step WebRTC handshake (GET_ROUTER_
+  CAPABILITIES → CREATE_WEBRTC_TRANSPORT → CONNECT_TRANSPORT → PRODUCE →
+  CONSUME → RESUME_CONSUMER); two-way audio; mute/deafen controls.
+  Notable fixes: Electron mic-permission auto-grant, silent-audio race
+  (queued consumption until recv transport ready), ICE announced-IP
+  defaulting, detached-Audio()-element silence (must attach to DOM),
+  deafen-toggle state flag, voice-control UI overflow.
+
+PHASE 3 — Relational Logic & Hierarchy
+  DB seeding (default server/channels/roles), channel CRUD over Socket.io,
+  three-pane TeamSpeak-style UI (tree + log + status bar), click-to-join
+  voice with occupant display, create/delete channel modals, production
+  Docker Compose (server + Postgres + Redis).
+  Notable fixes: window.confirm() unusable in Electron renderer (replaced
+  with custom modal), modal input pointer-events/drag-region fix.
+
+PHASE 4 — Permissions & Persistent Text
+  Instance-based identity: persistent UUID per Electron install (fresh
+  each launch in dev, persisted when packaged), auto-creates User +
+  default role, ADMIN_INSTANCE_ID env var grants admin. Bitwise
+  permission service + requirePermission() middleware. Permission-guarded
+  channel CRUD. SEND_MESSAGE/FETCH_MESSAGES with cursor pagination.
+  Tabbed chat UI. 11 unit tests added (permissions.test.ts).
+
+PHASE 5 — Desktop UX, Audio Polish & Admin
+  Unified Settings modal (Roles / Voice & Shortcuts tabs). Role management
+  UI (toggle Member/Admin, admins can't self-demote). Audio device
+  selection (input/output, localStorage-persisted). Multi-key shortcut
+  combos for PTT/Mute/Deafen/Disconnect via Electron globalShortcut.
+  URL-based server connection. Instance ID visible in footer.
+
+PHASE 6 — Deployment & Packaging
+  Server Dockerfile + entrypoint.sh (migrate → seed → start). Electron
+  Builder config: Windows NSIS, Linux AppImage+deb, macOS dmg. Electron
+  pinned to 34.5.8. Packaged-build instance ID persistence via
+  app.isPackaged.
+
+PHASE 7 — Evolutions (PRD 2.x — 14 items + moderation system)
+  - Fixed dual-voice-channel race condition (full mediasoup + presence
+    cleanup of the old channel before joining the new one; client-side
+    join lock)
+  - Public/private dual-announce IP (MEDIASOUP_PRIVATE_ANNOUNCED_IP) for
+    hairpin-NAT self-hosters
+  - Push-to-Talk Mode toggle, decoupled from the manual mute button
+  - Explicit "Save" action for audio device changes (staged pending state)
+  - Fixed channel-tree occupant hydration on initial connect
+  - "Remember Me" — persists server URL/nickname/password in localStorage
+  - Server password protection (SERVER_PRIVATE_PASSWORD env var)
+  - Direct Messaging: full 1-to-1 DMs with persistence, Online Users
+    modal, read receipts, unread indicators, auto-opening unread tabs
+  - Rich media: image upload/paste sharing, dual storage (local disk or
+    Cloudinary CDN), lightbox viewer
+  - Active Speaker Indicator via server-side mediasoup AudioLevelObserver
+    (pulsing halo on the channel-tree presence dot)
+  - System Tray: minimize-to-tray, close-to-tray, tray context menu
+  - Rich link previews (metascraper via main-process IPC, sanitized HTML,
+    video embed support with fullscreen lightbox)
+  - Emoji Selector: ~350 curated emojis, categorized + searchable
+  - Native right-click context menu (Cut/Copy/Paste/Select All via
+    Electron's Menu API)
+  - Persistent DM conversations — history remains accessible once a
+    partner goes offline (first-contact still requires both online)
+  - Kick from Channel & Ban from Server moderation system (instance-ID-
+    keyed bans with unban support)
+
+PHASE 8 — Improvements (PRD 3.x — 5 items + 3 extras)
+  - Fixed tray icon invisible in packaged builds (assets/**/* added to
+    electron-builder's build.files)
+  - Fixed "Unknown" nickname / duplicate-join-on-reconnect (resolveNickname()
+    DB fallback for Redis-presence races; joinServerInFlight guard)
+  - Sound Alerts System: 16 event-mapped audio cues (connection, voice
+    presence, moderation, mute/deafen, DM notification gated by focus)
+  - Mic Sensitivity Slider (noise gate): AnalyserNode-based silence
+    detection with configurable dB threshold + live meter; 3 post-impl
+    fixes (cloned-track analysis to avoid a mute feedback loop, threshold-
+    only update to avoid re-hooking the analyser on every slider tick,
+    preview mode for the meter outside of voice channels)
+  - Voice Channel Session Timer: server-authoritative session start time,
+    displayed in the channel tree and voice panel, synced on reconnect
+  - Extra: Settings button always accessible even when disconnected
+  - Extra: Emoji Reactions on messages (persistent, toggleable, tallied)
+  - Extra: Real-time latency display (color-coded ping in the status bar)
+
+
+================================================================================
+  ONGOING LOG — new entries go below this line
+================================================================================
+
+Use `/log-progress` (see .claude/commands/log-progress.md) to append entries
+here in the established format:
+
+--- Entry: DD/MM/YYYY ---
+
+Feature/Fix: <name>
+
+  Problem: ...
+  Solution: ...
+  Key Files Modified:
+    ...
+  Verification:
+    ...
+  Next Step: ...
