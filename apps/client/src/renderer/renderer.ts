@@ -725,6 +725,7 @@ interface Reson8Api {
     setTrayPrefs(prefs: { minimizeToTray: boolean; closeToTray: boolean }): void;
     getTrayPrefs(): Promise<{ minimizeToTray: boolean; closeToTray: boolean }>;
     isWindowFocused(): Promise<boolean>;
+    flashWindow(): void;
     setMicSensitivity(enabled: boolean, threshold: number): void;
     setMicThreshold(threshold: number): void;
     startMicPreview(): Promise<void>;
@@ -737,6 +738,9 @@ interface Reson8Api {
     getApprovedEmojis(): Promise<{ success: boolean; emojis?: CustomEmoji[]; error?: string }>;
     getPendingEmojis(): Promise<{ success: boolean; emojis?: CustomEmoji[]; error?: string }>;
     reviewCustomEmoji(emojiId: string, decision: "APPROVED" | "REJECTED"): Promise<{ success: boolean; error?: string }>;
+    nudgeUser(targetUserId: string): Promise<{ success: boolean; error?: string }>;
+    getServerSettings(): Promise<{ success: boolean; nudgeEnabled?: boolean; error?: string }>;
+    updateServerSettings(nudgeEnabled: boolean): Promise<{ success: boolean; error?: string }>;
     on(event: string, callback: (...args: any[]) => void): void;
 }
 
@@ -812,6 +816,14 @@ const unreadChannelIds = new Set<string>();
 // resolving :name: tokens in message content / reaction pills. Refreshed on
 // (re)connect, updated live via the CUSTOM_EMOJI_APPROVED broadcast.
 let customEmojis: CustomEmoji[] = [];
+
+// Nudge (PRD 4.14). Server-wide toggle, refreshed on (re)connect and kept
+// live via SERVER_SETTINGS_UPDATED. The cooldown map here is a client-side
+// mirror purely for disabling the button / showing a countdown — the server
+// enforces the real 30s-per-(sender,target) cooldown authoritatively.
+let serverNudgeEnabled = true;
+const NUDGE_COOLDOWN_MS = 30 * 1000;
+const lastNudgeSentAt = new Map<string, number>();
 
 function formatDuration(ms: number): string {
     const totalSeconds = Math.floor(ms / 1000);
@@ -933,6 +945,8 @@ const btnAdminClose = document.getElementById("btn-admin-close") as HTMLButtonEl
 const settingsTabRoles = document.getElementById("settings-tab-roles") as HTMLButtonElement;
 const settingsTabEmojis = document.getElementById("settings-tab-emojis") as HTMLButtonElement;
 const emojiPendingList = document.getElementById("emoji-pending-list") as HTMLDivElement;
+const settingsTabServer = document.getElementById("settings-tab-server") as HTMLButtonElement;
+const chkNudgeEnabled = document.getElementById("chk-nudge-enabled") as HTMLInputElement;
 
 // Audio device selects (inside settings modal voice tab)
 const audioInputSelect = document.getElementById("audio-input-select") as HTMLSelectElement;
@@ -945,6 +959,7 @@ const onlineUsersModal = document.getElementById("online-users-modal") as HTMLDi
 const onlineUserList = document.getElementById("online-user-list") as HTMLDivElement;
 const btnOnlineClose = document.getElementById("btn-online-close") as HTMLButtonElement;
 const onlineDot = document.getElementById("online-dot") as HTMLSpanElement;
+const toastContainer = document.getElementById("toast-container") as HTMLDivElement;
 
 // System tray checkboxes
 const chkMinimizeToTray = document.getElementById("chk-minimize-to-tray") as HTMLInputElement;
@@ -1040,6 +1055,22 @@ function log(message: string, type: "info" | "success" | "error" | "" = ""): voi
 
     eventLog.appendChild(entry);
     eventLog.scrollTop = eventLog.scrollHeight;
+}
+
+/** Shows a transient toast in the top-right corner (used by Nudge; general-purpose otherwise). */
+function showToast(message: string, durationMs = 4000): void {
+    const toast = document.createElement("div");
+    toast.className = "toast";
+    toast.innerHTML = message;
+    toastContainer.appendChild(toast);
+
+    // Force a reflow so the "visible" transition actually animates in.
+    requestAnimationFrame(() => toast.classList.add("visible"));
+
+    setTimeout(() => {
+        toast.classList.remove("visible");
+        toast.addEventListener("transitionend", () => toast.remove(), { once: true });
+    }, durationMs);
 }
 
 // ── Connection ──────────────────────────────────────────────────────────
@@ -1856,6 +1887,13 @@ api.on("connected", (data: { serverId: string; instanceId: string }) => {
     api.getApprovedEmojis().then((res) => {
         if (res.success && res.emojis) {
             customEmojis = res.emojis;
+        }
+    });
+
+    // Load the server-wide Nudge toggle
+    api.getServerSettings().then((res) => {
+        if (res.success && res.nudgeEnabled !== undefined) {
+            serverNudgeEnabled = res.nudgeEnabled;
         }
     });
 });
@@ -2941,8 +2979,57 @@ function createUserRow(user: { userId: string; nickname: string; isOnline: boole
     });
     btnGroup.appendChild(dmBtn);
 
-    // Admin-only ban button (don't show for self)
     const myId = api.getInstanceId();
+
+    // Nudge — online users only, never yourself, only when the server allows it
+    if (user.isOnline && user.userId !== myId && serverNudgeEnabled) {
+        const nudgeBtn = document.createElement("button");
+        nudgeBtn.className = "btn-nudge";
+        nudgeBtn.textContent = "👋 Nudge";
+
+        let cooldownInterval: ReturnType<typeof setInterval> | null = null;
+        const applyCooldownState = (): void => {
+            if (!document.body.contains(nudgeBtn)) {
+                if (cooldownInterval) clearInterval(cooldownInterval);
+                return;
+            }
+            const last = lastNudgeSentAt.get(user.userId);
+            const remaining = last ? NUDGE_COOLDOWN_MS - (Date.now() - last) : 0;
+            if (remaining <= 0) {
+                nudgeBtn.disabled = false;
+                nudgeBtn.textContent = "👋 Nudge";
+                if (cooldownInterval) {
+                    clearInterval(cooldownInterval);
+                    cooldownInterval = null;
+                }
+                return;
+            }
+            nudgeBtn.disabled = true;
+            nudgeBtn.textContent = `${Math.ceil(remaining / 1000)}s`;
+        };
+
+        if (lastNudgeSentAt.has(user.userId)) {
+            applyCooldownState();
+            cooldownInterval = setInterval(applyCooldownState, 1000);
+        }
+
+        nudgeBtn.addEventListener("click", async () => {
+            nudgeBtn.disabled = true;
+            const res = await api.nudgeUser(user.userId);
+            if (res.success) {
+                lastNudgeSentAt.set(user.userId, Date.now());
+                applyCooldownState();
+                if (!cooldownInterval) cooldownInterval = setInterval(applyCooldownState, 1000);
+                log(`Nudged ${escapeHtml(user.nickname)}`, "success");
+            } else {
+                nudgeBtn.disabled = false;
+                log(`Failed to nudge: ${res.error}`, "error");
+            }
+        });
+        btnGroup.appendChild(nudgeBtn);
+    }
+
+    // Admin-only ban button (don't show for self)
     if (isAdminUser && user.userId !== myId) {
         const banBtn = document.createElement("button");
         banBtn.className = "btn-ban";
@@ -3042,10 +3129,23 @@ async function openSettingsPanel(): Promise<void> {
         } else {
             settingsTabEmojis.style.display = "none";
         }
+
+        // Server tab — UPDATE_SERVER_SETTINGS requires literal ADMIN, so
+        // isAdminUser is the correct (not just approximate) gate here.
+        if (isAdminUser) {
+            settingsTabServer.style.display = "";
+            const settingsRes = await api.getServerSettings();
+            if (settingsRes.success) {
+                chkNudgeEnabled.checked = settingsRes.nudgeEnabled ?? true;
+            }
+        } else {
+            settingsTabServer.style.display = "none";
+        }
     } else {
-        // Not connected — hide both admin tabs entirely and default to Voice tab
+        // Not connected — hide all admin tabs entirely and default to Voice tab
         settingsTabRoles.style.display = "none";
         settingsTabEmojis.style.display = "none";
+        settingsTabServer.style.display = "none";
         adminUserList.innerHTML = '<div class="admin-empty">Connect to a server to manage roles.</div>';
     }
 
@@ -3116,6 +3216,19 @@ function renderPendingEmojis(emojis: CustomEmoji[]): void {
 
 btnServerSettings.addEventListener("click", () => {
     openSettingsPanel();
+});
+
+chkNudgeEnabled.addEventListener("change", async () => {
+    const desired = chkNudgeEnabled.checked;
+    const result = await api.updateServerSettings(desired);
+    if (result.success) {
+        serverNudgeEnabled = desired;
+        log(`Nudge ${desired ? "enabled" : "disabled"} for this server`, "success");
+    } else {
+        chkNudgeEnabled.checked = !desired; // revert on failure
+        log(`Failed to update server settings: ${result.error}`, "error");
+        if (result.error && /permission|denied/i.test(result.error)) SoundAlert.play("insufficient_perms.mp3");
+    }
 });
 
 btnAdminClose.addEventListener("click", () => {
@@ -3824,6 +3937,28 @@ api.on("custom-emoji-approved", (data: { serverId: string; emoji: CustomEmoji })
     }
     if (emojiPicker.classList.contains("visible")) {
         renderEmojiGrid(emojiSearch.value);
+    }
+});
+
+// ── Nudge (PRD 4.14) ─────────────────────────────────────────────────────
+
+api.on("server-settings-updated", (data: { nudgeEnabled: boolean }) => {
+    serverNudgeEnabled = data.nudgeEnabled;
+    // If the Online Users modal is open, re-render so Nudge buttons appear/disappear live.
+    if (onlineUsersModal.classList.contains("visible")) {
+        api.getOnlineUsers().then((res) => {
+            if (res.success && res.users) renderOnlineUsers(res.users);
+        });
+    }
+});
+
+api.on("nudge-received", async (data: { fromUserId: string; fromNickname: string }) => {
+    SoundAlert.play("nudge.mp3");
+    showToast(`👋 <strong>${escapeHtml(data.fromNickname)}</strong> nudged you!`);
+
+    const isFocused = await api.isWindowFocused();
+    if (!isFocused) {
+        api.flashWindow();
     }
 });
 

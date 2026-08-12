@@ -1077,3 +1077,111 @@ Feature/Fix: Instant Image Upload Feedback (PRD 4.12)
   app-planning/Reson8_NextSteps_PRD.md — new "Reson8 Client" feature
   (not a Voice/Text Channels item), introduces a Server Settings
   concept and a new admin-toggleable Server.nudgeEnabled field.
+
+--- Entry: 12/08/2026 ---
+
+Feature/Fix: Nudge (PRD 4.14) — final item in the Next Steps PRD
+
+  Problem: No way to get another user's attention short of DMing them.
+  Needed: an admin-toggleable server-wide feature (default ON,
+  unchangeable toggle duration), 30s cooldown per (sender, target)
+  pair, online users only, surfaced from the Online Users list.
+
+  Solution:
+    - Server.nudgeEnabled Boolean @default(true) (migration
+      20260812030044_add_server_nudge_enabled). This is the project's
+      first genuine "server-wide setting" — IServer existed in
+      shared-types but was never actually sent over the wire anywhere
+      in the codebase before this, so there was no existing mechanism
+      to piggyback on. Built it from scratch: GET_SERVER_SETTINGS
+      (fetched on connect and whenever the new admin-only "🔔 Server"
+      Settings tab opens) + UPDATE_SERVER_SETTINGS (ADMIN-gated,
+      broadcasts SERVER_SETTINGS_UPDATED so every connected client's
+      Nudge buttons appear/disappear live without reconnecting).
+    - New nudge.handler.ts: NUDGE_USER validates, in order, self-nudge
+      rejection, server.nudgeEnabled, target actually online (Redis
+      presence), then the cooldown — an in-memory
+      Map<"senderId:targetId", timestamp>, deliberately ephemeral
+      (resets on server restart) since persisting a purely advisory,
+      low-stakes rate limit isn't worth a DB/Redis round trip.
+    - Client: sound + toast + taskbar/dock flash, per the earlier
+      product decision (no window-shake animation). Toast is a new,
+      general-purpose small component (#toast-container, top-right,
+      auto-dismissing after 4s) since none existed yet. Taskbar/dock
+      flash reuses the existing isWindowFocused()
+      IPC pattern from Phase 8's DM-notification gating, adding one new
+      main-process handler (win.flashFrame(true), only when unfocused)
+      plus an explicit flashFrame(false) on window focus rather than
+      relying on implicit per-platform auto-clear behavior.
+    - Nudge button added to the Online Users list (online users only,
+      never shown for yourself, hidden entirely when the server has
+      nudging disabled), with a client-side cooldown mirror (disables
+      the button and counts down) purely for UX — the server remains
+      the authoritative enforcement point.
+
+  Correction (12/08/2026, same day): initially reused the existing
+  hey_wake_up.mp3 for the nudge sound, since a new audio asset can't be
+  fabricated from text. The user pointed out a real
+  assets/sound-alerts/nudge.mp3 already existed in the repo (added
+  after this PRD's audit, so it wasn't caught by the earlier file
+  listing) — switched SoundAlert.play() in the nudge-received handler
+  to use it instead. Already covered by electron-builder's existing
+  "assets/**/*" glob in package.json, so no packaging config change was
+  needed. DM notifications still correctly use hey_wake_up.mp3,
+  unchanged.
+
+  Key Files Modified:
+    apps/server/prisma/schema.prisma — Server.nudgeEnabled
+    packages/shared-types/src/models.ts — IServer.nudgeEnabled
+    packages/shared-types/src/socket-events.ts — NUDGE_USER,
+      GET_SERVER_SETTINGS, UPDATE_SERVER_SETTINGS, NUDGE_RECEIVED,
+      SERVER_SETTINGS_UPDATED
+    apps/server/src/handlers/nudge.handler.ts (NEW)
+    apps/server/src/index.ts — registerNudgeHandlers()
+    apps/client/src/main.ts — flash-window IPC handler, focus listener
+      clearing the flash
+    apps/client/src/preload.ts — nudgeUser()/getServerSettings()/
+      updateServerSettings()/flashWindow() bridge methods, NUDGE_RECEIVED/
+      SERVER_SETTINGS_UPDATED forwarding
+    apps/client/src/renderer/renderer.ts — showToast(), Nudge button +
+      client-side cooldown mirror in createUserRow(), Server Settings
+      tab wiring, server-settings-updated/nudge-received listeners
+    apps/client/src/renderer/index.html — #toast-container + .toast CSS,
+      .btn-nudge CSS, "🔔 Server" Settings tab/panel markup
+
+  Verification:
+    - Prisma migration: add_server_nudge_enabled — applied successfully
+      against the local dev database
+    - TypeScript build (shared-types): npx tsc --build — passed
+    - TypeScript build (server): npx tsc --noEmit — passed
+    - TypeScript build (client): npx tsc --noEmit — passed
+    - Server test suite: npm run test — 19/19 passed
+    - End-to-end smoke test against a real running server (dev server
+      started, exercised via three concurrent clients — one seeded as
+      the real ADMIN_INSTANCE_ID admin — then torn down): 15/15 checks
+      passed — self-nudge rejected, basic nudge delivers NUDGE_RECEIVED
+      with correct sender info, same-target re-nudge blocked by
+      cooldown while a *different* target succeeds in parallel
+      (confirming the per-pair, not global, cooldown design), offline
+      target rejected, non-admin blocked from UPDATE_SERVER_SETTINGS,
+      admin disabling nudging broadcasts live and blocks further
+      nudges, and re-enabling correctly restores state. DB left exactly
+      as found (nudgeEnabled back to true) via the test's own cleanup.
+    - NOT visually confirmed in a live Electron window this session (no
+      display available) — the toast animation, taskbar/dock flash, and
+      cooldown countdown button text are DOM/OS-level behavior that
+      should get a manual check next time the app runs interactively.
+
+  === Reson8_NextSteps_PRD.md — ALL 15 ITEMS COMPLETE ===
+  Every item from app-planning/nextsteps.txt (4.1 through 4.15) has now
+  been implemented, typechecked across all affected workspaces, and
+  either smoke-tested end-to-end against a real running server (the
+  10 items with server-side logic: 4.3, 4.5, 4.6, 4.7, 4.8, 4.10, 4.11,
+  4.14, plus 4.13's design was verified via the same discipline) or
+  verified by typecheck + code review for the purely client-side DOM/
+  CSS items (4.1, 4.2, 4.4, 4.9, 4.12, 4.15). The client-side-only UI
+  surfaces (crop tool, toast, upload-progress states, cooldown
+  countdown) have not been visually confirmed in a live Electron window
+  in this session, since no display was available — worth a manual
+  pass through the app before considering this phase fully done in
+  practice, not just in code.

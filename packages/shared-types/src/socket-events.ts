@@ -303,6 +303,25 @@ export interface ClientToServerEvents {
         payload: { isMuted: boolean; isDeafened: boolean },
         ack: (response: { success: boolean }) => void,
     ) => void;
+
+    // ── Nudge ────────────────────────────────────────────────────────────
+
+    /** Nudges another online user to get their attention (30s cooldown per sender/target pair). */
+    NUDGE_USER: (
+        payload: { targetUserId: string },
+        ack: (response: { success: boolean; error?: string }) => void,
+    ) => void;
+
+    /** Fetches the current server's admin-configurable settings (currently just nudgeEnabled). */
+    GET_SERVER_SETTINGS: (
+        ack: (response: { success: boolean; nudgeEnabled?: boolean; error?: string }) => void,
+    ) => void;
+
+    /** Updates server-wide settings. Requires ADMIN. */
+    UPDATE_SERVER_SETTINGS: (
+        payload: { nudgeEnabled: boolean },
+        ack: (response: { success: boolean; error?: string }) => void,
+    ) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -418,6 +437,12 @@ export interface ServerToClientEvents {
 
     /** Broadcasts a newly-approved custom emoji so every connected picker updates live. */
     CUSTOM_EMOJI_APPROVED: (payload: { serverId: string; emoji: ICustomEmoji }) => void;
+
+    /** Delivered to the target of a NUDGE_USER call. */
+    NUDGE_RECEIVED: (payload: { fromUserId: string; fromNickname: string }) => void;
+
+    /** Broadcasts a server settings change so every connected client updates live. */
+    SERVER_SETTINGS_UPDATED: (payload: { nudgeEnabled: boolean }) => void;
 }
 
 // ---------------------------------------------------------------------------

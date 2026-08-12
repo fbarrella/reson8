@@ -245,6 +245,8 @@ const api = {
         socket.on("USER_BANNED", () => emit("user-banned", null));
         socket.on("REACTION_UPDATED", (payload) => emit("reaction-updated", payload));
         socket.on("CUSTOM_EMOJI_APPROVED", (payload) => emit("custom-emoji-approved", payload));
+        socket.on("NUDGE_RECEIVED", (payload) => emit("nudge-received", payload));
+        socket.on("SERVER_SETTINGS_UPDATED", (payload) => emit("server-settings-updated", payload));
 
         // Voice-specific events
         socket.on("NEW_PRODUCER", (payload) => {
@@ -701,6 +703,10 @@ const api = {
         return ipcRenderer.invoke("is-window-focused");
     },
 
+    flashWindow(): void {
+        ipcRenderer.send("flash-window");
+    },
+
     // ── Mic Sensitivity / Noise Gate ──────────────────────────────────────
 
     setMicSensitivity(enabled: boolean, threshold: number): void {
@@ -803,6 +809,38 @@ const api = {
                 return;
             }
             socket.emit("REVIEW_CUSTOM_EMOJI", { emojiId, decision }, resolve);
+        });
+    },
+
+    // ── Nudge ─────────────────────────────────────────────────────────────
+
+    nudgeUser(targetUserId: string): Promise<{ success: boolean; error?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.emit("NUDGE_USER", { targetUserId }, resolve);
+        });
+    },
+
+    getServerSettings(): Promise<{ success: boolean; nudgeEnabled?: boolean; error?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.emit("GET_SERVER_SETTINGS", resolve);
+        });
+    },
+
+    updateServerSettings(nudgeEnabled: boolean): Promise<{ success: boolean; error?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.emit("UPDATE_SERVER_SETTINGS", { nudgeEnabled }, resolve);
         });
     },
 };

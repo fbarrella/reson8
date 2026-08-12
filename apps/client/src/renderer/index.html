@@ -1670,6 +1670,31 @@
       border-color: #c0392b;
     }
 
+    .btn-nudge {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+      font-size: 12px;
+      padding: 6px 12px;
+      border-radius: var(--radius);
+      cursor: pointer;
+      transition: all 0.15s;
+      flex-shrink: 0;
+      font-weight: 500;
+    }
+
+    .btn-nudge:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    .btn-nudge:disabled {
+      opacity: 0.5;
+      cursor: default;
+      border-color: var(--border);
+      color: var(--text-muted);
+    }
+
     .btn-unban {
       background: var(--surface);
       border: 1px solid var(--border);
@@ -2241,6 +2266,41 @@
       border-radius: 2px;
       transition: width 0.05s linear;
     }
+
+    /* ── Toast Notifications (Nudge, etc.) ────────────────────────────── */
+    #toast-container {
+      position: fixed;
+      top: 16px;
+      right: 16px;
+      z-index: 20000;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      -webkit-app-region: no-drag;
+    }
+
+    .toast {
+      background: var(--bg-secondary);
+      border: 1px solid var(--accent);
+      border-radius: var(--radius);
+      box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+      padding: 10px 14px;
+      font-size: 12px;
+      color: var(--text-primary);
+      max-width: 280px;
+      opacity: 0;
+      transform: translateX(20px);
+      transition: opacity 0.2s, transform 0.2s;
+    }
+
+    .toast.visible {
+      opacity: 1;
+      transform: translateX(0);
+    }
+
+    .toast strong {
+      color: var(--accent);
+    }
   </style>
 </head>
 
@@ -2466,6 +2526,7 @@
       <div class="settings-tab-bar">
         <button class="settings-tab-btn active" data-settings-tab="roles" id="settings-tab-roles">👑 Roles</button>
         <button class="settings-tab-btn" data-settings-tab="emojis" id="settings-tab-emojis">😀 Emojis</button>
+        <button class="settings-tab-btn" data-settings-tab="server" id="settings-tab-server">🔔 Server</button>
         <button class="settings-tab-btn" data-settings-tab="voice">🎤 Voice & Shortcuts</button>
         <button class="settings-tab-btn" data-settings-tab="app">🖥 Application</button>
       </div>
@@ -2474,6 +2535,22 @@
       <div class="settings-panel active" data-settings-panel="roles">
         <div id="admin-user-list" class="admin-user-list">
           <div class="admin-empty">Loading users...</div>
+        </div>
+      </div>
+
+      <!-- Server Tab (admin-only server-wide settings) -->
+      <div class="settings-panel" data-settings-panel="server">
+        <div class="toggle-row">
+          <div class="toggle-row-info">
+            <div class="toggle-row-text">
+              <span class="toggle-row-title">👋 Nudge</span>
+              <span class="toggle-row-desc">Lets members nudge each other for attention (30s cooldown per pair, not configurable)</span>
+            </div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="chk-nudge-enabled" checked>
+            <span class="toggle-slider"></span>
+          </label>
         </div>
       </div>
 
@@ -2664,6 +2741,9 @@
       allowfullscreen style="display:none;"></iframe>
     <video id="video-lightbox-video" controls style="display:none;"></video>
   </div>
+
+  <!-- ── Toast Notifications (Nudge, etc.) ───────────────────────────── -->
+  <div id="toast-container"></div>
 
   <script src="renderer.js"></script>
 </body>
