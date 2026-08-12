@@ -1868,11 +1868,17 @@ api.on("connected", (data: { serverId: string; instanceId: string }) => {
     btnOnlineUsers.style.display = "";
     updateOnlineDot();
 
-    // Check if user is admin on connect (enables kick/ban UI immediately)
-    api.getAllUsers(data.serverId).then((res) => {
-        isAdminUser = res.success;
-        settingsTabRoles.disabled = !isAdminUser;
-    });
+    // Check admin/emoji-management status on connect (not just when the
+    // Settings modal opens) so openSettingsPanel() already knows the answer
+    // and can render the right tabs on the very first paint — see
+    // applySettingsTabVisibility().
+    Promise.all([api.getAllUsers(data.serverId), api.getPendingEmojis()]).then(
+        ([usersRes, pendingEmojisRes]) => {
+            isAdminUser = usersRes.success;
+            canManageEmojis = pendingEmojisRes.success;
+            settingsTabRoles.disabled = !isAdminUser;
+        },
+    );
 
     // Auto-open DM tabs for partners with unread messages
     api.getUnreadDmPartners().then((res) => {
@@ -1900,6 +1906,8 @@ api.on("connected", (data: { serverId: string; instanceId: string }) => {
 
 api.on("disconnected", () => {
     isConnected = false;
+    isAdminUser = false;
+    canManageEmojis = false;
     isInVoice = false;
     currentChannelId = null;
     currentServerId = "";
@@ -2762,8 +2770,24 @@ function markChannelUnread(channelId: string): void {
     }
 }
 
+function findTreeNode(nodes: TreeNode[], channelId: string): TreeNode | null {
+    for (const n of nodes) {
+        if (n.id === channelId) return n;
+        const found = findTreeNode(n.children, channelId);
+        if (found) return found;
+    }
+    return null;
+}
+
 /** Clears a channel's unread state locally and persists the read cursor server-side. */
 function markChannelRead(channelId: string): void {
+    // Clear the cached tree node's join-time hasUnread flag too — otherwise a
+    // later renderTree(currentTree) call (e.g. re-rendering on voice channel
+    // join/leave) re-seeds unreadChannelIds from that stale flag (see line
+    // ~1283) and the notification erroneously reappears after being read.
+    const node = findTreeNode(currentTree, channelId);
+    if (node) node.hasUnread = false;
+
     if (!unreadChannelIds.has(channelId)) return;
     unreadChannelIds.delete(channelId);
 
@@ -3069,6 +3093,7 @@ async function updateOnlineDot(): Promise<void> {
 // ── Unified Settings Modal (Tabs) ─────────────────────────────────────
 
 let isAdminUser = false;
+let canManageEmojis = false;
 
 // Settings tab switching
 const settingsTabBtns = document.querySelectorAll(".settings-tab-btn");
@@ -3085,7 +3110,34 @@ settingsTabBtns.forEach((btn) => {
     });
 });
 
+/** Applies the already-known (cached) isAdminUser/canManageEmojis flags to
+ * tab visibility, and falls back to the Voice tab if the active tab just got
+ * hidden. Synchronous and idempotent — safe to call both before the modal is
+ * shown (using state cached at connect time) and again after a live re-check
+ * resolves, without ever flashing the wrong tabs on screen in between. */
+function applySettingsTabVisibility(): void {
+    settingsTabRoles.style.display = isConnected && isAdminUser ? "" : "none";
+    settingsTabEmojis.style.display = isConnected && canManageEmojis ? "" : "none";
+    settingsTabServer.style.display = isConnected && isAdminUser ? "" : "none";
+
+    const activeTabBtn = document.querySelector(".settings-tab-btn.active") as HTMLButtonElement | null;
+    if (activeTabBtn && activeTabBtn.style.display === "none") {
+        settingsTabBtns.forEach((b) => b.classList.remove("active"));
+        settingsPanels.forEach((p) => p.classList.remove("active"));
+        const voiceBtn = document.querySelector('.settings-tab-btn[data-settings-tab="voice"]');
+        const voicePanel = document.querySelector('.settings-panel[data-settings-panel="voice"]');
+        voiceBtn?.classList.add("active");
+        voicePanel?.classList.add("active");
+    }
+}
+
 async function openSettingsPanel(): Promise<void> {
+    // Apply the isAdminUser/canManageEmojis state already known from the
+    // connect-time check (see the "connected" handler) BEFORE the modal is
+    // shown, so non-admins never see the admin tabs blink into view while
+    // the live re-check below is still in flight — the client already knows
+    // the answer and shouldn't need a round trip to render correctly.
+    applySettingsTabVisibility();
     adminModal.classList.add("visible");
 
     // Populate audio devices
@@ -3098,12 +3150,14 @@ async function openSettingsPanel(): Promise<void> {
     }
 
     if (isConnected) {
-        // Fetch users, roles, and the pending-emoji queue concurrently. The
-        // Emojis tab's visibility is decided by whether GET_PENDING_EMOJIS
-        // actually succeeds (i.e. the server confirms MANAGE_EMOJIS) rather
-        // than reusing the isAdminUser heuristic below — MANAGE_EMOJIS is a
-        // distinct permission bit, even though in practice only the Admin
-        // role (via its ADMIN bypass) holds it today.
+        // Live re-check, in case permissions changed since connect (e.g. an
+        // admin promoted/demoted this user mid-session). Fetch users, roles,
+        // and the pending-emoji queue concurrently. The Emojis tab's
+        // visibility is decided by whether GET_PENDING_EMOJIS actually
+        // succeeds (i.e. the server confirms MANAGE_EMOJIS) rather than
+        // reusing the isAdminUser heuristic — MANAGE_EMOJIS is a distinct
+        // permission bit, even though in practice only the Admin role (via
+        // its ADMIN bypass) holds it today.
         const [usersRes, rolesRes, pendingEmojisRes] = await Promise.all([
             api.getAllUsers(currentServerId),
             api.getRoles(currentServerId),
@@ -3111,53 +3165,30 @@ async function openSettingsPanel(): Promise<void> {
         ]);
 
         isAdminUser = usersRes.success;
+        canManageEmojis = pendingEmojisRes.success;
+        applySettingsTabVisibility();
 
         if (isAdminUser) {
-            // Show Roles tab for admins
-            settingsTabRoles.style.display = "";
             allServerRoles = rolesRes.roles ?? [];
             renderAdminUsers(usersRes.users ?? []);
         } else {
-            // Hide Roles tab for non-admins
-            settingsTabRoles.style.display = "none";
             adminUserList.innerHTML = '<div class="admin-empty">You don\'t have permission to manage roles.</div>';
         }
 
-        if (pendingEmojisRes.success) {
-            settingsTabEmojis.style.display = "";
+        if (canManageEmojis) {
             renderPendingEmojis(pendingEmojisRes.emojis ?? []);
-        } else {
-            settingsTabEmojis.style.display = "none";
         }
 
         // Server tab — UPDATE_SERVER_SETTINGS requires literal ADMIN, so
         // isAdminUser is the correct (not just approximate) gate here.
         if (isAdminUser) {
-            settingsTabServer.style.display = "";
             const settingsRes = await api.getServerSettings();
             if (settingsRes.success) {
                 chkNudgeEnabled.checked = settingsRes.nudgeEnabled ?? true;
             }
-        } else {
-            settingsTabServer.style.display = "none";
         }
     } else {
-        // Not connected — hide all admin tabs entirely and default to Voice tab
-        settingsTabRoles.style.display = "none";
-        settingsTabEmojis.style.display = "none";
-        settingsTabServer.style.display = "none";
         adminUserList.innerHTML = '<div class="admin-empty">Connect to a server to manage roles.</div>';
-    }
-
-    // If the currently-active tab just got hidden, fall back to Voice tab
-    const activeTabBtn = document.querySelector(".settings-tab-btn.active") as HTMLButtonElement | null;
-    if (activeTabBtn && activeTabBtn.style.display === "none") {
-        settingsTabBtns.forEach((b) => b.classList.remove("active"));
-        settingsPanels.forEach((p) => p.classList.remove("active"));
-        const voiceBtn = document.querySelector('.settings-tab-btn[data-settings-tab="voice"]');
-        const voicePanel = document.querySelector('.settings-panel[data-settings-panel="voice"]');
-        voiceBtn?.classList.add("active");
-        voicePanel?.classList.add("active");
     }
 }
 

@@ -1185,3 +1185,166 @@ Feature/Fix: Nudge (PRD 4.14) — final item in the Next Steps PRD
   in this session, since no display was available — worth a manual
   pass through the app before considering this phase fully done in
   practice, not just in code.
+
+--- Entry: 12/08/2026 ---
+
+Feature/Fix: Fix Unread Text-Channel Indicator Reappearing After Voice Join/Leave
+
+  Problem: Manual verification pass (see previous entry) surfaced a real
+  bug in PRD 4.13's unread indicator: after opening a text channel and
+  clearing its unread state, joining or leaving a voice channel would
+  make the notification dot reappear on the already-read channel — and
+  reopening the channel cleared it again, only for the same cycle to
+  repeat on the next voice join/leave.
+
+  Root cause: renderChannel() seeds the client-side unreadChannelIds Set
+  from the cached tree node's `hasUnread` field
+  (`if (node.hasUnread && node.id !== activeTabId)
+  unreadChannelIds.add(node.id)`), by design only trustworthy on the
+  single per-socket tree emission sent at USER_JOIN_SERVER time (see the
+  PRD 4.13 entry above for why). markChannelRead() correctly cleared
+  unreadChannelIds and the DOM, but never touched that same field on the
+  underlying `currentTree` node object — the tree array isn't replaced
+  except on a full CHANNEL_TREE_UPDATE, so the stale `hasUnread: true`
+  survived in memory indefinitely. Several actions call
+  renderTree(currentTree) using that same cached array for unrelated
+  reasons — joining voice (handleChannelClick), leaving voice
+  (leaveVoiceAndNotify) — and each re-render re-executed the seeding
+  line, resurrecting the already-read channel's unread flag from the
+  stale cached value.
+
+  Solution: Added findTreeNode() (recursive lookup by channelId over
+  currentTree) and call it from markChannelRead() to also clear the
+  node's cached hasUnread flag, not just the unreadChannelIds Set and
+  the DOM — so a later renderTree(currentTree) call has nothing stale
+  left to reseed from.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts — findTreeNode(), markChannelRead()
+
+  Verification:
+    - TypeScript build (client): npx tsc --noEmit — passed
+    - Live Electron window (Xvfb + Playwright driver, real dev server):
+      opened a channel with a genuine pending unread (dot cleared on
+      open), joined a voice channel (tree re-render triggered), confirmed
+      via DOM inspection the text channel's element stayed plain
+      "tree-channel" with no "unread" class — previously this
+      re-rendered as "tree-channel unread".
+
+--- Entry: 12/08/2026 ---
+
+Feature/Fix: Fix Non-Functional Custom Emoji Upload (CSP Blocked blob: Image Loads)
+
+  Problem: Manual verification pass surfaced that the custom emoji
+  upload feature (PRD 4.8) was completely non-functional in the real
+  app: clicking "Choose Image..." and selecting a file did nothing
+  visible — no crop step, no name field, no error, nothing sent to the
+  server, nothing appearing in the admin approval queue. This made the
+  name-input field (which does exist in the code, at the crop step)
+  look entirely missing, since that step was never reached.
+
+  Root cause: index.html's Content-Security-Policy meta tag allowed
+  `blob:` sources for `media-src` (used by sound-alert/DM audio
+  elements) but not for `img-src`. The crop tool's file-select handler
+  sets `emojiCropImg.src = URL.createObjectURL(file)` — a `blob:` URL —
+  which CSP silently blocked. The image element's `load` event (which
+  triggers the step-select → step-crop transition, revealing the name
+  input) never fired, so the modal appeared to do nothing at all. No
+  console-visible application error, since CSP violations aren't
+  surfaced through the app's own error handling.
+
+  Solution: Added `blob:` to the `img-src` directive in index.html's CSP
+  meta tag, matching the existing `media-src` allowance. No other code
+  changes were needed — the name-input field, client-side name
+  validation, server-side uniqueness check (@@unique([serverId, name])
+  in CustomEmoji), and the full upload → PENDING review queue pipeline
+  were all already correctly implemented from PRD 4.8; they were simply
+  unreachable behind this one blocked image load.
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html — CSP img-src directive
+
+  Verification:
+    - TypeScript build (client): npx tsc --noEmit — passed
+    - Live Electron window (Xvfb + Playwright driver, real dev server):
+      drove the full flow with a real file via Playwright's
+      setInputFiles() against the hidden #emoji-file-input — confirmed
+      the modal now correctly advances to the crop step with the name
+      field visible and interactable, filled a name, clicked Upload, and
+      confirmed via the server log (200 on POST /api/upload/emoji, "file
+      uploaded", "Custom emoji submitted for review" with a real
+      emojiId) and a direct Postgres query
+      (`SELECT ... FROM custom_emojis WHERE name='verifytest'`) that the
+      row was persisted with status PENDING. Test row deleted afterward
+      to leave the DB clean.
+
+--- Entry: 12/08/2026 ---
+
+Feature/Fix: Eliminate Settings Modal Admin-Tab Flicker for Non-Admin Users
+
+  Problem: Opening the Settings modal as a non-admin user briefly showed
+  the Roles/Emojis/Server tabs before they disappeared — a visible
+  "blink" that looked like a bug, even though the end state (tabs
+  hidden) was correct.
+
+  Root cause: openSettingsPanel() called `adminModal.classList.add(
+  "visible")` immediately, then only decided each admin tab's
+  display:none/"" AFTER awaiting a fresh round trip
+  (getAllUsers/getRoles/getPendingEmojis) to re-derive permission state
+  that, in the common case, was already known — the exact same
+  getAllUsers() check already ran once at connect time to gate
+  kick/ban UI, but its result wasn't reused here. The Roles/Emojis/
+  Server tab buttons also have no default `display:none` in their CSS
+  (unlike the modal itself, which is hidden by default and only shown
+  via .visible), so for the whole duration of that round trip they
+  rendered in their HTML default (visible) state.
+
+  Solution: Per the user's explicit design direction — the client
+  should already know a user's admin status by the time they click
+  Settings, not discover it after opening the modal — cached both
+  `isAdminUser` and a new `canManageEmojis` flag from the existing
+  connect-time admin probe (extended to also call GET_PENDING_EMOJIS,
+  whose success/failure is the existing signal for MANAGE_EMOJIS,
+  mirroring how GET_ALL_USERS already signals ADMIN). Extracted tab
+  visibility logic into applySettingsTabVisibility(), a small
+  synchronous function that reads only these cached flags. openSettingsPanel()
+  now calls it BEFORE adding the "visible" class to the modal, so the
+  correct tabs are already in their final display state on the very
+  first paint — no round trip gates what's shown. The existing live
+  re-check (getAllUsers/getRoles/getPendingEmojis) still runs on every
+  open, in case permissions changed since connect (e.g. mid-session
+  promotion/demotion), and calls applySettingsTabVisibility() again
+  once it resolves — but since it starts from an already-correct
+  cached state, this second call is a no-op in the overwhelmingly
+  common case and never produces a visible flash.
+  isAdminUser/canManageEmojis are also reset to false on disconnect,
+  so a fresh connection never briefly shows a stale previous session's
+  admin tabs either.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts — canManageEmojis state,
+      applySettingsTabVisibility(), connect-time admin probe extended
+      to also check GET_PENDING_EMOJIS, openSettingsPanel() rewired,
+      disconnect handler resets both cached flags
+
+  Verification:
+    - TypeScript build (client): npx tsc --noEmit — passed
+    - Live Electron window (Xvfb + Playwright driver, real dev server):
+      connected as a non-admin user, clicked the Settings button, and
+      read the three admin tab buttons' computed `style.display` in the
+      same synchronous tick as the click (no wait) — all three were
+      already "none", confirming no round trip is needed before the
+      correct (hidden) state is shown. Screenshot confirms the modal
+      opens directly on the Voice & Shortcuts tab with only
+      Voice & Shortcuts / Application visible.
+    - Admin-path regression (tabs correctly shown for an actual admin)
+      was not re-verified live this session — apps/server/.env was open
+      in the user's own editor with an actively-changing
+      ADMIN_INSTANCE_ID, so granting a test session admin rights via
+      that file was deliberately avoided to not interfere with the
+      user's own concurrent work. The fix is symmetric: the same
+      applySettingsTabVisibility() function drives both the admin and
+      non-admin cases from the same two cached booleans, and the admin
+      path was unchanged in logic (still isAdminUser/canManageEmojis
+      true → tabs shown), only its *timing* relative to the modal's
+      first paint changed.
