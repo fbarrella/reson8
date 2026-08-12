@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Reson8 is a self-hosted voice and text communication platform (TeamSpeak-3-style) with an Electron desktop client and a standalone Node.js server. Current version: 1.2.0, phases 1–9 complete, Phase 10 in planning — see "Project history" below before assuming something is unbuilt.
+Reson8 is a self-hosted voice and text communication platform (TeamSpeak-3-style) with an Electron desktop client and a standalone Node.js server. Current version: 1.3.0, phases 1–10 complete — see "Project history" below before assuming something is unbuilt.
 
 npm workspaces monorepo:
 - `apps/client/` — Electron desktop client (TypeScript, no framework — vanilla DOM in the renderer)
