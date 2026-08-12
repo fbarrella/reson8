@@ -479,7 +479,12 @@ interface Reson8Api {
         name: string,
         type: "TEXT" | "VOICE",
         parentId?: string | null,
+        isNsfw?: boolean,
     ): Promise<{ success: boolean; channelId?: string; error?: string }>;
+    updateChannel(
+        channelId: string,
+        changes: { name?: string; position?: number; isNsfw?: boolean },
+    ): Promise<{ success: boolean; error?: string }>;
     deleteChannel(channelId: string): Promise<{ success: boolean; error?: string }>;
     sendMessage(channelId: string, content: string, attachmentUrl?: string): Promise<{ success: boolean; messageId?: string }>;
     fetchMessages(channelId: string, before?: string, limit?: number): Promise<{ success: boolean; messages?: ChatMessage[]; error?: string }>;
@@ -722,6 +727,23 @@ const micSensitivitySection = document.getElementById("mic-sensitivity-section")
 // State for pending delete
 let pendingDeleteChannelId: string | null = null;
 
+// ── Rename Channel Modal (PRD 4.5) ──────────────────────────────────────────
+const renameChannelModal = document.getElementById("rename-channel-modal") as HTMLDivElement;
+const renameChannelInput = document.getElementById("rename-channel-input") as HTMLInputElement;
+const btnRenameCancel = document.getElementById("btn-rename-cancel") as HTMLButtonElement;
+const btnRenameConfirm = document.getElementById("btn-rename-confirm") as HTMLButtonElement;
+let pendingRenameChannelId: string | null = null;
+
+// ── NSFW Channel Confirmation Modal (PRD 4.7) ───────────────────────────────
+const nsfwConfirmModal = document.getElementById("nsfw-confirm-modal") as HTMLDivElement;
+const nsfwConfirmChannelName = document.getElementById("nsfw-confirm-channel-name") as HTMLElement;
+const btnNsfwCancel = document.getElementById("btn-nsfw-cancel") as HTMLButtonElement;
+const btnNsfwConfirm = document.getElementById("btn-nsfw-confirm") as HTMLButtonElement;
+let pendingNsfwChannel: TreeNode | null = null;
+
+const newChannelNsfwRow = document.getElementById("new-channel-nsfw-row") as HTMLDivElement;
+const newChannelNsfw = document.getElementById("new-channel-nsfw") as HTMLInputElement;
+
 // State for tabs: map of channelId → { tabEl, contentEl, messagesEl }
 interface ChatTab {
     channelId: string;
@@ -802,6 +824,7 @@ interface TreeNode {
     name: string;
     type: "TEXT" | "VOICE";
     parentId: string | null;
+    isNsfw?: boolean;
     children: TreeNode[];
     occupants: { userId: string; nickname: string; isMuted?: boolean; isDeafened?: boolean }[];
 }
@@ -884,19 +907,64 @@ function renderChannel(node: TreeNode): HTMLDivElement {
         timerBadge = `<span class="session-timer" data-session-channel="${node.id}"></span>`;
     }
 
+    const nsfwBadge = node.isNsfw ? `<span class="nsfw-badge">NSFW</span>` : "";
+
     channel.innerHTML = `
         <span class="ch-icon ${iconClass}">${icon}</span>
         <span class="ch-name">${escapeHtml(node.name)}</span>
+        ${nsfwBadge}
         ${timerBadge}
         ${countBadge}
     `;
 
     channel.addEventListener("click", () => handleChannelClick(node));
 
-    // Right-click to delete
+    // Right-click → Rename / Toggle NSFW (text only) / Delete
     channel.addEventListener("contextmenu", (e) => {
         e.preventDefault();
-        showDeleteModal(node.id, node.name);
+        e.stopPropagation();
+
+        document.querySelector(".occupant-ctx-menu")?.remove();
+
+        const menu = document.createElement("div");
+        menu.className = "occupant-ctx-menu";
+        menu.style.left = `${e.clientX}px`;
+        menu.style.top = `${e.clientY}px`;
+
+        menu.innerHTML = `
+            <button class="channel-ctx-menu-item ctx-rename-btn">✏️ Rename</button>
+            ${!isVoice ? `<button class="channel-ctx-menu-item ctx-nsfw-toggle-btn">🔞 ${node.isNsfw ? "Unmark" : "Mark"} as NSFW</button>` : ""}
+            <button class="ctx-delete-channel-btn">🗑️ Delete Channel</button>
+        `;
+
+        menu.querySelector(".ctx-rename-btn")?.addEventListener("click", () => {
+            menu.remove();
+            showRenameModal(node.id, node.name);
+        });
+
+        menu.querySelector(".ctx-nsfw-toggle-btn")?.addEventListener("click", async () => {
+            menu.remove();
+            const result = await api.updateChannel(node.id, { isNsfw: !node.isNsfw });
+            if (!result.success) {
+                log(`Failed to update channel: ${result.error}`, "error");
+                if (result.error && /permission|denied/i.test(result.error)) SoundAlert.play("insufficient_perms.mp3");
+            }
+        });
+
+        menu.querySelector(".ctx-delete-channel-btn")?.addEventListener("click", () => {
+            menu.remove();
+            showDeleteModal(node.id, node.name);
+        });
+
+        document.body.appendChild(menu);
+
+        const closeCtx = (ev: MouseEvent) => {
+            if (!menu.contains(ev.target as Node)) {
+                menu.remove();
+                document.removeEventListener("click", closeCtx, true);
+            }
+        };
+        setTimeout(() => document.addEventListener("click", closeCtx, true), 0);
     });
 
     return channel;
@@ -1108,7 +1176,13 @@ async function handleChannelClick(node: TreeNode): Promise<void> {
             isJoiningChannel = false;
         }
     } else {
-        // Text channel — open (or focus) a chat tab
+        // Text channel — open (or focus) a chat tab, prompting first if NSFW
+        if (node.isNsfw) {
+            pendingNsfwChannel = node;
+            nsfwConfirmChannelName.textContent = node.name;
+            nsfwConfirmModal.classList.add("visible");
+            return;
+        }
         openChatTab(node.id, node.name);
     }
 
@@ -1201,8 +1275,15 @@ btnLeaveVoice.addEventListener("click", leaveVoiceAndNotify);
 btnCreateChannel.addEventListener("click", () => {
     if (!isConnected) return;
     newChannelName.value = "";
+    newChannelNsfw.checked = false;
+    newChannelNsfwRow.style.display = newChannelType.value === "TEXT" ? "flex" : "none";
     createChannelModal.classList.add("visible");
     newChannelName.focus();
+});
+
+newChannelType.addEventListener("change", () => {
+    newChannelNsfwRow.style.display = newChannelType.value === "TEXT" ? "flex" : "none";
+    if (newChannelType.value !== "TEXT") newChannelNsfw.checked = false;
 });
 
 btnModalCancel.addEventListener("click", () => {
@@ -1232,8 +1313,9 @@ btnModalCreate.addEventListener("click", async () => {
 
     const type = newChannelType.value as "TEXT" | "VOICE";
     const parentId = newChannelParent.value || null;
+    const isNsfw = type === "TEXT" && newChannelNsfw.checked;
 
-    const result = await api.createChannel(currentServerId, name, type, parentId);
+    const result = await api.createChannel(currentServerId, name, type, parentId, isNsfw);
     if (result.success) {
         log(`Channel "${name}" created`, "success");
         SoundAlert.play("channel_created.mp3");
@@ -1270,6 +1352,73 @@ btnDeleteConfirm.addEventListener("click", async () => {
     deleteChannelModal.classList.remove("visible");
     pendingDeleteChannelId = null;
     await deleteChannel(channelId);
+});
+
+// ── Rename Channel Modal (PRD 4.5) ──────────────────────────────────────────
+
+function showRenameModal(channelId: string, currentName: string): void {
+    pendingRenameChannelId = channelId;
+    renameChannelInput.value = currentName;
+    renameChannelModal.classList.add("visible");
+    renameChannelInput.focus();
+    renameChannelInput.select();
+}
+
+btnRenameCancel.addEventListener("click", () => {
+    renameChannelModal.classList.remove("visible");
+    pendingRenameChannelId = null;
+});
+
+renameChannelModal.addEventListener("click", (e) => {
+    if (e.target === renameChannelModal) {
+        renameChannelModal.classList.remove("visible");
+        pendingRenameChannelId = null;
+    }
+});
+
+btnRenameConfirm.addEventListener("click", async () => {
+    if (!pendingRenameChannelId) return;
+    const name = renameChannelInput.value.trim();
+    if (!name) {
+        renameChannelInput.focus();
+        return;
+    }
+    const channelId = pendingRenameChannelId;
+    renameChannelModal.classList.remove("visible");
+    pendingRenameChannelId = null;
+
+    const result = await api.updateChannel(channelId, { name });
+    if (result.success) {
+        log(`Channel renamed to "${name}"`, "success");
+    } else {
+        log(`Failed to rename channel: ${result.error}`, "error");
+        if (result.error && /permission|denied/i.test(result.error)) SoundAlert.play("insufficient_perms.mp3");
+    }
+});
+
+// ── NSFW Channel Confirmation Modal (PRD 4.7) ───────────────────────────────
+
+btnNsfwCancel.addEventListener("click", () => {
+    nsfwConfirmModal.classList.remove("visible");
+    pendingNsfwChannel = null;
+});
+
+nsfwConfirmModal.addEventListener("click", (e) => {
+    if (e.target === nsfwConfirmModal) {
+        nsfwConfirmModal.classList.remove("visible");
+        pendingNsfwChannel = null;
+    }
+});
+
+btnNsfwConfirm.addEventListener("click", () => {
+    nsfwConfirmModal.classList.remove("visible");
+    if (pendingNsfwChannel) {
+        openChatTab(pendingNsfwChannel.id, pendingNsfwChannel.name);
+        pendingNsfwChannel = null;
+        if (currentTree.length > 0) {
+            renderTree(currentTree);
+        }
+    }
 });
 
 // ── Event Listeners ───────────────────────────────────────────────────────
@@ -1386,7 +1535,25 @@ api.on("user-banned", () => {
 
 api.on("channel-tree", (data: { serverId: string; tree: TreeNode[] }) => {
     renderTree(data.tree);
+    syncOpenTabNames(data.tree);
 });
+
+/** Keeps already-open chat tabs' displayed names in sync after a channel rename. */
+function syncOpenTabNames(tree: TreeNode[]): void {
+    if (chatTabs.size === 0) return;
+
+    function walk(nodes: TreeNode[]): void {
+        for (const node of nodes) {
+            const tab = chatTabs.get(node.id);
+            if (tab && tab.channelName !== node.name) {
+                tab.channelName = node.name;
+                tab.tabEl.innerHTML = `💬 ${escapeHtml(node.name)} <span class="tab-close">✕</span>`;
+            }
+            if (node.children.length > 0) walk(node.children);
+        }
+    }
+    walk(tree);
+}
 
 api.on("presence", (data: { channelId: string; occupants: any[]; sessionStartedAt?: string }) => {
     // Track voice session timers

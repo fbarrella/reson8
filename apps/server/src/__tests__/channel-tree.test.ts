@@ -19,6 +19,7 @@ function makeChannel(
         parentId: null,
         position: 0,
         maxUsers: null,
+        isNsfw: false,
         createdAt: new Date().toISOString(),
         ...overrides,
     };

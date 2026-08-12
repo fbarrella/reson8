@@ -59,6 +59,7 @@ export interface IChannel {
     parentId: string | null;
     position: number;
     maxUsers: number | null; // null = unlimited
+    isNsfw: boolean; // text channels only
     createdAt: string;
 }
 

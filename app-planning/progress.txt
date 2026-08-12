@@ -380,3 +380,124 @@ Feature/Fix: Mute a Single User Locally (PRD 4.2)
   Next Step: PRD 4.5 (channel rename) and PRD 4.7 (NSFW channels) are
   next per app-planning/Reson8_NextSteps_PRD.md's suggested order — they
   share the same admin "edit channel" event/UI.
+
+--- Entry: 11/08/2026 ---
+
+Feature/Fix: Channel Post-Creation Editing / Rename (PRD 4.5)
+
+  Problem: Once created, a channel's name could never be changed —
+  the only way to "fix" a bad name was to delete and recreate the
+  channel (losing message history for text channels).
+
+  Solution: Discovered during implementation that the server already
+  had a fully-built, permission-gated UPDATE_CHANNEL socket event
+  (apps/server/src/handlers/channel.handler.ts) supporting `name` and
+  `position` updates — it had simply never been wired up on the client.
+  So this ended up being a much smaller change than planned: no new
+  server event was needed.
+    - Added a small validation guard to UPDATE_CHANNEL (reject an
+      empty/whitespace-only name, matching CREATE_CHANNEL's existing
+      rule — the handler previously had no such check).
+    - Client: replaced the channel tree's right-click behavior (which
+      previously jumped straight to the delete-confirmation modal) with
+      a small floating context menu offering Rename, Delete Channel,
+      and (for text channels) Toggle NSFW — see PRD 4.7 below. Menu
+      styling reuses the existing .occupant-ctx-menu / .channel-ctx-
+      menu-item classes.
+    - New Rename Channel modal (mirrors the existing Delete Channel
+      modal's structure), pre-filled with the current name.
+    - preload.ts exposes a general updateChannel(channelId, {name?,
+      position?, isNsfw?}) bridge method rather than a single-purpose
+      renameChannel(), since the same event backs three different
+      client actions (rename here, NSFW toggle in 4.7, reordering in
+      the upcoming 4.6).
+    - Added syncOpenTabNames(): a CHANNEL_TREE_UPDATE listener that
+      walks the tree and updates any already-open chat tab's displayed
+      title if its channel was renamed elsewhere, so an open tab
+      doesn't show a stale name until it's closed and reopened.
+
+  Key Files Modified:
+    apps/server/src/handlers/channel.handler.ts — empty-name guard on
+      UPDATE_CHANNEL
+    apps/client/src/preload.ts — updateChannel() bridge method
+    apps/client/src/renderer/renderer.ts — channel context menu,
+      showRenameModal(), syncOpenTabNames(), Reson8Api interface
+    apps/client/src/renderer/index.html — #rename-channel-modal markup,
+      .channel-ctx-menu-item CSS
+
+  Verification:
+    - TypeScript build (shared-types): npx tsc --build — passed
+    - TypeScript build (server): npx tsc --noEmit — passed
+    - TypeScript build (client): npx tsc --noEmit — passed
+    - Server test suite: npm run test — 19/19 passed
+
+  Next Step: See PRD 4.7 entry below — implemented in the same pass,
+  extending the same UPDATE_CHANNEL event and context menu.
+
+--- Entry: 11/08/2026 ---
+
+Feature/Fix: NSFW Text Channels (PRD 4.7)
+
+  Problem: No way to mark a text channel as containing NSFW content,
+  or to warn users before they open one.
+
+  Solution:
+    - Database: added Channel.isNsfw Boolean @default(false) via a new
+      Prisma migration (20260812004544_add_channel_nsfw). Made isNsfw
+      non-optional on the shared IChannel type specifically so that
+      `npx tsc --noEmit` would fail at every place constructing a
+      channel DTO without it — this caught all 3 real call sites
+      (channel.handler.ts's broadcastTreeUpdate, connection.handler.ts's
+      USER_JOIN_SERVER tree hydration, and the channel-tree.test.ts
+      factory) that needed updating, rather than relying on manually
+      grepping for them.
+    - CREATE_CHANNEL and UPDATE_CHANNEL payloads both gained an
+      optional isNsfw field. UPDATE_CHANNEL only persists it when the
+      target channel's type is TEXT (looked up server-side before
+      writing), so a stray value sent for a voice channel is silently
+      ignored rather than stored.
+    - Client: NSFW checkbox in the Create Channel modal (hidden/reset
+      automatically when Type is switched to Voice), an NSFW badge
+      rendered next to the channel name in the tree, and a "Mark/Unmark
+      as NSFW" entry in the new channel context menu (PRD 4.5) for text
+      channels only.
+    - Confirmation modal: clicking any NSFW-marked text channel shows a
+      "This channel is marked NSFW — continue?" modal every time (per
+      product decision — not remembered per-session or permanently);
+      the channel only opens on Continue. Implemented by intercepting
+      the text-channel branch of handleChannelClick() before it calls
+      openChatTab().
+
+  Database Changes:
+    apps/server/prisma/migrations/20260812004544_add_channel_nsfw/ —
+      adds channels.isNsfw boolean, default false
+
+  Key Files Modified:
+    apps/server/prisma/schema.prisma — Channel.isNsfw
+    packages/shared-types/src/models.ts — IChannel.isNsfw
+    packages/shared-types/src/socket-events.ts — isNsfw on
+      CREATE_CHANNEL/UPDATE_CHANNEL payloads
+    apps/server/src/handlers/channel.handler.ts — persist isNsfw
+      (type-gated) on create/update
+    apps/server/src/handlers/connection.handler.ts — isNsfw in tree
+      hydration DTO mapping
+    apps/server/src/__tests__/channel-tree.test.ts — makeChannel()
+      factory default
+    apps/client/src/renderer/renderer.ts — NSFW checkbox wiring, NSFW
+      badge, context menu toggle entry, confirmation-modal interception
+      in handleChannelClick(), TreeNode.isNsfw
+    apps/client/src/renderer/index.html — #nsfw-confirm-modal markup,
+      .nsfw-badge CSS, NSFW toggle row in create-channel modal
+
+  Verification:
+    - Prisma migration: add_channel_nsfw — applied successfully against
+      the local dev database
+    - TypeScript build (shared-types): npx tsc --build — passed
+    - TypeScript build (server): npx tsc --noEmit — passed
+    - TypeScript build (client): npx tsc --noEmit — passed
+    - Server test suite: npm run test — 19/19 passed
+
+  Next Step: PRD 4.6 (channel reordering via drag-and-drop) is next per
+  app-planning/Reson8_NextSteps_PRD.md's suggested order — it will build
+  on the existing Channel.position field (already used for sibling
+  sort order, just not yet client-editable).

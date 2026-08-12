@@ -343,6 +343,7 @@ const api = {
         name: string,
         type: "TEXT" | "VOICE",
         parentId?: string | null,
+        isNsfw?: boolean,
     ): Promise<{ success: boolean; channelId?: string; error?: string }> {
         return new Promise((resolve) => {
             if (!socket?.connected) {
@@ -351,9 +352,22 @@ const api = {
             }
             socket.emit(
                 "CREATE_CHANNEL",
-                { serverId, name, type, parentId: parentId ?? null },
+                { serverId, name, type, parentId: parentId ?? null, isNsfw },
                 resolve,
             );
+        });
+    },
+
+    updateChannel(
+        channelId: string,
+        changes: { name?: string; position?: number; isNsfw?: boolean },
+    ): Promise<{ success: boolean; error?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.emit("UPDATE_CHANNEL", { channelId, ...changes }, resolve);
         });
     },
 

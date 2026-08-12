@@ -47,6 +47,7 @@ model Channel {
   parentId  String?
   position  Int         @default(0)
   maxUsers  Int?        // null = unlimited
+  isNsfw    Boolean     @default(false) // text channels only — client prompts before opening
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

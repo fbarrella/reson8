@@ -60,6 +60,7 @@ export interface ClientToServerEvents {
             name: string;
             type: "TEXT" | "VOICE";
             parentId?: string | null;
+            isNsfw?: boolean;
         },
         ack: (response: { success: boolean; channelId?: string; error?: string }) => void,
     ) => void;
@@ -72,7 +73,7 @@ export interface ClientToServerEvents {
 
     /** Client requests an update to a channel's properties. */
     UPDATE_CHANNEL: (
-        payload: { channelId: string; name?: string; position?: number },
+        payload: { channelId: string; name?: string; position?: number; isNsfw?: boolean },
         ack: (response: { success: boolean; error?: string }) => void,
     ) => void;
 

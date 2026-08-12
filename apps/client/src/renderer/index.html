@@ -1025,6 +1025,8 @@
     /* ── Modals ────────────────────────────────────────────────────────── */
     #create-channel-modal,
     #delete-channel-modal,
+    #rename-channel-modal,
+    #nsfw-confirm-modal,
     #admin-modal {
       display: none;
       position: fixed;
@@ -1041,8 +1043,40 @@
 
     #create-channel-modal.visible,
     #delete-channel-modal.visible,
+    #rename-channel-modal.visible,
+    #nsfw-confirm-modal.visible,
     #admin-modal.visible {
       display: flex;
+    }
+
+    .nsfw-badge {
+      display: inline-flex;
+      align-items: center;
+      font-size: 9px;
+      font-weight: 700;
+      color: var(--danger);
+      border: 1px solid var(--danger);
+      border-radius: 3px;
+      padding: 0 4px;
+      margin-left: 4px;
+      letter-spacing: 0.3px;
+    }
+
+    .channel-ctx-menu-item {
+      width: 100%;
+      background: none;
+      border: none;
+      color: var(--text-primary);
+      font-size: 12px;
+      padding: 8px 12px;
+      border-radius: 3px;
+      cursor: pointer;
+      text-align: left;
+      transition: background 0.1s;
+    }
+
+    .channel-ctx-menu-item:hover {
+      background: rgba(255,255,255,0.06);
     }
 
     .modal-content {
@@ -1495,6 +1529,23 @@
     }
 
     .ctx-kick-btn:hover {
+      background: rgba(231,76,60,0.15);
+    }
+
+    .ctx-delete-channel-btn {
+      width: 100%;
+      background: none;
+      border: none;
+      color: #e74c3c;
+      font-size: 12px;
+      padding: 8px 12px;
+      border-radius: 3px;
+      cursor: pointer;
+      text-align: left;
+      transition: background 0.1s;
+    }
+
+    .ctx-delete-channel-btn:hover {
       background: rgba(231,76,60,0.15);
     }
 
@@ -2053,6 +2104,18 @@
       <select id="new-channel-parent">
         <option value="">— None (root) —</option>
       </select>
+      <div class="toggle-row" id="new-channel-nsfw-row" style="display:none; margin-top:4px;">
+        <div class="toggle-row-info">
+          <div class="toggle-row-text">
+            <span class="toggle-row-title">🔞 NSFW</span>
+            <span class="toggle-row-desc">Prompts users before opening this channel</span>
+          </div>
+        </div>
+        <label class="toggle-switch">
+          <input type="checkbox" id="new-channel-nsfw">
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
       <div class="modal-actions">
         <button class="btn btn-cancel" id="btn-modal-cancel">Cancel</button>
         <button class="btn btn-create" id="btn-modal-create">Create</button>
@@ -2068,6 +2131,31 @@
       <div class="modal-actions">
         <button class="btn btn-cancel" id="btn-delete-cancel">Cancel</button>
         <button class="btn btn-disconnect" id="btn-delete-confirm">Delete</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Rename Channel Modal ─────────────────────────────────────────── -->
+  <div id="rename-channel-modal">
+    <div class="modal-content">
+      <h3>Rename Channel</h3>
+      <label for="rename-channel-input">Channel Name</label>
+      <input type="text" id="rename-channel-input">
+      <div class="modal-actions">
+        <button class="btn btn-cancel" id="btn-rename-cancel">Cancel</button>
+        <button class="btn btn-create" id="btn-rename-confirm">Rename</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── NSFW Channel Confirmation Modal ─────────────────────────────────── -->
+  <div id="nsfw-confirm-modal">
+    <div class="modal-content">
+      <h3>🔞 NSFW Channel</h3>
+      <p><strong id="nsfw-confirm-channel-name"></strong> is marked as Not Safe For Work. Are you sure you want to open it?</p>
+      <div class="modal-actions">
+        <button class="btn btn-cancel" id="btn-nsfw-cancel">Cancel</button>
+        <button class="btn btn-disconnect" id="btn-nsfw-confirm">Continue</button>
       </div>
     </div>
   </div>

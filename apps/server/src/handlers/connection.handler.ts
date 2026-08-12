@@ -186,6 +186,7 @@ export function registerConnectionHandlers(
                     parentId: string | null;
                     position: number;
                     maxUsers: number | null;
+                    isNsfw: boolean;
                     createdAt: Date;
                 }) => ({
                     id: ch.id,
@@ -195,6 +196,7 @@ export function registerConnectionHandlers(
                     parentId: ch.parentId,
                     position: ch.position,
                     maxUsers: ch.maxUsers,
+                    isNsfw: ch.isNsfw,
                     createdAt: ch.createdAt.toISOString(),
                 }));
 
