@@ -3477,6 +3477,21 @@ chatInput.addEventListener("paste", async (e) => {
     }
 });
 
+// Uploads happen up front (before Send is even clicked) — SEND_MESSAGE only
+// fires once an attachmentUrl already exists. So the "nothing shows until
+// upload finishes" gap this item fixes is entirely inside this function: the
+// moment a file is picked/pasted, show a local-blob thumbnail + spinner in
+// the attachment bar immediately (PRD 4.12), instead of only a text log line
+// while the network round-trip is in flight.
+let pendingAttachmentObjectUrl: string | null = null;
+
+function revokePendingAttachmentObjectUrl(): void {
+    if (pendingAttachmentObjectUrl) {
+        URL.revokeObjectURL(pendingAttachmentObjectUrl);
+        pendingAttachmentObjectUrl = null;
+    }
+}
+
 async function handleFileUpload(file: File): Promise<void> {
     if (!isConnected) {
         log("Not connected — cannot upload", "error");
@@ -3495,20 +3510,38 @@ async function handleFileUpload(file: File): Promise<void> {
         return;
     }
 
+    revokePendingAttachmentObjectUrl();
+    pendingAttachmentObjectUrl = URL.createObjectURL(file);
+    showAttachmentUploading(file.name, pendingAttachmentObjectUrl);
+
     try {
-        log(`Uploading ${file.name}...`, "info");
         const buffer = await file.arrayBuffer();
         const result = await api.uploadFile(buffer, file.name, file.type);
         pendingAttachmentUrl = result.url;
         pendingAttachmentPublicId = result.publicId ?? null;
+        revokePendingAttachmentObjectUrl();
         showAttachmentPreview(file.name);
         log(`Image ready to send: ${file.name}`, "success");
     } catch (err: any) {
         log(`Upload failed: ${err.message}`, "error");
+        showAttachmentFailed(file.name, err.message, () => handleFileUpload(file));
     }
 }
 
+/** Instant local preview shown the moment a file is picked, before the upload round-trip even starts. */
+function showAttachmentUploading(fileName: string, previewObjectUrl: string): void {
+    attachmentPreview.classList.remove("attachment-failed");
+    attachmentPreview.innerHTML = `
+        <img class="attachment-thumb" src="${escapeHtml(previewObjectUrl)}" alt="">
+        <span class="attachment-name">📎 Uploading ${escapeHtml(fileName)}…</span>
+        <span class="attachment-spinner"></span>
+    `;
+    attachmentPreview.style.display = "flex";
+}
+
+/** Ready-to-send state — unchanged from before this item, on purpose: only the uploading/failed states are new. */
 function showAttachmentPreview(fileName: string): void {
+    attachmentPreview.classList.remove("attachment-failed");
     attachmentPreview.innerHTML = `
         <span class="attachment-name">📎 ${escapeHtml(fileName)}</span>
         <button class="attachment-remove" id="btn-remove-attachment">✕</button>
@@ -3517,9 +3550,24 @@ function showAttachmentPreview(fileName: string): void {
     document.getElementById("btn-remove-attachment")?.addEventListener("click", clearAttachmentPreview);
 }
 
+/** Failure state — surfaces the error instead of silently discarding the attempt, with a one-click retry (re-reads the same File object). */
+function showAttachmentFailed(fileName: string, errorMessage: string, onRetry: () => void): void {
+    attachmentPreview.classList.add("attachment-failed");
+    attachmentPreview.innerHTML = `
+        <span class="attachment-name">⚠️ ${escapeHtml(fileName)} failed: ${escapeHtml(errorMessage)}</span>
+        <button class="attachment-retry" id="btn-retry-attachment">Retry</button>
+        <button class="attachment-remove" id="btn-remove-attachment">✕</button>
+    `;
+    attachmentPreview.style.display = "flex";
+    document.getElementById("btn-retry-attachment")?.addEventListener("click", onRetry);
+    document.getElementById("btn-remove-attachment")?.addEventListener("click", clearAttachmentPreview);
+}
+
 function clearAttachmentPreview(): void {
     pendingAttachmentUrl = null;
     pendingAttachmentPublicId = null;
+    revokePendingAttachmentObjectUrl();
+    attachmentPreview.classList.remove("attachment-failed");
     attachmentPreview.style.display = "none";
     attachmentPreview.innerHTML = "";
 }

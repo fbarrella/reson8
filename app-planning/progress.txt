@@ -1022,3 +1022,58 @@ Feature/Fix: Default Emoji Set Completion (PRD 4.9)
   Next Step: PRD 4.12 (instant image upload feedback) is next per
   app-planning/Reson8_NextSteps_PRD.md's suggested order — a pure
   client-side optimistic-UI feature around the existing upload flow.
+
+--- Entry: 11/08/2026 ---
+
+Feature/Fix: Instant Image Upload Feedback (PRD 4.12)
+
+  Problem: Selecting/pasting an image gave no visual feedback until the
+  upload finished — only a text log line ("Uploading filename...").
+
+  Solution: Reading the actual upload flow closely (rather than
+  assuming from the roadmap wording alone) revealed the real
+  architecture: images upload to the server immediately on file-select/
+  paste, BEFORE Send is ever clicked — SEND_MESSAGE only fires once an
+  attachmentUrl already exists, via the small filename chip
+  (#attachment-preview) shown above the compose box once upload
+  succeeds. There's no "message sent, image still uploading" state
+  possible here (unlike a chat-bubble-placeholder architecture) — the
+  entire "nothing shows" gap lives inside handleFileUpload(), between
+  file selection and that chip appearing.
+    - The moment a file is picked/pasted, an instant local thumbnail
+      (via URL.createObjectURL, revoked once no longer needed) plus a
+      small CSS spinner now appears immediately in that same
+      #attachment-preview bar, before the network round-trip even
+      starts.
+    - On success, reverts to exactly the pre-existing filename-only
+      chip appearance (deliberately unchanged) — only the
+      uploading/failed states are new.
+    - On failure, shows an inline error state (red-tinted bar, the
+      actual error message, a Retry button that re-reads the same File
+      object) instead of only a log line the user could easily miss —
+      arguably the more important half of this fix, since a silent
+      failure previously looked identical to simply never having
+      selected anything.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts — pendingAttachmentObjectUrl
+      tracking, showAttachmentUploading()/showAttachmentFailed() (new),
+      handleFileUpload() rewired to call them
+    apps/client/src/renderer/index.html — .attachment-thumb/
+      .attachment-spinner/.attachment-retry/.attachment-failed CSS
+
+  Verification:
+    - TypeScript build (client): npx tsc --noEmit — passed
+    - Purely client-side DOM/CSS timing change with no server-side
+      logic — a wire-level smoke test (as used for the previous several
+      server-heavy items) wouldn't exercise anything meaningful here,
+      so verification was code review + typecheck only. NOT visually
+      confirmed in a live Electron window in this session (no display
+      available) — the upload-progress thumbnail/spinner and the retry
+      flow should get a manual once-over next time the app is run
+      interactively.
+
+  Next Step: PRD 4.14 (Nudge) is the last remaining item in
+  app-planning/Reson8_NextSteps_PRD.md — new "Reson8 Client" feature
+  (not a Voice/Text Channels item), introduces a Server Settings
+  concept and a new admin-toggleable Server.nudgeEnabled field.
