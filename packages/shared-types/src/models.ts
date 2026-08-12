@@ -32,6 +32,7 @@ export enum PermissionFlags {
     KICK_USER = 1 << 6,  // 64
     BAN_USER = 1 << 7,  // 128
     ADMIN = 1 << 8,  // 256 — bypasses all checks
+    MANAGE_EMOJIS = 1 << 9,  // 512 — approve/reject custom emoji uploads
 }
 
 // ---------------------------------------------------------------------------
@@ -160,6 +161,23 @@ export interface IBannedUser {
     userId: string;
     nickname: string;
     bannedAt: string;
+}
+
+// ---------------------------------------------------------------------------
+// CustomEmoji
+// ---------------------------------------------------------------------------
+
+/** Server-uploaded custom emoji, referenced in chat as :name:. */
+export interface ICustomEmoji {
+    id: string;
+    serverId: string;
+    name: string;
+    imageUrl: string;
+    uploadedBy: string;
+    /** Resolved only where useful to display (e.g. the pending-review queue). */
+    uploadedByNickname?: string;
+    status: "PENDING" | "APPROVED";
+    createdAt: string;
 }
 
 // ---------------------------------------------------------------------------

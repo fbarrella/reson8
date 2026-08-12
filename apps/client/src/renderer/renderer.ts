@@ -30,6 +30,17 @@ interface DirectMessage {
     reactions?: Array<{ emoji: string; count: number; userIds: string[] }>;
 }
 
+interface CustomEmoji {
+    id: string;
+    serverId: string;
+    name: string;
+    imageUrl: string;
+    uploadedBy: string;
+    uploadedByNickname?: string;
+    status: "PENDING" | "APPROVED";
+    createdAt: string;
+}
+
 interface LinkPreviewData {
     title?: string;
     description?: string;
@@ -522,6 +533,11 @@ interface Reson8Api {
     getMicLevel(): number;
     getLatency(): number;
     toggleReaction(messageId: string, emoji: string, isDm: boolean): Promise<{ success: boolean; error?: string }>;
+    uploadEmojiFile(fileBuffer: ArrayBuffer, fileName: string, mimeType: string): Promise<{ url: string; publicId?: string }>;
+    createCustomEmoji(name: string, imageUrl: string, imagePublicId?: string): Promise<{ success: boolean; emojiId?: string; error?: string }>;
+    getApprovedEmojis(): Promise<{ success: boolean; emojis?: CustomEmoji[]; error?: string }>;
+    getPendingEmojis(): Promise<{ success: boolean; emojis?: CustomEmoji[]; error?: string }>;
+    reviewCustomEmoji(emojiId: string, decision: "APPROVED" | "REJECTED"): Promise<{ success: boolean; error?: string }>;
     on(event: string, callback: (...args: any[]) => void): void;
 }
 
@@ -592,6 +608,11 @@ const sessionTimers = new Map<string, string>();
 // server-wide regardless of which tabs are open); opening a channel's tab
 // clears it and persists the read cursor via MARK_CHANNEL_READ.
 const unreadChannelIds = new Set<string>();
+
+// Approved custom server emoji, cached for the picker's "+" tab and for
+// resolving :name: tokens in message content / reaction pills. Refreshed on
+// (re)connect, updated live via the CUSTOM_EMOJI_APPROVED broadcast.
+let customEmojis: CustomEmoji[] = [];
 
 function formatDuration(ms: number): string {
     const totalSeconds = Math.floor(ms / 1000);
@@ -711,6 +732,8 @@ const adminModal = document.getElementById("admin-modal") as HTMLDivElement;
 const adminUserList = document.getElementById("admin-user-list") as HTMLDivElement;
 const btnAdminClose = document.getElementById("btn-admin-close") as HTMLButtonElement;
 const settingsTabRoles = document.getElementById("settings-tab-roles") as HTMLButtonElement;
+const settingsTabEmojis = document.getElementById("settings-tab-emojis") as HTMLButtonElement;
+const emojiPendingList = document.getElementById("emoji-pending-list") as HTMLDivElement;
 
 // Audio device selects (inside settings modal voice tab)
 const audioInputSelect = document.getElementById("audio-input-select") as HTMLSelectElement;
@@ -765,6 +788,34 @@ const deleteMessageModal = document.getElementById("delete-message-modal") as HT
 const btnDeleteMessageCancel = document.getElementById("btn-delete-message-cancel") as HTMLButtonElement;
 const btnDeleteMessageConfirm = document.getElementById("btn-delete-message-confirm") as HTMLButtonElement;
 let pendingDeleteMessage: { msgId: string; isDm: boolean } | null = null;
+
+// ── Custom Emoji Upload / Crop Modal (PRD 4.8) ──────────────────────────────
+const emojiUploadModal = document.getElementById("emoji-upload-modal") as HTMLDivElement;
+const emojiUploadStepSelect = document.getElementById("emoji-upload-step-select") as HTMLDivElement;
+const emojiUploadStepCrop = document.getElementById("emoji-upload-step-crop") as HTMLDivElement;
+const emojiFileInput = document.getElementById("emoji-file-input") as HTMLInputElement;
+const btnEmojiChooseFile = document.getElementById("btn-emoji-choose-file") as HTMLButtonElement;
+const btnEmojiUploadCancelSelect = document.getElementById("btn-emoji-upload-cancel-select") as HTMLButtonElement;
+const emojiCropViewport = document.getElementById("emoji-crop-viewport") as HTMLDivElement;
+const emojiCropImg = document.getElementById("emoji-crop-img") as HTMLImageElement;
+const emojiCropZoom = document.getElementById("emoji-crop-zoom") as HTMLInputElement;
+const emojiNameInput = document.getElementById("emoji-name-input") as HTMLInputElement;
+const btnEmojiUploadCancel = document.getElementById("btn-emoji-upload-cancel") as HTMLButtonElement;
+const btnEmojiUploadConfirm = document.getElementById("btn-emoji-upload-confirm") as HTMLButtonElement;
+
+const EMOJI_CROP_VIEWPORT_SIZE = 220;
+const EMOJI_MAX_UPLOAD_SIZE = 500 * 1024; // 500KB, pre-crop
+
+// State for the crop tool
+let emojiCropNaturalWidth = 0;
+let emojiCropNaturalHeight = 0;
+let emojiCropBaseScale = 1; // scale at zoom=1 that makes the image fully cover the viewport
+let emojiCropZoomFactor = 1;
+let emojiCropOffsetX = 0;
+let emojiCropOffsetY = 0;
+let emojiCropObjectUrl: string | null = null;
+let emojiCropDragging = false;
+let emojiCropDragStart = { x: 0, y: 0, offsetX: 0, offsetY: 0 };
 
 // State for tabs: map of channelId → { tabEl, contentEl, messagesEl }
 interface ChatTab {
@@ -1601,6 +1652,13 @@ api.on("connected", (data: { serverId: string; instanceId: string }) => {
             }
         }
     });
+
+    // Load approved custom emojis for the picker's "+" tab
+    api.getApprovedEmojis().then((res) => {
+        if (res.success && res.emojis) {
+            customEmojis = res.emojis;
+        }
+    });
 });
 
 api.on("disconnected", () => {
@@ -1609,6 +1667,7 @@ api.on("disconnected", () => {
     currentChannelId = null;
     currentServerId = "";
     currentTree = [];
+    customEmojis = [];
     previousOccupantIds = new Set();
     activeSpeakers.clear();
     for (const timer of speakerHoldTimers.values()) clearTimeout(timer);
@@ -1870,25 +1929,51 @@ function escapeHtml(text: string): string {
     return div.innerHTML;
 }
 
-/** Build HTML for message text with clickable URL links.
- * Operates on raw (unescaped) text so the URL regex works correctly,
- * then escapes each non-URL segment independently. */
+/**
+ * Renders a single emoji token as HTML. A `:name:` token that matches a
+ * known approved custom emoji becomes an inline <img>; anything else
+ * (a literal Unicode emoji, or an unrecognized :name:) is escaped as plain
+ * text — matching how Discord/Slack leave unknown shortcodes literal.
+ * Shared between message-content rendering and reaction-pill rendering so
+ * both recognize custom emoji the same way.
+ */
+function renderEmojiToken(token: string): string {
+    if (token.length > 2 && token.startsWith(":") && token.endsWith(":")) {
+        const name = token.slice(1, -1);
+        const custom = customEmojis.find((e) => e.name === name);
+        if (custom) {
+            return `<img src="${escapeHtml(custom.imageUrl)}" alt="${escapeHtml(token)}" title="${escapeHtml(token)}" class="custom-emoji-inline">`;
+        }
+    }
+    return escapeHtml(token);
+}
+
+/** Build HTML for message text with clickable URL links and inline custom
+ * emoji. Operates on raw (unescaped) text so the regexes work correctly,
+ * then escapes/transforms each segment independently. */
 function linkifyContent(text: string): string {
-    const urlRegex = /https?:\/\/[^\s<>"'`,;)\]]+/gi;
+    const combinedRegex = /(https?:\/\/[^\s<>"'`,;)\]]+)|(:[a-zA-Z0-9_]{2,32}:)/g;
     let lastIndex = 0;
     let result = "";
     let match;
 
-    while ((match = urlRegex.exec(text)) !== null) {
-        // Escape text before the URL
+    while ((match = combinedRegex.exec(text)) !== null) {
+        // Escape text before this match
         result += escapeHtml(text.slice(lastIndex, match.index));
-        // Add the URL as a clickable link
-        const url = match[0];
-        result += `<a href="${escapeHtml(url)}" target="_blank" class="msg-link">${escapeHtml(url)}</a>`;
-        lastIndex = match.index + url.length;
+
+        if (match[1]) {
+            // URL
+            const url = match[1];
+            result += `<a href="${escapeHtml(url)}" target="_blank" class="msg-link">${escapeHtml(url)}</a>`;
+        } else {
+            // :name: token — renders as an <img> if it's a known custom emoji
+            result += renderEmojiToken(match[2]);
+        }
+
+        lastIndex = match.index + match[0].length;
     }
 
-    // Escape remaining text after last URL
+    // Escape remaining text after the last match
     result += escapeHtml(text.slice(lastIndex));
     return result;
 }
@@ -2725,10 +2810,16 @@ async function openSettingsPanel(): Promise<void> {
     }
 
     if (isConnected) {
-        // Fetch users and roles concurrently
-        const [usersRes, rolesRes] = await Promise.all([
+        // Fetch users, roles, and the pending-emoji queue concurrently. The
+        // Emojis tab's visibility is decided by whether GET_PENDING_EMOJIS
+        // actually succeeds (i.e. the server confirms MANAGE_EMOJIS) rather
+        // than reusing the isAdminUser heuristic below — MANAGE_EMOJIS is a
+        // distinct permission bit, even though in practice only the Admin
+        // role (via its ADMIN bypass) holds it today.
+        const [usersRes, rolesRes, pendingEmojisRes] = await Promise.all([
             api.getAllUsers(currentServerId),
             api.getRoles(currentServerId),
+            api.getPendingEmojis(),
         ]);
 
         isAdminUser = usersRes.success;
@@ -2743,20 +2834,82 @@ async function openSettingsPanel(): Promise<void> {
             settingsTabRoles.style.display = "none";
             adminUserList.innerHTML = '<div class="admin-empty">You don\'t have permission to manage roles.</div>';
         }
+
+        if (pendingEmojisRes.success) {
+            settingsTabEmojis.style.display = "";
+            renderPendingEmojis(pendingEmojisRes.emojis ?? []);
+        } else {
+            settingsTabEmojis.style.display = "none";
+        }
     } else {
-        // Not connected — hide Roles tab entirely and default to Voice tab
+        // Not connected — hide both admin tabs entirely and default to Voice tab
         settingsTabRoles.style.display = "none";
+        settingsTabEmojis.style.display = "none";
         adminUserList.innerHTML = '<div class="admin-empty">Connect to a server to manage roles.</div>';
     }
 
-    // If Roles tab is hidden and it was active, switch to Voice tab
-    if (settingsTabRoles.style.display === "none" && settingsTabRoles.classList.contains("active")) {
+    // If the currently-active tab just got hidden, fall back to Voice tab
+    const activeTabBtn = document.querySelector(".settings-tab-btn.active") as HTMLButtonElement | null;
+    if (activeTabBtn && activeTabBtn.style.display === "none") {
         settingsTabBtns.forEach((b) => b.classList.remove("active"));
         settingsPanels.forEach((p) => p.classList.remove("active"));
         const voiceBtn = document.querySelector('.settings-tab-btn[data-settings-tab="voice"]');
         const voicePanel = document.querySelector('.settings-panel[data-settings-panel="voice"]');
         voiceBtn?.classList.add("active");
         voicePanel?.classList.add("active");
+    }
+}
+
+function renderPendingEmojis(emojis: CustomEmoji[]): void {
+    emojiPendingList.innerHTML = "";
+
+    if (emojis.length === 0) {
+        emojiPendingList.innerHTML = '<div class="admin-empty">No emojis pending review.</div>';
+        return;
+    }
+
+    for (const emoji of emojis) {
+        const row = document.createElement("div");
+        row.className = "admin-user-row";
+        row.innerHTML = `
+            <img class="emoji-pending-thumb" src="${escapeHtml(emoji.imageUrl)}" alt="${escapeHtml(emoji.name)}">
+            <div class="admin-user-info">
+                <div class="admin-user-nickname">:${escapeHtml(emoji.name)}:</div>
+                <div class="admin-user-id">by ${escapeHtml(emoji.uploadedByNickname ?? "Unknown")}</div>
+            </div>
+            <div class="emoji-pending-actions">
+                <button class="btn-emoji-approve">✓ Approve</button>
+                <button class="btn-emoji-reject">✕ Reject</button>
+            </div>
+        `;
+
+        row.querySelector(".btn-emoji-approve")?.addEventListener("click", async () => {
+            const result = await api.reviewCustomEmoji(emoji.id, "APPROVED");
+            if (result.success) {
+                log(`Approved emoji ":${emoji.name}:"`, "success");
+                row.remove();
+                if (emojiPendingList.children.length === 0) {
+                    emojiPendingList.innerHTML = '<div class="admin-empty">No emojis pending review.</div>';
+                }
+            } else {
+                log(`Failed to approve emoji: ${result.error}`, "error");
+            }
+        });
+
+        row.querySelector(".btn-emoji-reject")?.addEventListener("click", async () => {
+            const result = await api.reviewCustomEmoji(emoji.id, "REJECTED");
+            if (result.success) {
+                log(`Rejected emoji ":${emoji.name}:"`, "success");
+                row.remove();
+                if (emojiPendingList.children.length === 0) {
+                    emojiPendingList.innerHTML = '<div class="admin-empty">No emojis pending review.</div>';
+                }
+            } else {
+                log(`Failed to reject emoji: ${result.error}`, "error");
+            }
+        });
+
+        emojiPendingList.appendChild(row);
     }
 }
 
@@ -3226,7 +3379,7 @@ function buildReactionBar(
         for (const r of reactions) {
             const pill = document.createElement("button");
             pill.className = "reaction-pill" + (r.userIds.includes(myId) ? " mine" : "");
-            pill.innerHTML = `${r.emoji} <span class="reaction-count">${r.count}</span>`;
+            pill.innerHTML = `${renderEmojiToken(r.emoji)} <span class="reaction-count">${r.count}</span>`;
             pill.title = `Reacted by ${r.count} user${r.count > 1 ? "s" : ""}`;
             pill.addEventListener("click", (e) => {
                 e.stopPropagation();
@@ -3305,6 +3458,18 @@ api.on("reaction-updated", (data: { messageId: string; isDm: boolean; reactions:
     updateReactionBar(data.messageId, data.isDm, data.reactions);
 });
 
+// A custom emoji another user (or an admin reviewing this client's own
+// upload) just got approved — add it to the cache and refresh the picker
+// if it's currently open, so it shows up without needing to reconnect.
+api.on("custom-emoji-approved", (data: { serverId: string; emoji: CustomEmoji }) => {
+    if (!customEmojis.some((e) => e.id === data.emoji.id)) {
+        customEmojis.push(data.emoji);
+    }
+    if (emojiPicker.classList.contains("visible")) {
+        renderEmojiGrid(emojiSearch.value);
+    }
+});
+
 // ── Emoji Picker ──────────────────────────────────────────────────────────
 
 function closeEmojiPicker(): void {
@@ -3359,6 +3524,24 @@ function buildEmojiCategoryTabs(): void {
         });
         emojiCategoryTabs.appendChild(btn);
     }
+
+    // "+" tab — custom server emoji (approved ones) + the upload entry point
+    const customBtn = document.createElement("button");
+    customBtn.className = "emoji-cat-tab";
+    customBtn.title = "Custom Emojis";
+    customBtn.textContent = "➕";
+    customBtn.addEventListener("click", () => {
+        emojiSearch.value = "";
+        renderEmojiGrid();
+        const header = emojiGridContainer.querySelector(`[data-emoji-cat="Custom"]`);
+        if (header) {
+            header.scrollIntoView({ behavior: "smooth", block: "start" });
+        }
+        emojiCategoryTabs.querySelectorAll(".emoji-cat-tab").forEach((t) => t.classList.remove("active"));
+        customBtn.classList.add("active");
+    });
+    emojiCategoryTabs.appendChild(customBtn);
+
     // Activate first tab
     const first = emojiCategoryTabs.querySelector(".emoji-cat-tab");
     first?.classList.add("active");
@@ -3416,6 +3599,51 @@ function renderEmojiGrid(filter?: string): void {
         noResults.textContent = "No emojis found";
         emojiGridContainer.appendChild(noResults);
     }
+
+    renderCustomEmojiSection(lowerFilter);
+}
+
+/** Renders the "+" tab's custom-emoji section — always shown (holds the
+ * upload button) regardless of search, with items filtered by name. */
+function renderCustomEmojiSection(lowerFilter: string): void {
+    const header = document.createElement("div");
+    header.className = "emoji-category-header";
+    header.textContent = "Custom Emojis";
+    header.setAttribute("data-emoji-cat", "Custom");
+    emojiGridContainer.appendChild(header);
+
+    const grid = document.createElement("div");
+    grid.className = "emoji-grid";
+
+    const uploadBtn = document.createElement("button");
+    uploadBtn.className = "emoji-upload-btn";
+    uploadBtn.title = "Upload a custom emoji";
+    uploadBtn.textContent = "+";
+    uploadBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        openEmojiUploadModal();
+    });
+    grid.appendChild(uploadBtn);
+
+    const filtered = customEmojis.filter(
+        (e) => !lowerFilter || e.name.toLowerCase().includes(lowerFilter),
+    );
+    for (const ce of filtered) {
+        const item = document.createElement("span");
+        item.className = "emoji-item custom-emoji-item";
+        item.title = `:${ce.name}:`;
+        const img = document.createElement("img");
+        img.src = ce.imageUrl;
+        img.alt = ce.name;
+        img.className = "custom-emoji-img";
+        item.appendChild(img);
+        item.addEventListener("click", () => {
+            insertEmojiAtCursor(`:${ce.name}:`);
+        });
+        grid.appendChild(item);
+    }
+
+    emojiGridContainer.appendChild(grid);
 }
 
 // Insert emoji at cursor position in chat input or toggle reaction
@@ -3431,6 +3659,174 @@ function insertEmojiAtCursor(emoji: string): void {
     chatInput.setRangeText(emoji, start, end, "end");
     chatInput.focus();
 }
+
+// ── Custom Emoji Upload / Crop Tool (PRD 4.8) ───────────────────────────────
+//
+// A simple "cover + pan + zoom" cropper, the same interaction model as
+// Discord/most avatar croppers: the viewport is a fixed 220x220 square, the
+// image always fully covers it (never leaving gaps), the user can drag to
+// reposition and use the zoom slider to scale in, and whatever is visible in
+// the viewport at confirm time is exactly what gets drawn into the final
+// 128x128 output — via a canvas source-rect computed back into the image's
+// natural pixel space, not by trying to read pixels off the styled <img>.
+
+function openEmojiUploadModal(): void {
+    emojiUploadStepSelect.style.display = "block";
+    emojiUploadStepCrop.style.display = "none";
+    emojiNameInput.value = "";
+    emojiUploadModal.classList.add("visible");
+}
+
+function closeEmojiUploadModal(): void {
+    emojiUploadModal.classList.remove("visible");
+    if (emojiCropObjectUrl) {
+        URL.revokeObjectURL(emojiCropObjectUrl);
+        emojiCropObjectUrl = null;
+    }
+    emojiCropImg.removeAttribute("src");
+    emojiCropNaturalWidth = 0;
+    emojiCropNaturalHeight = 0;
+}
+
+function applyEmojiCropTransform(): void {
+    const scale = emojiCropBaseScale * emojiCropZoomFactor;
+    emojiCropImg.style.width = `${emojiCropNaturalWidth}px`;
+    emojiCropImg.style.height = `${emojiCropNaturalHeight}px`;
+    emojiCropImg.style.transform = `translate(${emojiCropOffsetX}px, ${emojiCropOffsetY}px) scale(${scale})`;
+}
+
+/** Keeps the image fully covering the viewport — offsets can't drift so far that a gap would show. */
+function clampEmojiCropOffsets(): void {
+    const scale = emojiCropBaseScale * emojiCropZoomFactor;
+    const displayedW = emojiCropNaturalWidth * scale;
+    const displayedH = emojiCropNaturalHeight * scale;
+    const minX = EMOJI_CROP_VIEWPORT_SIZE - displayedW;
+    const minY = EMOJI_CROP_VIEWPORT_SIZE - displayedH;
+    emojiCropOffsetX = Math.min(0, Math.max(minX, emojiCropOffsetX));
+    emojiCropOffsetY = Math.min(0, Math.max(minY, emojiCropOffsetY));
+}
+
+btnEmojiChooseFile.addEventListener("click", () => emojiFileInput.click());
+btnEmojiUploadCancelSelect.addEventListener("click", () => closeEmojiUploadModal());
+btnEmojiUploadCancel.addEventListener("click", () => closeEmojiUploadModal());
+
+emojiUploadModal.addEventListener("click", (e) => {
+    if (e.target === emojiUploadModal) closeEmojiUploadModal();
+});
+
+const EMOJI_ALLOWED_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+
+emojiFileInput.addEventListener("change", () => {
+    const file = emojiFileInput.files?.[0];
+    emojiFileInput.value = ""; // allow re-selecting the same file later
+    if (!file) return;
+
+    if (file.size > EMOJI_MAX_UPLOAD_SIZE) {
+        log(`Image too large (max ${Math.round(EMOJI_MAX_UPLOAD_SIZE / 1024)}KB)`, "error");
+        return;
+    }
+    if (!EMOJI_ALLOWED_TYPES.has(file.type)) {
+        log("Unsupported image type", "error");
+        return;
+    }
+
+    if (emojiCropObjectUrl) URL.revokeObjectURL(emojiCropObjectUrl);
+    emojiCropObjectUrl = URL.createObjectURL(file);
+    emojiCropImg.src = emojiCropObjectUrl;
+});
+
+emojiCropImg.addEventListener("load", () => {
+    emojiCropNaturalWidth = emojiCropImg.naturalWidth;
+    emojiCropNaturalHeight = emojiCropImg.naturalHeight;
+    if (!emojiCropNaturalWidth || !emojiCropNaturalHeight) return;
+
+    emojiCropBaseScale = Math.max(
+        EMOJI_CROP_VIEWPORT_SIZE / emojiCropNaturalWidth,
+        EMOJI_CROP_VIEWPORT_SIZE / emojiCropNaturalHeight,
+    );
+    emojiCropZoomFactor = 1;
+    emojiCropZoom.value = "1";
+
+    const displayedW = emojiCropNaturalWidth * emojiCropBaseScale;
+    const displayedH = emojiCropNaturalHeight * emojiCropBaseScale;
+    emojiCropOffsetX = (EMOJI_CROP_VIEWPORT_SIZE - displayedW) / 2;
+    emojiCropOffsetY = (EMOJI_CROP_VIEWPORT_SIZE - displayedH) / 2;
+    applyEmojiCropTransform();
+
+    emojiUploadStepSelect.style.display = "none";
+    emojiUploadStepCrop.style.display = "block";
+});
+
+emojiCropViewport.addEventListener("mousedown", (e) => {
+    emojiCropDragging = true;
+    emojiCropViewport.classList.add("dragging");
+    emojiCropDragStart = { x: e.clientX, y: e.clientY, offsetX: emojiCropOffsetX, offsetY: emojiCropOffsetY };
+    e.preventDefault();
+});
+
+document.addEventListener("mousemove", (e) => {
+    if (!emojiCropDragging) return;
+    emojiCropOffsetX = emojiCropDragStart.offsetX + (e.clientX - emojiCropDragStart.x);
+    emojiCropOffsetY = emojiCropDragStart.offsetY + (e.clientY - emojiCropDragStart.y);
+    clampEmojiCropOffsets();
+    applyEmojiCropTransform();
+});
+
+document.addEventListener("mouseup", () => {
+    if (emojiCropDragging) {
+        emojiCropDragging = false;
+        emojiCropViewport.classList.remove("dragging");
+    }
+});
+
+emojiCropZoom.addEventListener("input", () => {
+    emojiCropZoomFactor = parseFloat(emojiCropZoom.value);
+    clampEmojiCropOffsets();
+    applyEmojiCropTransform();
+});
+
+btnEmojiUploadConfirm.addEventListener("click", async () => {
+    const name = emojiNameInput.value.trim();
+    if (!/^[a-zA-Z0-9_]{2,32}$/.test(name)) {
+        log("Emoji name must be 2-32 letters, numbers, or underscores", "error");
+        emojiNameInput.focus();
+        return;
+    }
+    if (!emojiCropNaturalWidth || !emojiCropNaturalHeight) return;
+
+    btnEmojiUploadConfirm.disabled = true;
+    try {
+        const scale = emojiCropBaseScale * emojiCropZoomFactor;
+        const srcX = -emojiCropOffsetX / scale;
+        const srcY = -emojiCropOffsetY / scale;
+        const srcSize = EMOJI_CROP_VIEWPORT_SIZE / scale;
+
+        const canvas = document.createElement("canvas");
+        canvas.width = 128;
+        canvas.height = 128;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) throw new Error("Canvas not supported");
+        ctx.drawImage(emojiCropImg, srcX, srcY, srcSize, srcSize, 0, 0, 128, 128);
+
+        const blob: Blob | null = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+        if (!blob) throw new Error("Failed to crop image");
+
+        const buffer = await blob.arrayBuffer();
+        const uploadResult = await api.uploadEmojiFile(buffer, `${name}.png`, "image/png");
+        const createResult = await api.createCustomEmoji(name, uploadResult.url, uploadResult.publicId);
+
+        if (createResult.success) {
+            log(`Emoji ":${name}:" submitted for admin approval`, "success");
+            closeEmojiUploadModal();
+        } else {
+            log(`Failed to submit emoji: ${createResult.error}`, "error");
+        }
+    } catch (err: any) {
+        log(`Emoji upload failed: ${err.message}`, "error");
+    } finally {
+        btnEmojiUploadConfirm.disabled = false;
+    }
+});
 
 // Emoji button toggle
 btnEmoji.addEventListener("click", (e) => {

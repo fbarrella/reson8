@@ -23,9 +23,10 @@ model Server {
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
-  channels Channel[]
-  roles    Role[]
-  users    UserServer[]
+  channels     Channel[]
+  roles        Role[]
+  users        UserServer[]
+  customEmojis CustomEmoji[]
 
   @@map("servers")
 }
@@ -231,4 +232,31 @@ model ChannelRead {
 
   @@id([userId, channelId])
   @@map("channel_reads")
+}
+
+// ---------------------------------------------------------------------------
+// CustomEmoji — user-uploaded server emoji, pending admin approval
+// ---------------------------------------------------------------------------
+
+enum EmojiStatus {
+  PENDING
+  APPROVED
+}
+
+model CustomEmoji {
+  id            String      @id @default(uuid())
+  serverId      String
+  name          String // unique per server, used as the :name: token
+  imageUrl      String
+  imagePublicId String? // Cloudinary public_id — null for local-disk storage
+  uploadedBy    String // instance ID
+  status        EmojiStatus @default(PENDING)
+  createdAt     DateTime    @default(now())
+  reviewedAt    DateTime?
+  reviewedBy    String? // instance ID of the admin who approved it
+
+  server Server @relation(fields: [serverId], references: [id], onDelete: Cascade)
+
+  @@unique([serverId, name])
+  @@map("custom_emojis")
 }

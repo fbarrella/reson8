@@ -19,6 +19,7 @@ import type {
     IUserPresence,
     ITransportOptions,
     IConsumerInfo,
+    ICustomEmoji,
 } from "./models.js";
 
 // ---------------------------------------------------------------------------
@@ -262,6 +263,30 @@ export interface ClientToServerEvents {
         ack: (response: { success: boolean; error?: string }) => void,
     ) => void;
 
+    // ── Custom Emoji ─────────────────────────────────────────────────────
+
+    /** Submits an uploaded (already-cropped) emoji image for admin review. */
+    CREATE_CUSTOM_EMOJI: (
+        payload: { name: string; imageUrl: string; imagePublicId?: string },
+        ack: (response: { success: boolean; emojiId?: string; error?: string }) => void,
+    ) => void;
+
+    /** Fetches all APPROVED custom emoji for the current server (usable by everyone). */
+    GET_APPROVED_EMOJIS: (
+        ack: (response: { success: boolean; emojis?: ICustomEmoji[]; error?: string }) => void,
+    ) => void;
+
+    /** Fetches all PENDING custom emoji awaiting review. Requires MANAGE_EMOJIS. */
+    GET_PENDING_EMOJIS: (
+        ack: (response: { success: boolean; emojis?: ICustomEmoji[]; error?: string }) => void,
+    ) => void;
+
+    /** Approves or rejects a pending custom emoji. Requires MANAGE_EMOJIS. */
+    REVIEW_CUSTOM_EMOJI: (
+        payload: { emojiId: string; decision: "APPROVED" | "REJECTED" },
+        ack: (response: { success: boolean; error?: string }) => void,
+    ) => void;
+
     /** Lightweight ping for client-side latency measurement. */
     PING_LATENCY: (
         ack: () => void,
@@ -381,6 +406,9 @@ export interface ServerToClientEvents {
         isDm: boolean;
         reactions: Array<{ emoji: string; count: number; userIds: string[] }>;
     }) => void;
+
+    /** Broadcasts a newly-approved custom emoji so every connected picker updates live. */
+    CUSTOM_EMOJI_APPROVED: (payload: { serverId: string; emoji: ICustomEmoji }) => void;
 }
 
 // ---------------------------------------------------------------------------

@@ -774,3 +774,120 @@ Feature/Fix: Delete Own Messages (PRD 4.10)
   per app-planning/Reson8_NextSteps_PRD.md's suggested order — reuses
   storage.service.ts's deleteAttachment() for the reject-pending-upload
   cleanup path.
+
+--- Entry: 11/08/2026 ---
+
+Feature/Fix: Custom Emoji Upload with Admin Approval (PRD 4.8)
+
+  Problem: No way to add custom emoji to a server — only the static
+  curated Unicode set was usable. Largest single item in this phase:
+  new schema model, new upload route, client-side crop tool,
+  moderation queue, and picker integration.
+
+  Solution:
+    - New CustomEmoji model (serverId, name unique-per-server, imageUrl,
+      imagePublicId, uploadedBy, status PENDING|APPROVED, reviewedAt/By)
+      — migration 20260812020435_add_custom_emoji. New MANAGE_EMOJIS
+      permission flag (1 << 9 = 512); the seeded Admin role already has
+      the ADMIN bit, which bypasses all bitwise checks
+      (permissions.service.ts hasPermission()), so no seed.ts change
+      was needed for the Admin role to gain it automatically — verified
+      this via the smoke test's permission checks rather than assuming it.
+    - Rejecting a pending emoji doesn't set a persisted "rejected"
+      status — it deletes the row and its stored image outright via
+      storage.service.ts's deleteAttachment() (the same helper PRD 4.10
+      introduced). Simplified the EmojiStatus enum to just
+      PENDING/APPROVED for this reason — a REJECTED value that's never
+      actually written would just be dead code.
+    - New POST /api/upload/emoji route (512KB cap — generous headroom
+      over what a 128x128 PNG should ever weigh) alongside the existing
+      /api/upload; extracted their shared body-reading/validation logic
+      into one handleUpload() helper in upload.route.ts rather than
+      duplicating the chunked-read-with-size-limit loop a third time.
+    - Client crop tool: a "cover + pan + zoom" cropper (same interaction
+      model as Discord's avatar cropper) — fixed 220x220 viewport, image
+      always fully covers it via a computed base "cover" scale, drag to
+      reposition, slider to zoom 1x-3x, offsets clamped every frame so
+      no gap can ever show. On confirm, the visible viewport rect is
+      mapped back into the source image's natural pixel coordinates and
+      drawn onto a 128x128 canvas via a single ctx.drawImage() call —
+      the crop reads directly from the <img> element's natural
+      dimensions, not by re-parsing pixels off the styled/transformed
+      element.
+    - Emoji picker gained a "+" tab (approved custom emoji + an upload
+      entry point), shared by both the chat-input picker and the
+      per-message reaction picker (both already funnel through the same
+      renderEmojiGrid()/buildEmojiCategoryTabs(), so no separate wiring
+      was needed for reaction mode). Custom emoji are referenced as
+      :name: tokens; linkifyContent() (message rendering) and the
+      reaction-pill renderer now share one renderEmojiToken() helper
+      that resolves a known :name: token to an inline <img>, leaving
+      unrecognized tokens as literal text — matching how Discord/Slack
+      handle unknown shortcodes.
+    - Settings modal gained an "😀 Emojis" tab with the pending-review
+      queue (thumbnail, name, uploader nickname, Approve/Reject). Its
+      visibility is decided by whether GET_PENDING_EMOJIS actually
+      succeeds — not by reusing the existing isAdminUser heuristic —
+      since MANAGE_EMOJIS is a distinct permission bit from general
+      admin status, even though today only the Admin role holds it.
+
+  Edge Cases Handled:
+    - CUSTOM_EMOJI_APPROVED broadcasts live to every connected client
+      (including the uploader) so an already-open picker updates
+      in-place without needing to reconnect.
+    - Duplicate names and malformed names (must be 2-32
+      letters/numbers/underscores) are rejected both client-side
+      (immediate feedback) and server-side (authoritative — the
+      @@unique([serverId, name]) constraint backs this up too).
+
+  Key Files Modified:
+    apps/server/prisma/schema.prisma — CustomEmoji model, EmojiStatus enum
+    packages/shared-types/src/models.ts — MANAGE_EMOJIS flag, ICustomEmoji
+    packages/shared-types/src/socket-events.ts — CREATE_CUSTOM_EMOJI,
+      GET_APPROVED_EMOJIS, GET_PENDING_EMOJIS, REVIEW_CUSTOM_EMOJI,
+      CUSTOM_EMOJI_APPROVED
+    apps/server/src/handlers/emoji.handler.ts (NEW) — all four emoji events
+    apps/server/src/routes/upload.route.ts — /api/upload/emoji route,
+      handleUpload() extraction
+    apps/server/src/index.ts — registerEmojiHandlers()
+    apps/client/src/preload.ts — uploadTo() extraction, uploadEmojiFile(),
+      createCustomEmoji(), getApprovedEmojis(), getPendingEmojis(),
+      reviewCustomEmoji(), CUSTOM_EMOJI_APPROVED forwarding
+    apps/client/src/renderer/renderer.ts — customEmojis cache, crop-tool
+      modal logic, renderEmojiToken()/linkifyContent() custom-emoji
+      support, "+" picker tab, Settings "Emojis" tab + moderation queue
+    apps/client/src/renderer/index.html — #emoji-upload-modal (crop UI),
+      Settings Emojis tab/panel, custom-emoji picker item + inline
+      message-image CSS
+
+  Verification:
+    - Prisma migration: add_custom_emoji — applied successfully against
+      the local dev database
+    - TypeScript build (shared-types): npx tsc --build — passed
+    - TypeScript build (server): npx tsc --noEmit — passed
+    - TypeScript build (client): npx tsc --noEmit — passed
+    - Server test suite: npm run test — 19/19 passed
+    - End-to-end smoke test against a real running server + Postgres +
+      Redis (dev server started, exercised via a throwaway
+      socket.io-client script, then torn down and all test data
+      cleaned up): 19/19 checks passed, covering the full server-side
+      flow — non-admin correctly rejected from both GET_PENDING_EMOJIS
+      and REVIEW_CUSTOM_EMOJI, upload + submit, duplicate/invalid-name
+      rejection, pending emoji correctly absent from the approved list,
+      admin's pending queue showing the uploader's resolved nickname,
+      approval broadcasting CUSTOM_EMOJI_APPROVED live to other clients
+      and the emoji then appearing in GET_APPROVED_EMOJIS, re-reviewing
+      an already-approved emoji rejected, and rejection actually
+      deleting both the DB row and the file on disk. One real bug
+      caught mid-test: the smoke test script itself had a transposed
+      ADMIN_INSTANCE_ID (my own typo copying it from .env), which
+      surfaced as every admin-gated call failing — a good reminder that
+      "permission denied" during testing warrants checking the test
+      setup before assuming the feature is broken.
+    - NOT exercised: the client-side crop tool UI and picker DOM
+      (Electron renderer, not reachable from a Node script) — verified
+      by code review and manual math-checking of the cover/pan/zoom/
+      crop-rect calculations only, not a live browser interaction.
+
+  Next Step: PRD 4.11 (edit own messages, 2-minute window) is next per
+  app-planning/Reson8_NextSteps_PRD.md's suggested order.

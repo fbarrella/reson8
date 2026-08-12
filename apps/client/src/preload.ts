@@ -13,6 +13,7 @@ import type {
     ServerToClientEvents,
     IMessage,
     IDirectMessage,
+    ICustomEmoji,
 } from "@reson8/shared-types";
 import { VoiceService, VoiceSignaling } from "./services/voice.service";
 
@@ -24,6 +25,40 @@ let voiceService: VoiceService | null = null;
 let serverBaseUrl: string = "";
 let joinServerInFlight = false;
 let latencyMs: number = -1;
+
+async function uploadTo(
+    endpoint: string,
+    fileBuffer: ArrayBuffer,
+    fileName: string,
+    mimeType: string,
+): Promise<{ url: string; publicId?: string }> {
+    if (!serverBaseUrl) {
+        throw new Error("Not connected to a server");
+    }
+
+    const formData = new FormData();
+    const blob = new Blob([fileBuffer], { type: mimeType });
+    formData.append("file", blob, fileName);
+
+    const response = await fetch(`${serverBaseUrl}${endpoint}`, {
+        method: "POST",
+        body: formData,
+    });
+
+    if (!response.ok) {
+        const errBody = await response.json().catch(() => ({ error: "Upload failed" }));
+        throw new Error(errBody.error || `Upload failed (${response.status})`);
+    }
+
+    const result = await response.json();
+
+    // If the URL is relative (local storage), prepend the server base URL
+    if (result.url && result.url.startsWith("/")) {
+        result.url = `${serverBaseUrl}${result.url}`;
+    }
+
+    return result;
+}
 
 // Eagerly fetch instance ID so it's available before any connection
 ipcRenderer.invoke("get-instance-id").then((id: string) => {
@@ -208,6 +243,7 @@ const api = {
         socket.on("CHANNEL_USER_KICKED", (payload) => emit("channel-user-kicked", payload));
         socket.on("USER_BANNED", () => emit("user-banned", null));
         socket.on("REACTION_UPDATED", (payload) => emit("reaction-updated", payload));
+        socket.on("CUSTOM_EMOJI_APPROVED", (payload) => emit("custom-emoji-approved", payload));
 
         // Voice-specific events
         socket.on("NEW_PRODUCER", (payload) => {
@@ -617,32 +653,15 @@ const api = {
         fileName: string,
         mimeType: string,
     ): Promise<{ url: string; publicId?: string }> {
-        if (!serverBaseUrl) {
-            throw new Error("Not connected to a server");
-        }
+        return uploadTo("/api/upload", fileBuffer, fileName, mimeType);
+    },
 
-        const formData = new FormData();
-        const blob = new Blob([fileBuffer], { type: mimeType });
-        formData.append("file", blob, fileName);
-
-        const response = await fetch(`${serverBaseUrl}/api/upload`, {
-            method: "POST",
-            body: formData,
-        });
-
-        if (!response.ok) {
-            const errBody = await response.json().catch(() => ({ error: "Upload failed" }));
-            throw new Error(errBody.error || `Upload failed (${response.status})`);
-        }
-
-        const result = await response.json();
-
-        // If the URL is relative (local storage), prepend the server base URL
-        if (result.url && result.url.startsWith("/")) {
-            result.url = `${serverBaseUrl}${result.url}`;
-        }
-
-        return result;
+    async uploadEmojiFile(
+        fileBuffer: ArrayBuffer,
+        fileName: string,
+        mimeType: string,
+    ): Promise<{ url: string; publicId?: string }> {
+        return uploadTo("/api/upload/emoji", fileBuffer, fileName, mimeType);
     },
 
     // ── Image Download ───────────────────────────────────────────────────
@@ -724,6 +743,55 @@ const api = {
                 return;
             }
             socket.emit("TOGGLE_REACTION", { messageId, emoji, isDm }, resolve);
+        });
+    },
+
+    // ── Custom Emoji ──────────────────────────────────────────────────────
+
+    createCustomEmoji(
+        name: string,
+        imageUrl: string,
+        imagePublicId?: string,
+    ): Promise<{ success: boolean; emojiId?: string; error?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.emit("CREATE_CUSTOM_EMOJI", { name, imageUrl, imagePublicId }, resolve);
+        });
+    },
+
+    getApprovedEmojis(): Promise<{ success: boolean; emojis?: ICustomEmoji[]; error?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.emit("GET_APPROVED_EMOJIS", resolve);
+        });
+    },
+
+    getPendingEmojis(): Promise<{ success: boolean; emojis?: ICustomEmoji[]; error?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.emit("GET_PENDING_EMOJIS", resolve);
+        });
+    },
+
+    reviewCustomEmoji(
+        emojiId: string,
+        decision: "APPROVED" | "REJECTED",
+    ): Promise<{ success: boolean; error?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.emit("REVIEW_CUSTOM_EMOJI", { emojiId, decision }, resolve);
         });
     },
 };

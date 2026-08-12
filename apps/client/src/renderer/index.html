@@ -1077,6 +1077,7 @@
     #rename-channel-modal,
     #nsfw-confirm-modal,
     #delete-message-modal,
+    #emoji-upload-modal,
     #admin-modal {
       display: none;
       position: fixed;
@@ -1096,6 +1097,7 @@
     #rename-channel-modal.visible,
     #nsfw-confirm-modal.visible,
     #delete-message-modal.visible,
+    #emoji-upload-modal.visible,
     #admin-modal.visible {
       display: flex;
     }
@@ -1215,6 +1217,50 @@
 
     .role-badge:hover {
       border-color: var(--accent);
+    }
+
+    .emoji-pending-thumb {
+      width: 32px;
+      height: 32px;
+      object-fit: contain;
+      border-radius: 4px;
+      background: repeating-conic-gradient(#2a2a35 0% 25%, #232330 0% 50%) 50% / 8px 8px;
+      flex-shrink: 0;
+    }
+
+    .emoji-pending-actions {
+      display: flex;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+
+    .btn-emoji-approve,
+    .btn-emoji-reject {
+      font-size: 11px;
+      padding: 4px 10px;
+      border-radius: var(--radius);
+      cursor: pointer;
+      border: 1px solid var(--border);
+      background: transparent;
+      transition: all 0.15s;
+    }
+
+    .btn-emoji-approve {
+      color: var(--success);
+    }
+
+    .btn-emoji-approve:hover {
+      border-color: var(--success);
+      background: rgba(46, 204, 113, 0.12);
+    }
+
+    .btn-emoji-reject {
+      color: var(--danger);
+    }
+
+    .btn-emoji-reject:hover {
+      border-color: var(--danger);
+      background: rgba(239, 83, 80, 0.12);
     }
 
     .admin-empty {
@@ -1960,6 +2006,80 @@
       padding: 24px 8px;
     }
 
+    .custom-emoji-img {
+      width: 70%;
+      height: 70%;
+      object-fit: contain;
+    }
+
+    .emoji-upload-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 100%;
+      aspect-ratio: 1;
+      font-size: 18px;
+      color: var(--text-muted);
+      border: 1px dashed var(--border);
+      background: none;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.1s;
+    }
+
+    .emoji-upload-btn:hover {
+      color: var(--accent);
+      border-color: var(--accent);
+      background: rgba(79, 195, 247, 0.08);
+    }
+
+    .custom-emoji-inline {
+      display: inline-block;
+      width: 1.3em;
+      height: 1.3em;
+      object-fit: contain;
+      vertical-align: middle;
+    }
+
+    /* ── Emoji Upload / Crop Modal ─────────────────────────────────────── */
+    #emoji-crop-viewport {
+      width: 220px;
+      height: 220px;
+      margin: 10px auto;
+      overflow: hidden;
+      position: relative;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: repeating-conic-gradient(#2a2a35 0% 25%, #232330 0% 50%) 50% / 16px 16px;
+      cursor: grab;
+    }
+
+    #emoji-crop-viewport.dragging {
+      cursor: grabbing;
+    }
+
+    #emoji-crop-img {
+      position: absolute;
+      top: 0;
+      left: 0;
+      transform-origin: 0 0;
+      user-select: none;
+      -webkit-user-drag: none;
+      pointer-events: none;
+    }
+
+    .emoji-upload-hint {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin: 4px 0 12px;
+    }
+
+    #emoji-crop-zoom {
+      width: 100%;
+      accent-color: var(--accent);
+      margin-bottom: 12px;
+    }
+
     /* ── Mic Sensitivity Slider & Meter ─────────────────────── */
     #mic-sensitivity-slider-wrap {
       background: var(--bg-input);
@@ -2223,12 +2343,42 @@
     </div>
   </div>
 
+  <!-- ── Custom Emoji Upload Modal ────────────────────────────────────── -->
+  <div id="emoji-upload-modal">
+    <div class="modal-content">
+      <h3>Upload Custom Emoji</h3>
+
+      <div id="emoji-upload-step-select">
+        <input type="file" id="emoji-file-input" accept="image/png,image/jpeg,image/gif,image/webp" style="display:none;">
+        <button class="btn btn-create" id="btn-emoji-choose-file">Choose Image…</button>
+        <p class="emoji-upload-hint">Max 500KB. PNG, JPEG, GIF, or WebP. An admin must approve it before it becomes usable.</p>
+        <div class="modal-actions">
+          <button class="btn btn-cancel" id="btn-emoji-upload-cancel-select">Cancel</button>
+        </div>
+      </div>
+
+      <div id="emoji-upload-step-crop" style="display:none;">
+        <div id="emoji-crop-viewport">
+          <img id="emoji-crop-img" alt="">
+        </div>
+        <input type="range" id="emoji-crop-zoom" min="1" max="3" step="0.01" value="1">
+        <label for="emoji-name-input">Name</label>
+        <input type="text" id="emoji-name-input" placeholder="e.g. pepehands" maxlength="32">
+        <div class="modal-actions">
+          <button class="btn btn-cancel" id="btn-emoji-upload-cancel">Cancel</button>
+          <button class="btn btn-create" id="btn-emoji-upload-confirm">Upload</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- ── Unified Settings Modal ───────────────────────────────────── -->
   <div id="admin-modal">
     <div class="modal-content wide">
       <h3>⚙ Settings</h3>
       <div class="settings-tab-bar">
         <button class="settings-tab-btn active" data-settings-tab="roles" id="settings-tab-roles">👑 Roles</button>
+        <button class="settings-tab-btn" data-settings-tab="emojis" id="settings-tab-emojis">😀 Emojis</button>
         <button class="settings-tab-btn" data-settings-tab="voice">🎤 Voice & Shortcuts</button>
         <button class="settings-tab-btn" data-settings-tab="app">🖥 Application</button>
       </div>
@@ -2237,6 +2387,13 @@
       <div class="settings-panel active" data-settings-panel="roles">
         <div id="admin-user-list" class="admin-user-list">
           <div class="admin-empty">Loading users...</div>
+        </div>
+      </div>
+
+      <!-- Emojis Tab (pending custom emoji review queue) -->
+      <div class="settings-panel" data-settings-panel="emojis">
+        <div id="emoji-pending-list" class="admin-user-list">
+          <div class="admin-empty">Loading pending emojis...</div>
         </div>
       </div>
 
