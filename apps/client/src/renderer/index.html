@@ -1165,7 +1165,8 @@
     #nsfw-confirm-modal,
     #delete-message-modal,
     #emoji-upload-modal,
-    #admin-modal {
+    #admin-modal,
+    #update-modal {
       display: none;
       position: fixed;
       top: 0;
@@ -1185,8 +1186,31 @@
     #nsfw-confirm-modal.visible,
     #delete-message-modal.visible,
     #emoji-upload-modal.visible,
-    #admin-modal.visible {
+    #admin-modal.visible,
+    #update-modal.visible {
       display: flex;
+    }
+
+    #update-modal .update-progress-wrap {
+      margin-top: 12px;
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      height: 8px;
+      overflow: hidden;
+    }
+
+    #update-modal .update-progress-bar {
+      height: 100%;
+      width: 0%;
+      background: var(--accent);
+      transition: width 0.2s ease;
+    }
+
+    #update-modal .update-status-text {
+      font-size: 12px;
+      color: var(--text-secondary);
+      margin-top: 8px;
     }
 
     .nsfw-badge {
@@ -2478,6 +2502,22 @@
     </div>
   </div>
 
+  <!-- ── Auto-Updater Modal (PRD 10.1) ───────────────────────────────────── -->
+  <div id="update-modal">
+    <div class="modal-content">
+      <h3 id="update-modal-title">⬆ Update Available</h3>
+      <p id="update-modal-message">A newer version of Reson8 is available. Some features might fail if you don't update.</p>
+      <div id="update-modal-progress-wrap" class="update-progress-wrap" style="display:none;">
+        <div id="update-modal-progress-bar" class="update-progress-bar"></div>
+      </div>
+      <div id="update-modal-status" class="update-status-text" style="display:none;"></div>
+      <div class="modal-actions">
+        <button class="btn btn-cancel" id="btn-update-later">Not Now</button>
+        <button class="btn btn-create" id="btn-update-now">Update Now</button>
+      </div>
+    </div>
+  </div>
+
   <!-- ── Delete Message Confirmation Modal ───────────────────────────────── -->
   <div id="delete-message-modal">
     <div class="modal-content">
@@ -2529,6 +2569,8 @@
         <button class="settings-tab-btn" data-settings-tab="server" id="settings-tab-server">🔔 Server</button>
         <button class="settings-tab-btn" data-settings-tab="voice">🎤 Voice & Shortcuts</button>
         <button class="settings-tab-btn" data-settings-tab="app">🖥 Application</button>
+        <button class="settings-tab-btn" data-settings-tab="audio">🔊 Audio</button>
+        <button class="settings-tab-btn" data-settings-tab="about">ℹ️ About</button>
       </div>
 
       <!-- Roles Tab -->
@@ -2700,6 +2742,52 @@
             <span class="toggle-slider"></span>
           </label>
         </div>
+      </div>
+
+      <!-- Audio Tab -->
+      <div class="settings-panel" data-settings-panel="audio">
+        <label style="font-size:11px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px; display:block; margin-bottom:10px;">Volume</label>
+
+        <div id="audio-nudge-volume-wrap" style="margin-bottom:14px;">
+          <label style="display:block; margin-bottom:6px;">Nudge Volume</label>
+          <div class="sensitivity-slider-row">
+            <input type="range" id="audio-nudge-volume-slider" min="0" max="100" value="100" step="5">
+            <span class="sensitivity-value" id="audio-nudge-volume-value">100%</span>
+          </div>
+        </div>
+
+        <div id="audio-alert-volume-wrap" style="margin-bottom:14px;">
+          <label style="display:block; margin-bottom:6px;">Sound Alerts Volume</label>
+          <div class="sensitivity-slider-row">
+            <input type="range" id="audio-alert-volume-slider" min="0" max="100" value="100" step="5">
+            <span class="sensitivity-value" id="audio-alert-volume-value">100%</span>
+          </div>
+        </div>
+
+        <div id="audio-voice-volume-wrap" style="margin-bottom:14px;">
+          <label style="display:block; margin-bottom:6px;">Global Voice Chat Volume</label>
+          <div class="sensitivity-slider-row">
+            <input type="range" id="audio-voice-volume-slider" min="0" max="100" value="100" step="5">
+            <span class="sensitivity-value" id="audio-voice-volume-value">100%</span>
+          </div>
+          <div class="sensitivity-labels">
+            <span>Master attenuator — combines with each participant's individual volume</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- About Tab -->
+      <div class="settings-panel" data-settings-panel="about">
+        <div style="text-align:center; padding: 10px 0 18px;">
+          <img src="logo.png" alt="Reson8 Logo" style="width:56px; height:56px; margin-bottom:8px;">
+          <div style="font-size:15px; font-weight:600;">Reson8</div>
+          <div id="about-version" style="font-size:12px; color:var(--text-muted);"></div>
+        </div>
+        <p style="font-size:12px; color:var(--text-secondary); margin-bottom:16px;">
+          Self-hosted voice and text communication.
+        </p>
+        <button class="btn btn-create" id="btn-check-updates" style="width:100%;">Check for Updates</button>
+        <div id="about-update-status" style="font-size:12px; color:var(--text-secondary); margin-top:10px; min-height:16px;"></div>
       </div>
 
       <div class="modal-actions">

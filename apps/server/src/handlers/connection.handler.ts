@@ -98,7 +98,7 @@ async function annotateUnreadChannels(
     const [latestMessages, readCursors] = await Promise.all([
         app.prisma.message.groupBy({
             by: ["channelId"],
-            where: { channelId: { in: textChannelIds } },
+            where: { channelId: { in: textChannelIds }, userId: { not: userId } },
             _max: { createdAt: true },
         }),
         app.prisma.channelRead.findMany({

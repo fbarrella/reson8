@@ -8,6 +8,7 @@
 import { app, BrowserWindow, session, ipcMain, globalShortcut, Menu, Tray, nativeImage, shell } from "electron";
 import path from "node:path";
 import { getInstanceId } from "./instance-id.js";
+import { autoUpdater } from "electron-updater";
 
 // ── Link Preview (metascraper) ───────────────────────────────────────────
 // @ts-ignore — metascraper packages lack type declarations
@@ -173,6 +174,7 @@ function createWindow(): void {
         minWidth: 800,
         minHeight: 600,
         title: "Reson8",
+        icon: path.join(__dirname, "..", "assets", "icon.png"),
         webPreferences: {
             preload: path.join(__dirname, "preload.js"),
             contextIsolation: true,
@@ -182,6 +184,18 @@ function createWindow(): void {
     });
 
     mainWindow.loadFile(path.join(__dirname, "renderer", "index.html"));
+
+    // Packaged-only: check for updates shortly after the window finishes
+    // loading, so it doesn't compete with initial app load. Silent on
+    // failure/no-update — the found-update modal only appears when there's
+    // actually something to offer (PRD 10.1).
+    if (app.isPackaged) {
+        mainWindow.webContents.once("did-finish-load", () => {
+            setTimeout(() => {
+                checkForUpdatesWithRetry();
+            }, 3000);
+        });
+    }
 
     // ── Open external links in system browser ────────────────────────────
     mainWindow.webContents.setWindowOpenHandler(({ url }) => {
@@ -295,7 +309,84 @@ function unregisterPttShortcut(): void {
     }
 }
 
+// ── Auto-Updater (PRD 10.1) ──────────────────────────────────────────────
+// Metadata check and download are separate steps: nothing downloads until
+// the user (or the modal's "Update Now") explicitly asks for it.
+autoUpdater.autoDownload = false;
+
+// True only while a download is in flight — distinguishes a download-phase
+// 'error' (surfaced immediately, no retry) from a check-phase 'error'
+// (already retried and reported by checkForUpdatesWithRetry() below, so it
+// must NOT also be forwarded to the renderer here or every retry attempt
+// would spam an error event).
+let isDownloadingUpdate = false;
+
+/** Single metadata-fetch attempt, resolved/rejected by whichever of
+ *  update-available / update-not-available / error fires first. */
+function checkForUpdatesOnce(): Promise<"available" | "not-available"> {
+    return new Promise((resolve, reject) => {
+        const onAvailable = () => { cleanup(); resolve("available"); };
+        const onNotAvailable = () => { cleanup(); resolve("not-available"); };
+        const onError = (err: Error) => { cleanup(); reject(err); };
+        function cleanup() {
+            autoUpdater.removeListener("update-available", onAvailable);
+            autoUpdater.removeListener("update-not-available", onNotAvailable);
+            autoUpdater.removeListener("error", onError);
+        }
+        autoUpdater.once("update-available", onAvailable);
+        autoUpdater.once("update-not-available", onNotAvailable);
+        autoUpdater.once("error", onError);
+        autoUpdater.checkForUpdates().catch(onError);
+    });
+}
+
+/**
+ * Metadata-only update check: 1 attempt, then up to 3 retries 20s apart —
+ * shared by the automatic startup check and the manual "Check for Updates"
+ * button, per PRD 10.1.
+ */
+async function checkForUpdatesWithRetry(): Promise<"available" | "not-available" | "error"> {
+    const maxAttempts = 4; // 1 initial + 3 retries
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+            return await checkForUpdatesOnce();
+        } catch (err) {
+            console.error(`[main] Update check attempt ${attempt}/${maxAttempts} failed:`, err);
+            if (attempt < maxAttempts) {
+                await new Promise((resolve) => setTimeout(resolve, 20_000));
+            }
+        }
+    }
+    return "error";
+}
+
+function setupAutoUpdater(): void {
+    autoUpdater.on("update-available", (info) => {
+        mainWindow?.webContents.send("update-available", { version: info.version });
+    });
+
+    autoUpdater.on("download-progress", (progress) => {
+        mainWindow?.webContents.send("download-progress", { percent: progress.percent });
+    });
+
+    autoUpdater.on("update-downloaded", () => {
+        isDownloadingUpdate = false;
+        mainWindow?.webContents.send("update-downloaded");
+    });
+
+    autoUpdater.on("error", (err: Error) => {
+        if (isDownloadingUpdate) {
+            isDownloadingUpdate = false;
+            mainWindow?.webContents.send("update-error", { message: err.message });
+        }
+    });
+}
+
+setupAutoUpdater();
+
 // ── App lifecycle ────────────────────────────────────────────────────────
+
+app.setName("Reson8");
 
 app.whenReady().then(() => {
     // Disable the default application menu in production builds
@@ -338,6 +429,28 @@ app.whenReady().then(() => {
     }));
 
     ipcMain.handle("is-window-focused", () => mainWindow?.isFocused() ?? false);
+
+    // ── Auto-Updater IPC (PRD 10.1) ──────────────────────────────────────
+    ipcMain.handle("check-for-updates", async () => {
+        const status = await checkForUpdatesWithRetry();
+        return { status };
+    });
+
+    ipcMain.handle("download-update", async () => {
+        isDownloadingUpdate = true;
+        try {
+            await autoUpdater.downloadUpdate();
+        } catch (err: any) {
+            isDownloadingUpdate = false;
+            mainWindow?.webContents.send("update-error", { message: err.message });
+        }
+    });
+
+    ipcMain.handle("quit-and-install", () => {
+        autoUpdater.quitAndInstall();
+    });
+
+    ipcMain.handle("get-app-version", () => app.getVersion());
 
     // Taskbar/dock attention flash for Nudge (PRD 4.14) — cleared automatically
     // by Electron once the window regains focus, so no explicit "un-flash" call

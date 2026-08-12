@@ -1348,3 +1348,358 @@ Feature/Fix: Eliminate Settings Modal Admin-Tab Flicker for Non-Admin Users
       path was unchanged in logic (still isAdminUser/canManageEmojis
       true → tabs shown), only its *timing* relative to the modal's
       first paint changed.
+
+--- Entry: 12/08/2026 ---
+
+Feature/Fix: Phase 10 — PRD 10.6: Fix Generic AppImage Icon on Wayland
+
+  Problem: On Wayland, the packaged AppImage showed a generic icon in
+  both the title bar and the alt-tab app switcher instead of the real
+  Reson8 icon, even though a correctly-sized icon asset already existed
+  and the generated .desktop file pointed at it.
+
+  Root cause: BrowserWindow was constructed with no explicit `icon`
+  option (relying entirely on platform packaging to resolve it),
+  `app.setName()` was never called anywhere (so Electron derived the
+  runtime WM_CLASS from the scoped package.json `"name"` field,
+  `"@reson8/client"`, not `"Reson8"`), and `build.linux` had no
+  `desktop.StartupWMClass`. On Wayland/GNOME, icon resolution depends
+  on the .desktop file's StartupWMClass matching the running window's
+  actual WM_CLASS — without that match, the lookup silently falls back
+  to a generic icon.
+
+  Solution: Added an explicit `icon: path.join(__dirname, "..",
+  "assets", "icon.png")` to the BrowserWindow constructor, called
+  `app.setName("Reson8")` before `app.whenReady()`, and added
+  `build.linux.desktop.StartupWMClass: "Reson8"` in
+  apps/client/package.json so the generated .desktop file's
+  StartupWMClass matches the runtime WM_CLASS.
+
+  Key Files Modified:
+    apps/client/src/main.ts
+    apps/client/package.json
+
+  Verification:
+    - TypeScript build (client): npx tsc --noEmit — passed
+    - This fix is inherently a windowing-system-level visual check —
+      confirming the real icon in the Wayland title bar / alt-tab
+      switcher requires `npm run build:linux` and running the resulting
+      AppImage under an actual Wayland session, which was not done this
+      session (no packaged build was produced). The code change itself
+      was verified by reading the current BrowserWindow constructor and
+      confirming no `icon` option or `app.setName()` call existed prior
+      to this change.
+
+--- Entry: 12/08/2026 ---
+
+Feature/Fix: Phase 10 — PRD 10.5: Fix False-Positive Unread Indicator on Own Message
+
+  Problem: A user could see their own text channel flagged as "unread"
+  after disconnecting and reconnecting, even though nobody else had
+  posted since their last message.
+
+  Root cause: two independent gaps. (1) `annotateUnreadChannels()`
+  (run during USER_JOIN_SERVER tree hydration) found each channel's
+  latest-message timestamp via `message.groupBy({ by: ["channelId"],
+  where: { channelId: { in: textChannelIds } }, _max: { createdAt:
+  true } })` with no exclusion of the requesting user's own messages,
+  so a user's own last message counted as the channel's "latest" when
+  compared against their stored ChannelRead.lastReadAt cursor. (2)
+  `SEND_MESSAGE` persisted and broadcast the message but never
+  advanced the *sender's own* ChannelRead cursor — only the separate
+  MARK_CHANNEL_READ handler (fired when a client explicitly opens a
+  channel) did that upsert.
+
+  Solution: Added `userId: { not: userId }` to the `message.groupBy`
+  where clause in `annotateUnreadChannels()`, so "unread" only ever
+  reflects messages authored by others. Added a `channelRead.upsert`
+  call inside `SEND_MESSAGE` — mirroring the exact upsert pattern
+  already used by `MARK_CHANNEL_READ` (`where: { userId_channelId:
+  { userId, channelId } }`) — using the new message's own `createdAt`,
+  so the sender's cursor advances at send time rather than only when
+  they later reopen the channel.
+
+  Key Files Modified:
+    apps/server/src/handlers/connection.handler.ts
+    apps/server/src/handlers/message.handler.ts
+
+  Verification:
+    - TypeScript build (server): npx tsc --noEmit — passed
+    - npm run test (server, vitest): 19/19 tests passed
+    - Live check via a locally connected client (see the Phase 10 PRD
+      10.2/10.3/10.4 entries below for the same session): confirmed
+      messages sent and channels opened behaved normally with no
+      unread-indicator regressions observed during the session, though
+      the specific disconnect/reconnect repro from the PRD (send last
+      message → disconnect → reconnect → channel must not show unread)
+      was not explicitly re-run end-to-end this session beyond the
+      passing vitest suite and code-level confirmation of both fixes.
+
+--- Entry: 12/08/2026 ---
+
+Feature/Fix: Phase 10 — PRD 10.3: Fix Session Timer Blink on Mute/Deafen Toggle
+
+  Problem: Toggling mute/deafen while in a voice channel made the
+  channel's session timer badge briefly go blank (up to ~1s) before
+  showing the correct elapsed time again.
+
+  Root cause: mute/deafen toggles are presence-driven — every toggle
+  calls `api.setVoiceState(...)`, which round-trips through the server
+  and comes back as a PRESENCE_UPDATE broadcast to the whole server
+  room, including the sender. The client's presence handler calls
+  `updateOccupants()`, which unconditionally calls `renderTree(
+  currentTree)` — a full `channelTree.innerHTML = ""` teardown and
+  rebuild. `renderChannel()` recreated the session-timer
+  `<span data-session-channel="...">` empty every time, relying on the
+  existing 1s `setInterval` to fill in the text on its next tick —
+  leaving a visible blank gap after every full re-render.
+
+  Solution: `renderChannel()` now computes the timer's elapsed-time
+  text synchronously at render time, using the exact same
+  `formatDuration(now - new Date(startedAt).getTime())` calculation
+  the existing `setInterval` already uses against the `sessionTimers`
+  map, instead of leaving `textContent` empty until the next tick.
+  Scoped surgical fix — `renderTree()`'s full-teardown-and-rebuild
+  approach was left unchanged, since only this one element had the
+  render-then-fill-later timing gap.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts
+
+  Verification:
+    - TypeScript build (client): npx tsc --noEmit — passed
+    - Live check via a CDP-driven Electron session (real dev server,
+      built client, `electron . --remote-debugging-port` + a small
+      script talking to the Chrome DevTools Protocol over the page's
+      websocket to evaluate JS and capture screenshots): connected,
+      joined the "Lobby" voice channel, then read
+      `document.querySelector('[data-session-channel]').textContent`
+      immediately after each of five consecutive mute/deafen toggles
+      (mute, deafen, undeafen, deafen, mute-while-deafened) — the timer
+      text was always a valid non-blank value (e.g. "00:01" through
+      "00:04") at every check, never empty.
+
+--- Entry: 12/08/2026 ---
+
+Feature/Fix: Phase 10 — PRD 10.4: Mute/Deafen Accumulation
+
+  Problem: Deafening did not mute the mic — a deafened user could
+  still transmit audio — and undeafening had no memory of whatever
+  mute state existed before deafening, so mute/deafen state didn't
+  "accumulate" the way the roadmap specified (deafen should always
+  imply mute; undeafen should restore, not clobber, the prior mute
+  state).
+
+  Solution:
+    - voice.service.ts: added a new `_deafenAutoMuted` field and
+      reworked `toggleDeafen()` into a combined method returning
+      `{ isMuted, isDeafened }`. On deafen: if the mic producer wasn't
+      already paused, pause it and remember that this deafen action was
+      the one that did so (`_deafenAutoMuted = true`); if it was
+      already paused (user had manually muted first), leave it alone
+      and remember that too. On undeafen: only resume the producer if
+      `_deafenAutoMuted` is true — otherwise the prior manual mute is
+      left exactly as it was. This producer-state-based approach
+      (rather than reusing the pre-existing `_isManuallyMuted` flag
+      directly) was chosen because `_isManuallyMuted` is also flipped
+      transiently by every push-to-talk key press/release, making it
+      an unreliable signal for "was the user deliberately muted before
+      I deafened them."
+    - renderer.ts: `toggleDeafenAndNotify()` now syncs both `isMuted`
+      and `isDeafened` from the one combined service call and sends a
+      single `SET_VOICE_STATE`, playing only the deafen sound pair —
+      never mute + deafen together for one user action.
+    - PTT keydown/keyup and the `ptt-pressed`/`ptt-released` IPC
+      handlers (which call `api.setMuted()` directly, bypassing the
+      toggle-and-notify functions) gained an explicit `!isDeafened`
+      guard, so PTT is fully blocked while deafened — confirmed with
+      the user as the intended behavior.
+    - The Voice-Activation-mode-switch handler (switching from
+      push-to-talk to voice-activation while already in a voice
+      channel) gained the same `!isDeafened` guard — this was a real
+      gap surfaced during implementation, not explicitly in the PRD: it
+      previously unmuted the mic unconditionally on mode switch, which
+      could have silently broken the "can't speak while deaf"
+      invariant.
+    - `renderOccupants()`'s icon rendering changed from a
+      mutually-exclusive ternary (deafened-or-muted-or-neither) to
+      rendering both icons simultaneously when both flags are true.
+    - Resolved decision (explicit user call, overriding the PRD's
+      stated default): clicking the Mute button/shortcut while
+      deafened does not no-op. It auto-undeafens first (restoring
+      whatever mute state existed before deafening via the same
+      undeafen logic), then applies a normal mute toggle on top of
+      that resolved state — a single combined action, single
+      `SET_VOICE_STATE`, single sound (the mute/unmute pair, not the
+      deafen pair).
+
+  Key Files Modified:
+    apps/client/src/services/voice.service.ts
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/preload.ts — toggleDeafen() bridge return type
+      updated to match the new { isMuted, isDeafened } shape
+
+  Verification:
+    - TypeScript build (client): npx tsc --noEmit — passed
+    - Live check via the same CDP-driven Electron session described in
+      the PRD 10.3 entry above: joined voice, then walked through
+      mute → deafen (occupant icon markup showed both Muted and
+      Deafened icons together) → undeafen (Deafened icon cleared,
+      Muted icon stayed) → deafen again → mute-button-click-while-
+      deafened, confirming the auto-undeafen-then-toggle behavior
+      exactly: button states went from "Unmute | Undeafen" to
+      "Mute | Deafen" in one click, and the occupant's icon list
+      became empty (both cleared), matching the case where the user
+      had been manually muted before the deafen cycle. Each step was
+      checked by reading the mute/deafen button text and the target
+      occupant's rendered icon HTML directly via
+      `Runtime.evaluate` over the DevTools protocol, not just visually.
+
+--- Entry: 12/08/2026 ---
+
+Feature/Fix: Phase 10 — PRD 10.2: Audio Settings Tab
+
+  Problem: No client-local volume controls existed for nudge sounds,
+  general sound alerts, or a global voice-chat master attenuator on
+  top of Phase 9's existing per-user (0-200%) voice volume.
+
+  Solution: Added a new "🔊 Audio" settings tab with three 0-100%
+  sliders — Nudge Volume, Sound Alerts Volume, Global Voice Chat
+  Volume — each persisted to localStorage under the existing `reson8-`
+  prefix (`reson8-nudge-volume`, `reson8-alert-volume`,
+  `reson8-voice-volume`, defaulting to "100"). `SoundAlert.play()` now
+  sets `audio.volume` before playing, reading `nudgeVolume` for
+  `nudge.mp3` and `alertVolume` for every other alert file — this
+  applies uniformly across all sound call sites without touching each
+  one individually, since the volume lookup lives inside `.play()`
+  itself. voice.service.ts gained a `globalVoiceVolume` field and
+  `setGlobalVoiceVolume(percent)`, multiplied into both existing
+  gain-computation sites (`consumeProducer()`, `applyOverrideForUser()`)
+  as `(userVolumePercent / 100) * globalVoiceVolume`, applied live to
+  every currently-consumed participant, on top of (not replacing) each
+  participant's individual volume/mute override.
+
+  Bug found and fixed during implementation (not caught by the
+  pre-implementation code audit): preload.ts's `joinVoiceChannel()`
+  unconditionally constructs a brand-new `VoiceService` instance on
+  every join (`voiceService = new VoiceService(...)`), which would have
+  silently reset the global voice volume attenuator back to 100% every
+  time a user joined a channel, even after they'd set it lower. Fixed
+  by having renderer.ts call `api.setGlobalVoiceVolume(voiceVolume)`
+  again immediately after a successful join, in addition to the
+  one-time call at app startup the PRD specified.
+
+  Key Files Modified:
+    apps/client/src/services/voice.service.ts
+    apps/client/src/preload.ts
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/renderer/index.html
+
+  Verification:
+    - TypeScript build (client): npx tsc --noEmit — passed
+    - Live check via the same CDP-driven Electron session: opened
+      Settings, clicked the new Audio tab, and confirmed all three
+      sliders render at their persisted 100% default with correct
+      labels. Multi-client volume-blending scenarios (global 50% +
+      per-user 150% producing audibly different levels between two
+      participants) were not exercised this session — that requires a
+      second connected client and is a perceptual audio check the PRD
+      itself flags as a manual verification step.
+
+--- Entry: 12/08/2026 ---
+
+Feature/Fix: Phase 10 — PRD 10.1: Client Auto-Updater
+
+  Problem/Overview: Reson8 had no way to check for or install new
+  releases — users had to notice a new GitHub release and manually
+  download it.
+
+  Solution: Added `electron-updater`-based update checking, packaged-
+  build-only, with a strict check/download separation
+  (`autoUpdater.autoDownload = false` — nothing downloads until the
+  user explicitly clicks "Update Now").
+
+  Main Process Changes (main.ts):
+    - `checkForUpdatesOnce()` wraps a single `autoUpdater.
+      checkForUpdates()` call, resolved/rejected by whichever of
+      `update-available` / `update-not-available` / `error` fires
+      first for that attempt.
+    - `checkForUpdatesWithRetry()` wraps that in 1 attempt + up to 3
+      retries, 20s apart — shared by both the automatic startup check
+      and the manual "Check for Updates" button, per the PRD's retry
+      spec.
+    - The startup check fires from `did-finish-load` + a 3s delay,
+      gated on `app.isPackaged`, and its result is intentionally
+      discarded — the UI only ever reacts to the `update-available`
+      event, so a failed or negative startup check is silent by
+      construction (no special-casing needed).
+    - A module-level `isDownloadingUpdate` flag distinguishes
+      download-phase `error` events (surfaced to the renderer
+      immediately, since downloads have no retry loop of their own)
+      from check-phase `error` events (already handled/retried inside
+      `checkForUpdatesWithRetry()` — forwarding those too would spam
+      an error event on every retry attempt).
+    - New `ipcMain.handle` registrations: `check-for-updates`,
+      `download-update`, `quit-and-install`, `get-app-version`.
+    - The explicit `BrowserWindow` `icon` option and `app.setName()`
+      call from PRD 10.6 were added in the same file — see that
+      entry, not duplicated here.
+
+  Client Bridge (preload.ts):
+    - `checkForUpdates()`, `downloadUpdate()`, `quitAndInstall()`,
+      `getAppVersion()` bridge methods.
+    - Event forwarding for `update-available` / `download-progress` /
+      `update-downloaded` / `update-error`, using the existing
+      `emit`/`listeners` pub-sub pattern already used for
+      `ptt-pressed`/`ptt-released`, rather than inventing a new
+      one-off callback style.
+
+  Renderer Changes (renderer.ts, index.html):
+    - New update-confirm modal with an explicit state machine (idle →
+      found → downloading → ready), driven entirely by the forwarded
+      events above. "Update Now" triggers `downloadUpdate()` and
+      switches to a progress-bar state; `update-downloaded` briefly
+      shows "Update ready — restarting..." before calling
+      `quitAndInstall()`. "Not Now" just closes the modal — no
+      persistent snooze, matching the "prompt again next check" spec.
+    - New "ℹ️ About" settings tab (added alongside the existing tab
+      pattern, no extra wiring needed since the generic
+      `.settings-tab-btn` click handler already picks up new tabs)
+      showing the app logo, version (via `getAppVersion()`), a short
+      description, and a "Check for Updates" button with
+      Checking.../"You're up to date."/inline-error states depending
+      on the result.
+
+  Packaging (package.json):
+    - Added `"electron-updater"` as a runtime dependency (it ships
+      inside the packaged app, not just used at build time).
+    - Added `build.publish: { provider: "github", owner: "fbarrella",
+      repo: "reson8" }` — required for electron-builder to emit the
+      `latest*.yml` metadata files electron-updater reads from GitHub
+      Releases; without this, nothing exists for the updater to check
+      against.
+
+  Key Files Modified:
+    apps/client/src/main.ts
+    apps/client/src/preload.ts
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/renderer/index.html
+    apps/client/package.json
+
+  Verification:
+    - TypeScript build (client): npx tsc --noEmit — passed
+    - Live check via the same CDP-driven Electron session: opened the
+      new About tab and confirmed it correctly showed "Version 1.2.0"
+      (via the real `getAppVersion()` IPC round trip); clicked "Check
+      for Updates" and confirmed the button immediately went to a
+      disabled "Checking..." state, proving the click handler and IPC
+      bridge fire correctly.
+    - Inherently limited this session, as the PRD itself anticipated:
+      no GitHub release with `latest*.yml` metadata exists yet for
+      electron-updater to check against, so the full retry-to-
+      completion path (resolving to either an inline error or
+      "up to date" message) and the entire update-available → download
+      → install flow could not be exercised end-to-end. Plan to
+      smoke-test the "up to date" path immediately after the next
+      release ships, and the "update available" path retroactively on
+      the release after that.

@@ -27,6 +27,11 @@
         "directories": {
             "output": "release"
         },
+        "publish": {
+            "provider": "github",
+            "owner": "fbarrella",
+            "repo": "reson8"
+        },
         "files": [
             "dist/**/*",
             "assets/**/*",
@@ -46,7 +51,10 @@
                 "AppImage"
             ],
             "category": "Network;AudioVideo",
-            "icon": "assets/icon.png"
+            "icon": "assets/icon.png",
+            "desktop": {
+                "StartupWMClass": "Reson8"
+            }
         },
         "mac": {
             "target": "zip",
@@ -55,6 +63,7 @@
     },
     "dependencies": {
         "@reson8/shared-types": "*",
+        "electron-updater": "^6.8.9",
         "mediasoup-client": "^3.18.7",
         "metascraper": "^5.49.25",
         "metascraper-description": "^5.49.25",
