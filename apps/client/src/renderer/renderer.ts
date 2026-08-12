@@ -15,6 +15,7 @@ interface ChatMessage {
     content: string;
     attachmentUrl?: string | null;
     createdAt: string;
+    editedAt?: string | null;
     reactions?: Array<{ emoji: string; count: number; userIds: string[] }>;
 }
 
@@ -28,6 +29,17 @@ interface DirectMessage {
     createdAt: string;
     readAt?: string | null;
     reactions?: Array<{ emoji: string; count: number; userIds: string[] }>;
+}
+
+interface CustomEmoji {
+    id: string;
+    serverId: string;
+    name: string;
+    imageUrl: string;
+    uploadedBy: string;
+    uploadedByNickname?: string;
+    status: "PENDING" | "APPROVED";
+    createdAt: string;
 }
 
 interface LinkPreviewData {
@@ -363,7 +375,6 @@ const EMOJI_DATA: EmojiEntry[] = [
     { emoji: "🌧️", name: "cloud with rain", keywords: ["rain", "weather", "cloud"], category: "Travel & Places" },
     { emoji: "⛈️", name: "cloud with lightning and rain", keywords: ["storm", "thunder", "weather"], category: "Travel & Places" },
     { emoji: "❄️", name: "snowflake", keywords: ["snow", "cold", "winter", "ice"], category: "Travel & Places" },
-    { emoji: "🔥", name: "fire", keywords: ["flame", "hot", "lit", "burn"], category: "Travel & Places" },
     // ── Objects ──
     { emoji: "⌚", name: "watch", keywords: ["watch", "time", "clock"], category: "Objects" },
     { emoji: "📱", name: "mobile phone", keywords: ["phone", "mobile", "cell", "iphone"], category: "Objects" },
@@ -458,6 +469,204 @@ const EMOJI_DATA: EmojiEntry[] = [
     { emoji: "🇮🇳", name: "flag india", keywords: ["india", "indian"], category: "Flags" },
     { emoji: "🇲🇽", name: "flag mexico", keywords: ["mexico", "mexican"], category: "Flags" },
     { emoji: "🇦🇷", name: "flag argentina", keywords: ["argentina"], category: "Flags" },
+
+    // ── Gap-fill: commonly-expected default emoji missing from the set above (PRD 4.9) ──
+    // ── Smileys & Emotion ──
+    { emoji: "😉", name: "winking face", keywords: ["wink", "flirt"], category: "Smileys & Emotion" },
+    { emoji: "🙃", name: "upside-down face", keywords: ["silly", "sarcasm"], category: "Smileys & Emotion" },
+    { emoji: "☺️", name: "smiling face", keywords: ["smile", "happy", "relaxed"], category: "Smileys & Emotion" },
+    { emoji: "😙", name: "kissing face with smiling eyes", keywords: ["kiss", "affection"], category: "Smileys & Emotion" },
+    { emoji: "🤨", name: "face with raised eyebrow", keywords: ["skeptical", "suspicious", "distrust"], category: "Smileys & Emotion" },
+    { emoji: "🤧", name: "sneezing face", keywords: ["sick", "sneeze", "gesundheit"], category: "Smileys & Emotion" },
+    { emoji: "🤠", name: "cowboy hat face", keywords: ["cowboy", "cowgirl", "hat"], category: "Smileys & Emotion" },
+    { emoji: "🥲", name: "smiling face with tear", keywords: ["bittersweet", "proud", "touched"], category: "Smileys & Emotion" },
+    { emoji: "🥹", name: "face holding back tears", keywords: ["touched", "proud", "emotional"], category: "Smileys & Emotion" },
+    { emoji: "😵‍💫", name: "face with spiral eyes", keywords: ["dizzy", "confused"], category: "Smileys & Emotion" },
+    { emoji: "🫥", name: "dotted line face", keywords: ["invisible", "shy", "blend in"], category: "Smileys & Emotion" },
+
+    // ── People & Body ──
+    { emoji: "🤦", name: "person facepalming", keywords: ["facepalm", "disbelief"], category: "People & Body" },
+    { emoji: "🤷", name: "person shrugging", keywords: ["shrug", "idk", "unknown"], category: "People & Body" },
+    { emoji: "💃", name: "woman dancing", keywords: ["dance", "party"], category: "People & Body" },
+    { emoji: "🕺", name: "man dancing", keywords: ["dance", "party"], category: "People & Body" },
+    { emoji: "🚶", name: "person walking", keywords: ["walk", "pedestrian"], category: "People & Body" },
+    { emoji: "🏃", name: "person running", keywords: ["run", "race", "jog"], category: "People & Body" },
+    { emoji: "👶", name: "baby", keywords: ["infant", "newborn"], category: "People & Body" },
+    { emoji: "🧒", name: "child", keywords: ["kid"], category: "People & Body" },
+    { emoji: "👦", name: "boy", keywords: ["child", "kid"], category: "People & Body" },
+    { emoji: "👧", name: "girl", keywords: ["child", "kid"], category: "People & Body" },
+    { emoji: "👨", name: "man", keywords: ["adult"], category: "People & Body" },
+    { emoji: "👩", name: "woman", keywords: ["adult"], category: "People & Body" },
+    { emoji: "👴", name: "old man", keywords: ["elder", "senior"], category: "People & Body" },
+    { emoji: "👵", name: "old woman", keywords: ["elder", "senior"], category: "People & Body" },
+    { emoji: "🙋", name: "person raising hand", keywords: ["question", "volunteer"], category: "People & Body" },
+    { emoji: "💁", name: "person tipping hand", keywords: ["information", "sassy"], category: "People & Body" },
+    { emoji: "🙇", name: "person bowing", keywords: ["sorry", "respect", "apology"], category: "People & Body" },
+    { emoji: "🧑‍💻", name: "technologist", keywords: ["coder", "developer", "programmer"], category: "People & Body" },
+    { emoji: "👣", name: "footprints", keywords: ["tracks", "steps"], category: "People & Body" },
+
+    // ── Animals & Nature ──
+    { emoji: "🦄", name: "unicorn", keywords: ["mythical", "fantasy"], category: "Animals & Nature" },
+    { emoji: "🐺", name: "wolf", keywords: ["animal"], category: "Animals & Nature" },
+    { emoji: "🐴", name: "horse face", keywords: ["animal", "pony"], category: "Animals & Nature" },
+    { emoji: "🐢", name: "turtle", keywords: ["slow", "animal"], category: "Animals & Nature" },
+    { emoji: "🦀", name: "crab", keywords: ["animal", "seafood"], category: "Animals & Nature" },
+    { emoji: "🐟", name: "fish", keywords: ["animal", "seafood"], category: "Animals & Nature" },
+    { emoji: "🐠", name: "tropical fish", keywords: ["animal", "aquarium"], category: "Animals & Nature" },
+    { emoji: "🕷️", name: "spider", keywords: ["bug", "creepy"], category: "Animals & Nature" },
+    { emoji: "🦂", name: "scorpion", keywords: ["bug", "zodiac"], category: "Animals & Nature" },
+    { emoji: "🦇", name: "bat", keywords: ["animal", "vampire", "night"], category: "Animals & Nature" },
+    { emoji: "🐣", name: "hatching chick", keywords: ["bird", "baby", "new"], category: "Animals & Nature" },
+    { emoji: "🌴", name: "palm tree", keywords: ["tropical", "beach"], category: "Animals & Nature" },
+    { emoji: "🌵", name: "cactus", keywords: ["desert", "plant"], category: "Animals & Nature" },
+    { emoji: "🍁", name: "maple leaf", keywords: ["autumn", "fall", "canada"], category: "Animals & Nature" },
+    { emoji: "🍂", name: "fallen leaves", keywords: ["autumn", "fall"], category: "Animals & Nature" },
+    { emoji: "🌱", name: "seedling", keywords: ["plant", "growth", "new"], category: "Animals & Nature" },
+    { emoji: "🌷", name: "tulip", keywords: ["flower", "spring"], category: "Animals & Nature" },
+    { emoji: "💐", name: "bouquet", keywords: ["flowers", "gift"], category: "Animals & Nature" },
+    { emoji: "🌼", name: "blossom", keywords: ["flower"], category: "Animals & Nature" },
+
+    // ── Food & Drink ──
+    { emoji: "🍒", name: "cherries", keywords: ["fruit"], category: "Food & Drink" },
+    { emoji: "🍅", name: "tomato", keywords: ["vegetable", "fruit"], category: "Food & Drink" },
+    { emoji: "🥕", name: "carrot", keywords: ["vegetable"], category: "Food & Drink" },
+    { emoji: "🌽", name: "corn", keywords: ["vegetable"], category: "Food & Drink" },
+    { emoji: "🥦", name: "broccoli", keywords: ["vegetable"], category: "Food & Drink" },
+    { emoji: "🧀", name: "cheese wedge", keywords: ["dairy"], category: "Food & Drink" },
+    { emoji: "🥓", name: "bacon", keywords: ["meat", "breakfast"], category: "Food & Drink" },
+    { emoji: "🍞", name: "bread", keywords: ["loaf", "bakery"], category: "Food & Drink" },
+    { emoji: "🥐", name: "croissant", keywords: ["bakery", "breakfast"], category: "Food & Drink" },
+    { emoji: "🥪", name: "sandwich", keywords: ["lunch"], category: "Food & Drink" },
+    { emoji: "🌮", name: "taco", keywords: ["mexican"], category: "Food & Drink" },
+    { emoji: "🌯", name: "burrito", keywords: ["mexican", "wrap"], category: "Food & Drink" },
+    { emoji: "🍝", name: "spaghetti", keywords: ["pasta", "italian"], category: "Food & Drink" },
+    { emoji: "🍜", name: "steaming bowl", keywords: ["ramen", "noodles", "soup"], category: "Food & Drink" },
+    { emoji: "🍣", name: "sushi", keywords: ["japanese", "seafood"], category: "Food & Drink" },
+    { emoji: "🍦", name: "soft ice cream", keywords: ["dessert", "sweet"], category: "Food & Drink" },
+    { emoji: "🍨", name: "ice cream", keywords: ["dessert", "sweet"], category: "Food & Drink" },
+    { emoji: "🍭", name: "lollipop", keywords: ["candy", "sweet"], category: "Food & Drink" },
+    { emoji: "🍯", name: "honey pot", keywords: ["sweet", "bees"], category: "Food & Drink" },
+    { emoji: "🥛", name: "glass of milk", keywords: ["drink", "dairy"], category: "Food & Drink" },
+    { emoji: "🍸", name: "cocktail glass", keywords: ["drink", "alcohol"], category: "Food & Drink" },
+    { emoji: "🥃", name: "tumbler glass", keywords: ["whisky", "drink", "alcohol"], category: "Food & Drink" },
+    { emoji: "🍾", name: "bottle with popping cork", keywords: ["champagne", "celebration"], category: "Food & Drink" },
+
+    // ── Activities ──
+    { emoji: "🏸", name: "badminton", keywords: ["sport", "racquet"], category: "Activities" },
+    { emoji: "🏒", name: "ice hockey", keywords: ["sport"], category: "Activities" },
+    { emoji: "🏏", name: "cricket game", keywords: ["sport"], category: "Activities" },
+    { emoji: "🥊", name: "boxing glove", keywords: ["sport", "fight"], category: "Activities" },
+    { emoji: "⛳", name: "flag in hole", keywords: ["golf", "sport"], category: "Activities" },
+    { emoji: "🎳", name: "bowling", keywords: ["sport", "strike"], category: "Activities" },
+    { emoji: "🎣", name: "fishing pole", keywords: ["fish", "hobby"], category: "Activities" },
+    { emoji: "🎿", name: "skis", keywords: ["winter", "sport"], category: "Activities" },
+    { emoji: "🏂", name: "snowboarder", keywords: ["winter", "sport"], category: "Activities" },
+    { emoji: "🏋️", name: "person lifting weights", keywords: ["gym", "workout"], category: "Activities" },
+    { emoji: "🚴", name: "person biking", keywords: ["cycling", "sport"], category: "Activities" },
+    { emoji: "🎖️", name: "military medal", keywords: ["award", "honor"], category: "Activities" },
+    { emoji: "🎫", name: "ticket", keywords: ["event", "admission"], category: "Activities" },
+
+    // ── Travel & Places ──
+    { emoji: "🚲", name: "bicycle", keywords: ["bike", "cycling"], category: "Travel & Places" },
+    { emoji: "🏍️", name: "motorcycle", keywords: ["bike", "motorbike"], category: "Travel & Places" },
+    { emoji: "🚂", name: "locomotive", keywords: ["train"], category: "Travel & Places" },
+    { emoji: "🚦", name: "vertical traffic light", keywords: ["stop", "go", "signal"], category: "Travel & Places" },
+    { emoji: "⛽", name: "fuel pump", keywords: ["gas", "station"], category: "Travel & Places" },
+    { emoji: "🗺️", name: "world map", keywords: ["travel", "geography"], category: "Travel & Places" },
+    { emoji: "🧭", name: "compass", keywords: ["navigation", "direction"], category: "Travel & Places" },
+    { emoji: "⛰️", name: "mountain", keywords: ["nature", "hike"], category: "Travel & Places" },
+    { emoji: "🏖️", name: "beach with umbrella", keywords: ["vacation", "sand"], category: "Travel & Places" },
+    { emoji: "🌋", name: "volcano", keywords: ["nature", "eruption"], category: "Travel & Places" },
+    { emoji: "🏰", name: "castle", keywords: ["fairytale", "building"], category: "Travel & Places" },
+    { emoji: "🎡", name: "ferris wheel", keywords: ["carnival", "fair"], category: "Travel & Places" },
+    { emoji: "🎢", name: "roller coaster", keywords: ["amusement", "park"], category: "Travel & Places" },
+    { emoji: "🌅", name: "sunrise", keywords: ["morning", "dawn"], category: "Travel & Places" },
+    { emoji: "🎆", name: "fireworks", keywords: ["celebration", "night"], category: "Travel & Places" },
+    { emoji: "🌊", name: "water wave", keywords: ["ocean", "sea", "surf"], category: "Travel & Places" },
+    { emoji: "⚡", name: "high voltage", keywords: ["lightning", "bolt", "electric"], category: "Travel & Places" },
+    { emoji: "☔", name: "umbrella with rain drops", keywords: ["rain", "weather"], category: "Travel & Places" },
+    { emoji: "⛄", name: "snowman without snow", keywords: ["winter", "cold"], category: "Travel & Places" },
+    { emoji: "🌡️", name: "thermometer", keywords: ["temperature", "weather"], category: "Travel & Places" },
+
+    // ── Objects ──
+    { emoji: "📚", name: "books", keywords: ["read", "study", "library"], category: "Objects" },
+    { emoji: "✂️", name: "scissors", keywords: ["cut", "craft"], category: "Objects" },
+    { emoji: "🗑️", name: "wastebasket", keywords: ["trash", "delete"], category: "Objects" },
+    { emoji: "🛒", name: "shopping cart", keywords: ["shopping", "store"], category: "Objects" },
+    { emoji: "💰", name: "money bag", keywords: ["cash", "rich"], category: "Objects" },
+    { emoji: "💵", name: "dollar banknote", keywords: ["money", "cash"], category: "Objects" },
+    { emoji: "💳", name: "credit card", keywords: ["payment", "money"], category: "Objects" },
+    { emoji: "👑", name: "crown", keywords: ["king", "queen", "royalty"], category: "Objects" },
+    { emoji: "💎", name: "gem stone", keywords: ["diamond", "jewel"], category: "Objects" },
+    { emoji: "🕶️", name: "sunglasses", keywords: ["cool", "shades"], category: "Objects" },
+    { emoji: "👓", name: "glasses", keywords: ["eyewear", "nerd"], category: "Objects" },
+    { emoji: "👔", name: "necktie", keywords: ["clothing", "formal"], category: "Objects" },
+    { emoji: "👕", name: "t-shirt", keywords: ["clothing", "shirt"], category: "Objects" },
+    { emoji: "👗", name: "dress", keywords: ["clothing"], category: "Objects" },
+    { emoji: "👟", name: "running shoe", keywords: ["sneaker", "clothing"], category: "Objects" },
+    { emoji: "🎩", name: "top hat", keywords: ["formal", "magic"], category: "Objects" },
+    { emoji: "🧢", name: "billed cap", keywords: ["hat", "clothing"], category: "Objects" },
+    { emoji: "💄", name: "lipstick", keywords: ["makeup", "beauty"], category: "Objects" },
+    { emoji: "💍", name: "ring", keywords: ["jewelry", "engagement", "wedding"], category: "Objects" },
+    { emoji: "🛏️", name: "bed", keywords: ["sleep", "furniture"], category: "Objects" },
+    { emoji: "🪑", name: "chair", keywords: ["furniture", "seat"], category: "Objects" },
+    { emoji: "🧸", name: "teddy bear", keywords: ["toy", "cute"], category: "Objects" },
+    { emoji: "💊", name: "pill", keywords: ["medicine", "health"], category: "Objects" },
+    { emoji: "💉", name: "syringe", keywords: ["medicine", "injection", "vaccine"], category: "Objects" },
+
+    // ── Symbols ──
+    { emoji: "💲", name: "heavy dollar sign", keywords: ["money", "currency"], category: "Symbols" },
+    { emoji: "#️⃣", name: "keycap hash", keywords: ["hashtag", "number"], category: "Symbols" },
+    { emoji: "✔️", name: "check mark", keywords: ["done", "yes", "correct"], category: "Symbols" },
+    { emoji: "☑️", name: "check box with check", keywords: ["done", "selected"], category: "Symbols" },
+    { emoji: "🔀", name: "shuffle tracks button", keywords: ["random", "music"], category: "Symbols" },
+    { emoji: "🔁", name: "repeat button", keywords: ["loop", "again"], category: "Symbols" },
+    { emoji: "⏯️", name: "play or pause button", keywords: ["media", "video"], category: "Symbols" },
+    { emoji: "⏹️", name: "stop button", keywords: ["media", "video"], category: "Symbols" },
+    { emoji: "⬆️", name: "up arrow", keywords: ["direction", "north"], category: "Symbols" },
+    { emoji: "⬇️", name: "down arrow", keywords: ["direction", "south"], category: "Symbols" },
+    { emoji: "⬅️", name: "left arrow", keywords: ["direction", "back", "west"], category: "Symbols" },
+    { emoji: "➡️", name: "right arrow", keywords: ["direction", "next", "east"], category: "Symbols" },
+    { emoji: "🔄", name: "counterclockwise arrows button", keywords: ["refresh", "reload", "sync"], category: "Symbols" },
+    { emoji: "🔢", name: "input numbers", keywords: ["1234", "digits"], category: "Symbols" },
+    { emoji: "💠", name: "diamond with a dot", keywords: ["shape"], category: "Symbols" },
+    { emoji: "🔘", name: "radio button", keywords: ["select", "option"], category: "Symbols" },
+    { emoji: "⬛", name: "black large square", keywords: ["shape", "square"], category: "Symbols" },
+    { emoji: "⬜", name: "white large square", keywords: ["shape", "square"], category: "Symbols" },
+    { emoji: "🟥", name: "red square", keywords: ["shape", "color"], category: "Symbols" },
+    { emoji: "🟩", name: "green square", keywords: ["shape", "color"], category: "Symbols" },
+    { emoji: "🟦", name: "blue square", keywords: ["shape", "color"], category: "Symbols" },
+    { emoji: "💞", name: "revolving hearts", keywords: ["love", "affection"], category: "Symbols" },
+    { emoji: "💕", name: "two hearts", keywords: ["love", "affection"], category: "Symbols" },
+    { emoji: "💓", name: "beating heart", keywords: ["love", "pulse"], category: "Symbols" },
+    { emoji: "💗", name: "growing heart", keywords: ["love", "excited"], category: "Symbols" },
+    { emoji: "💖", name: "sparkling heart", keywords: ["love", "shiny"], category: "Symbols" },
+    { emoji: "💘", name: "heart with arrow", keywords: ["love", "cupid", "crush"], category: "Symbols" },
+    { emoji: "❤️‍🔥", name: "heart on fire", keywords: ["love", "passion", "burning"], category: "Symbols" },
+
+    // ── Flags ──
+    { emoji: "🇨🇳", name: "flag china", keywords: ["china", "chinese"], category: "Flags" },
+    { emoji: "🇷🇺", name: "flag russia", keywords: ["russia", "russian"], category: "Flags" },
+    { emoji: "🇵🇹", name: "flag portugal", keywords: ["portugal", "portuguese"], category: "Flags" },
+    { emoji: "🇳🇱", name: "flag netherlands", keywords: ["netherlands", "dutch", "holland"], category: "Flags" },
+    { emoji: "🇸🇪", name: "flag sweden", keywords: ["sweden", "swedish"], category: "Flags" },
+    { emoji: "🇨🇭", name: "flag switzerland", keywords: ["switzerland", "swiss"], category: "Flags" },
+    { emoji: "🇵🇱", name: "flag poland", keywords: ["poland", "polish"], category: "Flags" },
+    { emoji: "🇹🇷", name: "flag turkey", keywords: ["turkey", "turkish"], category: "Flags" },
+    { emoji: "🇿🇦", name: "flag south africa", keywords: ["south africa"], category: "Flags" },
+    { emoji: "🇺🇦", name: "flag ukraine", keywords: ["ukraine", "ukrainian"], category: "Flags" },
+    { emoji: "🇵🇭", name: "flag philippines", keywords: ["philippines", "filipino"], category: "Flags" },
+    { emoji: "🇮🇩", name: "flag indonesia", keywords: ["indonesia", "indonesian"], category: "Flags" },
+    { emoji: "🇻🇳", name: "flag vietnam", keywords: ["vietnam", "vietnamese"], category: "Flags" },
+    { emoji: "🇹🇭", name: "flag thailand", keywords: ["thailand", "thai"], category: "Flags" },
+    { emoji: "🇮🇪", name: "flag ireland", keywords: ["ireland", "irish"], category: "Flags" },
+    { emoji: "🇳🇴", name: "flag norway", keywords: ["norway", "norwegian"], category: "Flags" },
+    { emoji: "🇩🇰", name: "flag denmark", keywords: ["denmark", "danish"], category: "Flags" },
+    { emoji: "🇬🇷", name: "flag greece", keywords: ["greece", "greek"], category: "Flags" },
+    { emoji: "🇪🇬", name: "flag egypt", keywords: ["egypt", "egyptian"], category: "Flags" },
+    { emoji: "🇳🇬", name: "flag nigeria", keywords: ["nigeria", "nigerian"], category: "Flags" },
+    { emoji: "🇮🇱", name: "flag israel", keywords: ["israel", "israeli"], category: "Flags" },
+    { emoji: "🇳🇿", name: "flag new zealand", keywords: ["new zealand", "kiwi"], category: "Flags" },
 ];
 
 interface Reson8Api {
@@ -469,21 +678,39 @@ interface Reson8Api {
     toggleMute(): boolean;
     toggleDeafen(): boolean;
     setMuted(muted: boolean): void;
+    setVoiceState(isMuted: boolean, isDeafened: boolean): void;
+    setLocalUserVolume(userId: string, percent: number): void;
+    setLocalUserMute(userId: string, muted: boolean): void;
+    getLocalUserVolume(userId: string): number;
+    getLocalUserMute(userId: string): boolean;
     createChannel(
         serverId: string,
         name: string,
         type: "TEXT" | "VOICE",
         parentId?: string | null,
+        isNsfw?: boolean,
     ): Promise<{ success: boolean; channelId?: string; error?: string }>;
+    updateChannel(
+        channelId: string,
+        changes: { name?: string; position?: number; isNsfw?: boolean },
+    ): Promise<{ success: boolean; error?: string }>;
+    reorderChannels(
+        parentId: string | null,
+        orderedChannelIds: string[],
+    ): Promise<{ success: boolean; error?: string }>;
     deleteChannel(channelId: string): Promise<{ success: boolean; error?: string }>;
-    sendMessage(channelId: string, content: string, attachmentUrl?: string): Promise<{ success: boolean; messageId?: string }>;
+    sendMessage(channelId: string, content: string, attachmentUrl?: string, attachmentPublicId?: string): Promise<{ success: boolean; messageId?: string }>;
+    deleteMessage(messageId: string): Promise<{ success: boolean; error?: string }>;
+    editMessage(messageId: string, content: string): Promise<{ success: boolean; error?: string }>;
     fetchMessages(channelId: string, before?: string, limit?: number): Promise<{ success: boolean; messages?: ChatMessage[]; error?: string }>;
+    markChannelRead(channelId: string): Promise<{ success: boolean }>;
     getAllUsers(serverId: string): Promise<{ success: boolean; users?: any[]; error?: string }>;
     getRoles(serverId: string): Promise<{ success: boolean; roles?: any[]; error?: string }>;
     assignRole(userId: string, roleId: string, action: "add" | "remove"): Promise<{ success: boolean; error?: string }>;
     enumerateAudioDevices(): Promise<{ inputs: { deviceId: string; label: string }[]; outputs: { deviceId: string; label: string }[] }>;
     setAudioInputDevice(deviceId: string | null): void;
-    sendDirectMessage(recipientId: string, content: string, attachmentUrl?: string): Promise<{ success: boolean; messageId?: string; error?: string }>;
+    sendDirectMessage(recipientId: string, content: string, attachmentUrl?: string, attachmentPublicId?: string): Promise<{ success: boolean; messageId?: string; error?: string }>;
+    deleteDirectMessage(dmId: string): Promise<{ success: boolean; error?: string }>;
     fetchDirectMessages(partnerId: string, before?: string, limit?: number): Promise<{ success: boolean; messages?: DirectMessage[]; error?: string }>;
     getOnlineUsers(): Promise<{ success: boolean; users?: { userId: string; nickname: string; isOnline: boolean }[]; error?: string }>;
     markDmsRead(partnerId: string): Promise<{ success: boolean; error?: string }>;
@@ -492,12 +719,13 @@ interface Reson8Api {
     banUser(userId: string): Promise<{ success: boolean; error?: string }>;
     unbanUser(userId: string): Promise<{ success: boolean; error?: string }>;
     getBannedUsers(): Promise<{ success: boolean; users?: { userId: string; nickname: string; bannedAt: string }[]; error?: string }>;
-    uploadFile(fileBuffer: ArrayBuffer, fileName: string, mimeType: string): Promise<{ url: string }>;
+    uploadFile(fileBuffer: ArrayBuffer, fileName: string, mimeType: string): Promise<{ url: string; publicId?: string }>;
     downloadImage(url: string): void;
     fetchLinkPreview(url: string): Promise<LinkPreviewData | null>;
     setTrayPrefs(prefs: { minimizeToTray: boolean; closeToTray: boolean }): void;
     getTrayPrefs(): Promise<{ minimizeToTray: boolean; closeToTray: boolean }>;
     isWindowFocused(): Promise<boolean>;
+    flashWindow(): void;
     setMicSensitivity(enabled: boolean, threshold: number): void;
     setMicThreshold(threshold: number): void;
     startMicPreview(): Promise<void>;
@@ -505,6 +733,14 @@ interface Reson8Api {
     getMicLevel(): number;
     getLatency(): number;
     toggleReaction(messageId: string, emoji: string, isDm: boolean): Promise<{ success: boolean; error?: string }>;
+    uploadEmojiFile(fileBuffer: ArrayBuffer, fileName: string, mimeType: string): Promise<{ url: string; publicId?: string }>;
+    createCustomEmoji(name: string, imageUrl: string, imagePublicId?: string): Promise<{ success: boolean; emojiId?: string; error?: string }>;
+    getApprovedEmojis(): Promise<{ success: boolean; emojis?: CustomEmoji[]; error?: string }>;
+    getPendingEmojis(): Promise<{ success: boolean; emojis?: CustomEmoji[]; error?: string }>;
+    reviewCustomEmoji(emojiId: string, decision: "APPROVED" | "REJECTED"): Promise<{ success: boolean; error?: string }>;
+    nudgeUser(targetUserId: string): Promise<{ success: boolean; error?: string }>;
+    getServerSettings(): Promise<{ success: boolean; nudgeEnabled?: boolean; error?: string }>;
+    updateServerSettings(nudgeEnabled: boolean): Promise<{ success: boolean; error?: string }>;
     on(event: string, callback: (...args: any[]) => void): void;
 }
 
@@ -545,6 +781,7 @@ let pttModeEnabled = localStorage.getItem("reson8-ptt-mode") === "true";
 
 // Attachment state
 let pendingAttachmentUrl: string | null = null;
+let pendingAttachmentPublicId: string | null = null;
 let serverBaseUrl: string = "";
 
 // Active speakers state
@@ -566,6 +803,27 @@ const linkPreviewCache = new Map<string, LinkPreviewData | null>();
 
 // Voice session timers: channelId → ISO startedAt
 const sessionTimers = new Map<string, string>();
+
+// Text channels with unread messages (PRD 4.13). Seeded from the server's
+// per-user hasUnread flag at join time, then kept live client-side: every
+// MESSAGE_RECEIVED for a channel that isn't the active tab adds to this set
+// (no server round-trip needed, since MESSAGE_RECEIVED already broadcasts
+// server-wide regardless of which tabs are open); opening a channel's tab
+// clears it and persists the read cursor via MARK_CHANNEL_READ.
+const unreadChannelIds = new Set<string>();
+
+// Approved custom server emoji, cached for the picker's "+" tab and for
+// resolving :name: tokens in message content / reaction pills. Refreshed on
+// (re)connect, updated live via the CUSTOM_EMOJI_APPROVED broadcast.
+let customEmojis: CustomEmoji[] = [];
+
+// Nudge (PRD 4.14). Server-wide toggle, refreshed on (re)connect and kept
+// live via SERVER_SETTINGS_UPDATED. The cooldown map here is a client-side
+// mirror purely for disabling the button / showing a countdown — the server
+// enforces the real 30s-per-(sender,target) cooldown authoritatively.
+let serverNudgeEnabled = true;
+const NUDGE_COOLDOWN_MS = 30 * 1000;
+const lastNudgeSentAt = new Map<string, number>();
 
 function formatDuration(ms: number): string {
     const totalSeconds = Math.floor(ms / 1000);
@@ -685,6 +943,10 @@ const adminModal = document.getElementById("admin-modal") as HTMLDivElement;
 const adminUserList = document.getElementById("admin-user-list") as HTMLDivElement;
 const btnAdminClose = document.getElementById("btn-admin-close") as HTMLButtonElement;
 const settingsTabRoles = document.getElementById("settings-tab-roles") as HTMLButtonElement;
+const settingsTabEmojis = document.getElementById("settings-tab-emojis") as HTMLButtonElement;
+const emojiPendingList = document.getElementById("emoji-pending-list") as HTMLDivElement;
+const settingsTabServer = document.getElementById("settings-tab-server") as HTMLButtonElement;
+const chkNudgeEnabled = document.getElementById("chk-nudge-enabled") as HTMLInputElement;
 
 // Audio device selects (inside settings modal voice tab)
 const audioInputSelect = document.getElementById("audio-input-select") as HTMLSelectElement;
@@ -697,6 +959,7 @@ const onlineUsersModal = document.getElementById("online-users-modal") as HTMLDi
 const onlineUserList = document.getElementById("online-user-list") as HTMLDivElement;
 const btnOnlineClose = document.getElementById("btn-online-close") as HTMLButtonElement;
 const onlineDot = document.getElementById("online-dot") as HTMLSpanElement;
+const toastContainer = document.getElementById("toast-container") as HTMLDivElement;
 
 // System tray checkboxes
 const chkMinimizeToTray = document.getElementById("chk-minimize-to-tray") as HTMLInputElement;
@@ -716,6 +979,57 @@ const micSensitivitySection = document.getElementById("mic-sensitivity-section")
 
 // State for pending delete
 let pendingDeleteChannelId: string | null = null;
+
+// ── Rename Channel Modal (PRD 4.5) ──────────────────────────────────────────
+const renameChannelModal = document.getElementById("rename-channel-modal") as HTMLDivElement;
+const renameChannelInput = document.getElementById("rename-channel-input") as HTMLInputElement;
+const btnRenameCancel = document.getElementById("btn-rename-cancel") as HTMLButtonElement;
+const btnRenameConfirm = document.getElementById("btn-rename-confirm") as HTMLButtonElement;
+let pendingRenameChannelId: string | null = null;
+
+// ── NSFW Channel Confirmation Modal (PRD 4.7) ───────────────────────────────
+const nsfwConfirmModal = document.getElementById("nsfw-confirm-modal") as HTMLDivElement;
+const nsfwConfirmChannelName = document.getElementById("nsfw-confirm-channel-name") as HTMLElement;
+const btnNsfwCancel = document.getElementById("btn-nsfw-cancel") as HTMLButtonElement;
+const btnNsfwConfirm = document.getElementById("btn-nsfw-confirm") as HTMLButtonElement;
+let pendingNsfwChannel: TreeNode | null = null;
+
+const newChannelNsfwRow = document.getElementById("new-channel-nsfw-row") as HTMLDivElement;
+const newChannelNsfw = document.getElementById("new-channel-nsfw") as HTMLInputElement;
+
+// ── Delete Message Confirmation Modal (PRD 4.10) ────────────────────────────
+const deleteMessageModal = document.getElementById("delete-message-modal") as HTMLDivElement;
+const btnDeleteMessageCancel = document.getElementById("btn-delete-message-cancel") as HTMLButtonElement;
+const btnDeleteMessageConfirm = document.getElementById("btn-delete-message-confirm") as HTMLButtonElement;
+let pendingDeleteMessage: { msgId: string; isDm: boolean } | null = null;
+
+// ── Custom Emoji Upload / Crop Modal (PRD 4.8) ──────────────────────────────
+const emojiUploadModal = document.getElementById("emoji-upload-modal") as HTMLDivElement;
+const emojiUploadStepSelect = document.getElementById("emoji-upload-step-select") as HTMLDivElement;
+const emojiUploadStepCrop = document.getElementById("emoji-upload-step-crop") as HTMLDivElement;
+const emojiFileInput = document.getElementById("emoji-file-input") as HTMLInputElement;
+const btnEmojiChooseFile = document.getElementById("btn-emoji-choose-file") as HTMLButtonElement;
+const btnEmojiUploadCancelSelect = document.getElementById("btn-emoji-upload-cancel-select") as HTMLButtonElement;
+const emojiCropViewport = document.getElementById("emoji-crop-viewport") as HTMLDivElement;
+const emojiCropImg = document.getElementById("emoji-crop-img") as HTMLImageElement;
+const emojiCropZoom = document.getElementById("emoji-crop-zoom") as HTMLInputElement;
+const emojiNameInput = document.getElementById("emoji-name-input") as HTMLInputElement;
+const btnEmojiUploadCancel = document.getElementById("btn-emoji-upload-cancel") as HTMLButtonElement;
+const btnEmojiUploadConfirm = document.getElementById("btn-emoji-upload-confirm") as HTMLButtonElement;
+
+const EMOJI_CROP_VIEWPORT_SIZE = 220;
+const EMOJI_MAX_UPLOAD_SIZE = 500 * 1024; // 500KB, pre-crop
+
+// State for the crop tool
+let emojiCropNaturalWidth = 0;
+let emojiCropNaturalHeight = 0;
+let emojiCropBaseScale = 1; // scale at zoom=1 that makes the image fully cover the viewport
+let emojiCropZoomFactor = 1;
+let emojiCropOffsetX = 0;
+let emojiCropOffsetY = 0;
+let emojiCropObjectUrl: string | null = null;
+let emojiCropDragging = false;
+let emojiCropDragStart = { x: 0, y: 0, offsetX: 0, offsetY: 0 };
 
 // State for tabs: map of channelId → { tabEl, contentEl, messagesEl }
 interface ChatTab {
@@ -741,6 +1055,22 @@ function log(message: string, type: "info" | "success" | "error" | "" = ""): voi
 
     eventLog.appendChild(entry);
     eventLog.scrollTop = eventLog.scrollHeight;
+}
+
+/** Shows a transient toast in the top-right corner (used by Nudge; general-purpose otherwise). */
+function showToast(message: string, durationMs = 4000): void {
+    const toast = document.createElement("div");
+    toast.className = "toast";
+    toast.innerHTML = message;
+    toastContainer.appendChild(toast);
+
+    // Force a reflow so the "visible" transition actually animates in.
+    requestAnimationFrame(() => toast.classList.add("visible"));
+
+    setTimeout(() => {
+        toast.classList.remove("visible");
+        toast.addEventListener("transitionend", () => toast.remove(), { once: true });
+    }, durationMs);
 }
 
 // ── Connection ──────────────────────────────────────────────────────────
@@ -797,8 +1127,10 @@ interface TreeNode {
     name: string;
     type: "TEXT" | "VOICE";
     parentId: string | null;
+    isNsfw?: boolean;
+    hasUnread?: boolean;
     children: TreeNode[];
-    occupants: { userId: string; nickname: string }[];
+    occupants: { userId: string; nickname: string; isMuted?: boolean; isDeafened?: boolean }[];
 }
 
 function renderTree(tree: TreeNode[]): void {
@@ -817,10 +1149,10 @@ function renderTree(tree: TreeNode[]): void {
     for (const node of tree) {
         if (node.children.length > 0) {
             // This node has children — render as a category
-            channelTree.appendChild(renderCategory(node));
+            channelTree.appendChild(renderCategory(node, tree));
         } else {
             // Leaf channel at root level
-            channelTree.appendChild(renderChannel(node));
+            channelTree.appendChild(renderChannel(node, tree));
             renderOccupants(channelTree, node);
         }
     }
@@ -828,7 +1160,67 @@ function renderTree(tree: TreeNode[]): void {
     updateParentSelect(tree);
 }
 
-function renderCategory(node: TreeNode): HTMLDivElement {
+// Currently-dragged channel/category ID (PRD 4.6, admin-only sibling reordering).
+let draggedChannelId: string | null = null;
+
+/**
+ * Wires HTML5 drag-and-drop reordering onto a channel-tree row. `siblings` is
+ * the exact array `node` belongs to (the `tree` array for root nodes, or a
+ * category's `children` array) — dropping onto another row in the same array
+ * reorders the whole array and persists it via REORDER_CHANNELS. Admin-only;
+ * a no-op for everyone else so non-admins see no drag affordance at all.
+ */
+function attachChannelDragHandlers(el: HTMLElement, node: TreeNode, siblings: TreeNode[]): void {
+    if (!isAdminUser) return;
+
+    el.classList.add("draggable-channel");
+    el.draggable = true;
+
+    el.addEventListener("dragstart", (e) => {
+        draggedChannelId = node.id;
+        e.dataTransfer?.setData("text/plain", node.id);
+        if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
+    });
+
+    el.addEventListener("dragover", (e) => {
+        if (!draggedChannelId || draggedChannelId === node.id) return;
+        if (!siblings.some((s) => s.id === draggedChannelId)) return;
+        e.preventDefault();
+        el.classList.add("drag-over");
+    });
+
+    el.addEventListener("dragleave", () => {
+        el.classList.remove("drag-over");
+    });
+
+    el.addEventListener("drop", async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        el.classList.remove("drag-over");
+
+        const draggedId = draggedChannelId;
+        draggedChannelId = null;
+        if (!draggedId || draggedId === node.id) return;
+        if (!siblings.some((s) => s.id === draggedId)) return;
+
+        const orderedIds = siblings.map((s) => s.id).filter((id) => id !== draggedId);
+        const insertIdx = orderedIds.indexOf(node.id);
+        orderedIds.splice(insertIdx === -1 ? orderedIds.length : insertIdx, 0, draggedId);
+
+        const result = await api.reorderChannels(node.parentId, orderedIds);
+        if (!result.success) {
+            log(`Failed to reorder channels: ${result.error}`, "error");
+            if (result.error && /permission|denied/i.test(result.error)) SoundAlert.play("insufficient_perms.mp3");
+        }
+    });
+
+    el.addEventListener("dragend", () => {
+        draggedChannelId = null;
+        document.querySelectorAll(".drag-over").forEach((n) => n.classList.remove("drag-over"));
+    });
+}
+
+function renderCategory(node: TreeNode, siblings: TreeNode[]): HTMLDivElement {
     const category = document.createElement("div");
     category.className = "tree-category";
 
@@ -838,6 +1230,7 @@ function renderCategory(node: TreeNode): HTMLDivElement {
     label.addEventListener("click", () => {
         category.classList.toggle("collapsed");
     });
+    attachChannelDragHandlers(label, node, siblings);
     category.appendChild(label);
 
     const children = document.createElement("div");
@@ -845,9 +1238,9 @@ function renderCategory(node: TreeNode): HTMLDivElement {
 
     for (const child of node.children) {
         if (child.children.length > 0) {
-            children.appendChild(renderCategory(child));
+            children.appendChild(renderCategory(child, node.children));
         } else {
-            children.appendChild(renderChannel(child));
+            children.appendChild(renderChannel(child, node.children));
             renderOccupants(children, child);
         }
     }
@@ -859,7 +1252,7 @@ function renderCategory(node: TreeNode): HTMLDivElement {
     return category;
 }
 
-function renderChannel(node: TreeNode): HTMLDivElement {
+function renderChannel(node: TreeNode, siblings: TreeNode[]): HTMLDivElement {
     const channel = document.createElement("div");
     channel.className = "tree-channel";
     if (currentChannelId === node.id) {
@@ -879,25 +1272,113 @@ function renderChannel(node: TreeNode): HTMLDivElement {
         timerBadge = `<span class="session-timer" data-session-channel="${node.id}"></span>`;
     }
 
+    const nsfwBadge = node.isNsfw ? `<span class="nsfw-badge">NSFW</span>` : "";
+
+    // Unread indicator (text channels only) — seed from the server's
+    // per-user flag (only trustworthy on the initial join-time tree, see
+    // IChannelTreeNode.hasUnread), then let it persist across re-renders
+    // via unreadChannelIds until the tab is opened.
+    if (!isVoice) {
+        channel.dataset.channelId = node.id;
+        if (node.hasUnread && node.id !== activeTabId) unreadChannelIds.add(node.id);
+        if (unreadChannelIds.has(node.id)) channel.classList.add("unread");
+    }
+    const unreadDot = !isVoice && unreadChannelIds.has(node.id) ? `<span class="unread-dot"></span>` : "";
+
     channel.innerHTML = `
         <span class="ch-icon ${iconClass}">${icon}</span>
         <span class="ch-name">${escapeHtml(node.name)}</span>
+        ${unreadDot}
+        ${nsfwBadge}
         ${timerBadge}
         ${countBadge}
     `;
 
     channel.addEventListener("click", () => handleChannelClick(node));
+    attachChannelDragHandlers(channel, node, siblings);
 
-    // Right-click to delete
+    // Right-click → Rename / Toggle NSFW (text only) / Delete
     channel.addEventListener("contextmenu", (e) => {
         e.preventDefault();
-        showDeleteModal(node.id, node.name);
+        e.stopPropagation();
+
+        document.querySelector(".occupant-ctx-menu")?.remove();
+
+        const menu = document.createElement("div");
+        menu.className = "occupant-ctx-menu";
+        menu.style.left = `${e.clientX}px`;
+        menu.style.top = `${e.clientY}px`;
+
+        menu.innerHTML = `
+            <button class="channel-ctx-menu-item ctx-rename-btn">✏️ Rename</button>
+            ${!isVoice ? `<button class="channel-ctx-menu-item ctx-nsfw-toggle-btn">🔞 ${node.isNsfw ? "Unmark" : "Mark"} as NSFW</button>` : ""}
+            <button class="ctx-delete-channel-btn">🗑️ Delete Channel</button>
+        `;
+
+        menu.querySelector(".ctx-rename-btn")?.addEventListener("click", () => {
+            menu.remove();
+            showRenameModal(node.id, node.name);
+        });
+
+        menu.querySelector(".ctx-nsfw-toggle-btn")?.addEventListener("click", async () => {
+            menu.remove();
+            const result = await api.updateChannel(node.id, { isNsfw: !node.isNsfw });
+            if (!result.success) {
+                log(`Failed to update channel: ${result.error}`, "error");
+                if (result.error && /permission|denied/i.test(result.error)) SoundAlert.play("insufficient_perms.mp3");
+            }
+        });
+
+        menu.querySelector(".ctx-delete-channel-btn")?.addEventListener("click", () => {
+            menu.remove();
+            showDeleteModal(node.id, node.name);
+        });
+
+        document.body.appendChild(menu);
+
+        const closeCtx = (ev: MouseEvent) => {
+            if (!menu.contains(ev.target as Node)) {
+                menu.remove();
+                document.removeEventListener("click", closeCtx, true);
+            }
+        };
+        setTimeout(() => document.addEventListener("click", closeCtx, true), 0);
     });
 
     return channel;
 }
 
+// Inline SVGs shown next to an occupant's name when they've muted or deafened
+// themselves, so it doesn't look like they're simply ignoring everyone else.
+const OCC_MUTED_ICON =
+    `<svg class="occ-voice-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" title="Muted"><line x1="1" y1="1" x2="23" y2="23"/><path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"/><path d="M17 16.95A7 7 0 0 1 5 12v-2M19 10v2a7 7 0 0 1-.11 1.23"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>`;
+const OCC_DEAFENED_ICON =
+    `<svg class="occ-voice-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" title="Deafened"><line x1="1" y1="1" x2="23" y2="23"/><path d="M3 18v-6a9 9 0 0 1 15.34-6.36M21 12v2.5"/><path d="M21 16v2a2 2 0 0 1-2 2h-1"/><path d="M3 18v2a2 2 0 0 0 2 2h1v-4H4a1 1 0 0 0-1 1z"/></svg>`;
+
+// Client-local (never sent to the server) per-remote-user volume/mute overrides —
+// see PRD 4.1/4.2. Persisted per target userId so a preference sticks across
+// restarts and applies the next time you're in a channel with that person.
+function getSavedLocalVolume(userId: string): number {
+    const raw = localStorage.getItem(`reson8-local-volume-${userId}`);
+    const parsed = raw !== null ? parseInt(raw, 10) : NaN;
+    return Number.isFinite(parsed) ? Math.max(0, Math.min(200, parsed)) : 100;
+}
+
+function setSavedLocalVolume(userId: string, percent: number): void {
+    localStorage.setItem(`reson8-local-volume-${userId}`, String(percent));
+}
+
+function getSavedLocalMute(userId: string): boolean {
+    return localStorage.getItem(`reson8-local-mute-${userId}`) === "1";
+}
+
+function setSavedLocalMute(userId: string, muted: boolean): void {
+    localStorage.setItem(`reson8-local-mute-${userId}`, muted ? "1" : "0");
+}
+
 function renderOccupants(container: HTMLElement, node: TreeNode): void {
+    const myId = api.getInstanceId();
+
     for (const occ of node.occupants) {
         const el = document.createElement("div");
         el.className = "tree-occupant";
@@ -905,12 +1386,24 @@ function renderOccupants(container: HTMLElement, node: TreeNode): void {
             el.classList.add("speaking");
         }
         el.setAttribute("data-user-id", occ.userId);
-        el.innerHTML = `<span class="occ-dot"></span>${escapeHtml(occ.nickname)}`;
+        const voiceStateIcons =
+            `${occ.isDeafened ? OCC_DEAFENED_ICON : occ.isMuted ? OCC_MUTED_ICON : ""}`;
+        el.innerHTML = `<span class="occ-dot"></span>${escapeHtml(occ.nickname)}${voiceStateIcons}`;
 
-        // Admin right-click → Kick from Channel
+        // Re-apply any saved local volume/mute for this participant. Cheap and
+        // idempotent — voice.service.ts only touches the audio graph when a
+        // value actually differs, and this covers both "already consuming"
+        // and "not consuming yet" (the override is queued and applied as soon
+        // as their producer is consumed).
+        if (occ.userId !== myId) {
+            api.setLocalUserVolume(occ.userId, getSavedLocalVolume(occ.userId));
+            api.setLocalUserMute(occ.userId, getSavedLocalMute(occ.userId));
+        }
+
+        // Right-click → per-user local volume/mute (everyone) + Kick (admins only)
         el.addEventListener("contextmenu", (e) => {
-            const myId = api.getInstanceId();
-            if (!isAdminUser || occ.userId === myId) return;
+            const targetId = occ.userId;
+            if (targetId === myId) return;
             e.preventDefault();
             e.stopPropagation();
 
@@ -921,12 +1414,41 @@ function renderOccupants(container: HTMLElement, node: TreeNode): void {
             menu.className = "occupant-ctx-menu";
             menu.style.left = `${e.clientX}px`;
             menu.style.top = `${e.clientY}px`;
-            menu.innerHTML = `<button class="ctx-kick-btn">🚫 Kick from Channel</button>`;
 
-            const kickBtn = menu.querySelector(".ctx-kick-btn") as HTMLButtonElement;
-            kickBtn.addEventListener("click", async () => {
+            const currentVolume = api.getLocalUserVolume(targetId);
+            const currentMuted = api.getLocalUserMute(targetId);
+
+            menu.innerHTML = `
+                <div class="ctx-volume-row">
+                    <span class="ctx-volume-label">Volume <span class="ctx-volume-value">${currentVolume}%</span></span>
+                    <input type="range" class="ctx-volume-slider" min="0" max="200" step="5" value="${currentVolume}">
+                </div>
+                <button class="ctx-mute-btn${currentMuted ? " active" : ""}">${currentMuted ? "🔇 Unmute Locally" : "🔊 Mute Locally"}</button>
+                ${isAdminUser ? `<button class="ctx-kick-btn">🚫 Kick from Channel</button>` : ""}
+            `;
+
+            const volumeSlider = menu.querySelector(".ctx-volume-slider") as HTMLInputElement;
+            const volumeValue = menu.querySelector(".ctx-volume-value") as HTMLSpanElement;
+            volumeSlider.addEventListener("input", () => {
+                const percent = parseInt(volumeSlider.value, 10);
+                volumeValue.textContent = `${percent}%`;
+                api.setLocalUserVolume(targetId, percent);
+                setSavedLocalVolume(targetId, percent);
+            });
+
+            const muteBtn = menu.querySelector(".ctx-mute-btn") as HTMLButtonElement;
+            muteBtn.addEventListener("click", () => {
+                const nowMuted = !muteBtn.classList.contains("active");
+                api.setLocalUserMute(targetId, nowMuted);
+                setSavedLocalMute(targetId, nowMuted);
+                muteBtn.classList.toggle("active", nowMuted);
+                muteBtn.textContent = nowMuted ? "🔇 Unmute Locally" : "🔊 Mute Locally";
+            });
+
+            const kickBtn = menu.querySelector(".ctx-kick-btn") as HTMLButtonElement | null;
+            kickBtn?.addEventListener("click", async () => {
                 menu.remove();
-                const result = await api.kickUser(occ.userId, node.id);
+                const result = await api.kickUser(targetId, node.id);
                 if (result.success) {
                     log(`Kicked ${escapeHtml(occ.nickname)} from channel`, "success");
                 } else {
@@ -937,7 +1459,7 @@ function renderOccupants(container: HTMLElement, node: TreeNode): void {
 
             document.body.appendChild(menu);
 
-            // Close on click outside
+            // Close on click outside (but not while dragging the slider)
             const closeCtx = (ev: MouseEvent) => {
                 if (!menu.contains(ev.target as Node)) {
                     menu.remove();
@@ -1017,6 +1539,10 @@ async function handleChannelClick(node: TreeNode): Promise<void> {
                     }
                 }
 
+                // Sync mute/deafen state to the server so other occupants' icons
+                // aren't left showing a stale state from a previous session.
+                api.setVoiceState(isMuted, isDeafened);
+
                 updateVoiceUI(node.name);
                 log(`Joined voice channel: ${node.name}`, "success");
                 SoundAlert.play("joining-channel.mp3");
@@ -1028,7 +1554,13 @@ async function handleChannelClick(node: TreeNode): Promise<void> {
             isJoiningChannel = false;
         }
     } else {
-        // Text channel — open (or focus) a chat tab
+        // Text channel — open (or focus) a chat tab, prompting first if NSFW
+        if (node.isNsfw) {
+            pendingNsfwChannel = node;
+            nsfwConfirmChannelName.textContent = node.name;
+            nsfwConfirmModal.classList.add("visible");
+            return;
+        }
         openChatTab(node.id, node.name);
     }
 
@@ -1066,7 +1598,10 @@ function updateVoiceUI(channelName?: string): void {
     }
 }
 
-btnMute.addEventListener("click", () => {
+// Shared mute/deafen/disconnect logic — used by both the button click handlers
+// below and the keyboard-shortcut handlers, so sound alerts stay in sync between
+// the two triggers instead of silently drifting apart (see PRD 4.15).
+function toggleMuteAndNotify(): void {
     if (pttModeEnabled) {
         // In PTT mode: mute = lock PTT (block key), unmute = unlock PTT (allow key)
         isMuted = !isMuted;
@@ -1078,16 +1613,22 @@ btnMute.addEventListener("click", () => {
         isMuted = api.toggleMute();
     }
     updateVoiceUI();
-    if (isInVoice) SoundAlert.play(isMuted ? "mic_muted.mp3" : "mic_activated.mp3");
-});
+    if (isInVoice) {
+        SoundAlert.play(isMuted ? "mic_muted.mp3" : "mic_activated.mp3");
+        api.setVoiceState(isMuted, isDeafened);
+    }
+}
 
-btnDeafen.addEventListener("click", () => {
+function toggleDeafenAndNotify(): void {
     isDeafened = api.toggleDeafen();
     updateVoiceUI();
-    if (isInVoice) SoundAlert.play(isDeafened ? "sound_muted.mp3" : "sound_resumed.mp3");
-});
+    if (isInVoice) {
+        SoundAlert.play(isDeafened ? "sound_muted.mp3" : "sound_resumed.mp3");
+        api.setVoiceState(isMuted, isDeafened);
+    }
+}
 
-btnLeaveVoice.addEventListener("click", () => {
+function leaveVoiceAndNotify(): void {
     api.leaveVoiceChannel();
     isInVoice = false;
     currentChannelId = null;
@@ -1099,15 +1640,28 @@ btnLeaveVoice.addEventListener("click", () => {
     if (currentTree.length > 0) {
         renderTree(currentTree);
     }
-});
+}
+
+btnMute.addEventListener("click", toggleMuteAndNotify);
+
+btnDeafen.addEventListener("click", toggleDeafenAndNotify);
+
+btnLeaveVoice.addEventListener("click", leaveVoiceAndNotify);
 
 // ── Create Channel Modal ──────────────────────────────────────────────────
 
 btnCreateChannel.addEventListener("click", () => {
     if (!isConnected) return;
     newChannelName.value = "";
+    newChannelNsfw.checked = false;
+    newChannelNsfwRow.style.display = newChannelType.value === "TEXT" ? "flex" : "none";
     createChannelModal.classList.add("visible");
     newChannelName.focus();
+});
+
+newChannelType.addEventListener("change", () => {
+    newChannelNsfwRow.style.display = newChannelType.value === "TEXT" ? "flex" : "none";
+    if (newChannelType.value !== "TEXT") newChannelNsfw.checked = false;
 });
 
 btnModalCancel.addEventListener("click", () => {
@@ -1137,8 +1691,9 @@ btnModalCreate.addEventListener("click", async () => {
 
     const type = newChannelType.value as "TEXT" | "VOICE";
     const parentId = newChannelParent.value || null;
+    const isNsfw = type === "TEXT" && newChannelNsfw.checked;
 
-    const result = await api.createChannel(currentServerId, name, type, parentId);
+    const result = await api.createChannel(currentServerId, name, type, parentId, isNsfw);
     if (result.success) {
         log(`Channel "${name}" created`, "success");
         SoundAlert.play("channel_created.mp3");
@@ -1177,6 +1732,121 @@ btnDeleteConfirm.addEventListener("click", async () => {
     await deleteChannel(channelId);
 });
 
+// ── Rename Channel Modal (PRD 4.5) ──────────────────────────────────────────
+
+function showRenameModal(channelId: string, currentName: string): void {
+    pendingRenameChannelId = channelId;
+    renameChannelInput.value = currentName;
+    renameChannelModal.classList.add("visible");
+    renameChannelInput.focus();
+    renameChannelInput.select();
+}
+
+btnRenameCancel.addEventListener("click", () => {
+    renameChannelModal.classList.remove("visible");
+    pendingRenameChannelId = null;
+});
+
+renameChannelModal.addEventListener("click", (e) => {
+    if (e.target === renameChannelModal) {
+        renameChannelModal.classList.remove("visible");
+        pendingRenameChannelId = null;
+    }
+});
+
+btnRenameConfirm.addEventListener("click", async () => {
+    if (!pendingRenameChannelId) return;
+    const name = renameChannelInput.value.trim();
+    if (!name) {
+        renameChannelInput.focus();
+        return;
+    }
+    const channelId = pendingRenameChannelId;
+    renameChannelModal.classList.remove("visible");
+    pendingRenameChannelId = null;
+
+    const result = await api.updateChannel(channelId, { name });
+    if (result.success) {
+        log(`Channel renamed to "${name}"`, "success");
+    } else {
+        log(`Failed to rename channel: ${result.error}`, "error");
+        if (result.error && /permission|denied/i.test(result.error)) SoundAlert.play("insufficient_perms.mp3");
+    }
+});
+
+// ── NSFW Channel Confirmation Modal (PRD 4.7) ───────────────────────────────
+
+btnNsfwCancel.addEventListener("click", () => {
+    nsfwConfirmModal.classList.remove("visible");
+    pendingNsfwChannel = null;
+});
+
+nsfwConfirmModal.addEventListener("click", (e) => {
+    if (e.target === nsfwConfirmModal) {
+        nsfwConfirmModal.classList.remove("visible");
+        pendingNsfwChannel = null;
+    }
+});
+
+btnNsfwConfirm.addEventListener("click", () => {
+    nsfwConfirmModal.classList.remove("visible");
+    if (pendingNsfwChannel) {
+        openChatTab(pendingNsfwChannel.id, pendingNsfwChannel.name);
+        pendingNsfwChannel = null;
+        if (currentTree.length > 0) {
+            renderTree(currentTree);
+        }
+    }
+});
+
+// ── Delete Message Confirmation Modal (PRD 4.10) ────────────────────────────
+
+function showDeleteMessageModal(msgId: string, isDm: boolean): void {
+    pendingDeleteMessage = { msgId, isDm };
+    deleteMessageModal.classList.add("visible");
+}
+
+btnDeleteMessageCancel.addEventListener("click", () => {
+    deleteMessageModal.classList.remove("visible");
+    pendingDeleteMessage = null;
+});
+
+deleteMessageModal.addEventListener("click", (e) => {
+    if (e.target === deleteMessageModal) {
+        deleteMessageModal.classList.remove("visible");
+        pendingDeleteMessage = null;
+    }
+});
+
+btnDeleteMessageConfirm.addEventListener("click", async () => {
+    if (!pendingDeleteMessage) return;
+    const { msgId, isDm } = pendingDeleteMessage;
+    deleteMessageModal.classList.remove("visible");
+    pendingDeleteMessage = null;
+
+    const result = isDm ? await api.deleteDirectMessage(msgId) : await api.deleteMessage(msgId);
+    if (!result.success) {
+        log(`Failed to delete message: ${result.error ?? "Unknown error"}`, "error");
+    }
+    // No optimistic DOM removal here — MESSAGE_DELETED/DIRECT_MESSAGE_DELETED
+    // is echoed back to the sender the same way MESSAGE_RECEIVED/
+    // DIRECT_MESSAGE_RECEIVED already are, so removeMessageElement() below
+    // handles it uniformly for every client including this one.
+});
+
+/** Removes a rendered message from every tab it might be showing in (a tab stays in the DOM, just hidden, when it isn't the active one). */
+function removeMessageElement(msgId: string): void {
+    document.querySelectorAll(`.chat-msg[data-msg-id="${CSS.escape(msgId)}"]`).forEach((el) => el.remove());
+}
+
+api.on("message-deleted", (payload: { channelId: string; messageId: string }) => {
+    removeMessageElement(payload.messageId);
+});
+
+api.on("dm-deleted", (payload: { dmId: string }) => {
+    removeMessageElement(payload.dmId);
+});
+
 // ── Event Listeners ───────────────────────────────────────────────────────
 
 api.on("connected", (data: { serverId: string; instanceId: string }) => {
@@ -1212,6 +1882,20 @@ api.on("connected", (data: { serverId: string; instanceId: string }) => {
             }
         }
     });
+
+    // Load approved custom emojis for the picker's "+" tab
+    api.getApprovedEmojis().then((res) => {
+        if (res.success && res.emojis) {
+            customEmojis = res.emojis;
+        }
+    });
+
+    // Load the server-wide Nudge toggle
+    api.getServerSettings().then((res) => {
+        if (res.success && res.nudgeEnabled !== undefined) {
+            serverNudgeEnabled = res.nudgeEnabled;
+        }
+    });
 });
 
 api.on("disconnected", () => {
@@ -1220,6 +1904,7 @@ api.on("disconnected", () => {
     currentChannelId = null;
     currentServerId = "";
     currentTree = [];
+    customEmojis = [];
     previousOccupantIds = new Set();
     activeSpeakers.clear();
     for (const timer of speakerHoldTimers.values()) clearTimeout(timer);
@@ -1291,7 +1976,25 @@ api.on("user-banned", () => {
 
 api.on("channel-tree", (data: { serverId: string; tree: TreeNode[] }) => {
     renderTree(data.tree);
+    syncOpenTabNames(data.tree);
 });
+
+/** Keeps already-open chat tabs' displayed names in sync after a channel rename. */
+function syncOpenTabNames(tree: TreeNode[]): void {
+    if (chatTabs.size === 0) return;
+
+    function walk(nodes: TreeNode[]): void {
+        for (const node of nodes) {
+            const tab = chatTabs.get(node.id);
+            if (tab && tab.channelName !== node.name) {
+                tab.channelName = node.name;
+                tab.tabEl.innerHTML = `💬 ${escapeHtml(node.name)} <span class="tab-close">✕</span>`;
+            }
+            if (node.children.length > 0) walk(node.children);
+        }
+    }
+    walk(tree);
+}
 
 api.on("presence", (data: { channelId: string; occupants: any[]; sessionStartedAt?: string }) => {
     // Track voice session timers
@@ -1440,6 +2143,8 @@ function updateOccupants(channelId: string, occupants: any[]): void {
                 node.occupants = occupants.map((o) => ({
                     userId: o.userId,
                     nickname: o.nickname,
+                    isMuted: o.isMuted,
+                    isDeafened: o.isDeafened,
                 }));
                 return true;
             }
@@ -1461,25 +2166,51 @@ function escapeHtml(text: string): string {
     return div.innerHTML;
 }
 
-/** Build HTML for message text with clickable URL links.
- * Operates on raw (unescaped) text so the URL regex works correctly,
- * then escapes each non-URL segment independently. */
+/**
+ * Renders a single emoji token as HTML. A `:name:` token that matches a
+ * known approved custom emoji becomes an inline <img>; anything else
+ * (a literal Unicode emoji, or an unrecognized :name:) is escaped as plain
+ * text — matching how Discord/Slack leave unknown shortcodes literal.
+ * Shared between message-content rendering and reaction-pill rendering so
+ * both recognize custom emoji the same way.
+ */
+function renderEmojiToken(token: string): string {
+    if (token.length > 2 && token.startsWith(":") && token.endsWith(":")) {
+        const name = token.slice(1, -1);
+        const custom = customEmojis.find((e) => e.name === name);
+        if (custom) {
+            return `<img src="${escapeHtml(custom.imageUrl)}" alt="${escapeHtml(token)}" title="${escapeHtml(token)}" class="custom-emoji-inline">`;
+        }
+    }
+    return escapeHtml(token);
+}
+
+/** Build HTML for message text with clickable URL links and inline custom
+ * emoji. Operates on raw (unescaped) text so the regexes work correctly,
+ * then escapes/transforms each segment independently. */
 function linkifyContent(text: string): string {
-    const urlRegex = /https?:\/\/[^\s<>"'`,;)\]]+/gi;
+    const combinedRegex = /(https?:\/\/[^\s<>"'`,;)\]]+)|(:[a-zA-Z0-9_]{2,32}:)/g;
     let lastIndex = 0;
     let result = "";
     let match;
 
-    while ((match = urlRegex.exec(text)) !== null) {
-        // Escape text before the URL
+    while ((match = combinedRegex.exec(text)) !== null) {
+        // Escape text before this match
         result += escapeHtml(text.slice(lastIndex, match.index));
-        // Add the URL as a clickable link
-        const url = match[0];
-        result += `<a href="${escapeHtml(url)}" target="_blank" class="msg-link">${escapeHtml(url)}</a>`;
-        lastIndex = match.index + url.length;
+
+        if (match[1]) {
+            // URL
+            const url = match[1];
+            result += `<a href="${escapeHtml(url)}" target="_blank" class="msg-link">${escapeHtml(url)}</a>`;
+        } else {
+            // :name: token — renders as an <img> if it's a known custom emoji
+            result += renderEmojiToken(match[2]);
+        }
+
+        lastIndex = match.index + match[0].length;
     }
 
-    // Escape remaining text after last URL
+    // Escape remaining text after the last match
     result += escapeHtml(text.slice(lastIndex));
     return result;
 }
@@ -1725,6 +2456,7 @@ function renderAdminUsers(users: any[]): void {
 
 function switchTab(tabId: string): void {
     activeTabId = tabId;
+    markChannelRead(tabId);
 
     // Close emoji picker on tab switch
     closeEmojiPicker();
@@ -1918,9 +2650,11 @@ function renderChatMessage(tab: ChatTab, msg: ChatMessage): void {
     el.className = "chat-msg";
     el.setAttribute("data-msg-id", msg.id);
     el.setAttribute("data-msg-type", "channel");
+    el.setAttribute("data-msg-owner", msg.userId);
 
     const time = new Date(msg.createdAt).toLocaleTimeString();
-    let html = `<span class="msg-time">${time}</span><span class="msg-nick">${escapeHtml(msg.nickname)}</span>`;
+    const editedLabel = msg.editedAt ? `<span class="msg-edited">(edited)</span>` : "";
+    let html = `<span class="msg-time">${time}</span>${editedLabel}<span class="msg-nick">${escapeHtml(msg.nickname)}</span>`;
 
     if (msg.content) {
         html += `<span class="msg-text">${linkifyContent(msg.content)}</span>`;
@@ -1939,8 +2673,9 @@ function renderChatMessage(tab: ChatTab, msg: ChatMessage): void {
     }
 
     // Reaction bar
-    const reactBar = buildReactionBar(msg.id, false, msg.reactions);
+    const reactBar = buildReactionBar(msg.id, false, msg.userId, msg.reactions);
     el.appendChild(reactBar);
+    attachEditButton(reactBar, msg, el);
 
     tab.messagesEl.appendChild(el);
     tab.messagesEl.scrollTop = tab.messagesEl.scrollHeight;
@@ -1962,19 +2697,20 @@ async function sendChatMessage(): Promise<void> {
 
     chatInput.value = "";
     const attachmentUrl = pendingAttachmentUrl;
+    const attachmentPublicId = pendingAttachmentPublicId;
     clearAttachmentPreview();
 
     if (activeTabId.startsWith("dm:")) {
         // DM tab — send direct message
         const recipientId = activeTabId.slice(3);
-        const result = await api.sendDirectMessage(recipientId, content, attachmentUrl ?? undefined);
+        const result = await api.sendDirectMessage(recipientId, content, attachmentUrl ?? undefined, attachmentPublicId ?? undefined);
         if (!result.success) {
             log(`Failed to send DM: ${result.error ?? "Unknown error"}`, "error");
         }
     } else {
         // Channel tab — send channel message
         const channelId = activeTabId;
-        const result = await api.sendMessage(channelId, content, attachmentUrl ?? undefined);
+        const result = await api.sendMessage(channelId, content, attachmentUrl ?? undefined, attachmentPublicId ?? undefined);
         if (!result.success) {
             log("Failed to send message", "error");
         }
@@ -2002,7 +2738,41 @@ api.on("message", (msg: ChatMessage) => {
     if (tab) {
         renderChatMessage(tab, msg);
     }
+
+    // Unread indicator (PRD 4.13): MESSAGE_RECEIVED already broadcasts to
+    // everyone in the server regardless of which tab is open, so this can
+    // be tracked entirely client-side — no extra server round trip.
+    if (msg.channelId !== activeTabId) {
+        markChannelUnread(msg.channelId);
+    }
 });
+
+/** Flags a channel-tree row as unread without a full tree re-render (which would lose collapsed-category state). */
+function markChannelUnread(channelId: string): void {
+    if (unreadChannelIds.has(channelId)) return;
+    unreadChannelIds.add(channelId);
+
+    const el = channelTree.querySelector(`.tree-channel[data-channel-id="${CSS.escape(channelId)}"]`);
+    if (!el || el.classList.contains("unread")) return;
+    el.classList.add("unread");
+    if (!el.querySelector(".unread-dot")) {
+        const dot = document.createElement("span");
+        dot.className = "unread-dot";
+        el.querySelector(".ch-name")?.after(dot);
+    }
+}
+
+/** Clears a channel's unread state locally and persists the read cursor server-side. */
+function markChannelRead(channelId: string): void {
+    if (!unreadChannelIds.has(channelId)) return;
+    unreadChannelIds.delete(channelId);
+
+    const el = channelTree.querySelector(`.tree-channel[data-channel-id="${CSS.escape(channelId)}"]`);
+    el?.classList.remove("unread");
+    el?.querySelector(".unread-dot")?.remove();
+
+    api.markChannelRead(channelId);
+}
 
 // ── DM Event Listener ─────────────────────────────────────────────────────
 
@@ -2011,6 +2781,7 @@ function renderDmMessage(tab: ChatTab, msg: DirectMessage): void {
     el.className = "chat-msg";
     el.setAttribute("data-msg-id", msg.id);
     el.setAttribute("data-msg-type", "dm");
+    el.setAttribute("data-msg-owner", msg.senderId);
 
     const time = new Date(msg.createdAt).toLocaleTimeString();
     let html = `<span class="msg-time">${time}</span><span class="msg-nick">${escapeHtml(msg.senderNickname)}</span>`;
@@ -2032,7 +2803,7 @@ function renderDmMessage(tab: ChatTab, msg: DirectMessage): void {
     }
 
     // Reaction bar
-    const reactBar = buildReactionBar(msg.id, true, msg.reactions);
+    const reactBar = buildReactionBar(msg.id, true, msg.senderId, msg.reactions);
     el.appendChild(reactBar);
 
     tab.messagesEl.appendChild(el);
@@ -2208,8 +2979,57 @@ function createUserRow(user: { userId: string; nickname: string; isOnline: boole
     });
     btnGroup.appendChild(dmBtn);
 
-    // Admin-only ban button (don't show for self)
     const myId = api.getInstanceId();
+
+    // Nudge — online users only, never yourself, only when the server allows it
+    if (user.isOnline && user.userId !== myId && serverNudgeEnabled) {
+        const nudgeBtn = document.createElement("button");
+        nudgeBtn.className = "btn-nudge";
+        nudgeBtn.textContent = "👋 Nudge";
+
+        let cooldownInterval: ReturnType<typeof setInterval> | null = null;
+        const applyCooldownState = (): void => {
+            if (!document.body.contains(nudgeBtn)) {
+                if (cooldownInterval) clearInterval(cooldownInterval);
+                return;
+            }
+            const last = lastNudgeSentAt.get(user.userId);
+            const remaining = last ? NUDGE_COOLDOWN_MS - (Date.now() - last) : 0;
+            if (remaining <= 0) {
+                nudgeBtn.disabled = false;
+                nudgeBtn.textContent = "👋 Nudge";
+                if (cooldownInterval) {
+                    clearInterval(cooldownInterval);
+                    cooldownInterval = null;
+                }
+                return;
+            }
+            nudgeBtn.disabled = true;
+            nudgeBtn.textContent = `${Math.ceil(remaining / 1000)}s`;
+        };
+
+        if (lastNudgeSentAt.has(user.userId)) {
+            applyCooldownState();
+            cooldownInterval = setInterval(applyCooldownState, 1000);
+        }
+
+        nudgeBtn.addEventListener("click", async () => {
+            nudgeBtn.disabled = true;
+            const res = await api.nudgeUser(user.userId);
+            if (res.success) {
+                lastNudgeSentAt.set(user.userId, Date.now());
+                applyCooldownState();
+                if (!cooldownInterval) cooldownInterval = setInterval(applyCooldownState, 1000);
+                log(`Nudged ${escapeHtml(user.nickname)}`, "success");
+            } else {
+                nudgeBtn.disabled = false;
+                log(`Failed to nudge: ${res.error}`, "error");
+            }
+        });
+        btnGroup.appendChild(nudgeBtn);
+    }
+
+    // Admin-only ban button (don't show for self)
     if (isAdminUser && user.userId !== myId) {
         const banBtn = document.createElement("button");
         banBtn.className = "btn-ban";
@@ -2278,10 +3098,16 @@ async function openSettingsPanel(): Promise<void> {
     }
 
     if (isConnected) {
-        // Fetch users and roles concurrently
-        const [usersRes, rolesRes] = await Promise.all([
+        // Fetch users, roles, and the pending-emoji queue concurrently. The
+        // Emojis tab's visibility is decided by whether GET_PENDING_EMOJIS
+        // actually succeeds (i.e. the server confirms MANAGE_EMOJIS) rather
+        // than reusing the isAdminUser heuristic below — MANAGE_EMOJIS is a
+        // distinct permission bit, even though in practice only the Admin
+        // role (via its ADMIN bypass) holds it today.
+        const [usersRes, rolesRes, pendingEmojisRes] = await Promise.all([
             api.getAllUsers(currentServerId),
             api.getRoles(currentServerId),
+            api.getPendingEmojis(),
         ]);
 
         isAdminUser = usersRes.success;
@@ -2296,14 +3122,36 @@ async function openSettingsPanel(): Promise<void> {
             settingsTabRoles.style.display = "none";
             adminUserList.innerHTML = '<div class="admin-empty">You don\'t have permission to manage roles.</div>';
         }
+
+        if (pendingEmojisRes.success) {
+            settingsTabEmojis.style.display = "";
+            renderPendingEmojis(pendingEmojisRes.emojis ?? []);
+        } else {
+            settingsTabEmojis.style.display = "none";
+        }
+
+        // Server tab — UPDATE_SERVER_SETTINGS requires literal ADMIN, so
+        // isAdminUser is the correct (not just approximate) gate here.
+        if (isAdminUser) {
+            settingsTabServer.style.display = "";
+            const settingsRes = await api.getServerSettings();
+            if (settingsRes.success) {
+                chkNudgeEnabled.checked = settingsRes.nudgeEnabled ?? true;
+            }
+        } else {
+            settingsTabServer.style.display = "none";
+        }
     } else {
-        // Not connected — hide Roles tab entirely and default to Voice tab
+        // Not connected — hide all admin tabs entirely and default to Voice tab
         settingsTabRoles.style.display = "none";
+        settingsTabEmojis.style.display = "none";
+        settingsTabServer.style.display = "none";
         adminUserList.innerHTML = '<div class="admin-empty">Connect to a server to manage roles.</div>';
     }
 
-    // If Roles tab is hidden and it was active, switch to Voice tab
-    if (settingsTabRoles.style.display === "none" && settingsTabRoles.classList.contains("active")) {
+    // If the currently-active tab just got hidden, fall back to Voice tab
+    const activeTabBtn = document.querySelector(".settings-tab-btn.active") as HTMLButtonElement | null;
+    if (activeTabBtn && activeTabBtn.style.display === "none") {
         settingsTabBtns.forEach((b) => b.classList.remove("active"));
         settingsPanels.forEach((p) => p.classList.remove("active"));
         const voiceBtn = document.querySelector('.settings-tab-btn[data-settings-tab="voice"]');
@@ -2313,8 +3161,74 @@ async function openSettingsPanel(): Promise<void> {
     }
 }
 
+function renderPendingEmojis(emojis: CustomEmoji[]): void {
+    emojiPendingList.innerHTML = "";
+
+    if (emojis.length === 0) {
+        emojiPendingList.innerHTML = '<div class="admin-empty">No emojis pending review.</div>';
+        return;
+    }
+
+    for (const emoji of emojis) {
+        const row = document.createElement("div");
+        row.className = "admin-user-row";
+        row.innerHTML = `
+            <img class="emoji-pending-thumb" src="${escapeHtml(emoji.imageUrl)}" alt="${escapeHtml(emoji.name)}">
+            <div class="admin-user-info">
+                <div class="admin-user-nickname">:${escapeHtml(emoji.name)}:</div>
+                <div class="admin-user-id">by ${escapeHtml(emoji.uploadedByNickname ?? "Unknown")}</div>
+            </div>
+            <div class="emoji-pending-actions">
+                <button class="btn-emoji-approve">✓ Approve</button>
+                <button class="btn-emoji-reject">✕ Reject</button>
+            </div>
+        `;
+
+        row.querySelector(".btn-emoji-approve")?.addEventListener("click", async () => {
+            const result = await api.reviewCustomEmoji(emoji.id, "APPROVED");
+            if (result.success) {
+                log(`Approved emoji ":${emoji.name}:"`, "success");
+                row.remove();
+                if (emojiPendingList.children.length === 0) {
+                    emojiPendingList.innerHTML = '<div class="admin-empty">No emojis pending review.</div>';
+                }
+            } else {
+                log(`Failed to approve emoji: ${result.error}`, "error");
+            }
+        });
+
+        row.querySelector(".btn-emoji-reject")?.addEventListener("click", async () => {
+            const result = await api.reviewCustomEmoji(emoji.id, "REJECTED");
+            if (result.success) {
+                log(`Rejected emoji ":${emoji.name}:"`, "success");
+                row.remove();
+                if (emojiPendingList.children.length === 0) {
+                    emojiPendingList.innerHTML = '<div class="admin-empty">No emojis pending review.</div>';
+                }
+            } else {
+                log(`Failed to reject emoji: ${result.error}`, "error");
+            }
+        });
+
+        emojiPendingList.appendChild(row);
+    }
+}
+
 btnServerSettings.addEventListener("click", () => {
     openSettingsPanel();
+});
+
+chkNudgeEnabled.addEventListener("change", async () => {
+    const desired = chkNudgeEnabled.checked;
+    const result = await api.updateServerSettings(desired);
+    if (result.success) {
+        serverNudgeEnabled = desired;
+        log(`Nudge ${desired ? "enabled" : "disabled"} for this server`, "success");
+    } else {
+        chkNudgeEnabled.checked = !desired; // revert on failure
+        log(`Failed to update server settings: ${result.error}`, "error");
+        if (result.error && /permission|denied/i.test(result.error)) SoundAlert.play("insufficient_perms.mp3");
+    }
 });
 
 btnAdminClose.addEventListener("click", () => {
@@ -2520,26 +3434,13 @@ document.addEventListener("keydown", (e) => {
     // Check shortcuts (skip PTT which uses press/release)
     if (!e.repeat) {
         if (shortcuts.mute && setsEqual(heldKeys, shortcuts.mute.keys)) {
-            if (pttModeEnabled) {
-                isMuted = !isMuted;
-                if (isMuted) {
-                    api.setMuted(true);
-                }
-            } else {
-                isMuted = api.toggleMute();
-            }
-            updateVoiceUI();
+            toggleMuteAndNotify();
         }
         if (shortcuts.deafen && setsEqual(heldKeys, shortcuts.deafen.keys)) {
-            isDeafened = api.toggleDeafen();
-            updateVoiceUI();
+            toggleDeafenAndNotify();
         }
         if (shortcuts.disconnect && setsEqual(heldKeys, shortcuts.disconnect.keys)) {
-            api.leaveVoiceChannel();
-            isInVoice = false;
-            currentChannelId = null;
-            updateVoiceUI();
-            log("Disconnected from voice (shortcut)", "info");
+            leaveVoiceAndNotify();
         }
         // PTT keydown → unmute (only in PTT mode, and only if not locked/muted)
         if (shortcuts.ptt && setsEqual(heldKeys, shortcuts.ptt.keys) && pttModeEnabled && isInVoice && !isMuted) {
@@ -2689,6 +3590,21 @@ chatInput.addEventListener("paste", async (e) => {
     }
 });
 
+// Uploads happen up front (before Send is even clicked) — SEND_MESSAGE only
+// fires once an attachmentUrl already exists. So the "nothing shows until
+// upload finishes" gap this item fixes is entirely inside this function: the
+// moment a file is picked/pasted, show a local-blob thumbnail + spinner in
+// the attachment bar immediately (PRD 4.12), instead of only a text log line
+// while the network round-trip is in flight.
+let pendingAttachmentObjectUrl: string | null = null;
+
+function revokePendingAttachmentObjectUrl(): void {
+    if (pendingAttachmentObjectUrl) {
+        URL.revokeObjectURL(pendingAttachmentObjectUrl);
+        pendingAttachmentObjectUrl = null;
+    }
+}
+
 async function handleFileUpload(file: File): Promise<void> {
     if (!isConnected) {
         log("Not connected — cannot upload", "error");
@@ -2707,19 +3623,38 @@ async function handleFileUpload(file: File): Promise<void> {
         return;
     }
 
+    revokePendingAttachmentObjectUrl();
+    pendingAttachmentObjectUrl = URL.createObjectURL(file);
+    showAttachmentUploading(file.name, pendingAttachmentObjectUrl);
+
     try {
-        log(`Uploading ${file.name}...`, "info");
         const buffer = await file.arrayBuffer();
         const result = await api.uploadFile(buffer, file.name, file.type);
         pendingAttachmentUrl = result.url;
+        pendingAttachmentPublicId = result.publicId ?? null;
+        revokePendingAttachmentObjectUrl();
         showAttachmentPreview(file.name);
         log(`Image ready to send: ${file.name}`, "success");
     } catch (err: any) {
         log(`Upload failed: ${err.message}`, "error");
+        showAttachmentFailed(file.name, err.message, () => handleFileUpload(file));
     }
 }
 
+/** Instant local preview shown the moment a file is picked, before the upload round-trip even starts. */
+function showAttachmentUploading(fileName: string, previewObjectUrl: string): void {
+    attachmentPreview.classList.remove("attachment-failed");
+    attachmentPreview.innerHTML = `
+        <img class="attachment-thumb" src="${escapeHtml(previewObjectUrl)}" alt="">
+        <span class="attachment-name">📎 Uploading ${escapeHtml(fileName)}…</span>
+        <span class="attachment-spinner"></span>
+    `;
+    attachmentPreview.style.display = "flex";
+}
+
+/** Ready-to-send state — unchanged from before this item, on purpose: only the uploading/failed states are new. */
 function showAttachmentPreview(fileName: string): void {
+    attachmentPreview.classList.remove("attachment-failed");
     attachmentPreview.innerHTML = `
         <span class="attachment-name">📎 ${escapeHtml(fileName)}</span>
         <button class="attachment-remove" id="btn-remove-attachment">✕</button>
@@ -2728,8 +3663,24 @@ function showAttachmentPreview(fileName: string): void {
     document.getElementById("btn-remove-attachment")?.addEventListener("click", clearAttachmentPreview);
 }
 
+/** Failure state — surfaces the error instead of silently discarding the attempt, with a one-click retry (re-reads the same File object). */
+function showAttachmentFailed(fileName: string, errorMessage: string, onRetry: () => void): void {
+    attachmentPreview.classList.add("attachment-failed");
+    attachmentPreview.innerHTML = `
+        <span class="attachment-name">⚠️ ${escapeHtml(fileName)} failed: ${escapeHtml(errorMessage)}</span>
+        <button class="attachment-retry" id="btn-retry-attachment">Retry</button>
+        <button class="attachment-remove" id="btn-remove-attachment">✕</button>
+    `;
+    attachmentPreview.style.display = "flex";
+    document.getElementById("btn-retry-attachment")?.addEventListener("click", onRetry);
+    document.getElementById("btn-remove-attachment")?.addEventListener("click", clearAttachmentPreview);
+}
+
 function clearAttachmentPreview(): void {
     pendingAttachmentUrl = null;
+    pendingAttachmentPublicId = null;
+    revokePendingAttachmentObjectUrl();
+    attachmentPreview.classList.remove("attachment-failed");
     attachmentPreview.style.display = "none";
     attachmentPreview.innerHTML = "";
 }
@@ -2777,6 +3728,7 @@ let reactionTargetIsDm = false;
 function buildReactionBar(
     msgId: string,
     isDm: boolean,
+    ownerId: string,
     reactions?: Array<{ emoji: string; count: number; userIds: string[] }>,
 ): HTMLDivElement {
     const bar = document.createElement("div");
@@ -2789,7 +3741,7 @@ function buildReactionBar(
         for (const r of reactions) {
             const pill = document.createElement("button");
             pill.className = "reaction-pill" + (r.userIds.includes(myId) ? " mine" : "");
-            pill.innerHTML = `${r.emoji} <span class="reaction-count">${r.count}</span>`;
+            pill.innerHTML = `${renderEmojiToken(r.emoji)} <span class="reaction-count">${r.count}</span>`;
             pill.title = `Reacted by ${r.count} user${r.count > 1 ? "s" : ""}`;
             pill.addEventListener("click", (e) => {
                 e.stopPropagation();
@@ -2809,6 +3761,19 @@ function buildReactionBar(
         openReactionPicker(msgId, isDm, btnReact);
     });
     bar.appendChild(btnReact);
+
+    // Delete button — own messages only (PRD 4.10)
+    if (ownerId === myId) {
+        const btnDelete = document.createElement("button");
+        btnDelete.className = "btn-delete-msg";
+        btnDelete.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>`;
+        btnDelete.title = "Delete message";
+        btnDelete.addEventListener("click", (e) => {
+            e.stopPropagation();
+            showDeleteMessageModal(msgId, isDm);
+        });
+        bar.appendChild(btnDelete);
+    }
 
     return bar;
 }
@@ -2841,8 +3806,11 @@ function updateReactionBar(
     for (const bar of bars) {
         const parent = bar.parentElement;
         if (!parent) continue;
-        // Rebuild the bar
-        const newBar = buildReactionBar(msgId, isDm, reactions);
+        // Rebuild the bar — ownerId is read back from the message element's
+        // own data-msg-owner attribute (set at render time) since
+        // REACTION_UPDATED doesn't carry it.
+        const ownerId = parent.getAttribute("data-msg-owner") ?? "";
+        const newBar = buildReactionBar(msgId, isDm, ownerId, reactions);
         parent.replaceChild(newBar, bar);
     }
 }
@@ -2850,6 +3818,148 @@ function updateReactionBar(
 // Listen for reaction updates from server
 api.on("reaction-updated", (data: { messageId: string; isDm: boolean; reactions: Array<{ emoji: string; count: number; userIds: string[] }> }) => {
     updateReactionBar(data.messageId, data.isDm, data.reactions);
+});
+
+// ── Edit Own Messages (PRD 4.11) ────────────────────────────────────────────
+// Channel messages only (not DMs), text-only (no attachment), within 2
+// minutes of sending — all enforced authoritatively server-side; the checks
+// here are just so the user gets immediate feedback instead of a silent
+// round-trip failure.
+const EDIT_WINDOW_MS = 2 * 60 * 1000;
+
+function attachEditButton(bar: HTMLDivElement, msg: ChatMessage, el: HTMLDivElement): void {
+    const myId = api.getInstanceId();
+    if (msg.userId !== myId || msg.attachmentUrl) return;
+
+    const btnEdit = document.createElement("button");
+    btnEdit.className = "btn-edit-msg";
+    btnEdit.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>`;
+    btnEdit.title = "Edit message";
+    btnEdit.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const ageMs = Date.now() - new Date(msg.createdAt).getTime();
+        if (ageMs > EDIT_WINDOW_MS) {
+            log("Edit window has expired (2 minutes)", "error");
+            return;
+        }
+        startMessageEdit(el, msg);
+    });
+    bar.appendChild(btnEdit);
+}
+
+function startMessageEdit(el: HTMLDivElement, msg: ChatMessage): void {
+    if (el.querySelector(".msg-edit-input")) return; // already editing
+    const textEl = el.querySelector(".msg-text");
+    if (!textEl) return;
+
+    const originalHTML = textEl.outerHTML;
+    const input = document.createElement("textarea");
+    input.className = "msg-edit-input";
+    input.value = msg.content;
+    textEl.replaceWith(input);
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+
+    const finish = async (save: boolean): Promise<void> => {
+        input.removeEventListener("keydown", onKeydown);
+        input.removeEventListener("blur", onBlur);
+
+        if (!save) {
+            input.outerHTML = originalHTML;
+            return;
+        }
+
+        const newContent = input.value.trim();
+        if (!newContent || newContent === msg.content) {
+            input.outerHTML = originalHTML;
+            return;
+        }
+
+        const result = await api.editMessage(msg.id, newContent);
+        if (!result.success) {
+            log(`Failed to edit message: ${result.error}`, "error");
+            input.outerHTML = originalHTML;
+            return;
+        }
+
+        // Applied optimistically here rather than waiting for the
+        // MESSAGE_EDITED broadcast — applyMessageEdit() below still runs
+        // when that broadcast arrives (including the echo back to this
+        // client) and just harmlessly re-applies the same content.
+        msg.content = newContent;
+        const newTextEl = document.createElement("span");
+        newTextEl.className = "msg-text";
+        newTextEl.innerHTML = linkifyContent(newContent);
+        input.replaceWith(newTextEl);
+        if (!el.querySelector(".msg-edited")) {
+            el.querySelector(".msg-time")?.insertAdjacentHTML("afterend", `<span class="msg-edited">(edited)</span>`);
+        }
+    };
+
+    const onKeydown = (e: KeyboardEvent) => {
+        if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            finish(true);
+        } else if (e.key === "Escape") {
+            e.preventDefault();
+            finish(false);
+        }
+    };
+    const onBlur = () => finish(true);
+
+    input.addEventListener("keydown", onKeydown);
+    input.addEventListener("blur", onBlur);
+}
+
+/** Applies a MESSAGE_EDITED broadcast to every rendered copy of that message (a background tab stays in the DOM, just hidden). */
+function applyMessageEdit(msg: ChatMessage): void {
+    document.querySelectorAll(`.chat-msg[data-msg-id="${CSS.escape(msg.id)}"]`).forEach((el) => {
+        const textEl = el.querySelector(".msg-text");
+        if (textEl) {
+            textEl.innerHTML = linkifyContent(msg.content);
+        }
+        if (!el.querySelector(".msg-edited")) {
+            el.querySelector(".msg-time")?.insertAdjacentHTML("afterend", `<span class="msg-edited">(edited)</span>`);
+        }
+    });
+}
+
+api.on("message-edited", (msg: ChatMessage) => {
+    applyMessageEdit(msg);
+});
+
+// A custom emoji another user (or an admin reviewing this client's own
+// upload) just got approved — add it to the cache and refresh the picker
+// if it's currently open, so it shows up without needing to reconnect.
+api.on("custom-emoji-approved", (data: { serverId: string; emoji: CustomEmoji }) => {
+    if (!customEmojis.some((e) => e.id === data.emoji.id)) {
+        customEmojis.push(data.emoji);
+    }
+    if (emojiPicker.classList.contains("visible")) {
+        renderEmojiGrid(emojiSearch.value);
+    }
+});
+
+// ── Nudge (PRD 4.14) ─────────────────────────────────────────────────────
+
+api.on("server-settings-updated", (data: { nudgeEnabled: boolean }) => {
+    serverNudgeEnabled = data.nudgeEnabled;
+    // If the Online Users modal is open, re-render so Nudge buttons appear/disappear live.
+    if (onlineUsersModal.classList.contains("visible")) {
+        api.getOnlineUsers().then((res) => {
+            if (res.success && res.users) renderOnlineUsers(res.users);
+        });
+    }
+});
+
+api.on("nudge-received", async (data: { fromUserId: string; fromNickname: string }) => {
+    SoundAlert.play("nudge.mp3");
+    showToast(`👋 <strong>${escapeHtml(data.fromNickname)}</strong> nudged you!`);
+
+    const isFocused = await api.isWindowFocused();
+    if (!isFocused) {
+        api.flashWindow();
+    }
 });
 
 // ── Emoji Picker ──────────────────────────────────────────────────────────
@@ -2906,6 +4016,24 @@ function buildEmojiCategoryTabs(): void {
         });
         emojiCategoryTabs.appendChild(btn);
     }
+
+    // "+" tab — custom server emoji (approved ones) + the upload entry point
+    const customBtn = document.createElement("button");
+    customBtn.className = "emoji-cat-tab";
+    customBtn.title = "Custom Emojis";
+    customBtn.textContent = "➕";
+    customBtn.addEventListener("click", () => {
+        emojiSearch.value = "";
+        renderEmojiGrid();
+        const header = emojiGridContainer.querySelector(`[data-emoji-cat="Custom"]`);
+        if (header) {
+            header.scrollIntoView({ behavior: "smooth", block: "start" });
+        }
+        emojiCategoryTabs.querySelectorAll(".emoji-cat-tab").forEach((t) => t.classList.remove("active"));
+        customBtn.classList.add("active");
+    });
+    emojiCategoryTabs.appendChild(customBtn);
+
     // Activate first tab
     const first = emojiCategoryTabs.querySelector(".emoji-cat-tab");
     first?.classList.add("active");
@@ -2963,6 +4091,51 @@ function renderEmojiGrid(filter?: string): void {
         noResults.textContent = "No emojis found";
         emojiGridContainer.appendChild(noResults);
     }
+
+    renderCustomEmojiSection(lowerFilter);
+}
+
+/** Renders the "+" tab's custom-emoji section — always shown (holds the
+ * upload button) regardless of search, with items filtered by name. */
+function renderCustomEmojiSection(lowerFilter: string): void {
+    const header = document.createElement("div");
+    header.className = "emoji-category-header";
+    header.textContent = "Custom Emojis";
+    header.setAttribute("data-emoji-cat", "Custom");
+    emojiGridContainer.appendChild(header);
+
+    const grid = document.createElement("div");
+    grid.className = "emoji-grid";
+
+    const uploadBtn = document.createElement("button");
+    uploadBtn.className = "emoji-upload-btn";
+    uploadBtn.title = "Upload a custom emoji";
+    uploadBtn.textContent = "+";
+    uploadBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        openEmojiUploadModal();
+    });
+    grid.appendChild(uploadBtn);
+
+    const filtered = customEmojis.filter(
+        (e) => !lowerFilter || e.name.toLowerCase().includes(lowerFilter),
+    );
+    for (const ce of filtered) {
+        const item = document.createElement("span");
+        item.className = "emoji-item custom-emoji-item";
+        item.title = `:${ce.name}:`;
+        const img = document.createElement("img");
+        img.src = ce.imageUrl;
+        img.alt = ce.name;
+        img.className = "custom-emoji-img";
+        item.appendChild(img);
+        item.addEventListener("click", () => {
+            insertEmojiAtCursor(`:${ce.name}:`);
+        });
+        grid.appendChild(item);
+    }
+
+    emojiGridContainer.appendChild(grid);
 }
 
 // Insert emoji at cursor position in chat input or toggle reaction
@@ -2978,6 +4151,174 @@ function insertEmojiAtCursor(emoji: string): void {
     chatInput.setRangeText(emoji, start, end, "end");
     chatInput.focus();
 }
+
+// ── Custom Emoji Upload / Crop Tool (PRD 4.8) ───────────────────────────────
+//
+// A simple "cover + pan + zoom" cropper, the same interaction model as
+// Discord/most avatar croppers: the viewport is a fixed 220x220 square, the
+// image always fully covers it (never leaving gaps), the user can drag to
+// reposition and use the zoom slider to scale in, and whatever is visible in
+// the viewport at confirm time is exactly what gets drawn into the final
+// 128x128 output — via a canvas source-rect computed back into the image's
+// natural pixel space, not by trying to read pixels off the styled <img>.
+
+function openEmojiUploadModal(): void {
+    emojiUploadStepSelect.style.display = "block";
+    emojiUploadStepCrop.style.display = "none";
+    emojiNameInput.value = "";
+    emojiUploadModal.classList.add("visible");
+}
+
+function closeEmojiUploadModal(): void {
+    emojiUploadModal.classList.remove("visible");
+    if (emojiCropObjectUrl) {
+        URL.revokeObjectURL(emojiCropObjectUrl);
+        emojiCropObjectUrl = null;
+    }
+    emojiCropImg.removeAttribute("src");
+    emojiCropNaturalWidth = 0;
+    emojiCropNaturalHeight = 0;
+}
+
+function applyEmojiCropTransform(): void {
+    const scale = emojiCropBaseScale * emojiCropZoomFactor;
+    emojiCropImg.style.width = `${emojiCropNaturalWidth}px`;
+    emojiCropImg.style.height = `${emojiCropNaturalHeight}px`;
+    emojiCropImg.style.transform = `translate(${emojiCropOffsetX}px, ${emojiCropOffsetY}px) scale(${scale})`;
+}
+
+/** Keeps the image fully covering the viewport — offsets can't drift so far that a gap would show. */
+function clampEmojiCropOffsets(): void {
+    const scale = emojiCropBaseScale * emojiCropZoomFactor;
+    const displayedW = emojiCropNaturalWidth * scale;
+    const displayedH = emojiCropNaturalHeight * scale;
+    const minX = EMOJI_CROP_VIEWPORT_SIZE - displayedW;
+    const minY = EMOJI_CROP_VIEWPORT_SIZE - displayedH;
+    emojiCropOffsetX = Math.min(0, Math.max(minX, emojiCropOffsetX));
+    emojiCropOffsetY = Math.min(0, Math.max(minY, emojiCropOffsetY));
+}
+
+btnEmojiChooseFile.addEventListener("click", () => emojiFileInput.click());
+btnEmojiUploadCancelSelect.addEventListener("click", () => closeEmojiUploadModal());
+btnEmojiUploadCancel.addEventListener("click", () => closeEmojiUploadModal());
+
+emojiUploadModal.addEventListener("click", (e) => {
+    if (e.target === emojiUploadModal) closeEmojiUploadModal();
+});
+
+const EMOJI_ALLOWED_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+
+emojiFileInput.addEventListener("change", () => {
+    const file = emojiFileInput.files?.[0];
+    emojiFileInput.value = ""; // allow re-selecting the same file later
+    if (!file) return;
+
+    if (file.size > EMOJI_MAX_UPLOAD_SIZE) {
+        log(`Image too large (max ${Math.round(EMOJI_MAX_UPLOAD_SIZE / 1024)}KB)`, "error");
+        return;
+    }
+    if (!EMOJI_ALLOWED_TYPES.has(file.type)) {
+        log("Unsupported image type", "error");
+        return;
+    }
+
+    if (emojiCropObjectUrl) URL.revokeObjectURL(emojiCropObjectUrl);
+    emojiCropObjectUrl = URL.createObjectURL(file);
+    emojiCropImg.src = emojiCropObjectUrl;
+});
+
+emojiCropImg.addEventListener("load", () => {
+    emojiCropNaturalWidth = emojiCropImg.naturalWidth;
+    emojiCropNaturalHeight = emojiCropImg.naturalHeight;
+    if (!emojiCropNaturalWidth || !emojiCropNaturalHeight) return;
+
+    emojiCropBaseScale = Math.max(
+        EMOJI_CROP_VIEWPORT_SIZE / emojiCropNaturalWidth,
+        EMOJI_CROP_VIEWPORT_SIZE / emojiCropNaturalHeight,
+    );
+    emojiCropZoomFactor = 1;
+    emojiCropZoom.value = "1";
+
+    const displayedW = emojiCropNaturalWidth * emojiCropBaseScale;
+    const displayedH = emojiCropNaturalHeight * emojiCropBaseScale;
+    emojiCropOffsetX = (EMOJI_CROP_VIEWPORT_SIZE - displayedW) / 2;
+    emojiCropOffsetY = (EMOJI_CROP_VIEWPORT_SIZE - displayedH) / 2;
+    applyEmojiCropTransform();
+
+    emojiUploadStepSelect.style.display = "none";
+    emojiUploadStepCrop.style.display = "block";
+});
+
+emojiCropViewport.addEventListener("mousedown", (e) => {
+    emojiCropDragging = true;
+    emojiCropViewport.classList.add("dragging");
+    emojiCropDragStart = { x: e.clientX, y: e.clientY, offsetX: emojiCropOffsetX, offsetY: emojiCropOffsetY };
+    e.preventDefault();
+});
+
+document.addEventListener("mousemove", (e) => {
+    if (!emojiCropDragging) return;
+    emojiCropOffsetX = emojiCropDragStart.offsetX + (e.clientX - emojiCropDragStart.x);
+    emojiCropOffsetY = emojiCropDragStart.offsetY + (e.clientY - emojiCropDragStart.y);
+    clampEmojiCropOffsets();
+    applyEmojiCropTransform();
+});
+
+document.addEventListener("mouseup", () => {
+    if (emojiCropDragging) {
+        emojiCropDragging = false;
+        emojiCropViewport.classList.remove("dragging");
+    }
+});
+
+emojiCropZoom.addEventListener("input", () => {
+    emojiCropZoomFactor = parseFloat(emojiCropZoom.value);
+    clampEmojiCropOffsets();
+    applyEmojiCropTransform();
+});
+
+btnEmojiUploadConfirm.addEventListener("click", async () => {
+    const name = emojiNameInput.value.trim();
+    if (!/^[a-zA-Z0-9_]{2,32}$/.test(name)) {
+        log("Emoji name must be 2-32 letters, numbers, or underscores", "error");
+        emojiNameInput.focus();
+        return;
+    }
+    if (!emojiCropNaturalWidth || !emojiCropNaturalHeight) return;
+
+    btnEmojiUploadConfirm.disabled = true;
+    try {
+        const scale = emojiCropBaseScale * emojiCropZoomFactor;
+        const srcX = -emojiCropOffsetX / scale;
+        const srcY = -emojiCropOffsetY / scale;
+        const srcSize = EMOJI_CROP_VIEWPORT_SIZE / scale;
+
+        const canvas = document.createElement("canvas");
+        canvas.width = 128;
+        canvas.height = 128;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) throw new Error("Canvas not supported");
+        ctx.drawImage(emojiCropImg, srcX, srcY, srcSize, srcSize, 0, 0, 128, 128);
+
+        const blob: Blob | null = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+        if (!blob) throw new Error("Failed to crop image");
+
+        const buffer = await blob.arrayBuffer();
+        const uploadResult = await api.uploadEmojiFile(buffer, `${name}.png`, "image/png");
+        const createResult = await api.createCustomEmoji(name, uploadResult.url, uploadResult.publicId);
+
+        if (createResult.success) {
+            log(`Emoji ":${name}:" submitted for admin approval`, "success");
+            closeEmojiUploadModal();
+        } else {
+            log(`Failed to submit emoji: ${createResult.error}`, "error");
+        }
+    } catch (err: any) {
+        log(`Emoji upload failed: ${err.message}`, "error");
+    } finally {
+        btnEmojiUploadConfirm.disabled = false;
+    }
+});
 
 // Emoji button toggle
 btnEmoji.addEventListener("click", (e) => {

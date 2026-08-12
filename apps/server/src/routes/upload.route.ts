@@ -1,19 +1,22 @@
 /**
- * Upload Route — File upload endpoint for image sharing.
+ * Upload Route — File upload endpoints for image sharing and custom emoji.
  *
- * POST /api/upload — accepts multipart form data with a single image file.
- * Supports dual storage backend:
+ * POST /api/upload       — general chat attachments, up to 5MB.
+ * POST /api/upload/emoji — custom emoji images (already cropped client-side
+ *                          to 128x128 before this is called), up to 512KB.
+ * Both accept multipart form data with a single image file and support the
+ * same dual storage backend:
  *   1. Local filesystem (default) — saves to ./uploads/
  *   2. Cloudinary CDN — activated when CLOUDINARY_* env vars are present.
  *
- * Returns { url: string } on success.
+ * Returns { url: string, publicId?: string } on success.
  */
 
 import { randomUUID } from "node:crypto";
 import { createWriteStream, existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { v2 as cloudinary } from "cloudinary";
 
 const ALLOWED_MIME_TYPES = new Set([
@@ -24,6 +27,7 @@ const ALLOWED_MIME_TYPES = new Set([
 ]);
 
 const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
+const MAX_EMOJI_FILE_SIZE = 512 * 1024; // 512KB — generous for a 128x128 PNG
 
 const UPLOADS_DIR = path.resolve(process.cwd(), "uploads");
 
@@ -39,9 +43,13 @@ function isCloudinaryConfigured(): boolean {
 }
 
 /**
- * Uploads a buffer to Cloudinary and returns the secure URL.
+ * Uploads a buffer to Cloudinary and returns the secure URL + public_id
+ * (the public_id is needed later to delete the asset — see storage.service.ts).
  */
-async function uploadToCloudinary(buffer: Buffer, fileName: string): Promise<string> {
+async function uploadToCloudinary(
+    buffer: Buffer,
+    fileName: string,
+): Promise<{ url: string; publicId: string }> {
     cloudinary.config({
         cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
         api_key: process.env.CLOUDINARY_API_KEY,
@@ -59,7 +67,7 @@ async function uploadToCloudinary(buffer: Buffer, fileName: string): Promise<str
                 if (error) {
                     reject(error);
                 } else {
-                    resolve(result!.secure_url);
+                    resolve({ url: result!.secure_url, publicId: result!.public_id });
                 }
             },
         );
@@ -87,55 +95,82 @@ async function saveLocally(buffer: Buffer, fileName: string): Promise<string> {
 }
 
 /**
- * Registers the upload route on the Fastify instance.
+ * Shared body for both upload routes — validates MIME type, streams the
+ * file into a buffer while enforcing `maxSize`, then stores it via
+ * whichever backend is configured.
+ */
+async function handleUpload(
+    app: FastifyInstance,
+    request: FastifyRequest,
+    reply: FastifyReply,
+    maxSize: number,
+): Promise<void> {
+    const data = await request.file();
+    if (!data) {
+        reply.status(400).send({ error: "No file uploaded" });
+        return;
+    }
+
+    if (!ALLOWED_MIME_TYPES.has(data.mimetype)) {
+        reply.status(400).send({
+            error: `Invalid file type: ${data.mimetype}. Allowed: ${[...ALLOWED_MIME_TYPES].join(", ")}`,
+        });
+        return;
+    }
+
+    const chunks: Buffer[] = [];
+    let totalSize = 0;
+
+    for await (const chunk of data.file) {
+        totalSize += chunk.length;
+        if (totalSize > maxSize) {
+            reply.status(413).send({
+                error: `File too large. Maximum size is ${Math.round(maxSize / 1024)}KB`,
+            });
+            return;
+        }
+        chunks.push(chunk);
+    }
+
+    const buffer = Buffer.concat(chunks);
+    const originalName = data.filename || "image";
+
+    let url: string;
+    let publicId: string | undefined;
+
+    if (isCloudinaryConfigured()) {
+        app.log.info("Uploading to Cloudinary...");
+        const result = await uploadToCloudinary(buffer, originalName);
+        url = result.url;
+        publicId = result.publicId;
+    } else {
+        app.log.info("Saving locally...");
+        url = await saveLocally(buffer, originalName);
+    }
+
+    app.log.info({ url, size: buffer.length, mime: data.mimetype }, "File uploaded");
+    reply.send({ url, publicId });
+}
+
+/**
+ * Registers the upload routes on the Fastify instance.
  */
 export async function registerUploadRoute(app: FastifyInstance): Promise<void> {
     app.post("/api/upload", async (request, reply) => {
         try {
-            const data = await request.file();
-            if (!data) {
-                return reply.status(400).send({ error: "No file uploaded" });
-            }
-
-            // Validate MIME type
-            if (!ALLOWED_MIME_TYPES.has(data.mimetype)) {
-                return reply.status(400).send({
-                    error: `Invalid file type: ${data.mimetype}. Allowed: ${[...ALLOWED_MIME_TYPES].join(", ")}`,
-                });
-            }
-
-            // Read the file into a buffer
-            const chunks: Buffer[] = [];
-            let totalSize = 0;
-
-            for await (const chunk of data.file) {
-                totalSize += chunk.length;
-                if (totalSize > MAX_FILE_SIZE) {
-                    return reply.status(413).send({
-                        error: `File too large. Maximum size is ${MAX_FILE_SIZE / (1024 * 1024)}MB`,
-                    });
-                }
-                chunks.push(chunk);
-            }
-
-            const buffer = Buffer.concat(chunks);
-            const originalName = data.filename || "image";
-
-            let url: string;
-
-            if (isCloudinaryConfigured()) {
-                app.log.info("Uploading to Cloudinary...");
-                url = await uploadToCloudinary(buffer, originalName);
-            } else {
-                app.log.info("Saving locally...");
-                url = await saveLocally(buffer, originalName);
-            }
-
-            app.log.info({ url, size: buffer.length, mime: data.mimetype }, "File uploaded");
-            return reply.send({ url });
+            await handleUpload(app, request, reply, MAX_FILE_SIZE);
         } catch (err) {
             app.log.error({ err }, "Error in /api/upload");
-            return reply.status(500).send({ error: "Upload failed" });
+            reply.status(500).send({ error: "Upload failed" });
+        }
+    });
+
+    app.post("/api/upload/emoji", async (request, reply) => {
+        try {
+            await handleUpload(app, request, reply, MAX_EMOJI_FILE_SIZE);
+        } catch (err) {
+            app.log.error({ err }, "Error in /api/upload/emoji");
+            reply.status(500).send({ error: "Upload failed" });
         }
     });
 }

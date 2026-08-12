@@ -257,6 +257,19 @@
       background: rgba(79, 195, 247, 0.08);
     }
 
+    .draggable-channel {
+      cursor: grab;
+    }
+
+    .draggable-channel:active {
+      cursor: grabbing;
+    }
+
+    .draggable-channel.drag-over {
+      box-shadow: inset 0 2px 0 var(--accent);
+      background: rgba(79, 195, 247, 0.12);
+    }
+
     .tree-channel.active {
       background: var(--accent-dim);
       color: #fff;
@@ -290,6 +303,19 @@
       border-radius: 8px;
     }
 
+    .tree-channel.unread .ch-name {
+      font-weight: 700;
+      color: var(--text-primary);
+    }
+
+    .unread-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--danger);
+      flex-shrink: 0;
+    }
+
     /* Occupants under a channel */
     .tree-occupant {
       display: flex;
@@ -316,6 +342,11 @@
       animation: speaking-pulse 1.2s ease-in-out infinite;
     }
 
+    .occ-voice-icon {
+      flex-shrink: 0;
+      vertical-align: middle;
+    }
+
     @keyframes speaking-pulse {
       0%, 100% { box-shadow: 0 0 0 2px rgba(79, 195, 247, 0.3), 0 0 6px rgba(79, 195, 247, 0.3); }
       50% { box-shadow: 0 0 0 4px rgba(79, 195, 247, 0.15), 0 0 12px rgba(79, 195, 247, 0.5); }
@@ -327,10 +358,9 @@
 
     .session-timer {
       font-size: 9px;
-      color: var(--text-muted);
+      color: var(--text-secondary);
       margin-left: 4px;
       font-variant-numeric: tabular-nums;
-      opacity: 0.7;
     }
 
     /* ── Voice Controls (bottom of left pane) ─────────────────────────── */
@@ -562,6 +592,28 @@
       color: var(--text-primary);
     }
 
+    .msg-edited {
+      color: var(--text-muted);
+      font-size: 10px;
+      margin-right: 6px;
+      font-style: italic;
+    }
+
+    .msg-edit-input {
+      display: block;
+      width: 100%;
+      background: var(--bg-input);
+      border: 1px solid var(--accent);
+      border-radius: var(--radius);
+      color: var(--text-primary);
+      font-size: 13px;
+      font-family: inherit;
+      padding: 4px 6px;
+      margin-top: 2px;
+      resize: vertical;
+      min-height: 20px;
+    }
+
     .msg-image {
       display: block;
       max-width: 300px;
@@ -636,6 +688,52 @@
     }
 
     .btn-react:hover {
+      opacity: 1 !important;
+      color: var(--accent);
+      background: rgba(99, 102, 241, 0.1);
+    }
+
+    .btn-delete-msg {
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      padding: 2px;
+      border-radius: 4px;
+      opacity: 0;
+      transition: all 0.15s;
+      display: flex;
+      align-items: center;
+    }
+
+    .chat-msg:hover .btn-delete-msg {
+      opacity: 0.6;
+    }
+
+    .btn-delete-msg:hover {
+      opacity: 1 !important;
+      color: var(--danger);
+      background: rgba(239, 83, 80, 0.1);
+    }
+
+    .btn-edit-msg {
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      padding: 2px;
+      border-radius: 4px;
+      opacity: 0;
+      transition: all 0.15s;
+      display: flex;
+      align-items: center;
+    }
+
+    .chat-msg:hover .btn-edit-msg {
+      opacity: 0.6;
+    }
+
+    .btn-edit-msg:hover {
       opacity: 1 !important;
       color: var(--accent);
       background: rgba(99, 102, 241, 0.1);
@@ -855,6 +953,48 @@
       background: rgba(255, 107, 107, 0.1);
     }
 
+    .attachment-thumb {
+      width: 24px;
+      height: 24px;
+      object-fit: cover;
+      border-radius: 4px;
+      flex-shrink: 0;
+    }
+
+    .attachment-spinner {
+      width: 12px;
+      height: 12px;
+      border: 2px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      flex-shrink: 0;
+      animation: attachment-spin 0.7s linear infinite;
+    }
+
+    @keyframes attachment-spin {
+      to { transform: rotate(360deg); }
+    }
+
+    #attachment-preview.attachment-failed {
+      border-top-color: var(--danger);
+    }
+
+    .attachment-retry {
+      background: none;
+      border: 1px solid var(--accent);
+      color: var(--accent);
+      font-size: 11px;
+      cursor: pointer;
+      padding: 2px 8px;
+      border-radius: 4px;
+      transition: all 0.15s;
+      flex-shrink: 0;
+    }
+
+    .attachment-retry:hover {
+      background: rgba(79, 195, 247, 0.12);
+    }
+
     /* ── Image Lightbox ────────────────────────────────────────── */
     #image-lightbox-modal {
       display: none;
@@ -1021,6 +1161,10 @@
     /* ── Modals ────────────────────────────────────────────────────────── */
     #create-channel-modal,
     #delete-channel-modal,
+    #rename-channel-modal,
+    #nsfw-confirm-modal,
+    #delete-message-modal,
+    #emoji-upload-modal,
     #admin-modal {
       display: none;
       position: fixed;
@@ -1037,8 +1181,42 @@
 
     #create-channel-modal.visible,
     #delete-channel-modal.visible,
+    #rename-channel-modal.visible,
+    #nsfw-confirm-modal.visible,
+    #delete-message-modal.visible,
+    #emoji-upload-modal.visible,
     #admin-modal.visible {
       display: flex;
+    }
+
+    .nsfw-badge {
+      display: inline-flex;
+      align-items: center;
+      font-size: 9px;
+      font-weight: 700;
+      color: var(--danger);
+      border: 1px solid var(--danger);
+      border-radius: 3px;
+      padding: 0 4px;
+      margin-left: 4px;
+      letter-spacing: 0.3px;
+    }
+
+    .channel-ctx-menu-item {
+      width: 100%;
+      background: none;
+      border: none;
+      color: var(--text-primary);
+      font-size: 12px;
+      padding: 8px 12px;
+      border-radius: 3px;
+      cursor: pointer;
+      text-align: left;
+      transition: background 0.1s;
+    }
+
+    .channel-ctx-menu-item:hover {
+      background: rgba(255,255,255,0.06);
     }
 
     .modal-content {
@@ -1126,6 +1304,50 @@
 
     .role-badge:hover {
       border-color: var(--accent);
+    }
+
+    .emoji-pending-thumb {
+      width: 32px;
+      height: 32px;
+      object-fit: contain;
+      border-radius: 4px;
+      background: repeating-conic-gradient(#2a2a35 0% 25%, #232330 0% 50%) 50% / 8px 8px;
+      flex-shrink: 0;
+    }
+
+    .emoji-pending-actions {
+      display: flex;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+
+    .btn-emoji-approve,
+    .btn-emoji-reject {
+      font-size: 11px;
+      padding: 4px 10px;
+      border-radius: var(--radius);
+      cursor: pointer;
+      border: 1px solid var(--border);
+      background: transparent;
+      transition: all 0.15s;
+    }
+
+    .btn-emoji-approve {
+      color: var(--success);
+    }
+
+    .btn-emoji-approve:hover {
+      border-color: var(--success);
+      background: rgba(46, 204, 113, 0.12);
+    }
+
+    .btn-emoji-reject {
+      color: var(--danger);
+    }
+
+    .btn-emoji-reject:hover {
+      border-color: var(--danger);
+      background: rgba(239, 83, 80, 0.12);
     }
 
     .admin-empty {
@@ -1448,6 +1670,31 @@
       border-color: #c0392b;
     }
 
+    .btn-nudge {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+      font-size: 12px;
+      padding: 6px 12px;
+      border-radius: var(--radius);
+      cursor: pointer;
+      transition: all 0.15s;
+      flex-shrink: 0;
+      font-weight: 500;
+    }
+
+    .btn-nudge:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    .btn-nudge:disabled {
+      opacity: 0.5;
+      cursor: default;
+      border-color: var(--border);
+      color: var(--text-muted);
+    }
+
     .btn-unban {
       background: var(--surface);
       border: 1px solid var(--border);
@@ -1492,6 +1739,66 @@
 
     .ctx-kick-btn:hover {
       background: rgba(231,76,60,0.15);
+    }
+
+    .ctx-delete-channel-btn {
+      width: 100%;
+      background: none;
+      border: none;
+      color: #e74c3c;
+      font-size: 12px;
+      padding: 8px 12px;
+      border-radius: 3px;
+      cursor: pointer;
+      text-align: left;
+      transition: background 0.1s;
+    }
+
+    .ctx-delete-channel-btn:hover {
+      background: rgba(231,76,60,0.15);
+    }
+
+    .ctx-volume-row {
+      padding: 6px 12px 10px;
+    }
+
+    .ctx-volume-label {
+      display: flex;
+      justify-content: space-between;
+      font-size: 11px;
+      color: var(--text-secondary);
+      margin-bottom: 4px;
+    }
+
+    .ctx-volume-value {
+      color: var(--accent);
+      font-weight: 600;
+    }
+
+    .ctx-volume-slider {
+      width: 100%;
+      accent-color: var(--accent);
+    }
+
+    .ctx-mute-btn {
+      width: 100%;
+      background: none;
+      border: none;
+      color: var(--text-primary);
+      font-size: 12px;
+      padding: 8px 12px;
+      border-radius: 3px;
+      cursor: pointer;
+      text-align: left;
+      transition: background 0.1s;
+    }
+
+    .ctx-mute-btn:hover {
+      background: rgba(255,255,255,0.06);
+    }
+
+    .ctx-mute-btn.active {
+      color: var(--danger);
     }
 
     /* Green dot on Online Users button */
@@ -1811,6 +2118,80 @@
       padding: 24px 8px;
     }
 
+    .custom-emoji-img {
+      width: 70%;
+      height: 70%;
+      object-fit: contain;
+    }
+
+    .emoji-upload-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 100%;
+      aspect-ratio: 1;
+      font-size: 18px;
+      color: var(--text-muted);
+      border: 1px dashed var(--border);
+      background: none;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.1s;
+    }
+
+    .emoji-upload-btn:hover {
+      color: var(--accent);
+      border-color: var(--accent);
+      background: rgba(79, 195, 247, 0.08);
+    }
+
+    .custom-emoji-inline {
+      display: inline-block;
+      width: 1.3em;
+      height: 1.3em;
+      object-fit: contain;
+      vertical-align: middle;
+    }
+
+    /* ── Emoji Upload / Crop Modal ─────────────────────────────────────── */
+    #emoji-crop-viewport {
+      width: 220px;
+      height: 220px;
+      margin: 10px auto;
+      overflow: hidden;
+      position: relative;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: repeating-conic-gradient(#2a2a35 0% 25%, #232330 0% 50%) 50% / 16px 16px;
+      cursor: grab;
+    }
+
+    #emoji-crop-viewport.dragging {
+      cursor: grabbing;
+    }
+
+    #emoji-crop-img {
+      position: absolute;
+      top: 0;
+      left: 0;
+      transform-origin: 0 0;
+      user-select: none;
+      -webkit-user-drag: none;
+      pointer-events: none;
+    }
+
+    .emoji-upload-hint {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin: 4px 0 12px;
+    }
+
+    #emoji-crop-zoom {
+      width: 100%;
+      accent-color: var(--accent);
+      margin-bottom: 12px;
+    }
+
     /* ── Mic Sensitivity Slider & Meter ─────────────────────── */
     #mic-sensitivity-slider-wrap {
       background: var(--bg-input);
@@ -1884,6 +2265,41 @@
       background: linear-gradient(90deg, var(--accent), #4caf50);
       border-radius: 2px;
       transition: width 0.05s linear;
+    }
+
+    /* ── Toast Notifications (Nudge, etc.) ────────────────────────────── */
+    #toast-container {
+      position: fixed;
+      top: 16px;
+      right: 16px;
+      z-index: 20000;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      -webkit-app-region: no-drag;
+    }
+
+    .toast {
+      background: var(--bg-secondary);
+      border: 1px solid var(--accent);
+      border-radius: var(--radius);
+      box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+      padding: 10px 14px;
+      font-size: 12px;
+      color: var(--text-primary);
+      max-width: 280px;
+      opacity: 0;
+      transform: translateX(20px);
+      transition: opacity 0.2s, transform 0.2s;
+    }
+
+    .toast.visible {
+      opacity: 1;
+      transform: translateX(0);
+    }
+
+    .toast strong {
+      color: var(--accent);
     }
   </style>
 </head>
@@ -2006,6 +2422,18 @@
       <select id="new-channel-parent">
         <option value="">— None (root) —</option>
       </select>
+      <div class="toggle-row" id="new-channel-nsfw-row" style="display:none; margin-top:4px;">
+        <div class="toggle-row-info">
+          <div class="toggle-row-text">
+            <span class="toggle-row-title">🔞 NSFW</span>
+            <span class="toggle-row-desc">Prompts users before opening this channel</span>
+          </div>
+        </div>
+        <label class="toggle-switch">
+          <input type="checkbox" id="new-channel-nsfw">
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
       <div class="modal-actions">
         <button class="btn btn-cancel" id="btn-modal-cancel">Cancel</button>
         <button class="btn btn-create" id="btn-modal-create">Create</button>
@@ -2025,12 +2453,80 @@
     </div>
   </div>
 
+  <!-- ── Rename Channel Modal ─────────────────────────────────────────── -->
+  <div id="rename-channel-modal">
+    <div class="modal-content">
+      <h3>Rename Channel</h3>
+      <label for="rename-channel-input">Channel Name</label>
+      <input type="text" id="rename-channel-input">
+      <div class="modal-actions">
+        <button class="btn btn-cancel" id="btn-rename-cancel">Cancel</button>
+        <button class="btn btn-create" id="btn-rename-confirm">Rename</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── NSFW Channel Confirmation Modal ─────────────────────────────────── -->
+  <div id="nsfw-confirm-modal">
+    <div class="modal-content">
+      <h3>🔞 NSFW Channel</h3>
+      <p><strong id="nsfw-confirm-channel-name"></strong> is marked as Not Safe For Work. Are you sure you want to open it?</p>
+      <div class="modal-actions">
+        <button class="btn btn-cancel" id="btn-nsfw-cancel">Cancel</button>
+        <button class="btn btn-disconnect" id="btn-nsfw-confirm">Continue</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Delete Message Confirmation Modal ───────────────────────────────── -->
+  <div id="delete-message-modal">
+    <div class="modal-content">
+      <h3>Delete Message</h3>
+      <p>Are you sure you want to delete this message? This cannot be undone.</p>
+      <div class="modal-actions">
+        <button class="btn btn-cancel" id="btn-delete-message-cancel">Cancel</button>
+        <button class="btn btn-disconnect" id="btn-delete-message-confirm">Delete</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Custom Emoji Upload Modal ────────────────────────────────────── -->
+  <div id="emoji-upload-modal">
+    <div class="modal-content">
+      <h3>Upload Custom Emoji</h3>
+
+      <div id="emoji-upload-step-select">
+        <input type="file" id="emoji-file-input" accept="image/png,image/jpeg,image/gif,image/webp" style="display:none;">
+        <button class="btn btn-create" id="btn-emoji-choose-file">Choose Image…</button>
+        <p class="emoji-upload-hint">Max 500KB. PNG, JPEG, GIF, or WebP. An admin must approve it before it becomes usable.</p>
+        <div class="modal-actions">
+          <button class="btn btn-cancel" id="btn-emoji-upload-cancel-select">Cancel</button>
+        </div>
+      </div>
+
+      <div id="emoji-upload-step-crop" style="display:none;">
+        <div id="emoji-crop-viewport">
+          <img id="emoji-crop-img" alt="">
+        </div>
+        <input type="range" id="emoji-crop-zoom" min="1" max="3" step="0.01" value="1">
+        <label for="emoji-name-input">Name</label>
+        <input type="text" id="emoji-name-input" placeholder="e.g. pepehands" maxlength="32">
+        <div class="modal-actions">
+          <button class="btn btn-cancel" id="btn-emoji-upload-cancel">Cancel</button>
+          <button class="btn btn-create" id="btn-emoji-upload-confirm">Upload</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- ── Unified Settings Modal ───────────────────────────────────── -->
   <div id="admin-modal">
     <div class="modal-content wide">
       <h3>⚙ Settings</h3>
       <div class="settings-tab-bar">
         <button class="settings-tab-btn active" data-settings-tab="roles" id="settings-tab-roles">👑 Roles</button>
+        <button class="settings-tab-btn" data-settings-tab="emojis" id="settings-tab-emojis">😀 Emojis</button>
+        <button class="settings-tab-btn" data-settings-tab="server" id="settings-tab-server">🔔 Server</button>
         <button class="settings-tab-btn" data-settings-tab="voice">🎤 Voice & Shortcuts</button>
         <button class="settings-tab-btn" data-settings-tab="app">🖥 Application</button>
       </div>
@@ -2039,6 +2535,29 @@
       <div class="settings-panel active" data-settings-panel="roles">
         <div id="admin-user-list" class="admin-user-list">
           <div class="admin-empty">Loading users...</div>
+        </div>
+      </div>
+
+      <!-- Server Tab (admin-only server-wide settings) -->
+      <div class="settings-panel" data-settings-panel="server">
+        <div class="toggle-row">
+          <div class="toggle-row-info">
+            <div class="toggle-row-text">
+              <span class="toggle-row-title">👋 Nudge</span>
+              <span class="toggle-row-desc">Lets members nudge each other for attention (30s cooldown per pair, not configurable)</span>
+            </div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="chk-nudge-enabled" checked>
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+      </div>
+
+      <!-- Emojis Tab (pending custom emoji review queue) -->
+      <div class="settings-panel" data-settings-panel="emojis">
+        <div id="emoji-pending-list" class="admin-user-list">
+          <div class="admin-empty">Loading pending emojis...</div>
         </div>
       </div>
 
@@ -2222,6 +2741,9 @@
       allowfullscreen style="display:none;"></iframe>
     <video id="video-lightbox-video" controls style="display:none;"></video>
   </div>
+
+  <!-- ── Toast Notifications (Nudge, etc.) ───────────────────────────── -->
+  <div id="toast-container"></div>
 
   <script src="renderer.js"></script>
 </body>

@@ -19,6 +19,7 @@ import type {
     IUserPresence,
     ITransportOptions,
     IConsumerInfo,
+    ICustomEmoji,
 } from "./models.js";
 
 // ---------------------------------------------------------------------------
@@ -60,6 +61,7 @@ export interface ClientToServerEvents {
             name: string;
             type: "TEXT" | "VOICE";
             parentId?: string | null;
+            isNsfw?: boolean;
         },
         ack: (response: { success: boolean; channelId?: string; error?: string }) => void,
     ) => void;
@@ -72,13 +74,19 @@ export interface ClientToServerEvents {
 
     /** Client requests an update to a channel's properties. */
     UPDATE_CHANNEL: (
-        payload: { channelId: string; name?: string; position?: number },
+        payload: { channelId: string; name?: string; position?: number; isNsfw?: boolean },
+        ack: (response: { success: boolean; error?: string }) => void,
+    ) => void;
+
+    /** Admin reorders all channels sharing a parent in one atomic batch. */
+    REORDER_CHANNELS: (
+        payload: { parentId: string | null; orderedChannelIds: string[] },
         ack: (response: { success: boolean; error?: string }) => void,
     ) => void;
 
     /** Client sends a text message to their current channel. */
     SEND_MESSAGE: (
-        payload: { channelId: string; content: string; attachmentUrl?: string },
+        payload: { channelId: string; content: string; attachmentUrl?: string; attachmentPublicId?: string },
         ack: (response: { success: boolean; messageId?: string }) => void,
     ) => void;
 
@@ -88,11 +96,29 @@ export interface ClientToServerEvents {
         ack: (response: { success: boolean; messages?: IMessage[]; error?: string }) => void,
     ) => void;
 
+    /** Client marks a text channel as read up to now (clears the unread indicator). */
+    MARK_CHANNEL_READ: (
+        payload: { channelId: string },
+        ack: (response: { success: boolean }) => void,
+    ) => void;
+
+    /** Client deletes their own channel message (hard delete — including its attachment, if any). */
+    DELETE_MESSAGE: (
+        payload: { messageId: string },
+        ack: (response: { success: boolean; error?: string }) => void,
+    ) => void;
+
+    /** Client edits their own text-only channel message, within a 2-minute window of sending. */
+    EDIT_MESSAGE: (
+        payload: { messageId: string; content: string },
+        ack: (response: { success: boolean; error?: string }) => void,
+    ) => void;
+
     // ── Direct Messaging ─────────────────────────────────────────────────
 
     /** Client sends a direct message to another user. */
     SEND_DIRECT_MESSAGE: (
-        payload: { recipientId: string; content: string; attachmentUrl?: string },
+        payload: { recipientId: string; content: string; attachmentUrl?: string; attachmentPublicId?: string },
         ack: (response: { success: boolean; messageId?: string; error?: string }) => void,
     ) => void;
 
@@ -100,6 +126,12 @@ export interface ClientToServerEvents {
     FETCH_DIRECT_MESSAGES: (
         payload: { partnerId: string; before?: string; limit?: number },
         ack: (response: { success: boolean; messages?: IDirectMessage[]; error?: string }) => void,
+    ) => void;
+
+    /** Client deletes their own direct message (hard delete — including its attachment, if any). */
+    DELETE_DIRECT_MESSAGE: (
+        payload: { dmId: string },
+        ack: (response: { success: boolean; error?: string }) => void,
     ) => void;
 
     /** Client requests the list of currently online users on this server. */
@@ -237,9 +269,58 @@ export interface ClientToServerEvents {
         ack: (response: { success: boolean; error?: string }) => void,
     ) => void;
 
+    // ── Custom Emoji ─────────────────────────────────────────────────────
+
+    /** Submits an uploaded (already-cropped) emoji image for admin review. */
+    CREATE_CUSTOM_EMOJI: (
+        payload: { name: string; imageUrl: string; imagePublicId?: string },
+        ack: (response: { success: boolean; emojiId?: string; error?: string }) => void,
+    ) => void;
+
+    /** Fetches all APPROVED custom emoji for the current server (usable by everyone). */
+    GET_APPROVED_EMOJIS: (
+        ack: (response: { success: boolean; emojis?: ICustomEmoji[]; error?: string }) => void,
+    ) => void;
+
+    /** Fetches all PENDING custom emoji awaiting review. Requires MANAGE_EMOJIS. */
+    GET_PENDING_EMOJIS: (
+        ack: (response: { success: boolean; emojis?: ICustomEmoji[]; error?: string }) => void,
+    ) => void;
+
+    /** Approves or rejects a pending custom emoji. Requires MANAGE_EMOJIS. */
+    REVIEW_CUSTOM_EMOJI: (
+        payload: { emojiId: string; decision: "APPROVED" | "REJECTED" },
+        ack: (response: { success: boolean; error?: string }) => void,
+    ) => void;
+
     /** Lightweight ping for client-side latency measurement. */
     PING_LATENCY: (
         ack: () => void,
+    ) => void;
+
+    /** Reports the caller's own mute/deafen state so other occupants can display it. */
+    SET_VOICE_STATE: (
+        payload: { isMuted: boolean; isDeafened: boolean },
+        ack: (response: { success: boolean }) => void,
+    ) => void;
+
+    // ── Nudge ────────────────────────────────────────────────────────────
+
+    /** Nudges another online user to get their attention (30s cooldown per sender/target pair). */
+    NUDGE_USER: (
+        payload: { targetUserId: string },
+        ack: (response: { success: boolean; error?: string }) => void,
+    ) => void;
+
+    /** Fetches the current server's admin-configurable settings (currently just nudgeEnabled). */
+    GET_SERVER_SETTINGS: (
+        ack: (response: { success: boolean; nudgeEnabled?: boolean; error?: string }) => void,
+    ) => void;
+
+    /** Updates server-wide settings. Requires ADMIN. */
+    UPDATE_SERVER_SETTINGS: (
+        payload: { nudgeEnabled: boolean },
+        ack: (response: { success: boolean; error?: string }) => void,
     ) => void;
 }
 
@@ -276,6 +357,15 @@ export interface ServerToClientEvents {
 
     /** Delivers a direct message to the recipient in real-time. */
     DIRECT_MESSAGE_RECEIVED: (payload: IDirectMessage) => void;
+
+    /** Broadcasts that a channel message was deleted by its author. */
+    MESSAGE_DELETED: (payload: { channelId: string; messageId: string }) => void;
+
+    /** Broadcasts that a channel message was edited by its author. */
+    MESSAGE_EDITED: (payload: IMessage) => void;
+
+    /** Notifies both participants that a direct message was deleted by its author. */
+    DIRECT_MESSAGE_DELETED: (payload: { dmId: string }) => void;
 
     /** Broadcasts that a new channel was created. */
     CHANNEL_CREATED: (payload: {
@@ -344,6 +434,15 @@ export interface ServerToClientEvents {
         isDm: boolean;
         reactions: Array<{ emoji: string; count: number; userIds: string[] }>;
     }) => void;
+
+    /** Broadcasts a newly-approved custom emoji so every connected picker updates live. */
+    CUSTOM_EMOJI_APPROVED: (payload: { serverId: string; emoji: ICustomEmoji }) => void;
+
+    /** Delivered to the target of a NUDGE_USER call. */
+    NUDGE_RECEIVED: (payload: { fromUserId: string; fromNickname: string }) => void;
+
+    /** Broadcasts a server settings change so every connected client updates live. */
+    SERVER_SETTINGS_UPDATED: (payload: { nudgeEnabled: boolean }) => void;
 }
 
 // ---------------------------------------------------------------------------

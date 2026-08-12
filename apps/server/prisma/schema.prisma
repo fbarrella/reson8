@@ -2,7 +2,7 @@
 // Learn more: https://pris.ly/d/prisma-schema
 
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
   binaryTargets = ["native", "debian-openssl-1.1.x"]
 }
 
@@ -16,16 +16,18 @@ datasource db {
 // ---------------------------------------------------------------------------
 
 model Server {
-  id         String    @id @default(uuid())
-  name       String
-  address    String
-  maxClients Int       @default(32)
-  createdAt  DateTime  @default(now())
-  updatedAt  DateTime  @updatedAt
+  id           String   @id @default(uuid())
+  name         String
+  address      String
+  maxClients   Int      @default(32)
+  nudgeEnabled Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
-  channels Channel[]
-  roles    Role[]
-  users    UserServer[]
+  channels     Channel[]
+  roles        Role[]
+  users        UserServer[]
+  customEmojis CustomEmoji[]
 
   @@map("servers")
 }
@@ -40,22 +42,24 @@ enum ChannelType {
 }
 
 model Channel {
-  id        String      @id @default(uuid())
-  serverId  String
-  name      String
-  type      ChannelType @default(VOICE)
-  parentId  String?
-  position  Int         @default(0)
-  maxUsers  Int?        // null = unlimited
+  id       String      @id @default(uuid())
+  serverId String
+  name     String
+  type     ChannelType @default(VOICE)
+  parentId String?
+  position Int         @default(0)
+  maxUsers Int? // null = unlimited
+  isNsfw   Boolean     @default(false) // text channels only — client prompts before opening
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   // Relations
-  server   Server    @relation(fields: [serverId], references: [id], onDelete: Cascade)
-  parent   Channel?  @relation("ChannelTree", fields: [parentId], references: [id], onDelete: SetNull)
-  children Channel[] @relation("ChannelTree")
+  server   Server        @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  parent   Channel?      @relation("ChannelTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children Channel[]     @relation("ChannelTree")
   messages Message[]
+  reads    ChannelRead[]
 
   @@index([serverId])
   @@index([parentId])
@@ -70,15 +74,16 @@ model User {
   id        String   @id @default(uuid())
   username  String   @unique
   nickname  String
-  password  String   // bcrypt hash (Phase 4+)
+  password  String // bcrypt hash (Phase 4+)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  servers     UserServer[]
-  roles       UserRole[]
-  messages    Message[]
-  sentDMs     DirectMessage[] @relation("SentDMs")
-  receivedDMs DirectMessage[] @relation("ReceivedDMs")
+  servers      UserServer[]
+  roles        UserRole[]
+  messages     Message[]
+  sentDMs      DirectMessage[] @relation("SentDMs")
+  receivedDMs  DirectMessage[] @relation("ReceivedDMs")
+  channelReads ChannelRead[]
 
   @@map("users")
 }
@@ -109,7 +114,7 @@ model Role {
   name        String
   permissions BigInt   @default(0) // bitwise flags (see PermissionFlags enum)
   powerLevel  Int      @default(0)
-  color       String?  // hex color, e.g. "#FF5733"
+  color       String? // hex color, e.g. "#FF5733"
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -140,15 +145,17 @@ model UserRole {
 // ---------------------------------------------------------------------------
 
 model Message {
-  id            String   @id @default(uuid())
-  channelId     String
-  userId        String
-  content       String
-  attachmentUrl String?
-  createdAt     DateTime @default(now())
+  id                 String    @id @default(uuid())
+  channelId          String
+  userId             String
+  content            String
+  attachmentUrl      String?
+  attachmentPublicId String? // Cloudinary public_id — null for local-disk storage or text-only messages
+  createdAt          DateTime  @default(now())
+  editedAt           DateTime? // set when the author edits within the 2-minute window
 
-  channel Channel @relation(fields: [channelId], references: [id], onDelete: Cascade)
-  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  channel   Channel    @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
   reactions Reaction[] @relation("MessageReactions")
 
   @@index([channelId, createdAt])
@@ -160,16 +167,17 @@ model Message {
 // ---------------------------------------------------------------------------
 
 model DirectMessage {
-  id            String    @id @default(uuid())
-  senderId      String
-  receiverId    String
-  content       String
-  attachmentUrl String?
-  createdAt     DateTime  @default(now())
-  readAt        DateTime?
+  id                 String    @id @default(uuid())
+  senderId           String
+  receiverId         String
+  content            String
+  attachmentUrl      String?
+  attachmentPublicId String? // Cloudinary public_id — null for local-disk storage or text-only messages
+  createdAt          DateTime  @default(now())
+  readAt             DateTime?
 
-  sender   User @relation("SentDMs", fields: [senderId], references: [id], onDelete: Cascade)
-  receiver User @relation("ReceivedDMs", fields: [receiverId], references: [id], onDelete: Cascade)
+  sender    User       @relation("SentDMs", fields: [senderId], references: [id], onDelete: Cascade)
+  receiver  User       @relation("ReceivedDMs", fields: [receiverId], references: [id], onDelete: Cascade)
   reactions Reaction[] @relation("DmReactions")
 
   @@index([senderId, receiverId, createdAt])
@@ -184,8 +192,8 @@ model DirectMessage {
 model BannedUser {
   id       String   @id @default(uuid())
   serverId String
-  userId   String   // instance ID of the banned user
-  nickname String   // nickname at time of ban (for display)
+  userId   String // instance ID of the banned user
+  nickname String // nickname at time of ban (for display)
   bannedAt DateTime @default(now())
 
   @@unique([serverId, userId])
@@ -210,4 +218,47 @@ model Reaction {
   @@unique([messageId, userId, emoji])
   @@unique([dmId, userId, emoji])
   @@map("reactions")
+}
+
+// ---------------------------------------------------------------------------
+// ChannelRead — per-user read cursor for text channels (unread indicator)
+// ---------------------------------------------------------------------------
+
+model ChannelRead {
+  userId     String
+  channelId  String
+  lastReadAt DateTime @default(now())
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  channel Channel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  @@id([userId, channelId])
+  @@map("channel_reads")
+}
+
+// ---------------------------------------------------------------------------
+// CustomEmoji — user-uploaded server emoji, pending admin approval
+// ---------------------------------------------------------------------------
+
+enum EmojiStatus {
+  PENDING
+  APPROVED
+}
+
+model CustomEmoji {
+  id            String      @id @default(uuid())
+  serverId      String
+  name          String // unique per server, used as the :name: token
+  imageUrl      String
+  imagePublicId String? // Cloudinary public_id — null for local-disk storage
+  uploadedBy    String // instance ID
+  status        EmojiStatus @default(PENDING)
+  createdAt     DateTime    @default(now())
+  reviewedAt    DateTime?
+  reviewedBy    String? // instance ID of the admin who approved it
+
+  server Server @relation(fields: [serverId], references: [id], onDelete: Cascade)
+
+  @@unique([serverId, name])
+  @@map("custom_emojis")
 }

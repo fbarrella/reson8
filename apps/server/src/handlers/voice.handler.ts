@@ -19,8 +19,11 @@ import type {
     ServerToClientEvents,
     InterServerEvents,
     SocketData,
+    IUserPresence,
 } from "@reson8/shared-types";
 import type { MediasoupService } from "../services/mediasoup.service.js";
+import { PresenceService } from "../services/presence.service.js";
+import { buildOccupant, voiceSessionStartedAt } from "./connection.handler.js";
 
 type TypedIO = SocketIOServer<
     ClientToServerEvents,
@@ -44,6 +47,8 @@ export function registerVoiceHandlers(
     app: FastifyInstance,
     mediasoup: MediasoupService,
 ): void {
+    const presence = new PresenceService(app.redis);
+
     io.on("connection", (socket: TypedSocket) => {
         // ── 1. GET_ROUTER_CAPABILITIES ──────────────────────────────────────
         socket.on("GET_ROUTER_CAPABILITIES", async (payload, ack) => {
@@ -359,6 +364,35 @@ export function registerVoiceHandlers(
                 }
             } catch (err) {
                 app.log.error({ err }, "Error in CLOSE_PRODUCER");
+            }
+        });
+
+        // ── SET_VOICE_STATE ───────────────────────────────────────────────
+        socket.on("SET_VOICE_STATE", async (payload, ack) => {
+            try {
+                const { isMuted, isDeafened } = payload;
+                const userId = socket.data.userId;
+                const channelId = socket.data.currentChannelId;
+
+                await presence.setVoiceState(userId, isMuted, isDeafened);
+
+                if (channelId) {
+                    const occupantIds = await presence.getChannelOccupants(channelId);
+                    const occupants: IUserPresence[] = await Promise.all(
+                        occupantIds.map((uid) => buildOccupant(uid, presence, app.prisma)),
+                    );
+
+                    io.to(`server:${socket.data.serverId}`).emit("PRESENCE_UPDATE", {
+                        channelId,
+                        occupants,
+                        sessionStartedAt: voiceSessionStartedAt.get(channelId)?.toISOString(),
+                    });
+                }
+
+                ack({ success: true });
+            } catch (err) {
+                app.log.error({ err }, "Error in SET_VOICE_STATE");
+                ack({ success: false });
             }
         });
     });

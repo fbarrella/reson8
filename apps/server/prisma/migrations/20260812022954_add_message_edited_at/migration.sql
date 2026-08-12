@@ -1,0 +1,2 @@
+-- AlterTable
+ALTER TABLE "messages" ADD COLUMN     "editedAt" TIMESTAMP(3);

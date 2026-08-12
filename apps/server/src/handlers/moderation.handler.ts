@@ -18,6 +18,7 @@ import { PermissionFlags } from "@reson8/shared-types";
 import { PresenceService } from "../services/presence.service.js";
 import { requirePermission } from "../middleware/permissions.middleware.js";
 import type { MediasoupService } from "../services/mediasoup.service.js";
+import { buildOccupant } from "./connection.handler.js";
 
 type TypedIO = SocketIOServer<
     ClientToServerEvents,
@@ -88,16 +89,7 @@ export function registerModerationHandlers(
                 // Broadcast updated occupants for the channel
                 const occupantIds = await presence.getChannelOccupants(channelId);
                 const occupants: IUserPresence[] = await Promise.all(
-                    occupantIds.map(async (uid) => {
-                        const p = await presence.getUserPresence(uid);
-                        return {
-                            userId: uid,
-                            nickname: p?.nickname ?? "Unknown",
-                            isMuted: false,
-                            isDeafened: false,
-                            isAway: false,
-                        };
-                    }),
+                    occupantIds.map((uid) => buildOccupant(uid, presence, app.prisma)),
                 );
 
                 // Notify all remaining channel occupants that a user was kicked

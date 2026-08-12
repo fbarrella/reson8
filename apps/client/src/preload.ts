@@ -13,6 +13,7 @@ import type {
     ServerToClientEvents,
     IMessage,
     IDirectMessage,
+    ICustomEmoji,
 } from "@reson8/shared-types";
 import { VoiceService, VoiceSignaling } from "./services/voice.service";
 
@@ -24,6 +25,40 @@ let voiceService: VoiceService | null = null;
 let serverBaseUrl: string = "";
 let joinServerInFlight = false;
 let latencyMs: number = -1;
+
+async function uploadTo(
+    endpoint: string,
+    fileBuffer: ArrayBuffer,
+    fileName: string,
+    mimeType: string,
+): Promise<{ url: string; publicId?: string }> {
+    if (!serverBaseUrl) {
+        throw new Error("Not connected to a server");
+    }
+
+    const formData = new FormData();
+    const blob = new Blob([fileBuffer], { type: mimeType });
+    formData.append("file", blob, fileName);
+
+    const response = await fetch(`${serverBaseUrl}${endpoint}`, {
+        method: "POST",
+        body: formData,
+    });
+
+    if (!response.ok) {
+        const errBody = await response.json().catch(() => ({ error: "Upload failed" }));
+        throw new Error(errBody.error || `Upload failed (${response.status})`);
+    }
+
+    const result = await response.json();
+
+    // If the URL is relative (local storage), prepend the server base URL
+    if (result.url && result.url.startsWith("/")) {
+        result.url = `${serverBaseUrl}${result.url}`;
+    }
+
+    return result;
+}
 
 // Eagerly fetch instance ID so it's available before any connection
 ipcRenderer.invoke("get-instance-id").then((id: string) => {
@@ -199,6 +234,9 @@ const api = {
         socket.on("PRESENCE_UPDATE", (payload) => emit("presence", payload));
         socket.on("MESSAGE_RECEIVED", (payload) => emit("message", payload));
         socket.on("DIRECT_MESSAGE_RECEIVED", (payload) => emit("dm-received", payload));
+        socket.on("MESSAGE_DELETED", (payload) => emit("message-deleted", payload));
+        socket.on("DIRECT_MESSAGE_DELETED", (payload) => emit("dm-deleted", payload));
+        socket.on("MESSAGE_EDITED", (payload) => emit("message-edited", payload));
         socket.on("CHANNEL_DELETED", (payload) => emit("channel-deleted", payload));
         socket.on("ERROR", (payload) => emit("error", payload));
         socket.on("ACTIVE_SPEAKERS", (payload) => emit("active-speakers", payload));
@@ -206,11 +244,14 @@ const api = {
         socket.on("CHANNEL_USER_KICKED", (payload) => emit("channel-user-kicked", payload));
         socket.on("USER_BANNED", () => emit("user-banned", null));
         socket.on("REACTION_UPDATED", (payload) => emit("reaction-updated", payload));
+        socket.on("CUSTOM_EMOJI_APPROVED", (payload) => emit("custom-emoji-approved", payload));
+        socket.on("NUDGE_RECEIVED", (payload) => emit("nudge-received", payload));
+        socket.on("SERVER_SETTINGS_UPDATED", (payload) => emit("server-settings-updated", payload));
 
         // Voice-specific events
         socket.on("NEW_PRODUCER", (payload) => {
             emit("new-producer", payload);
-            voiceService?.queueConsumeProducer(payload.producerId);
+            voiceService?.queueConsumeProducer(payload.producerId, payload.userId);
         });
 
         socket.on("PRODUCER_CLOSED", (payload) => {
@@ -220,7 +261,7 @@ const api = {
 
         socket.on("EXISTING_PRODUCERS", (payload) => {
             for (const p of payload.producers) {
-                voiceService?.queueConsumeProducer(p.producerId);
+                voiceService?.queueConsumeProducer(p.producerId, p.userId);
             }
         });
     },
@@ -299,6 +340,26 @@ const api = {
         voiceService?.setMuted(muted);
     },
 
+    setVoiceState(isMuted: boolean, isDeafened: boolean): void {
+        socket?.emit("SET_VOICE_STATE", { isMuted, isDeafened }, () => { });
+    },
+
+    setLocalUserVolume(userId: string, percent: number): void {
+        voiceService?.setLocalUserVolume(userId, percent);
+    },
+
+    setLocalUserMute(userId: string, muted: boolean): void {
+        voiceService?.setLocalUserMute(userId, muted);
+    },
+
+    getLocalUserVolume(userId: string): number {
+        return voiceService?.getLocalUserVolume(userId) ?? 100;
+    },
+
+    getLocalUserMute(userId: string): boolean {
+        return voiceService?.getLocalUserMute(userId) ?? false;
+    },
+
     // ── Audio Settings ──────────────────────────────────────────────────────
 
     async enumerateAudioDevices(): Promise<{ inputs: { deviceId: string; label: string }[]; outputs: { deviceId: string; label: string }[] }> {
@@ -323,6 +384,7 @@ const api = {
         name: string,
         type: "TEXT" | "VOICE",
         parentId?: string | null,
+        isNsfw?: boolean,
     ): Promise<{ success: boolean; channelId?: string; error?: string }> {
         return new Promise((resolve) => {
             if (!socket?.connected) {
@@ -331,9 +393,35 @@ const api = {
             }
             socket.emit(
                 "CREATE_CHANNEL",
-                { serverId, name, type, parentId: parentId ?? null },
+                { serverId, name, type, parentId: parentId ?? null, isNsfw },
                 resolve,
             );
+        });
+    },
+
+    updateChannel(
+        channelId: string,
+        changes: { name?: string; position?: number; isNsfw?: boolean },
+    ): Promise<{ success: boolean; error?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.emit("UPDATE_CHANNEL", { channelId, ...changes }, resolve);
+        });
+    },
+
+    reorderChannels(
+        parentId: string | null,
+        orderedChannelIds: string[],
+    ): Promise<{ success: boolean; error?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.emit("REORDER_CHANNELS", { parentId, orderedChannelIds }, resolve);
         });
     },
 
@@ -355,13 +443,34 @@ const api = {
         channelId: string,
         content: string,
         attachmentUrl?: string,
+        attachmentPublicId?: string,
     ): Promise<{ success: boolean; messageId?: string }> {
         return new Promise((resolve) => {
             if (!socket?.connected) {
                 resolve({ success: false });
                 return;
             }
-            socket.emit("SEND_MESSAGE", { channelId, content, attachmentUrl }, resolve);
+            socket.emit("SEND_MESSAGE", { channelId, content, attachmentUrl, attachmentPublicId }, resolve);
+        });
+    },
+
+    deleteMessage(messageId: string): Promise<{ success: boolean; error?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.emit("DELETE_MESSAGE", { messageId }, resolve);
+        });
+    },
+
+    editMessage(messageId: string, content: string): Promise<{ success: boolean; error?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.emit("EDIT_MESSAGE", { messageId, content }, resolve);
         });
     },
 
@@ -380,6 +489,16 @@ const api = {
                 { channelId, before, limit },
                 resolve,
             );
+        });
+    },
+
+    markChannelRead(channelId: string): Promise<{ success: boolean }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false });
+                return;
+            }
+            socket.emit("MARK_CHANNEL_READ", { channelId }, resolve);
         });
     },
 
@@ -429,13 +548,24 @@ const api = {
         recipientId: string,
         content: string,
         attachmentUrl?: string,
+        attachmentPublicId?: string,
     ): Promise<{ success: boolean; messageId?: string; error?: string }> {
         return new Promise((resolve) => {
             if (!socket?.connected) {
                 resolve({ success: false, error: "Not connected" });
                 return;
             }
-            socket.emit("SEND_DIRECT_MESSAGE", { recipientId, content, attachmentUrl }, resolve);
+            socket.emit("SEND_DIRECT_MESSAGE", { recipientId, content, attachmentUrl, attachmentPublicId }, resolve);
+        });
+    },
+
+    deleteDirectMessage(dmId: string): Promise<{ success: boolean; error?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.emit("DELETE_DIRECT_MESSAGE", { dmId }, resolve);
         });
     },
 
@@ -535,33 +665,16 @@ const api = {
         fileBuffer: ArrayBuffer,
         fileName: string,
         mimeType: string,
-    ): Promise<{ url: string }> {
-        if (!serverBaseUrl) {
-            throw new Error("Not connected to a server");
-        }
+    ): Promise<{ url: string; publicId?: string }> {
+        return uploadTo("/api/upload", fileBuffer, fileName, mimeType);
+    },
 
-        const formData = new FormData();
-        const blob = new Blob([fileBuffer], { type: mimeType });
-        formData.append("file", blob, fileName);
-
-        const response = await fetch(`${serverBaseUrl}/api/upload`, {
-            method: "POST",
-            body: formData,
-        });
-
-        if (!response.ok) {
-            const errBody = await response.json().catch(() => ({ error: "Upload failed" }));
-            throw new Error(errBody.error || `Upload failed (${response.status})`);
-        }
-
-        const result = await response.json();
-
-        // If the URL is relative (local storage), prepend the server base URL
-        if (result.url && result.url.startsWith("/")) {
-            result.url = `${serverBaseUrl}${result.url}`;
-        }
-
-        return result;
+    async uploadEmojiFile(
+        fileBuffer: ArrayBuffer,
+        fileName: string,
+        mimeType: string,
+    ): Promise<{ url: string; publicId?: string }> {
+        return uploadTo("/api/upload/emoji", fileBuffer, fileName, mimeType);
     },
 
     // ── Image Download ───────────────────────────────────────────────────
@@ -588,6 +701,10 @@ const api = {
 
     async isWindowFocused(): Promise<boolean> {
         return ipcRenderer.invoke("is-window-focused");
+    },
+
+    flashWindow(): void {
+        ipcRenderer.send("flash-window");
     },
 
     // ── Mic Sensitivity / Noise Gate ──────────────────────────────────────
@@ -643,6 +760,87 @@ const api = {
                 return;
             }
             socket.emit("TOGGLE_REACTION", { messageId, emoji, isDm }, resolve);
+        });
+    },
+
+    // ── Custom Emoji ──────────────────────────────────────────────────────
+
+    createCustomEmoji(
+        name: string,
+        imageUrl: string,
+        imagePublicId?: string,
+    ): Promise<{ success: boolean; emojiId?: string; error?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.emit("CREATE_CUSTOM_EMOJI", { name, imageUrl, imagePublicId }, resolve);
+        });
+    },
+
+    getApprovedEmojis(): Promise<{ success: boolean; emojis?: ICustomEmoji[]; error?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.emit("GET_APPROVED_EMOJIS", resolve);
+        });
+    },
+
+    getPendingEmojis(): Promise<{ success: boolean; emojis?: ICustomEmoji[]; error?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.emit("GET_PENDING_EMOJIS", resolve);
+        });
+    },
+
+    reviewCustomEmoji(
+        emojiId: string,
+        decision: "APPROVED" | "REJECTED",
+    ): Promise<{ success: boolean; error?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.emit("REVIEW_CUSTOM_EMOJI", { emojiId, decision }, resolve);
+        });
+    },
+
+    // ── Nudge ─────────────────────────────────────────────────────────────
+
+    nudgeUser(targetUserId: string): Promise<{ success: boolean; error?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.emit("NUDGE_USER", { targetUserId }, resolve);
+        });
+    },
+
+    getServerSettings(): Promise<{ success: boolean; nudgeEnabled?: boolean; error?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.emit("GET_SERVER_SETTINGS", resolve);
+        });
+    },
+
+    updateServerSettings(nudgeEnabled: boolean): Promise<{ success: boolean; error?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.emit("UPDATE_SERVER_SETTINGS", { nudgeEnabled }, resolve);
         });
     },
 };

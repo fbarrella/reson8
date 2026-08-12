@@ -32,6 +32,7 @@ export enum PermissionFlags {
     KICK_USER = 1 << 6,  // 64
     BAN_USER = 1 << 7,  // 128
     ADMIN = 1 << 8,  // 256 — bypasses all checks
+    MANAGE_EMOJIS = 1 << 9,  // 512 — approve/reject custom emoji uploads
 }
 
 // ---------------------------------------------------------------------------
@@ -43,6 +44,7 @@ export interface IServer {
     name: string;
     address: string;
     maxClients: number;
+    nudgeEnabled: boolean;
     createdAt: string; // ISO-8601
 }
 
@@ -59,6 +61,7 @@ export interface IChannel {
     parentId: string | null;
     position: number;
     maxUsers: number | null; // null = unlimited
+    isNsfw: boolean; // text channels only
     createdAt: string;
 }
 
@@ -70,6 +73,14 @@ export interface IChannelTreeNode extends IChannel {
     children: IChannelTreeNode[];
     /** Users currently in this channel (populated from Redis presence). */
     occupants: IUserPresence[];
+    /**
+     * Whether the requesting user has unread messages in this (text) channel.
+     * Only meaningfully computed on the per-socket tree sent at join time —
+     * omitted (or stale) on tree broadcasts triggered by unrelated channel
+     * admin actions, since a single broadcast tree is shared by every
+     * recipient and can't carry a different value per user.
+     */
+    hasUnread?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -120,6 +131,7 @@ export interface IMessage {
     content: string;
     attachmentUrl?: string | null;
     createdAt: string;
+    editedAt?: string | null;
     reactions?: Array<{ emoji: string; count: number; userIds: string[] }>;
 }
 
@@ -151,6 +163,23 @@ export interface IBannedUser {
     userId: string;
     nickname: string;
     bannedAt: string;
+}
+
+// ---------------------------------------------------------------------------
+// CustomEmoji
+// ---------------------------------------------------------------------------
+
+/** Server-uploaded custom emoji, referenced in chat as :name:. */
+export interface ICustomEmoji {
+    id: string;
+    serverId: string;
+    name: string;
+    imageUrl: string;
+    uploadedBy: string;
+    /** Resolved only where useful to display (e.g. the pending-review queue). */
+    uploadedByNickname?: string;
+    status: "PENDING" | "APPROVED";
+    createdAt: string;
 }
 
 // ---------------------------------------------------------------------------

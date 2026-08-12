@@ -223,6 +223,12 @@ function createWindow(): void {
         }
     });
 
+    // Explicitly clear any taskbar/dock attention flash on focus, rather
+    // than relying on per-platform implicit behavior (PRD 4.14 — Nudge).
+    mainWindow.on("focus", () => {
+        mainWindow?.flashFrame(false);
+    });
+
     mainWindow.on("closed", () => {
         mainWindow = null;
     });
@@ -332,6 +338,15 @@ app.whenReady().then(() => {
     }));
 
     ipcMain.handle("is-window-focused", () => mainWindow?.isFocused() ?? false);
+
+    // Taskbar/dock attention flash for Nudge (PRD 4.14) — cleared automatically
+    // by Electron once the window regains focus, so no explicit "un-flash" call
+    // is needed on the renderer side.
+    ipcMain.on("flash-window", () => {
+        if (mainWindow && !mainWindow.isFocused()) {
+            mainWindow.flashFrame(true);
+        }
+    });
 
     createTray();
     createWindow();

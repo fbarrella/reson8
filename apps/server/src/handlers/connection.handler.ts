@@ -13,6 +13,7 @@ import type {
     InterServerEvents,
     SocketData,
     IUserPresence,
+    IChannelTreeNode,
 } from "@reson8/shared-types";
 import { PresenceService } from "../services/presence.service.js";
 import { buildChannelTree } from "../services/channel-tree.service.js";
@@ -33,29 +34,96 @@ type TypedSocket = Socket<
 >;
 
 /**
- * Resolves a user's nickname with a database fallback.
+ * Builds an occupant's presence DTO, resolving nickname with a database fallback
+ * and carrying along their self-reported mute/deafen state.
  *
  * Fast path: Redis presence (available 99% of the time).
  * Slow path: Prisma User table (covers the race-condition window
- *            where presence was just deleted / not yet written).
+ *            where presence was just deleted / not yet written) — voice
+ *            state has no DB fallback since it's inherently ephemeral.
  */
-async function resolveNickname(
+export async function buildOccupant(
     userId: string,
     presence: PresenceService,
     prisma: FastifyInstance["prisma"],
-): Promise<string> {
+): Promise<IUserPresence> {
     const p = await presence.getUserPresence(userId);
-    if (p?.nickname) return p.nickname;
+    if (p?.nickname) {
+        return {
+            userId,
+            nickname: p.nickname,
+            isMuted: p.isMuted,
+            isDeafened: p.isDeafened,
+            isAway: false,
+        };
+    }
 
     const user = await prisma.user.findUnique({
         where: { id: userId },
         select: { nickname: true },
     });
-    return user?.nickname ?? "Unknown";
+    return {
+        userId,
+        nickname: user?.nickname ?? "Unknown",
+        isMuted: false,
+        isDeafened: false,
+        isAway: false,
+    };
 }
 
 /** In-memory voice session start times (channelId → Date). */
-const voiceSessionStartedAt = new Map<string, Date>();
+export const voiceSessionStartedAt = new Map<string, Date>();
+
+/**
+ * Annotates each TEXT channel node in `tree` with `hasUnread`, comparing the
+ * channel's latest message timestamp against the requesting user's
+ * ChannelRead cursor (no cursor = unread only if the channel has any
+ * messages at all, so brand-new channels never start "unread" for anyone).
+ *
+ * Only meaningful for the per-socket tree sent at join time — a single
+ * broadcast tree is shared by every recipient, so this is never called for
+ * broadcastTreeUpdate()-style updates triggered by other users' actions.
+ */
+async function annotateUnreadChannels(
+    tree: IChannelTreeNode[],
+    channelDtos: { id: string; type: string }[],
+    userId: string,
+    app: FastifyInstance,
+): Promise<void> {
+    const textChannelIds = channelDtos
+        .filter((c) => c.type === "TEXT")
+        .map((c) => c.id);
+    if (textChannelIds.length === 0) return;
+
+    const [latestMessages, readCursors] = await Promise.all([
+        app.prisma.message.groupBy({
+            by: ["channelId"],
+            where: { channelId: { in: textChannelIds } },
+            _max: { createdAt: true },
+        }),
+        app.prisma.channelRead.findMany({
+            where: { userId, channelId: { in: textChannelIds } },
+        }),
+    ]);
+
+    const latestMap = new Map<string, Date>();
+    for (const row of latestMessages) {
+        if (row._max.createdAt) latestMap.set(row.channelId, row._max.createdAt);
+    }
+    const lastReadMap = new Map(readCursors.map((r) => [r.channelId, r.lastReadAt]));
+
+    function walk(nodes: IChannelTreeNode[]): void {
+        for (const node of nodes) {
+            const latest = latestMap.get(node.id);
+            if (latest) {
+                const lastRead = lastReadMap.get(node.id);
+                node.hasUnread = !lastRead || latest > lastRead;
+            }
+            if (node.children.length > 0) walk(node.children);
+        }
+    }
+    walk(tree);
+}
 
 /**
  * Registers all Socket.io connection event handlers.
@@ -170,6 +238,7 @@ export function registerConnectionHandlers(
                     parentId: string | null;
                     position: number;
                     maxUsers: number | null;
+                    isNsfw: boolean;
                     createdAt: Date;
                 }) => ({
                     id: ch.id,
@@ -179,6 +248,7 @@ export function registerConnectionHandlers(
                     parentId: ch.parentId,
                     position: ch.position,
                     maxUsers: ch.maxUsers,
+                    isNsfw: ch.isNsfw,
                     createdAt: ch.createdAt.toISOString(),
                 }));
 
@@ -194,15 +264,7 @@ export function registerConnectionHandlers(
                             await presence.getChannelOccupants(node.id);
                         if (occupantIds.length > 0) {
                             node.occupants = await Promise.all(
-                                occupantIds.map(async (uid) => {
-                                    return {
-                                        userId: uid,
-                                        nickname: await resolveNickname(uid, presence, app.prisma),
-                                        isMuted: false,
-                                        isDeafened: false,
-                                        isAway: false,
-                                    };
-                                }),
+                                occupantIds.map((uid) => buildOccupant(uid, presence, app.prisma)),
                             );
                             // Bootstrap voice session start time for occupied voice channels
                             // (approximate — covers server-restart recovery)
@@ -217,6 +279,7 @@ export function registerConnectionHandlers(
                     }
                 }
                 await hydrateOccupants(tree);
+                await annotateUnreadChannels(tree, channelDtos, instanceId, app);
 
                 socket.emit("CHANNEL_TREE_UPDATE", { serverId, tree });
 
@@ -280,15 +343,7 @@ export function registerConnectionHandlers(
                         voiceSessionStartedAt.delete(prevChannelId);
                     }
                     const oldOccupants: IUserPresence[] = await Promise.all(
-                        oldOccupantIds.map(async (uid) => {
-                            return {
-                                userId: uid,
-                                nickname: await resolveNickname(uid, presence, app.prisma),
-                                isMuted: false,
-                                isDeafened: false,
-                                isAway: false,
-                            };
-                        }),
+                        oldOccupantIds.map((uid) => buildOccupant(uid, presence, app.prisma)),
                     );
                     io.to(`server:${socket.data.serverId}`).emit("PRESENCE_UPDATE", {
                         channelId: prevChannelId,
@@ -317,15 +372,7 @@ export function registerConnectionHandlers(
                 }
 
                 const occupants: IUserPresence[] = await Promise.all(
-                    occupantIds.map(async (uid) => {
-                        return {
-                            userId: uid,
-                            nickname: await resolveNickname(uid, presence, app.prisma),
-                            isMuted: false,
-                            isDeafened: false,
-                            isAway: false,
-                        };
-                    }),
+                    occupantIds.map((uid) => buildOccupant(uid, presence, app.prisma)),
                 );
 
                 io.to(`server:${socket.data.serverId}`).emit("PRESENCE_UPDATE", {
@@ -394,15 +441,7 @@ export function registerConnectionHandlers(
                     voiceSessionStartedAt.delete(channelId);
                 }
                 const occupants: IUserPresence[] = await Promise.all(
-                    occupantIds.map(async (uid) => {
-                        return {
-                            userId: uid,
-                            nickname: await resolveNickname(uid, presence, app.prisma),
-                            isMuted: false,
-                            isDeafened: false,
-                            isAway: false,
-                        };
-                    }),
+                    occupantIds.map((uid) => buildOccupant(uid, presence, app.prisma)),
                 );
 
                 io.to(`server:${socket.data.serverId}`).emit("PRESENCE_UPDATE", {
@@ -444,15 +483,7 @@ export function registerConnectionHandlers(
                             voiceSessionStartedAt.delete(currentChannelId);
                         }
                         const occupants: IUserPresence[] = await Promise.all(
-                            occupantIds.map(async (uid) => {
-                                return {
-                                    userId: uid,
-                                    nickname: await resolveNickname(uid, presence, app.prisma),
-                                    isMuted: false,
-                                    isDeafened: false,
-                                    isAway: false,
-                                };
-                            }),
+                            occupantIds.map((uid) => buildOccupant(uid, presence, app.prisma)),
                         );
 
                         io.to(`server:${serverId}`).emit("PRESENCE_UPDATE", {
