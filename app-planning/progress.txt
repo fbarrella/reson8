@@ -142,3 +142,140 @@ Feature/Fix: <name>
   Verification:
     ...
   Next Step: ...
+
+--- Entry: 11/08/2026 ---
+
+Feature/Fix: Fix Shortcut Sound Alerts for Mute/Deafen/Disconnect (PRD 4.15)
+
+  Problem: The mute/unmute and deafen/undeafen sound alerts only played
+  when triggered via their on-screen buttons. Triggering the same
+  actions via keyboard shortcuts produced no sound. Root cause: the
+  click handlers (btnMute/btnDeafen/btnLeaveVoice) and the keyboard-
+  shortcut keydown branches independently duplicated the same state-
+  mutation logic (api.toggleMute()/toggleDeafen()/leaveVoiceChannel() +
+  updateVoiceUI()), but only the click handlers ever called
+  SoundAlert.play(...) — the shortcut path never had it added.
+
+  Solution: Extracted the duplicated logic into three shared helpers —
+  toggleMuteAndNotify(), toggleDeafenAndNotify(), leaveVoiceAndNotify()
+  — each ending with the appropriate SoundAlert.play() call (preserving
+  the existing PTT-mode lock/unlock branching inside the mute helper).
+  Both the click handlers and the shortcut keydown branches now call
+  these helpers instead of duplicating logic, so the two trigger paths
+  can no longer drift apart. This also fixes the disconnect shortcut,
+  which had the identical bug (no sound) despite not being explicitly
+  named in the original report — same root cause, so fixed alongside
+  mute/deafen per an explicit scoping decision made while drafting
+  app-planning/Reson8_NextSteps_PRD.md (PRD 4.15).
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts — added toggleMuteAndNotify(),
+      toggleDeafenAndNotify(), leaveVoiceAndNotify(); click handlers and
+      shortcut keydown branches now call them instead of duplicating logic
+
+  Verification:
+    - TypeScript build (client): npx tsc --noEmit — passed
+
+  Next Step: See PRD 4.3 entry below — its icon-toggle wiring hooks into
+  the helpers added here.
+
+--- Entry: 11/08/2026 ---
+
+Feature/Fix: Session Timer Visibility Fix (PRD 4.4)
+
+  Problem: The voice channel session timer (.session-timer) rendered in
+  low-contrast gray (var(--text-muted), #6a6a7a) with an additional
+  opacity:0.7 stacked on top, making it hard to read against the dark
+  theme in both the channel tree and the voice panel.
+
+  Solution: Switched the timer's color to var(--text-secondary)
+  (#a0a0b0), the token already used elsewhere in the UI for this same
+  "secondary but legible" contrast tier, and removed the opacity
+  dampening. Pure CSS change — no timer logic touched.
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html — .session-timer rule
+
+  Verification:
+    - Visual check: timer legible in both the channel-tree occupant row
+      and the voice panel against the dark theme.
+
+--- Entry: 11/08/2026 ---
+
+Feature/Fix: Self-Mute / Self-Deafen Status Icons (PRD 4.3)
+
+  Problem: When a user muted their mic or deafened themselves, other
+  voice channel participants had no way to know — it looked like they
+  were being ignored. IUserPresence.isMuted/isDeafened already existed
+  in the shared type and in every PRESENCE_UPDATE payload, but were
+  hardcoded to `false` in 6 separate places server-side (5 in
+  connection.handler.ts, 1 in moderation.handler.ts), because
+  voiceService.toggleMute()/toggleDeafen() were purely client-local and
+  never told the server anything had happened — the fields existed but
+  always lied.
+
+  Solution:
+    - Extended presence.service.ts's Redis-backed per-user hash to also
+      store isMuted/isDeafened; added PresenceService.setVoiceState().
+    - Refactored connection.handler.ts's duplicated resolveNickname()
+      helper into an exported buildOccupant() that returns a full
+      IUserPresence (including real isMuted/isDeafened) from a single
+      presence.getUserPresence() call. Replaced all 6 hardcoded-false
+      occupant-construction call sites (connection.handler.ts x5,
+      moderation.handler.ts x1) with buildOccupant().
+    - Added a new SET_VOICE_STATE client→server event
+      (packages/shared-types/src/socket-events.ts), handled in a new
+      handler in voice.handler.ts: updates presence, then rebuilds and
+      re-broadcasts PRESENCE_UPDATE for the user's current channel
+      (reusing connection.handler.ts's exported voiceSessionStartedAt
+      map so this broadcast doesn't blank out the active session timer
+      on other clients).
+    - Client emits SET_VOICE_STATE from the toggleMuteAndNotify()/
+      toggleDeafenAndNotify() helpers (added in PRD 4.15) and once right
+      after successfully joining a voice channel, so state is synced
+      correctly on join and after a reconnect.
+    - renderOccupants() in renderer.ts now renders a small red
+      (var(--danger)) inline-SVG mic-muted and/or headphones-deafened
+      icon next to an occupant's name based on occ.isMuted/isDeafened.
+      Also fixed updateOccupants(), which was silently dropping
+      isMuted/isDeafened when applying live PRESENCE_UPDATE payloads to
+      the tree (it previously only mapped userId/nickname through).
+
+  Edge Cases Handled:
+    - Deliberately did NOT wire this into the PTT press/release
+      key-hold handlers. isMuted represents a deliberate mute action (or
+      PTT-lock toggle), not momentary PTT silence between talk bursts —
+      wiring it to every key press/release would cause the icon to
+      flicker on every PTT tap with no real signal value. This was a
+      considered deviation from the original plan file after re-reading
+      the exact PTT code during implementation.
+    - Reconnect-while-muted: state is re-synced to the server
+      immediately after (re)joining a voice channel, so observers don't
+      see a stale "unmuted" icon after someone drops and rejoins.
+
+  Key Files Modified:
+    apps/server/src/services/presence.service.ts — isMuted/isDeafened
+      storage, setVoiceState()
+    apps/server/src/handlers/connection.handler.ts — buildOccupant()
+      (exported, replaces resolveNickname()), voiceSessionStartedAt
+      exported, all 5 hardcoded occupant-construction sites replaced
+    apps/server/src/handlers/moderation.handler.ts — uses buildOccupant()
+    apps/server/src/handlers/voice.handler.ts — SET_VOICE_STATE handler
+    packages/shared-types/src/socket-events.ts — SET_VOICE_STATE event
+    apps/client/src/preload.ts — setVoiceState() bridge method
+    apps/client/src/renderer/renderer.ts — SET_VOICE_STATE emission
+      points, OCC_MUTED_ICON/OCC_DEAFENED_ICON, renderOccupants() and
+      updateOccupants() updates, TreeNode.occupants type extended
+    apps/client/src/renderer/index.html — .occ-voice-icon CSS
+
+  Verification:
+    - TypeScript build (shared-types): npx tsc --build — passed
+    - TypeScript build (server): npx tsc --noEmit — passed
+    - TypeScript build (client): npx tsc --noEmit — passed
+    - Server test suite: npm run test — 19/19 passed, no regressions
+
+  Next Step: PRD 4.1 (per-user local volume) and PRD 4.2 (local
+  single-user mute) are next per app-planning/Reson8_NextSteps_PRD.md's
+  suggested implementation order — they share the same GainNode-per-
+  participant infrastructure and the generalized occupant right-click
+  context menu.

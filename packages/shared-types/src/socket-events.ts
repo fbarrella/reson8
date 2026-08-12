@@ -241,6 +241,12 @@ export interface ClientToServerEvents {
     PING_LATENCY: (
         ack: () => void,
     ) => void;
+
+    /** Reports the caller's own mute/deafen state so other occupants can display it. */
+    SET_VOICE_STATE: (
+        payload: { isMuted: boolean; isDeafened: boolean },
+        ack: (response: { success: boolean }) => void,
+    ) => void;
 }
 
 // ---------------------------------------------------------------------------

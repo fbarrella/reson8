@@ -299,6 +299,10 @@ const api = {
         voiceService?.setMuted(muted);
     },
 
+    setVoiceState(isMuted: boolean, isDeafened: boolean): void {
+        socket?.emit("SET_VOICE_STATE", { isMuted, isDeafened }, () => { });
+    },
+
     // ── Audio Settings ──────────────────────────────────────────────────────
 
     async enumerateAudioDevices(): Promise<{ inputs: { deviceId: string; label: string }[]; outputs: { deviceId: string; label: string }[] }> {

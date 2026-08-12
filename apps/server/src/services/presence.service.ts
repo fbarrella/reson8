@@ -7,7 +7,7 @@
  * Key schema:
  *   presence:server:{serverId}    → SET of userIds
  *   presence:channel:{channelId}  → SET of userIds
- *   presence:user:{userId}        → HASH { serverId, channelId, nickname }
+ *   presence:user:{userId}        → HASH { serverId, channelId, nickname, isMuted, isDeafened }
  */
 
 import type { Redis } from "ioredis";
@@ -97,17 +97,40 @@ export class PresenceService {
         return this.redis.smembers(KEY.channel(channelId));
     }
 
-    /** Returns the user's current presence metadata (serverId, channelId, nickname). */
+    /** Returns the user's current presence metadata (serverId, channelId, nickname, voice state). */
     async getUserPresence(
         userId: string,
-    ): Promise<{ serverId: string; channelId: string; nickname: string } | null> {
+    ): Promise<{
+        serverId: string;
+        channelId: string;
+        nickname: string;
+        isMuted: boolean;
+        isDeafened: boolean;
+    } | null> {
         const data = await this.redis.hgetall(KEY.user(userId));
         if (!data.serverId) return null;
         return {
             serverId: data.serverId,
             channelId: data.channelId ?? "",
             nickname: data.nickname ?? "Unknown",
+            isMuted: data.isMuted === "1",
+            isDeafened: data.isDeafened === "1",
         };
+    }
+
+    /** Records a user's self-reported mute/deafen state (for display to other occupants). */
+    async setVoiceState(
+        userId: string,
+        isMuted: boolean,
+        isDeafened: boolean,
+    ): Promise<void> {
+        const pipe = this.redis.pipeline();
+        pipe.hset(KEY.user(userId), {
+            isMuted: isMuted ? "1" : "0",
+            isDeafened: isDeafened ? "1" : "0",
+        });
+        pipe.expire(KEY.user(userId), USER_TTL);
+        await pipe.exec();
     }
 
     /** Refreshes the TTL of a user's presence hash (call on heartbeat). */

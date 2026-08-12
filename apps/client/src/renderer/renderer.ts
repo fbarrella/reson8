@@ -469,6 +469,7 @@ interface Reson8Api {
     toggleMute(): boolean;
     toggleDeafen(): boolean;
     setMuted(muted: boolean): void;
+    setVoiceState(isMuted: boolean, isDeafened: boolean): void;
     createChannel(
         serverId: string,
         name: string,
@@ -798,7 +799,7 @@ interface TreeNode {
     type: "TEXT" | "VOICE";
     parentId: string | null;
     children: TreeNode[];
-    occupants: { userId: string; nickname: string }[];
+    occupants: { userId: string; nickname: string; isMuted?: boolean; isDeafened?: boolean }[];
 }
 
 function renderTree(tree: TreeNode[]): void {
@@ -897,6 +898,13 @@ function renderChannel(node: TreeNode): HTMLDivElement {
     return channel;
 }
 
+// Inline SVGs shown next to an occupant's name when they've muted or deafened
+// themselves, so it doesn't look like they're simply ignoring everyone else.
+const OCC_MUTED_ICON =
+    `<svg class="occ-voice-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" title="Muted"><line x1="1" y1="1" x2="23" y2="23"/><path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"/><path d="M17 16.95A7 7 0 0 1 5 12v-2M19 10v2a7 7 0 0 1-.11 1.23"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>`;
+const OCC_DEAFENED_ICON =
+    `<svg class="occ-voice-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" title="Deafened"><line x1="1" y1="1" x2="23" y2="23"/><path d="M3 18v-6a9 9 0 0 1 15.34-6.36M21 12v2.5"/><path d="M21 16v2a2 2 0 0 1-2 2h-1"/><path d="M3 18v2a2 2 0 0 0 2 2h1v-4H4a1 1 0 0 0-1 1z"/></svg>`;
+
 function renderOccupants(container: HTMLElement, node: TreeNode): void {
     for (const occ of node.occupants) {
         const el = document.createElement("div");
@@ -905,7 +913,9 @@ function renderOccupants(container: HTMLElement, node: TreeNode): void {
             el.classList.add("speaking");
         }
         el.setAttribute("data-user-id", occ.userId);
-        el.innerHTML = `<span class="occ-dot"></span>${escapeHtml(occ.nickname)}`;
+        const voiceStateIcons =
+            `${occ.isDeafened ? OCC_DEAFENED_ICON : occ.isMuted ? OCC_MUTED_ICON : ""}`;
+        el.innerHTML = `<span class="occ-dot"></span>${escapeHtml(occ.nickname)}${voiceStateIcons}`;
 
         // Admin right-click → Kick from Channel
         el.addEventListener("contextmenu", (e) => {
@@ -1017,6 +1027,10 @@ async function handleChannelClick(node: TreeNode): Promise<void> {
                     }
                 }
 
+                // Sync mute/deafen state to the server so other occupants' icons
+                // aren't left showing a stale state from a previous session.
+                api.setVoiceState(isMuted, isDeafened);
+
                 updateVoiceUI(node.name);
                 log(`Joined voice channel: ${node.name}`, "success");
                 SoundAlert.play("joining-channel.mp3");
@@ -1066,7 +1080,10 @@ function updateVoiceUI(channelName?: string): void {
     }
 }
 
-btnMute.addEventListener("click", () => {
+// Shared mute/deafen/disconnect logic — used by both the button click handlers
+// below and the keyboard-shortcut handlers, so sound alerts stay in sync between
+// the two triggers instead of silently drifting apart (see PRD 4.15).
+function toggleMuteAndNotify(): void {
     if (pttModeEnabled) {
         // In PTT mode: mute = lock PTT (block key), unmute = unlock PTT (allow key)
         isMuted = !isMuted;
@@ -1078,16 +1095,22 @@ btnMute.addEventListener("click", () => {
         isMuted = api.toggleMute();
     }
     updateVoiceUI();
-    if (isInVoice) SoundAlert.play(isMuted ? "mic_muted.mp3" : "mic_activated.mp3");
-});
+    if (isInVoice) {
+        SoundAlert.play(isMuted ? "mic_muted.mp3" : "mic_activated.mp3");
+        api.setVoiceState(isMuted, isDeafened);
+    }
+}
 
-btnDeafen.addEventListener("click", () => {
+function toggleDeafenAndNotify(): void {
     isDeafened = api.toggleDeafen();
     updateVoiceUI();
-    if (isInVoice) SoundAlert.play(isDeafened ? "sound_muted.mp3" : "sound_resumed.mp3");
-});
+    if (isInVoice) {
+        SoundAlert.play(isDeafened ? "sound_muted.mp3" : "sound_resumed.mp3");
+        api.setVoiceState(isMuted, isDeafened);
+    }
+}
 
-btnLeaveVoice.addEventListener("click", () => {
+function leaveVoiceAndNotify(): void {
     api.leaveVoiceChannel();
     isInVoice = false;
     currentChannelId = null;
@@ -1099,7 +1122,13 @@ btnLeaveVoice.addEventListener("click", () => {
     if (currentTree.length > 0) {
         renderTree(currentTree);
     }
-});
+}
+
+btnMute.addEventListener("click", toggleMuteAndNotify);
+
+btnDeafen.addEventListener("click", toggleDeafenAndNotify);
+
+btnLeaveVoice.addEventListener("click", leaveVoiceAndNotify);
 
 // ── Create Channel Modal ──────────────────────────────────────────────────
 
@@ -1440,6 +1469,8 @@ function updateOccupants(channelId: string, occupants: any[]): void {
                 node.occupants = occupants.map((o) => ({
                     userId: o.userId,
                     nickname: o.nickname,
+                    isMuted: o.isMuted,
+                    isDeafened: o.isDeafened,
                 }));
                 return true;
             }
@@ -2520,26 +2551,13 @@ document.addEventListener("keydown", (e) => {
     // Check shortcuts (skip PTT which uses press/release)
     if (!e.repeat) {
         if (shortcuts.mute && setsEqual(heldKeys, shortcuts.mute.keys)) {
-            if (pttModeEnabled) {
-                isMuted = !isMuted;
-                if (isMuted) {
-                    api.setMuted(true);
-                }
-            } else {
-                isMuted = api.toggleMute();
-            }
-            updateVoiceUI();
+            toggleMuteAndNotify();
         }
         if (shortcuts.deafen && setsEqual(heldKeys, shortcuts.deafen.keys)) {
-            isDeafened = api.toggleDeafen();
-            updateVoiceUI();
+            toggleDeafenAndNotify();
         }
         if (shortcuts.disconnect && setsEqual(heldKeys, shortcuts.disconnect.keys)) {
-            api.leaveVoiceChannel();
-            isInVoice = false;
-            currentChannelId = null;
-            updateVoiceUI();
-            log("Disconnected from voice (shortcut)", "info");
+            leaveVoiceAndNotify();
         }
         // PTT keydown → unmute (only in PTT mode, and only if not locked/muted)
         if (shortcuts.ptt && setsEqual(heldKeys, shortcuts.ptt.keys) && pttModeEnabled && isInVoice && !isMuted) {
