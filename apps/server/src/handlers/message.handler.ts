@@ -93,6 +93,14 @@ export function registerMessageHandlers(
                     editedAt: null,
                 };
 
+                // Advance the sender's own read cursor so their own message
+                // never shows up as "unread" for them on reconnect
+                await app.prisma.channelRead.upsert({
+                    where: { userId_channelId: { userId: socket.data.userId, channelId } },
+                    update: { lastReadAt: message.createdAt },
+                    create: { userId: socket.data.userId, channelId, lastReadAt: message.createdAt },
+                });
+
                 // Broadcast to all clients in the server
                 // (they may have the channel's tab open)
                 io.to(`server:${socket.data.serverId}`).emit(

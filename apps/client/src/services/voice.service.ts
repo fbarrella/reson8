@@ -81,6 +81,8 @@ export class VoiceService {
     private remoteMediaSources = new Map<string, MediaElementAudioSourceNode>(); // keyed by consumerId
     private consumerIdToUserId = new Map<string, string>();
     private remoteUserOverrides = new Map<string, { volumePercent: number; muted: boolean }>(); // keyed by userId
+    /** Master attenuator (0-1) applied on top of every per-user gain (PRD 10.2). */
+    private globalVoiceVolume = 1.0;
 
     // ── Mic sensitivity / noise gate ──────────────────────────────────────
     private analyser: AnalyserNode | null = null;
@@ -91,6 +93,10 @@ export class VoiceService {
     private sensitivityThreshold: number = -40; // dB
     private sensitivityEnabled: boolean = false;
     private _isManuallyMuted: boolean = false;
+    /** True only when deafening had to pause the producer itself (i.e. the
+     *  mic wasn't already paused going in) — so undeafening knows whether to
+     *  resume it, rather than clobbering a mute that predates the deafen. */
+    private _deafenAutoMuted: boolean = false;
 
     /** Producers that arrived before recv transport was ready. */
     private pendingProducers: { producerId: string; userId: string }[] = [];
@@ -319,8 +325,8 @@ export class VoiceService {
         const gainNode = ctx.createGain();
         const override = this.remoteUserOverrides.get(userId);
         gainNode.gain.value = override
-            ? (override.muted ? 0 : override.volumePercent / 100)
-            : 1.0;
+            ? (override.muted ? 0 : (override.volumePercent / 100) * this.globalVoiceVolume)
+            : this.globalVoiceVolume;
         source.connect(gainNode).connect(ctx.destination);
         this.remoteMediaSources.set(consumer.id, source);
         this.remoteGainNodes.set(consumer.id, gainNode);
@@ -374,8 +380,23 @@ export class VoiceService {
             if (uid !== userId) continue;
             const gain = this.remoteGainNodes.get(consumerId);
             if (gain) {
-                gain.gain.value = override.muted ? 0 : override.volumePercent / 100;
+                gain.gain.value = override.muted ? 0 : (override.volumePercent / 100) * this.globalVoiceVolume;
             }
+        }
+    }
+
+    /** Set the master voice-chat volume attenuator (0-100%, PRD 10.2). Applied
+     *  live to every currently-consumed participant, on top of their own
+     *  per-user volume/mute override. */
+    setGlobalVoiceVolume(percent: number): void {
+        this.globalVoiceVolume = Math.max(0, Math.min(100, percent)) / 100;
+        for (const [consumerId, userId] of this.consumerIdToUserId) {
+            const gain = this.remoteGainNodes.get(consumerId);
+            if (!gain) continue;
+            const override = this.remoteUserOverrides.get(userId);
+            gain.gain.value = override
+                ? (override.muted ? 0 : (override.volumePercent / 100) * this.globalVoiceVolume)
+                : this.globalVoiceVolume;
         }
     }
 
@@ -431,13 +452,37 @@ export class VoiceService {
         }
     }
 
-    /** Toggle deafen (mutes/unmutes all audio elements). */
-    toggleDeafen(): boolean {
-        this._isDeafened = !this._isDeafened;
-        for (const audio of this.audioElements.values()) {
-            audio.muted = this._isDeafened;
+    /**
+     * Toggle deafen (mutes/unmutes all audio elements). Deafening also
+     * auto-mutes the mic if it wasn't already paused, and undeafening
+     * restores exactly that prior mute state — see PRD 10.4. Returns the
+     * resulting combined state so the caller can send a single
+     * SET_VOICE_STATE update reflecting both flags at once.
+     */
+    toggleDeafen(): { isMuted: boolean; isDeafened: boolean } {
+        if (!this._isDeafened) {
+            const wasPaused = this.producer?.paused ?? false;
+            this._deafenAutoMuted = !wasPaused;
+            if (this._deafenAutoMuted && this.producer) {
+                this.producer.pause();
+                this._isManuallyMuted = true;
+            }
+            for (const audio of this.audioElements.values()) {
+                audio.muted = true;
+            }
+            this._isDeafened = true;
+        } else {
+            for (const audio of this.audioElements.values()) {
+                audio.muted = false;
+            }
+            this._isDeafened = false;
+            if (this._deafenAutoMuted && this.producer) {
+                this.producer.resume();
+                this._isManuallyMuted = false;
+            }
+            this._deafenAutoMuted = false;
         }
-        return this._isDeafened;
+        return { isMuted: this.producer?.paused ?? false, isDeafened: this._isDeafened };
     }
 
     // ── Mic Sensitivity / Noise Gate ────────────────────────────────────────
@@ -690,6 +735,7 @@ export class VoiceService {
         this.channelId = null;
         this._isDeafened = false;
         this._isManuallyMuted = false;
+        this._deafenAutoMuted = false;
         this.pendingProducers = [];
     }
 

@@ -1,0 +1,1601 @@
+================================================================================
+  RESON8 — Development Progress Log
+  Archived: 12/08/2026 (condensed into the phases 9-10 summary in
+  app-planning/progress.txt)
+================================================================================
+
+PROJECT OVERVIEW
+================
+Reson8 is a high-performance, self-hosted voice and text communication platform
+for desktop (Electron). It replicates the TeamSpeak 3 experience — low-latency
+voice, hierarchical channel trees, and private server ownership — while
+integrating modern persistent text channels.
+
+Tech Stack: Electron + TypeScript, Fastify + Socket.io, mediasoup (SFU),
+PostgreSQL + Prisma, Redis, Docker.
+
+Monorepo structure:
+  apps/client/            — Electron desktop client
+  apps/server/             — Node.js signaling + SFU server
+  packages/shared-types/    — Shared DTOs, enums, and Socket.io event types
+
+This file holds the full, unabridged entry-by-entry history for Phase 9
+(app-planning/archive/Reson8_NextSteps_PRD.md, 15 items — per-user voice
+controls, mute/deafen status icons, channel rename/reorder/NSFW, custom
+emoji uploads, message edit/delete, unread indicators, nudge) plus three
+interim bug fixes found during Phase 9's manual verification pass, plus
+Phase 10 (app-planning/Reson8_Phase10_PRD.md — auto-updater, audio
+settings, mute/deafen accumulation, and three bugfixes). Both phases are
+condensed into a short summary in app-planning/progress.txt — reach for
+this file when that summary compresses away a "why" you need (root
+causes, exact files touched, verification detail).
+
+Version progression across this file: started at 1.1.0, reached 1.2.0 at
+the end of Phase 9 (and the 3 interim fixes), reached 1.3.0 at the end of
+Phase 10.
+
+
+================================================================================
+  PHASES 9-10 — FULL LOG (moved from progress.txt's "ONGOING LOG" section)
+================================================================================
+
+--- Entry: 11/08/2026 ---
+
+Feature/Fix: Fix Shortcut Sound Alerts for Mute/Deafen/Disconnect (PRD 4.15)
+
+  Problem: The mute/unmute and deafen/undeafen sound alerts only played
+  when triggered via their on-screen buttons. Triggering the same
+  actions via keyboard shortcuts produced no sound. Root cause: the
+  click handlers (btnMute/btnDeafen/btnLeaveVoice) and the keyboard-
+  shortcut keydown branches independently duplicated the same state-
+  mutation logic (api.toggleMute()/toggleDeafen()/leaveVoiceChannel() +
+  updateVoiceUI()), but only the click handlers ever called
+  SoundAlert.play(...) — the shortcut path never had it added.
+
+  Solution: Extracted the duplicated logic into three shared helpers —
+  toggleMuteAndNotify(), toggleDeafenAndNotify(), leaveVoiceAndNotify()
+  — each ending with the appropriate SoundAlert.play() call (preserving
+  the existing PTT-mode lock/unlock branching inside the mute helper).
+  Both the click handlers and the shortcut keydown branches now call
+  these helpers instead of duplicating logic, so the two trigger paths
+  can no longer drift apart. This also fixes the disconnect shortcut,
+  which had the identical bug (no sound) despite not being explicitly
+  named in the original report — same root cause, so fixed alongside
+  mute/deafen per an explicit scoping decision made while drafting
+  app-planning/Reson8_NextSteps_PRD.md (PRD 4.15).
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts — added toggleMuteAndNotify(),
+      toggleDeafenAndNotify(), leaveVoiceAndNotify(); click handlers and
+      shortcut keydown branches now call them instead of duplicating logic
+
+  Verification:
+    - TypeScript build (client): npx tsc --noEmit — passed
+
+  Next Step: See PRD 4.3 entry below — its icon-toggle wiring hooks into
+  the helpers added here.
+
+--- Entry: 11/08/2026 ---
+
+Feature/Fix: Session Timer Visibility Fix (PRD 4.4)
+
+  Problem: The voice channel session timer (.session-timer) rendered in
+  low-contrast gray (var(--text-muted), #6a6a7a) with an additional
+  opacity:0.7 stacked on top, making it hard to read against the dark
+  theme in both the channel tree and the voice panel.
+
+  Solution: Switched the timer's color to var(--text-secondary)
+  (#a0a0b0), the token already used elsewhere in the UI for this same
+  "secondary but legible" contrast tier, and removed the opacity
+  dampening. Pure CSS change — no timer logic touched.
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html — .session-timer rule
+
+  Verification:
+    - Visual check: timer legible in both the channel-tree occupant row
+      and the voice panel against the dark theme.
+
+--- Entry: 11/08/2026 ---
+
+Feature/Fix: Self-Mute / Self-Deafen Status Icons (PRD 4.3)
+
+  Problem: When a user muted their mic or deafened themselves, other
+  voice channel participants had no way to know — it looked like they
+  were being ignored. IUserPresence.isMuted/isDeafened already existed
+  in the shared type and in every PRESENCE_UPDATE payload, but were
+  hardcoded to `false` in 6 separate places server-side (5 in
+  connection.handler.ts, 1 in moderation.handler.ts), because
+  voiceService.toggleMute()/toggleDeafen() were purely client-local and
+  never told the server anything had happened — the fields existed but
+  always lied.
+
+  Solution:
+    - Extended presence.service.ts's Redis-backed per-user hash to also
+      store isMuted/isDeafened; added PresenceService.setVoiceState().
+    - Refactored connection.handler.ts's duplicated resolveNickname()
+      helper into an exported buildOccupant() that returns a full
+      IUserPresence (including real isMuted/isDeafened) from a single
+      presence.getUserPresence() call. Replaced all 6 hardcoded-false
+      occupant-construction call sites (connection.handler.ts x5,
+      moderation.handler.ts x1) with buildOccupant().
+    - Added a new SET_VOICE_STATE client→server event
+      (packages/shared-types/src/socket-events.ts), handled in a new
+      handler in voice.handler.ts: updates presence, then rebuilds and
+      re-broadcasts PRESENCE_UPDATE for the user's current channel
+      (reusing connection.handler.ts's exported voiceSessionStartedAt
+      map so this broadcast doesn't blank out the active session timer
+      on other clients).
+    - Client emits SET_VOICE_STATE from the toggleMuteAndNotify()/
+      toggleDeafenAndNotify() helpers (added in PRD 4.15) and once right
+      after successfully joining a voice channel, so state is synced
+      correctly on join and after a reconnect.
+    - renderOccupants() in renderer.ts now renders a small red
+      (var(--danger)) inline-SVG mic-muted and/or headphones-deafened
+      icon next to an occupant's name based on occ.isMuted/isDeafened.
+      Also fixed updateOccupants(), which was silently dropping
+      isMuted/isDeafened when applying live PRESENCE_UPDATE payloads to
+      the tree (it previously only mapped userId/nickname through).
+
+  Edge Cases Handled:
+    - Deliberately did NOT wire this into the PTT press/release
+      key-hold handlers. isMuted represents a deliberate mute action (or
+      PTT-lock toggle), not momentary PTT silence between talk bursts —
+      wiring it to every key press/release would cause the icon to
+      flicker on every PTT tap with no real signal value. This was a
+      considered deviation from the original plan file after re-reading
+      the exact PTT code during implementation.
+    - Reconnect-while-muted: state is re-synced to the server
+      immediately after (re)joining a voice channel, so observers don't
+      see a stale "unmuted" icon after someone drops and rejoins.
+
+  Key Files Modified:
+    apps/server/src/services/presence.service.ts — isMuted/isDeafened
+      storage, setVoiceState()
+    apps/server/src/handlers/connection.handler.ts — buildOccupant()
+      (exported, replaces resolveNickname()), voiceSessionStartedAt
+      exported, all 5 hardcoded occupant-construction sites replaced
+    apps/server/src/handlers/moderation.handler.ts — uses buildOccupant()
+    apps/server/src/handlers/voice.handler.ts — SET_VOICE_STATE handler
+    packages/shared-types/src/socket-events.ts — SET_VOICE_STATE event
+    apps/client/src/preload.ts — setVoiceState() bridge method
+    apps/client/src/renderer/renderer.ts — SET_VOICE_STATE emission
+      points, OCC_MUTED_ICON/OCC_DEAFENED_ICON, renderOccupants() and
+      updateOccupants() updates, TreeNode.occupants type extended
+    apps/client/src/renderer/index.html — .occ-voice-icon CSS
+
+  Verification:
+    - TypeScript build (shared-types): npx tsc --build — passed
+    - TypeScript build (server): npx tsc --noEmit — passed
+    - TypeScript build (client): npx tsc --noEmit — passed
+    - Server test suite: npm run test — 19/19 passed, no regressions
+
+  Next Step: PRD 4.1 (per-user local volume) and PRD 4.2 (local
+  single-user mute) are next per app-planning/Reson8_NextSteps_PRD.md's
+  suggested implementation order — they share the same GainNode-per-
+  participant infrastructure and the generalized occupant right-click
+  context menu.
+
+--- Entry: 11/08/2026 ---
+
+Feature/Fix: Per-User Local Volume Levels (PRD 4.1)
+
+  Problem: While in a voice channel, there was no way to adjust how loud
+  a specific participant sounded to you personally — voice.service.ts
+  hardcoded every remote <audio> element's volume to 1.0 with no per-
+  participant control, and had no concept of userId at all (consumers/
+  audio elements were keyed only by consumerId, with the userId↔producerId
+  association discarded in preload.ts right after triggering consumption).
+
+  Solution: This is a purely client-local feature — nothing is sent to
+  the server, and nothing changes for other participants.
+    - voice.service.ts: threaded userId through queueConsumeProducer()/
+      consumeProducer() (pendingProducers now stores {producerId, userId}
+      pairs instead of bare producer IDs) and added a consumerIdToUserId
+      map.
+    - Each consumed participant is now routed through a dedicated Web
+      Audio graph: MediaElementAudioSourceNode -> GainNode ->
+      destination, using a lazily-created playbackAudioContext (kept
+      separate from the existing mic-analysis AudioContext used by the
+      noise gate, since their lifecycles are unrelated). GainNode.gain
+      supports 0–200% (the existing .volume property caps at 100%, so a
+      real Gain node was required to allow boosting quiet talkers).
+    - remoteUserOverrides: Map<userId, {volumePercent, muted}> holds the
+      desired state per user regardless of whether they're currently
+      being consumed — setLocalUserVolume()/setLocalUserMute() update
+      this map and immediately re-apply gain to any live consumer for
+      that user; if the user isn't in-channel yet, the override is
+      simply read back when their producer is eventually consumed. This
+      fully decouples "user sets a preference" from "user is currently
+      speaking," so ordering never matters.
+    - Persistence: localStorage, keyed by target userId
+      (reson8-local-volume-<userId>), applied in renderOccupants() for
+      every rendered occupant (idempotent — cheap to call on every tree
+      render, and naturally covers both "already consuming" and "not
+      consuming yet" cases without extra event plumbing).
+
+  localStorage Keys:
+    reson8-local-volume-<userId> — string, 0–200 (percent)
+
+  Key Files Modified:
+    apps/client/src/services/voice.service.ts — GainNode-per-participant
+      playback graph, remoteUserOverrides, setLocalUserVolume()/
+      getLocalUserVolume(), userId threaded through consumeProducer()
+    apps/client/src/preload.ts — queueConsumeProducer() calls now pass
+      userId; setLocalUserVolume()/getLocalUserVolume() bridge methods
+    apps/client/src/renderer/renderer.ts — getSavedLocalVolume()/
+      setSavedLocalVolume(), hydration call in renderOccupants(),
+      Reson8Api interface extended
+
+  Verification:
+    - TypeScript build (client): npx tsc --noEmit — passed
+
+  Next Step: See PRD 4.2 entry below — implemented in the same pass,
+  sharing this GainNode infrastructure.
+
+--- Entry: 11/08/2026 ---
+
+Feature/Fix: Mute a Single User Locally (PRD 4.2)
+
+  Problem: No way to locally silence a specific voice channel
+  participant (client-local only — muting them for yourself, not for
+  anyone else). The only existing right-click menu on an occupant was
+  admin-only and single-purpose (Kick from Channel).
+
+  Solution: Generalized the existing occupant-list right-click context
+  menu (previously gated entirely behind isAdminUser) into a menu
+  everyone gets: a 0–200% volume slider (PRD 4.1) plus a "Mute Locally"/
+  "Unmute Locally" toggle button, with "Kick from Channel" still
+  rendered conditionally, admin-only, and never shown when right-
+  clicking yourself. Locally muting sets the participant's GainNode to
+  0 while preserving their configured volumePercent underneath, so
+  unmuting restores their actual saved volume rather than resetting to
+  100%. Same localStorage persistence pattern as PRD 4.1.
+
+  localStorage Keys:
+    reson8-local-mute-<userId> — "1" or "0"
+
+  Key Files Modified:
+    apps/client/src/services/voice.service.ts — setLocalUserMute()/
+      getLocalUserMute(), muted flag in remoteUserOverrides
+    apps/client/src/preload.ts — setLocalUserMute()/getLocalUserMute()
+      bridge methods
+    apps/client/src/renderer/renderer.ts — getSavedLocalMute()/
+      setSavedLocalMute(), context menu rebuilt with volume slider +
+      mute toggle + conditional kick button
+    apps/client/src/renderer/index.html — .ctx-volume-row/.ctx-mute-btn
+      CSS
+
+  Verification:
+    - TypeScript build (client): npx tsc --noEmit — passed
+    - Full workspace re-check: shared-types (npx tsc --build), server
+      (npx tsc --noEmit), server test suite (npm run test, 19/19) all
+      re-verified clean after this batch — no regressions from the
+      voice.service.ts changes even though they don't touch the server.
+
+  Next Step: PRD 4.5 (channel rename) and PRD 4.7 (NSFW channels) are
+  next per app-planning/Reson8_NextSteps_PRD.md's suggested order — they
+  share the same admin "edit channel" event/UI.
+
+--- Entry: 11/08/2026 ---
+
+Feature/Fix: Channel Post-Creation Editing / Rename (PRD 4.5)
+
+  Problem: Once created, a channel's name could never be changed —
+  the only way to "fix" a bad name was to delete and recreate the
+  channel (losing message history for text channels).
+
+  Solution: Discovered during implementation that the server already
+  had a fully-built, permission-gated UPDATE_CHANNEL socket event
+  (apps/server/src/handlers/channel.handler.ts) supporting `name` and
+  `position` updates — it had simply never been wired up on the client.
+  So this ended up being a much smaller change than planned: no new
+  server event was needed.
+    - Added a small validation guard to UPDATE_CHANNEL (reject an
+      empty/whitespace-only name, matching CREATE_CHANNEL's existing
+      rule — the handler previously had no such check).
+    - Client: replaced the channel tree's right-click behavior (which
+      previously jumped straight to the delete-confirmation modal) with
+      a small floating context menu offering Rename, Delete Channel,
+      and (for text channels) Toggle NSFW — see PRD 4.7 below. Menu
+      styling reuses the existing .occupant-ctx-menu / .channel-ctx-
+      menu-item classes.
+    - New Rename Channel modal (mirrors the existing Delete Channel
+      modal's structure), pre-filled with the current name.
+    - preload.ts exposes a general updateChannel(channelId, {name?,
+      position?, isNsfw?}) bridge method rather than a single-purpose
+      renameChannel(), since the same event backs three different
+      client actions (rename here, NSFW toggle in 4.7, reordering in
+      the upcoming 4.6).
+    - Added syncOpenTabNames(): a CHANNEL_TREE_UPDATE listener that
+      walks the tree and updates any already-open chat tab's displayed
+      title if its channel was renamed elsewhere, so an open tab
+      doesn't show a stale name until it's closed and reopened.
+
+  Key Files Modified:
+    apps/server/src/handlers/channel.handler.ts — empty-name guard on
+      UPDATE_CHANNEL
+    apps/client/src/preload.ts — updateChannel() bridge method
+    apps/client/src/renderer/renderer.ts — channel context menu,
+      showRenameModal(), syncOpenTabNames(), Reson8Api interface
+    apps/client/src/renderer/index.html — #rename-channel-modal markup,
+      .channel-ctx-menu-item CSS
+
+  Verification:
+    - TypeScript build (shared-types): npx tsc --build — passed
+    - TypeScript build (server): npx tsc --noEmit — passed
+    - TypeScript build (client): npx tsc --noEmit — passed
+    - Server test suite: npm run test — 19/19 passed
+
+  Next Step: See PRD 4.7 entry below — implemented in the same pass,
+  extending the same UPDATE_CHANNEL event and context menu.
+
+--- Entry: 11/08/2026 ---
+
+Feature/Fix: NSFW Text Channels (PRD 4.7)
+
+  Problem: No way to mark a text channel as containing NSFW content,
+  or to warn users before they open one.
+
+  Solution:
+    - Database: added Channel.isNsfw Boolean @default(false) via a new
+      Prisma migration (20260812004544_add_channel_nsfw). Made isNsfw
+      non-optional on the shared IChannel type specifically so that
+      `npx tsc --noEmit` would fail at every place constructing a
+      channel DTO without it — this caught all 3 real call sites
+      (channel.handler.ts's broadcastTreeUpdate, connection.handler.ts's
+      USER_JOIN_SERVER tree hydration, and the channel-tree.test.ts
+      factory) that needed updating, rather than relying on manually
+      grepping for them.
+    - CREATE_CHANNEL and UPDATE_CHANNEL payloads both gained an
+      optional isNsfw field. UPDATE_CHANNEL only persists it when the
+      target channel's type is TEXT (looked up server-side before
+      writing), so a stray value sent for a voice channel is silently
+      ignored rather than stored.
+    - Client: NSFW checkbox in the Create Channel modal (hidden/reset
+      automatically when Type is switched to Voice), an NSFW badge
+      rendered next to the channel name in the tree, and a "Mark/Unmark
+      as NSFW" entry in the new channel context menu (PRD 4.5) for text
+      channels only.
+    - Confirmation modal: clicking any NSFW-marked text channel shows a
+      "This channel is marked NSFW — continue?" modal every time (per
+      product decision — not remembered per-session or permanently);
+      the channel only opens on Continue. Implemented by intercepting
+      the text-channel branch of handleChannelClick() before it calls
+      openChatTab().
+
+  Database Changes:
+    apps/server/prisma/migrations/20260812004544_add_channel_nsfw/ —
+      adds channels.isNsfw boolean, default false
+
+  Key Files Modified:
+    apps/server/prisma/schema.prisma — Channel.isNsfw
+    packages/shared-types/src/models.ts — IChannel.isNsfw
+    packages/shared-types/src/socket-events.ts — isNsfw on
+      CREATE_CHANNEL/UPDATE_CHANNEL payloads
+    apps/server/src/handlers/channel.handler.ts — persist isNsfw
+      (type-gated) on create/update
+    apps/server/src/handlers/connection.handler.ts — isNsfw in tree
+      hydration DTO mapping
+    apps/server/src/__tests__/channel-tree.test.ts — makeChannel()
+      factory default
+    apps/client/src/renderer/renderer.ts — NSFW checkbox wiring, NSFW
+      badge, context menu toggle entry, confirmation-modal interception
+      in handleChannelClick(), TreeNode.isNsfw
+    apps/client/src/renderer/index.html — #nsfw-confirm-modal markup,
+      .nsfw-badge CSS, NSFW toggle row in create-channel modal
+
+  Verification:
+    - Prisma migration: add_channel_nsfw — applied successfully against
+      the local dev database
+    - TypeScript build (shared-types): npx tsc --build — passed
+    - TypeScript build (server): npx tsc --noEmit — passed
+    - TypeScript build (client): npx tsc --noEmit — passed
+    - Server test suite: npm run test — 19/19 passed
+
+  Next Step: PRD 4.6 (channel reordering via drag-and-drop) is next per
+  app-planning/Reson8_NextSteps_PRD.md's suggested order — it will build
+  on the existing Channel.position field (already used for sibling
+  sort order, just not yet client-editable).
+
+--- Entry: 11/08/2026 ---
+
+Feature/Fix: Channel Reordering via Drag & Drop (PRD 4.6)
+
+  Problem: Channels rendered in creation order (Channel.position, set
+  once at creation and never editable) with no way to reorder them
+  short of deleting and recreating — e.g. creating "2" then "1" left
+  them stuck in that order. Scoped to siblings-only reordering (same
+  parent) per an earlier product decision — dragging a channel into a
+  different parent group is out of scope.
+
+  Solution: buildChannelTree() already sorted siblings by `position`
+  correctly (verified before assuming a fix was needed there — the
+  original PRD draft had flagged this as a possible root cause, but it
+  wasn't; the actual gap was purely "nothing ever writes a non-default
+  position").
+    - New REORDER_CHANNELS socket event: client sends the full ordered
+      sibling ID list for one parent (`{ parentId, orderedChannelIds }`)
+      rather than a single move delta, so the server can validate the
+      set atomically and apply it in one transaction (`position = index`
+      for each ID) instead of reasoning about incremental moves. Server
+      validates the submitted ID set is exactly the current sibling set
+      for that parent/server before writing anything — rejects stale or
+      foreign IDs rather than partially applying.
+    - MANAGE_CHANNELS-gated, same as the other channel-admin actions.
+    - Client: HTML5 Drag and Drop API wired onto every channel-tree row
+      (both leaf channels and category labels, since categories are
+      channels-with-children and are siblings too). Dropping onto a row
+      inserts the dragged channel immediately before it and persists
+      the recomputed sibling order via reorderChannels(). Drag handlers
+      are admin-only and simply skip attaching (attachChannelDragHandlers
+      no-ops) for non-admins, so there's no drag affordance at all for
+      regular members — a deliberate difference from how Rename/Delete/
+      NSFW-toggle are exposed (those rely on server-side permission
+      checks + an "insufficient perms" sound on failure), because a
+      failed drag gesture is a much worse UX than a disabled menu item.
+    - renderChannel()/renderCategory() now take a `siblings: TreeNode[]`
+      parameter (the exact array the node belongs to — the root `tree`
+      array or a category's `children` array) so drop handlers can
+      compute the new sibling order directly by reference instead of
+      re-querying the DOM.
+
+  Key Files Modified:
+    packages/shared-types/src/socket-events.ts — REORDER_CHANNELS event
+    apps/server/src/handlers/channel.handler.ts — REORDER_CHANNELS
+      handler: sibling-set validation, transactional position update
+    apps/client/src/preload.ts — reorderChannels() bridge method
+    apps/client/src/renderer/renderer.ts — attachChannelDragHandlers(),
+      siblings threaded through renderTree()/renderCategory()/
+      renderChannel(), Reson8Api interface
+    apps/client/src/renderer/index.html — .draggable-channel/.drag-over
+      CSS
+
+  Verification:
+    - TypeScript build (shared-types): npx tsc --build — passed
+    - TypeScript build (server): npx tsc --noEmit — passed
+    - TypeScript build (client): npx tsc --noEmit — passed
+    - Server test suite: npm run test — 19/19 passed
+
+  Next Step: PRD 4.13 (unread text channel indicator) is next per
+  app-planning/Reson8_NextSteps_PRD.md's suggested order — needs a new
+  ChannelRead cursor table, the first item in this phase to add a new
+  Prisma model rather than extending an existing one.
+
+--- Entry: 11/08/2026 ---
+
+Feature/Fix: Unread Text Channel Indicator (PRD 4.13)
+
+  Problem: No visual cue for unseen messages in text channels the user
+  didn't have open — easy to miss activity in channels you weren't
+  actively watching.
+
+  Solution: New per-user-per-channel read cursor (`ChannelRead`), a
+  design directly modeled on the existing DM unread pattern but
+  necessarily different in shape: DirectMessage.readAt is a per-row
+  flag that works because a DM only has one reader, but a channel has
+  many readers, so a per-message flag can't represent "read by whom" —
+  a cursor table (lastReadAt per user per channel) is the correct
+  analog instead.
+
+  A key architectural finding shaped the whole design: MESSAGE_RECEIVED
+  already broadcasts to the entire server room
+  (`io.to(server:${serverId})`), not just clients with that channel's
+  tab open — confirmed by reading message.handler.ts's SEND_MESSAGE
+  broadcast before assuming otherwise. That means every connected
+  client already learns about every new message in real time regardless
+  of which tab is active, so "is this unread" can be tracked **entirely
+  client-side** by comparing the incoming channelId against activeTabId
+  — no new server round-trip needed for the live-update path. The
+  server only needs to persist a cursor, purely to restore correct
+  state on reconnect/fresh load (mirroring how DMs solve the same
+  reconnect problem with their own mechanism).
+
+  This also surfaced a real constraint worth remembering for future
+  per-user annotations on the channel tree: CHANNEL_TREE_UPDATE is
+  broadcast identically to every client in the server room via
+  `io.to(...)`, so a per-user field like hasUnread can only be computed
+  correctly on the single-socket emission connection.handler.ts sends
+  at USER_JOIN_SERVER time — never on the shared broadcasts triggered
+  by other users' channel-admin actions (rename/reorder/etc, all of
+  which reuse channel.handler.ts's broadcastTreeUpdate()). Left
+  IChannelTreeNode.hasUnread optional and undocumented-false-safe for
+  exactly this reason: the client only ever ADDs a channel to its local
+  unread set when hasUnread is true, never removes based on a false/
+  missing value from a shared broadcast, so stale broadcast data can't
+  incorrectly clear a real unread flag.
+
+  Server Changes:
+    - New ChannelRead model (userId, channelId, lastReadAt,
+      @@id([userId, channelId])) — migration 20260812013822_add_channel_read.
+    - connection.handler.ts: new annotateUnreadChannels() helper, called
+      once during USER_JOIN_SERVER after tree hydration — batches two
+      queries (latest message timestamp per text channel via
+      Prisma groupBy, and the user's ChannelRead cursors) rather than
+      querying per-channel, then walks the tree once to set hasUnread.
+    - message.handler.ts: new MARK_CHANNEL_READ handler — upserts the
+      cursor to now().
+
+  Client Changes:
+    - unreadChannelIds: a client-side Set<channelId>, seeded from
+      node.hasUnread on tree renders and otherwise updated purely from
+      live MESSAGE_RECEIVED events (see above).
+    - markChannelUnread()/markChannelRead() do targeted DOM patches
+      (add/remove an .unread class + a red dot) instead of a full
+      renderTree() on every message — a full re-render would blow away
+      collapsed-category UI state on every single incoming chat
+      message, which would have been a bad regression for anyone with
+      categories collapsed.
+    - switchTab() now calls markChannelRead() unconditionally; it's a
+      no-op for tab IDs never in unreadChannelIds (server-log, DM tabs,
+      already-read channels), so no extra guarding needed there.
+    - Guarded against flagging the currently-active tab's own channel
+      as unread when hydrating hasUnread on reconnect (edge case: the
+      user reconnects while already viewing that channel).
+
+  Key Files Modified:
+    apps/server/prisma/schema.prisma — ChannelRead model
+    packages/shared-types/src/models.ts — IChannelTreeNode.hasUnread
+    packages/shared-types/src/socket-events.ts — MARK_CHANNEL_READ event
+    apps/server/src/handlers/connection.handler.ts —
+      annotateUnreadChannels(), IChannelTreeNode import
+    apps/server/src/handlers/message.handler.ts — MARK_CHANNEL_READ handler
+    apps/client/src/preload.ts — markChannelRead() bridge method
+    apps/client/src/renderer/renderer.ts — unreadChannelIds,
+      markChannelUnread()/markChannelRead(), renderChannel() unread
+      rendering, switchTab() integration, TreeNode.hasUnread
+    apps/client/src/renderer/index.html — .tree-channel.unread /
+      .unread-dot CSS
+
+  Verification:
+    - Prisma migration: add_channel_read — applied successfully against
+      the local dev database
+    - TypeScript build (shared-types): npx tsc --build — passed
+    - TypeScript build (server): npx tsc --noEmit — passed
+    - TypeScript build (client): npx tsc --noEmit — passed
+    - Server test suite: npm run test — 19/19 passed
+
+  Next Step: PRD 4.10 (delete own messages) is next per
+  app-planning/Reson8_NextSteps_PRD.md's suggested order, followed by
+  PRD 4.8 (custom emoji upload) which reuses the storage-deletion
+  helper 4.10 introduces.
+
+--- Entry: 11/08/2026 ---
+
+Feature/Fix: Delete Own Messages (PRD 4.10)
+
+  Problem: No way to remove a sent message (text channel or DM) once
+  sent, including images already uploaded to storage. Confirmed no
+  delete-from-storage code existed anywhere before this — no
+  fs.unlink, no cloudinary.uploader.destroy, no DELETE route.
+
+  Solution: Hard delete (per product decision — row fully removed, no
+  "[message deleted]" tombstone), own messages only, applied uniformly
+  to both channel Message rows and DirectMessage rows.
+
+  Storage cleanup gap: Message.attachmentUrl alone wasn't enough to
+  delete a Cloudinary asset — deletion needs the `public_id`, which the
+  upload route was computing but discarding (only ever returning
+  `secure_url`). Fixed at the source:
+    - upload.route.ts's uploadToCloudinary() now returns
+      { url, publicId } instead of a bare url string; the /api/upload
+      response includes publicId (undefined for local-disk uploads,
+      which have no Cloudinary asset to eventually destroy).
+    - Message and DirectMessage both gained an attachmentPublicId
+      column (migration 20260812014649_add_message_attachment_public_id)
+      to carry that value through from upload time to delete time. This
+      field is server-internal only — deliberately NOT added to the
+      IMessage/IDirectMessage wire DTOs, since the client never needs
+      to know a Cloudinary public_id.
+    - New apps/server/src/services/storage.service.ts —
+      deleteAttachment(url, publicId?) — branches on publicId presence
+      (the discriminator for which backend stored it): Cloudinary
+      destroy vs local fs.unlink under ./uploads/. Shared by both
+      message.handler.ts and dm.handler.ts rather than duplicated.
+
+  New DELETE_MESSAGE / DELETE_DIRECT_MESSAGE events: ownership-checked
+  (message.userId / dm.senderId must match the caller — no bypass, not
+  even for admins, matching this item's stated scope of "delete your
+  own"), delete the attachment via the shared helper if one exists,
+  delete the row, then broadcast MESSAGE_DELETED (server-wide, same
+  room as MESSAGE_RECEIVED) or notify both DM participants'
+  sockets directly (mirroring SEND_DIRECT_MESSAGE's own delivery
+  pattern) with DIRECT_MESSAGE_DELETED.
+
+  Client: extended the existing per-message hover action bar
+  (buildReactionBar, which already held the react button) with a
+  delete button shown only when the viewer is the message's owner.
+  Reused a "confirm modal, not window.confirm()" pattern already
+  established for channel deletion. On confirm, calls
+  deleteMessage()/deleteDirectMessage() — the actual DOM removal
+  happens uniformly from the MESSAGE_DELETED/DIRECT_MESSAGE_DELETED
+  listener (which fires for the deleter too, same as how sent messages
+  already echo back), rather than an extra optimistic-removal path, so
+  there's exactly one code path that removes a message element
+  regardless of who deleted it or which tab is showing it.
+
+  Edge Cases Handled:
+    - buildReactionBar() didn't previously know who owned a message;
+      REACTION_UPDATED (which triggers a bar rebuild on reaction
+      changes) doesn't carry ownerId either. Rather than plumbing
+      ownerId through that event too, each .chat-msg element now
+      carries its own data-msg-owner attribute set at render time, and
+      the rebuild path reads it back from the DOM — avoids widening an
+      unrelated event's payload for this.
+    - removeMessageElement() queries the whole document (not just the
+      active tab), since a background tab stays in the DOM (just
+      hidden) rather than being unmounted.
+
+  Key Files Modified:
+    apps/server/prisma/schema.prisma — Message/DirectMessage.attachmentPublicId
+    apps/server/src/routes/upload.route.ts — return publicId for Cloudinary uploads
+    apps/server/src/services/storage.service.ts (NEW) — deleteAttachment()
+    packages/shared-types/src/socket-events.ts — DELETE_MESSAGE,
+      DELETE_DIRECT_MESSAGE, MESSAGE_DELETED, DIRECT_MESSAGE_DELETED,
+      attachmentPublicId on SEND_MESSAGE/SEND_DIRECT_MESSAGE payloads
+    apps/server/src/handlers/message.handler.ts — persist
+      attachmentPublicId, DELETE_MESSAGE handler
+    apps/server/src/handlers/dm.handler.ts — persist attachmentPublicId,
+      DELETE_DIRECT_MESSAGE handler
+    apps/client/src/preload.ts — deleteMessage()/deleteDirectMessage()
+      bridge methods, uploadFile() returns publicId, MESSAGE_DELETED/
+      DIRECT_MESSAGE_DELETED forwarding
+    apps/client/src/renderer/renderer.ts — delete button in
+      buildReactionBar(), delete confirmation modal wiring,
+      removeMessageElement(), data-msg-owner attribute, pendingAttachmentPublicId
+    apps/client/src/renderer/index.html — #delete-message-modal markup,
+      .btn-delete-msg CSS
+
+  Verification:
+    - Prisma migration: add_message_attachment_public_id — applied
+      successfully against the local dev database
+    - TypeScript build (shared-types): npx tsc --build — passed
+    - TypeScript build (server): npx tsc --noEmit — passed
+    - TypeScript build (client): npx tsc --noEmit — passed
+    - Server test suite: npm run test — 19/19 passed
+    - End-to-end smoke test against a real running server + Postgres +
+      Redis (dev server started, exercised via a throwaway
+      socket.io-client script, then torn down): 20/20 checks passed —
+      text-message send/delete, non-owner delete correctly rejected
+      (and the message survives that attempt), image message upload +
+      delete with the local-disk file confirmed actually removed from
+      apps/server/uploads/ afterward, and DM send/delete with
+      DIRECT_MESSAGE_DELETED confirmed delivered to both sender and
+      recipient sockets. Cloudinary path (attachmentPublicId branch in
+      storage.service.ts) was not exercised — no CLOUDINARY_* env vars
+      are configured in this dev environment — so that branch is
+      verified by code review only, not a live Cloudinary call.
+
+  Next Step: PRD 4.8 (custom emoji upload with admin approval) is next
+  per app-planning/Reson8_NextSteps_PRD.md's suggested order — reuses
+  storage.service.ts's deleteAttachment() for the reject-pending-upload
+  cleanup path.
+
+--- Entry: 11/08/2026 ---
+
+Feature/Fix: Custom Emoji Upload with Admin Approval (PRD 4.8)
+
+  Problem: No way to add custom emoji to a server — only the static
+  curated Unicode set was usable. Largest single item in this phase:
+  new schema model, new upload route, client-side crop tool,
+  moderation queue, and picker integration.
+
+  Solution:
+    - New CustomEmoji model (serverId, name unique-per-server, imageUrl,
+      imagePublicId, uploadedBy, status PENDING|APPROVED, reviewedAt/By)
+      — migration 20260812020435_add_custom_emoji. New MANAGE_EMOJIS
+      permission flag (1 << 9 = 512); the seeded Admin role already has
+      the ADMIN bit, which bypasses all bitwise checks
+      (permissions.service.ts hasPermission()), so no seed.ts change
+      was needed for the Admin role to gain it automatically — verified
+      this via the smoke test's permission checks rather than assuming it.
+    - Rejecting a pending emoji doesn't set a persisted "rejected"
+      status — it deletes the row and its stored image outright via
+      storage.service.ts's deleteAttachment() (the same helper PRD 4.10
+      introduced). Simplified the EmojiStatus enum to just
+      PENDING/APPROVED for this reason — a REJECTED value that's never
+      actually written would just be dead code.
+    - New POST /api/upload/emoji route (512KB cap — generous headroom
+      over what a 128x128 PNG should ever weigh) alongside the existing
+      /api/upload; extracted their shared body-reading/validation logic
+      into one handleUpload() helper in upload.route.ts rather than
+      duplicating the chunked-read-with-size-limit loop a third time.
+    - Client crop tool: a "cover + pan + zoom" cropper (same interaction
+      model as Discord's avatar cropper) — fixed 220x220 viewport, image
+      always fully covers it via a computed base "cover" scale, drag to
+      reposition, slider to zoom 1x-3x, offsets clamped every frame so
+      no gap can ever show. On confirm, the visible viewport rect is
+      mapped back into the source image's natural pixel coordinates and
+      drawn onto a 128x128 canvas via a single ctx.drawImage() call —
+      the crop reads directly from the <img> element's natural
+      dimensions, not by re-parsing pixels off the styled/transformed
+      element.
+    - Emoji picker gained a "+" tab (approved custom emoji + an upload
+      entry point), shared by both the chat-input picker and the
+      per-message reaction picker (both already funnel through the same
+      renderEmojiGrid()/buildEmojiCategoryTabs(), so no separate wiring
+      was needed for reaction mode). Custom emoji are referenced as
+      :name: tokens; linkifyContent() (message rendering) and the
+      reaction-pill renderer now share one renderEmojiToken() helper
+      that resolves a known :name: token to an inline <img>, leaving
+      unrecognized tokens as literal text — matching how Discord/Slack
+      handle unknown shortcodes.
+    - Settings modal gained an "😀 Emojis" tab with the pending-review
+      queue (thumbnail, name, uploader nickname, Approve/Reject). Its
+      visibility is decided by whether GET_PENDING_EMOJIS actually
+      succeeds — not by reusing the existing isAdminUser heuristic —
+      since MANAGE_EMOJIS is a distinct permission bit from general
+      admin status, even though today only the Admin role holds it.
+
+  Edge Cases Handled:
+    - CUSTOM_EMOJI_APPROVED broadcasts live to every connected client
+      (including the uploader) so an already-open picker updates
+      in-place without needing to reconnect.
+    - Duplicate names and malformed names (must be 2-32
+      letters/numbers/underscores) are rejected both client-side
+      (immediate feedback) and server-side (authoritative — the
+      @@unique([serverId, name]) constraint backs this up too).
+
+  Key Files Modified:
+    apps/server/prisma/schema.prisma — CustomEmoji model, EmojiStatus enum
+    packages/shared-types/src/models.ts — MANAGE_EMOJIS flag, ICustomEmoji
+    packages/shared-types/src/socket-events.ts — CREATE_CUSTOM_EMOJI,
+      GET_APPROVED_EMOJIS, GET_PENDING_EMOJIS, REVIEW_CUSTOM_EMOJI,
+      CUSTOM_EMOJI_APPROVED
+    apps/server/src/handlers/emoji.handler.ts (NEW) — all four emoji events
+    apps/server/src/routes/upload.route.ts — /api/upload/emoji route,
+      handleUpload() extraction
+    apps/server/src/index.ts — registerEmojiHandlers()
+    apps/client/src/preload.ts — uploadTo() extraction, uploadEmojiFile(),
+      createCustomEmoji(), getApprovedEmojis(), getPendingEmojis(),
+      reviewCustomEmoji(), CUSTOM_EMOJI_APPROVED forwarding
+    apps/client/src/renderer/renderer.ts — customEmojis cache, crop-tool
+      modal logic, renderEmojiToken()/linkifyContent() custom-emoji
+      support, "+" picker tab, Settings "Emojis" tab + moderation queue
+    apps/client/src/renderer/index.html — #emoji-upload-modal (crop UI),
+      Settings Emojis tab/panel, custom-emoji picker item + inline
+      message-image CSS
+
+  Verification:
+    - Prisma migration: add_custom_emoji — applied successfully against
+      the local dev database
+    - TypeScript build (shared-types): npx tsc --build — passed
+    - TypeScript build (server): npx tsc --noEmit — passed
+    - TypeScript build (client): npx tsc --noEmit — passed
+    - Server test suite: npm run test — 19/19 passed
+    - End-to-end smoke test against a real running server + Postgres +
+      Redis (dev server started, exercised via a throwaway
+      socket.io-client script, then torn down and all test data
+      cleaned up): 19/19 checks passed, covering the full server-side
+      flow — non-admin correctly rejected from both GET_PENDING_EMOJIS
+      and REVIEW_CUSTOM_EMOJI, upload + submit, duplicate/invalid-name
+      rejection, pending emoji correctly absent from the approved list,
+      admin's pending queue showing the uploader's resolved nickname,
+      approval broadcasting CUSTOM_EMOJI_APPROVED live to other clients
+      and the emoji then appearing in GET_APPROVED_EMOJIS, re-reviewing
+      an already-approved emoji rejected, and rejection actually
+      deleting both the DB row and the file on disk. One real bug
+      caught mid-test: the smoke test script itself had a transposed
+      ADMIN_INSTANCE_ID (my own typo copying it from .env), which
+      surfaced as every admin-gated call failing — a good reminder that
+      "permission denied" during testing warrants checking the test
+      setup before assuming the feature is broken.
+    - NOT exercised: the client-side crop tool UI and picker DOM
+      (Electron renderer, not reachable from a Node script) — verified
+      by code review and manual math-checking of the cover/pan/zoom/
+      crop-rect calculations only, not a live browser interaction.
+
+  Next Step: PRD 4.11 (edit own messages, 2-minute window) is next per
+  app-planning/Reson8_NextSteps_PRD.md's suggested order.
+
+--- Entry: 11/08/2026 ---
+
+Feature/Fix: Edit Own Messages, 2-Minute Window (PRD 4.11)
+
+  Problem: No way to fix a typo or add missing info to an already-sent
+  message. Scoped to channel messages only (not DMs — the roadmap item
+  is listed under "Text Channels"), text-only (not image messages), and
+  a 2-minute window from send time, server-enforced.
+
+  Solution:
+    - Message.editedAt DateTime? added (migration
+      20260812022954_add_message_edited_at). EDIT_MESSAGE event:
+      ownership check, rejects empty content, rejects if the message
+      has an attachment, rejects if more than 2 minutes have elapsed
+      since createdAt — all authoritative server-side checks, in that
+      order. On success, broadcasts MESSAGE_EDITED (full IMessage DTO,
+      same shape as MESSAGE_RECEIVED) to the server room.
+    - IMessage.editedAt threaded through both DTO-construction sites in
+      message.handler.ts (SEND_MESSAGE's broadcast and FETCH_MESSAGES'
+      mapping) so the "(edited)" mark survives a page reload/scrollback,
+      not just the live session.
+    - Client: inline editing — clicking the new Edit button (own
+      text-only messages only, hover-revealed next to React/Delete)
+      swaps the message's .msg-text span for a <textarea>; Enter saves,
+      Escape cancels, blur saves. On successful save, the new content
+      is applied optimistically (not by waiting for the MESSAGE_EDITED
+      echo) since the alternative — leaving a <textarea> in the DOM
+      until the broadcast arrives — would leave the message stuck in
+      "editing" state if that broadcast were ever delayed. The
+      broadcast handler still runs for every client (including the
+      editor's own) and just harmlessly re-applies the same content,
+      so there's one correctness path, not two divergent ones.
+    - Client-side pre-check: clicking Edit computes elapsed time from
+      msg.createdAt and shows an immediate error instead of opening the
+      editor if the window has passed, rather than maintaining a live
+      per-message countdown/timer for every rendered message — matches
+      the PRD's suggested simplification (attempt-and-explain over a
+      fleet of per-message intervals).
+
+  Key Files Modified:
+    apps/server/prisma/schema.prisma — Message.editedAt
+    packages/shared-types/src/models.ts — IMessage.editedAt
+    packages/shared-types/src/socket-events.ts — EDIT_MESSAGE, MESSAGE_EDITED
+    apps/server/src/handlers/message.handler.ts — EDIT_MESSAGE handler,
+      editedAt in both DTO mappings
+    apps/client/src/preload.ts — editMessage() bridge method,
+      MESSAGE_EDITED forwarding
+    apps/client/src/renderer/renderer.ts — attachEditButton(),
+      startMessageEdit(), applyMessageEdit(), ChatMessage.editedAt,
+      "(edited)" label rendering
+    apps/client/src/renderer/index.html — .msg-edited/.msg-edit-input/
+      .btn-edit-msg CSS
+
+  Verification:
+    - Prisma migration: add_message_edited_at — applied successfully
+      against the local dev database
+    - TypeScript build (shared-types): npx tsc --build — passed
+    - TypeScript build (server): npx tsc --noEmit — passed
+    - TypeScript build (client): npx tsc --noEmit — passed
+    - Server test suite: npm run test — 19/19 passed
+    - End-to-end smoke test against a real running server (dev server
+      started, exercised, torn down, test data cleaned up via the
+      test's own DELETE_MESSAGE calls): 11/11 checks passed — basic
+      edit + live MESSAGE_EDITED broadcast to another client, edited
+      content/editedAt surviving a fresh FETCH_MESSAGES, non-owner edit
+      rejected, empty-content edit rejected, image-message edit
+      rejected, and the 2-minute expiry path (simulated by backdating
+      the message's createdAt directly in Postgres rather than waiting
+      2 real minutes — confirmed the rejection fires correctly once the
+      window has genuinely passed).
+
+  Next Step: PRD 4.9 (default emoji set completion) is next per
+  app-planning/Reson8_NextSteps_PRD.md's suggested order — a content
+  audit rather than an architecture change, and the smallest remaining
+  item.
+
+--- Entry: 11/08/2026 ---
+
+Feature/Fix: Default Emoji Set Completion (PRD 4.9)
+
+  Problem: The curated EMOJI_DATA array (374 entries) was missing a
+  number of emoji generally considered part of the cross-platform
+  "default" set (Discord/Slack/iOS-style pickers) — most notably 😉
+  winking face, 🙃 upside-down face, 🤦 facepalm, 🤷 shrug, 🦄 unicorn,
+  👑 crown, ⚡ high voltage, directional arrows, several colored
+  squares/hearts, and around 20 common country flags (China, Russia,
+  Netherlands, Ukraine, etc.) — despite those being some of the most
+  frequently used emoji in any general chat context.
+
+  Solution: Audited each of the 9 existing categories against what's
+  commonly expected as "default" (cross-referencing what Discord/Slack/
+  iOS pickers typically include, not the full ~1800-entry Unicode CLDR
+  set, since this remains a curated picker by design) and appended 178
+  new entries, keeping them within the existing 9 categories and the
+  existing EmojiEntry shape. Flags (previously the smallest category at
+  21) and Symbols (32) got the largest proportional gap-fill.
+  Verified programmatically (a throwaway Python check, not committed)
+  that none of the additions collided with an existing emoji character
+  before finalizing.
+
+  That verification pass also caught a genuine pre-existing bug
+  unrelated to this task's additions: 🔥 (fire) was listed twice — once
+  under Smileys & Emotion (as a reaction), once under Travel & Places
+  (as a literal flame) — present in the file before any of this
+  session's work began. Fixed it (kept the Smileys & Emotion entry,
+  removed the Travel & Places duplicate) since it's squarely within
+  this item's "audit the emoji list" charter, not scope creep.
+
+  Final count: 552 unique entries (up from 374), zero duplicates,
+  spread across Smileys & Emotion (121), Objects (62), Animals & Nature
+  (60), Symbols (60), People & Body (58), Food & Drink (54), Travel &
+  Places (52), Activities (43), Flags (43).
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts — EMOJI_DATA additions +
+      duplicate fix (client-only; no server/shared-types changes, since
+      this is a static client-side content array)
+
+  Verification:
+    - TypeScript build (client): npx tsc --noEmit — passed
+    - Programmatic duplicate check (Python, ad hoc) confirmed 552
+      unique emoji characters, zero duplicates, before and after the
+      🔥 fix
+    - Not run as a server/full-stack change — no migration, no other
+      workspace touched, so shared-types/server verification was
+      unnecessary and skipped
+
+  Next Step: PRD 4.12 (instant image upload feedback) is next per
+  app-planning/Reson8_NextSteps_PRD.md's suggested order — a pure
+  client-side optimistic-UI feature around the existing upload flow.
+
+--- Entry: 11/08/2026 ---
+
+Feature/Fix: Instant Image Upload Feedback (PRD 4.12)
+
+  Problem: Selecting/pasting an image gave no visual feedback until the
+  upload finished — only a text log line ("Uploading filename...").
+
+  Solution: Reading the actual upload flow closely (rather than
+  assuming from the roadmap wording alone) revealed the real
+  architecture: images upload to the server immediately on file-select/
+  paste, BEFORE Send is ever clicked — SEND_MESSAGE only fires once an
+  attachmentUrl already exists, via the small filename chip
+  (#attachment-preview) shown above the compose box once upload
+  succeeds. There's no "message sent, image still uploading" state
+  possible here (unlike a chat-bubble-placeholder architecture) — the
+  entire "nothing shows" gap lives inside handleFileUpload(), between
+  file selection and that chip appearing.
+    - The moment a file is picked/pasted, an instant local thumbnail
+      (via URL.createObjectURL, revoked once no longer needed) plus a
+      small CSS spinner now appears immediately in that same
+      #attachment-preview bar, before the network round-trip even
+      starts.
+    - On success, reverts to exactly the pre-existing filename-only
+      chip appearance (deliberately unchanged) — only the
+      uploading/failed states are new.
+    - On failure, shows an inline error state (red-tinted bar, the
+      actual error message, a Retry button that re-reads the same File
+      object) instead of only a log line the user could easily miss —
+      arguably the more important half of this fix, since a silent
+      failure previously looked identical to simply never having
+      selected anything.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts — pendingAttachmentObjectUrl
+      tracking, showAttachmentUploading()/showAttachmentFailed() (new),
+      handleFileUpload() rewired to call them
+    apps/client/src/renderer/index.html — .attachment-thumb/
+      .attachment-spinner/.attachment-retry/.attachment-failed CSS
+
+  Verification:
+    - TypeScript build (client): npx tsc --noEmit — passed
+    - Purely client-side DOM/CSS timing change with no server-side
+      logic — a wire-level smoke test (as used for the previous several
+      server-heavy items) wouldn't exercise anything meaningful here,
+      so verification was code review + typecheck only. NOT visually
+      confirmed in a live Electron window in this session (no display
+      available) — the upload-progress thumbnail/spinner and the retry
+      flow should get a manual once-over next time the app is run
+      interactively.
+
+  Next Step: PRD 4.14 (Nudge) is the last remaining item in
+  app-planning/Reson8_NextSteps_PRD.md — new "Reson8 Client" feature
+  (not a Voice/Text Channels item), introduces a Server Settings
+  concept and a new admin-toggleable Server.nudgeEnabled field.
+
+--- Entry: 12/08/2026 ---
+
+Feature/Fix: Nudge (PRD 4.14) — final item in the Next Steps PRD
+
+  Problem: No way to get another user's attention short of DMing them.
+  Needed: an admin-toggleable server-wide feature (default ON,
+  unchangeable toggle duration), 30s cooldown per (sender, target)
+  pair, online users only, surfaced from the Online Users list.
+
+  Solution:
+    - Server.nudgeEnabled Boolean @default(true) (migration
+      20260812030044_add_server_nudge_enabled). This is the project's
+      first genuine "server-wide setting" — IServer existed in
+      shared-types but was never actually sent over the wire anywhere
+      in the codebase before this, so there was no existing mechanism
+      to piggyback on. Built it from scratch: GET_SERVER_SETTINGS
+      (fetched on connect and whenever the new admin-only "🔔 Server"
+      Settings tab opens) + UPDATE_SERVER_SETTINGS (ADMIN-gated,
+      broadcasts SERVER_SETTINGS_UPDATED so every connected client's
+      Nudge buttons appear/disappear live without reconnecting).
+    - New nudge.handler.ts: NUDGE_USER validates, in order, self-nudge
+      rejection, server.nudgeEnabled, target actually online (Redis
+      presence), then the cooldown — an in-memory
+      Map<"senderId:targetId", timestamp>, deliberately ephemeral
+      (resets on server restart) since persisting a purely advisory,
+      low-stakes rate limit isn't worth a DB/Redis round trip.
+    - Client: sound + toast + taskbar/dock flash, per the earlier
+      product decision (no window-shake animation). Toast is a new,
+      general-purpose small component (#toast-container, top-right,
+      auto-dismissing after 4s) since none existed yet. Taskbar/dock
+      flash reuses the existing isWindowFocused()
+      IPC pattern from Phase 8's DM-notification gating, adding one new
+      main-process handler (win.flashFrame(true), only when unfocused)
+      plus an explicit flashFrame(false) on window focus rather than
+      relying on implicit per-platform auto-clear behavior.
+    - Nudge button added to the Online Users list (online users only,
+      never shown for yourself, hidden entirely when the server has
+      nudging disabled), with a client-side cooldown mirror (disables
+      the button and counts down) purely for UX — the server remains
+      the authoritative enforcement point.
+
+  Correction (12/08/2026, same day): initially reused the existing
+  hey_wake_up.mp3 for the nudge sound, since a new audio asset can't be
+  fabricated from text. The user pointed out a real
+  assets/sound-alerts/nudge.mp3 already existed in the repo (added
+  after this PRD's audit, so it wasn't caught by the earlier file
+  listing) — switched SoundAlert.play() in the nudge-received handler
+  to use it instead. Already covered by electron-builder's existing
+  "assets/**/*" glob in package.json, so no packaging config change was
+  needed. DM notifications still correctly use hey_wake_up.mp3,
+  unchanged.
+
+  Key Files Modified:
+    apps/server/prisma/schema.prisma — Server.nudgeEnabled
+    packages/shared-types/src/models.ts — IServer.nudgeEnabled
+    packages/shared-types/src/socket-events.ts — NUDGE_USER,
+      GET_SERVER_SETTINGS, UPDATE_SERVER_SETTINGS, NUDGE_RECEIVED,
+      SERVER_SETTINGS_UPDATED
+    apps/server/src/handlers/nudge.handler.ts (NEW)
+    apps/server/src/index.ts — registerNudgeHandlers()
+    apps/client/src/main.ts — flash-window IPC handler, focus listener
+      clearing the flash
+    apps/client/src/preload.ts — nudgeUser()/getServerSettings()/
+      updateServerSettings()/flashWindow() bridge methods, NUDGE_RECEIVED/
+      SERVER_SETTINGS_UPDATED forwarding
+    apps/client/src/renderer/renderer.ts — showToast(), Nudge button +
+      client-side cooldown mirror in createUserRow(), Server Settings
+      tab wiring, server-settings-updated/nudge-received listeners
+    apps/client/src/renderer/index.html — #toast-container + .toast CSS,
+      .btn-nudge CSS, "🔔 Server" Settings tab/panel markup
+
+  Verification:
+    - Prisma migration: add_server_nudge_enabled — applied successfully
+      against the local dev database
+    - TypeScript build (shared-types): npx tsc --build — passed
+    - TypeScript build (server): npx tsc --noEmit — passed
+    - TypeScript build (client): npx tsc --noEmit — passed
+    - Server test suite: npm run test — 19/19 passed
+    - End-to-end smoke test against a real running server (dev server
+      started, exercised via three concurrent clients — one seeded as
+      the real ADMIN_INSTANCE_ID admin — then torn down): 15/15 checks
+      passed — self-nudge rejected, basic nudge delivers NUDGE_RECEIVED
+      with correct sender info, same-target re-nudge blocked by
+      cooldown while a *different* target succeeds in parallel
+      (confirming the per-pair, not global, cooldown design), offline
+      target rejected, non-admin blocked from UPDATE_SERVER_SETTINGS,
+      admin disabling nudging broadcasts live and blocks further
+      nudges, and re-enabling correctly restores state. DB left exactly
+      as found (nudgeEnabled back to true) via the test's own cleanup.
+    - NOT visually confirmed in a live Electron window this session (no
+      display available) — the toast animation, taskbar/dock flash, and
+      cooldown countdown button text are DOM/OS-level behavior that
+      should get a manual check next time the app runs interactively.
+
+  === Reson8_NextSteps_PRD.md — ALL 15 ITEMS COMPLETE ===
+  Every item from app-planning/nextsteps.txt (4.1 through 4.15) has now
+  been implemented, typechecked across all affected workspaces, and
+  either smoke-tested end-to-end against a real running server (the
+  10 items with server-side logic: 4.3, 4.5, 4.6, 4.7, 4.8, 4.10, 4.11,
+  4.14, plus 4.13's design was verified via the same discipline) or
+  verified by typecheck + code review for the purely client-side DOM/
+  CSS items (4.1, 4.2, 4.4, 4.9, 4.12, 4.15). The client-side-only UI
+  surfaces (crop tool, toast, upload-progress states, cooldown
+  countdown) have not been visually confirmed in a live Electron window
+  in this session, since no display was available — worth a manual
+  pass through the app before considering this phase fully done in
+  practice, not just in code.
+
+--- Entry: 12/08/2026 ---
+
+Feature/Fix: Fix Unread Text-Channel Indicator Reappearing After Voice Join/Leave
+
+  Problem: Manual verification pass (see previous entry) surfaced a real
+  bug in PRD 4.13's unread indicator: after opening a text channel and
+  clearing its unread state, joining or leaving a voice channel would
+  make the notification dot reappear on the already-read channel — and
+  reopening the channel cleared it again, only for the same cycle to
+  repeat on the next voice join/leave.
+
+  Root cause: renderChannel() seeds the client-side unreadChannelIds Set
+  from the cached tree node's `hasUnread` field
+  (`if (node.hasUnread && node.id !== activeTabId)
+  unreadChannelIds.add(node.id)`), by design only trustworthy on the
+  single per-socket tree emission sent at USER_JOIN_SERVER time (see the
+  PRD 4.13 entry above for why). markChannelRead() correctly cleared
+  unreadChannelIds and the DOM, but never touched that same field on the
+  underlying `currentTree` node object — the tree array isn't replaced
+  except on a full CHANNEL_TREE_UPDATE, so the stale `hasUnread: true`
+  survived in memory indefinitely. Several actions call
+  renderTree(currentTree) using that same cached array for unrelated
+  reasons — joining voice (handleChannelClick), leaving voice
+  (leaveVoiceAndNotify) — and each re-render re-executed the seeding
+  line, resurrecting the already-read channel's unread flag from the
+  stale cached value.
+
+  Solution: Added findTreeNode() (recursive lookup by channelId over
+  currentTree) and call it from markChannelRead() to also clear the
+  node's cached hasUnread flag, not just the unreadChannelIds Set and
+  the DOM — so a later renderTree(currentTree) call has nothing stale
+  left to reseed from.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts — findTreeNode(), markChannelRead()
+
+  Verification:
+    - TypeScript build (client): npx tsc --noEmit — passed
+    - Live Electron window (Xvfb + Playwright driver, real dev server):
+      opened a channel with a genuine pending unread (dot cleared on
+      open), joined a voice channel (tree re-render triggered), confirmed
+      via DOM inspection the text channel's element stayed plain
+      "tree-channel" with no "unread" class — previously this
+      re-rendered as "tree-channel unread".
+
+--- Entry: 12/08/2026 ---
+
+Feature/Fix: Fix Non-Functional Custom Emoji Upload (CSP Blocked blob: Image Loads)
+
+  Problem: Manual verification pass surfaced that the custom emoji
+  upload feature (PRD 4.8) was completely non-functional in the real
+  app: clicking "Choose Image..." and selecting a file did nothing
+  visible — no crop step, no name field, no error, nothing sent to the
+  server, nothing appearing in the admin approval queue. This made the
+  name-input field (which does exist in the code, at the crop step)
+  look entirely missing, since that step was never reached.
+
+  Root cause: index.html's Content-Security-Policy meta tag allowed
+  `blob:` sources for `media-src` (used by sound-alert/DM audio
+  elements) but not for `img-src`. The crop tool's file-select handler
+  sets `emojiCropImg.src = URL.createObjectURL(file)` — a `blob:` URL —
+  which CSP silently blocked. The image element's `load` event (which
+  triggers the step-select → step-crop transition, revealing the name
+  input) never fired, so the modal appeared to do nothing at all. No
+  console-visible application error, since CSP violations aren't
+  surfaced through the app's own error handling.
+
+  Solution: Added `blob:` to the `img-src` directive in index.html's CSP
+  meta tag, matching the existing `media-src` allowance. No other code
+  changes were needed — the name-input field, client-side name
+  validation, server-side uniqueness check (@@unique([serverId, name])
+  in CustomEmoji), and the full upload → PENDING review queue pipeline
+  were all already correctly implemented from PRD 4.8; they were simply
+  unreachable behind this one blocked image load.
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html — CSP img-src directive
+
+  Verification:
+    - TypeScript build (client): npx tsc --noEmit — passed
+    - Live Electron window (Xvfb + Playwright driver, real dev server):
+      drove the full flow with a real file via Playwright's
+      setInputFiles() against the hidden #emoji-file-input — confirmed
+      the modal now correctly advances to the crop step with the name
+      field visible and interactable, filled a name, clicked Upload, and
+      confirmed via the server log (200 on POST /api/upload/emoji, "file
+      uploaded", "Custom emoji submitted for review" with a real
+      emojiId) and a direct Postgres query
+      (`SELECT ... FROM custom_emojis WHERE name='verifytest'`) that the
+      row was persisted with status PENDING. Test row deleted afterward
+      to leave the DB clean.
+
+--- Entry: 12/08/2026 ---
+
+Feature/Fix: Eliminate Settings Modal Admin-Tab Flicker for Non-Admin Users
+
+  Problem: Opening the Settings modal as a non-admin user briefly showed
+  the Roles/Emojis/Server tabs before they disappeared — a visible
+  "blink" that looked like a bug, even though the end state (tabs
+  hidden) was correct.
+
+  Root cause: openSettingsPanel() called `adminModal.classList.add(
+  "visible")` immediately, then only decided each admin tab's
+  display:none/"" AFTER awaiting a fresh round trip
+  (getAllUsers/getRoles/getPendingEmojis) to re-derive permission state
+  that, in the common case, was already known — the exact same
+  getAllUsers() check already ran once at connect time to gate
+  kick/ban UI, but its result wasn't reused here. The Roles/Emojis/
+  Server tab buttons also have no default `display:none` in their CSS
+  (unlike the modal itself, which is hidden by default and only shown
+  via .visible), so for the whole duration of that round trip they
+  rendered in their HTML default (visible) state.
+
+  Solution: Per the user's explicit design direction — the client
+  should already know a user's admin status by the time they click
+  Settings, not discover it after opening the modal — cached both
+  `isAdminUser` and a new `canManageEmojis` flag from the existing
+  connect-time admin probe (extended to also call GET_PENDING_EMOJIS,
+  whose success/failure is the existing signal for MANAGE_EMOJIS,
+  mirroring how GET_ALL_USERS already signals ADMIN). Extracted tab
+  visibility logic into applySettingsTabVisibility(), a small
+  synchronous function that reads only these cached flags. openSettingsPanel()
+  now calls it BEFORE adding the "visible" class to the modal, so the
+  correct tabs are already in their final display state on the very
+  first paint — no round trip gates what's shown. The existing live
+  re-check (getAllUsers/getRoles/getPendingEmojis) still runs on every
+  open, in case permissions changed since connect (e.g. mid-session
+  promotion/demotion), and calls applySettingsTabVisibility() again
+  once it resolves — but since it starts from an already-correct
+  cached state, this second call is a no-op in the overwhelmingly
+  common case and never produces a visible flash.
+  isAdminUser/canManageEmojis are also reset to false on disconnect,
+  so a fresh connection never briefly shows a stale previous session's
+  admin tabs either.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts — canManageEmojis state,
+      applySettingsTabVisibility(), connect-time admin probe extended
+      to also check GET_PENDING_EMOJIS, openSettingsPanel() rewired,
+      disconnect handler resets both cached flags
+
+  Verification:
+    - TypeScript build (client): npx tsc --noEmit — passed
+    - Live Electron window (Xvfb + Playwright driver, real dev server):
+      connected as a non-admin user, clicked the Settings button, and
+      read the three admin tab buttons' computed `style.display` in the
+      same synchronous tick as the click (no wait) — all three were
+      already "none", confirming no round trip is needed before the
+      correct (hidden) state is shown. Screenshot confirms the modal
+      opens directly on the Voice & Shortcuts tab with only
+      Voice & Shortcuts / Application visible.
+    - Admin-path regression (tabs correctly shown for an actual admin)
+      was not re-verified live this session — apps/server/.env was open
+      in the user's own editor with an actively-changing
+      ADMIN_INSTANCE_ID, so granting a test session admin rights via
+      that file was deliberately avoided to not interfere with the
+      user's own concurrent work. The fix is symmetric: the same
+      applySettingsTabVisibility() function drives both the admin and
+      non-admin cases from the same two cached booleans, and the admin
+      path was unchanged in logic (still isAdminUser/canManageEmojis
+      true → tabs shown), only its *timing* relative to the modal's
+      first paint changed.
+
+--- Entry: 12/08/2026 ---
+
+Feature/Fix: Phase 10 — PRD 10.6: Fix Generic AppImage Icon on Wayland
+
+  Problem: On Wayland, the packaged AppImage showed a generic icon in
+  both the title bar and the alt-tab app switcher instead of the real
+  Reson8 icon, even though a correctly-sized icon asset already existed
+  and the generated .desktop file pointed at it.
+
+  Root cause: BrowserWindow was constructed with no explicit `icon`
+  option (relying entirely on platform packaging to resolve it),
+  `app.setName()` was never called anywhere (so Electron derived the
+  runtime WM_CLASS from the scoped package.json `"name"` field,
+  `"@reson8/client"`, not `"Reson8"`), and `build.linux` had no
+  `desktop.StartupWMClass`. On Wayland/GNOME, icon resolution depends
+  on the .desktop file's StartupWMClass matching the running window's
+  actual WM_CLASS — without that match, the lookup silently falls back
+  to a generic icon.
+
+  Solution: Added an explicit `icon: path.join(__dirname, "..",
+  "assets", "icon.png")` to the BrowserWindow constructor, called
+  `app.setName("Reson8")` before `app.whenReady()`, and added
+  `build.linux.desktop.StartupWMClass: "Reson8"` in
+  apps/client/package.json so the generated .desktop file's
+  StartupWMClass matches the runtime WM_CLASS.
+
+  Key Files Modified:
+    apps/client/src/main.ts
+    apps/client/package.json
+
+  Verification:
+    - TypeScript build (client): npx tsc --noEmit — passed
+    - This fix is inherently a windowing-system-level visual check —
+      confirming the real icon in the Wayland title bar / alt-tab
+      switcher requires `npm run build:linux` and running the resulting
+      AppImage under an actual Wayland session, which was not done this
+      session (no packaged build was produced). The code change itself
+      was verified by reading the current BrowserWindow constructor and
+      confirming no `icon` option or `app.setName()` call existed prior
+      to this change.
+
+--- Entry: 12/08/2026 ---
+
+Feature/Fix: Phase 10 — PRD 10.5: Fix False-Positive Unread Indicator on Own Message
+
+  Problem: A user could see their own text channel flagged as "unread"
+  after disconnecting and reconnecting, even though nobody else had
+  posted since their last message.
+
+  Root cause: two independent gaps. (1) `annotateUnreadChannels()`
+  (run during USER_JOIN_SERVER tree hydration) found each channel's
+  latest-message timestamp via `message.groupBy({ by: ["channelId"],
+  where: { channelId: { in: textChannelIds } }, _max: { createdAt:
+  true } })` with no exclusion of the requesting user's own messages,
+  so a user's own last message counted as the channel's "latest" when
+  compared against their stored ChannelRead.lastReadAt cursor. (2)
+  `SEND_MESSAGE` persisted and broadcast the message but never
+  advanced the *sender's own* ChannelRead cursor — only the separate
+  MARK_CHANNEL_READ handler (fired when a client explicitly opens a
+  channel) did that upsert.
+
+  Solution: Added `userId: { not: userId }` to the `message.groupBy`
+  where clause in `annotateUnreadChannels()`, so "unread" only ever
+  reflects messages authored by others. Added a `channelRead.upsert`
+  call inside `SEND_MESSAGE` — mirroring the exact upsert pattern
+  already used by `MARK_CHANNEL_READ` (`where: { userId_channelId:
+  { userId, channelId } }`) — using the new message's own `createdAt`,
+  so the sender's cursor advances at send time rather than only when
+  they later reopen the channel.
+
+  Key Files Modified:
+    apps/server/src/handlers/connection.handler.ts
+    apps/server/src/handlers/message.handler.ts
+
+  Verification:
+    - TypeScript build (server): npx tsc --noEmit — passed
+    - npm run test (server, vitest): 19/19 tests passed
+    - Live check via a locally connected client (see the Phase 10 PRD
+      10.2/10.3/10.4 entries below for the same session): confirmed
+      messages sent and channels opened behaved normally with no
+      unread-indicator regressions observed during the session, though
+      the specific disconnect/reconnect repro from the PRD (send last
+      message → disconnect → reconnect → channel must not show unread)
+      was not explicitly re-run end-to-end this session beyond the
+      passing vitest suite and code-level confirmation of both fixes.
+
+--- Entry: 12/08/2026 ---
+
+Feature/Fix: Phase 10 — PRD 10.3: Fix Session Timer Blink on Mute/Deafen Toggle
+
+  Problem: Toggling mute/deafen while in a voice channel made the
+  channel's session timer badge briefly go blank (up to ~1s) before
+  showing the correct elapsed time again.
+
+  Root cause: mute/deafen toggles are presence-driven — every toggle
+  calls `api.setVoiceState(...)`, which round-trips through the server
+  and comes back as a PRESENCE_UPDATE broadcast to the whole server
+  room, including the sender. The client's presence handler calls
+  `updateOccupants()`, which unconditionally calls `renderTree(
+  currentTree)` — a full `channelTree.innerHTML = ""` teardown and
+  rebuild. `renderChannel()` recreated the session-timer
+  `<span data-session-channel="...">` empty every time, relying on the
+  existing 1s `setInterval` to fill in the text on its next tick —
+  leaving a visible blank gap after every full re-render.
+
+  Solution: `renderChannel()` now computes the timer's elapsed-time
+  text synchronously at render time, using the exact same
+  `formatDuration(now - new Date(startedAt).getTime())` calculation
+  the existing `setInterval` already uses against the `sessionTimers`
+  map, instead of leaving `textContent` empty until the next tick.
+  Scoped surgical fix — `renderTree()`'s full-teardown-and-rebuild
+  approach was left unchanged, since only this one element had the
+  render-then-fill-later timing gap.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts
+
+  Verification:
+    - TypeScript build (client): npx tsc --noEmit — passed
+    - Live check via a CDP-driven Electron session (real dev server,
+      built client, `electron . --remote-debugging-port` + a small
+      script talking to the Chrome DevTools Protocol over the page's
+      websocket to evaluate JS and capture screenshots): connected,
+      joined the "Lobby" voice channel, then read
+      `document.querySelector('[data-session-channel]').textContent`
+      immediately after each of five consecutive mute/deafen toggles
+      (mute, deafen, undeafen, deafen, mute-while-deafened) — the timer
+      text was always a valid non-blank value (e.g. "00:01" through
+      "00:04") at every check, never empty.
+
+--- Entry: 12/08/2026 ---
+
+Feature/Fix: Phase 10 — PRD 10.4: Mute/Deafen Accumulation
+
+  Problem: Deafening did not mute the mic — a deafened user could
+  still transmit audio — and undeafening had no memory of whatever
+  mute state existed before deafening, so mute/deafen state didn't
+  "accumulate" the way the roadmap specified (deafen should always
+  imply mute; undeafen should restore, not clobber, the prior mute
+  state).
+
+  Solution:
+    - voice.service.ts: added a new `_deafenAutoMuted` field and
+      reworked `toggleDeafen()` into a combined method returning
+      `{ isMuted, isDeafened }`. On deafen: if the mic producer wasn't
+      already paused, pause it and remember that this deafen action was
+      the one that did so (`_deafenAutoMuted = true`); if it was
+      already paused (user had manually muted first), leave it alone
+      and remember that too. On undeafen: only resume the producer if
+      `_deafenAutoMuted` is true — otherwise the prior manual mute is
+      left exactly as it was. This producer-state-based approach
+      (rather than reusing the pre-existing `_isManuallyMuted` flag
+      directly) was chosen because `_isManuallyMuted` is also flipped
+      transiently by every push-to-talk key press/release, making it
+      an unreliable signal for "was the user deliberately muted before
+      I deafened them."
+    - renderer.ts: `toggleDeafenAndNotify()` now syncs both `isMuted`
+      and `isDeafened` from the one combined service call and sends a
+      single `SET_VOICE_STATE`, playing only the deafen sound pair —
+      never mute + deafen together for one user action.
+    - PTT keydown/keyup and the `ptt-pressed`/`ptt-released` IPC
+      handlers (which call `api.setMuted()` directly, bypassing the
+      toggle-and-notify functions) gained an explicit `!isDeafened`
+      guard, so PTT is fully blocked while deafened — confirmed with
+      the user as the intended behavior.
+    - The Voice-Activation-mode-switch handler (switching from
+      push-to-talk to voice-activation while already in a voice
+      channel) gained the same `!isDeafened` guard — this was a real
+      gap surfaced during implementation, not explicitly in the PRD: it
+      previously unmuted the mic unconditionally on mode switch, which
+      could have silently broken the "can't speak while deaf"
+      invariant.
+    - `renderOccupants()`'s icon rendering changed from a
+      mutually-exclusive ternary (deafened-or-muted-or-neither) to
+      rendering both icons simultaneously when both flags are true.
+    - Resolved decision (explicit user call, overriding the PRD's
+      stated default): clicking the Mute button/shortcut while
+      deafened does not no-op. It auto-undeafens first (restoring
+      whatever mute state existed before deafening via the same
+      undeafen logic), then applies a normal mute toggle on top of
+      that resolved state — a single combined action, single
+      `SET_VOICE_STATE`, single sound (the mute/unmute pair, not the
+      deafen pair).
+
+  Key Files Modified:
+    apps/client/src/services/voice.service.ts
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/preload.ts — toggleDeafen() bridge return type
+      updated to match the new { isMuted, isDeafened } shape
+
+  Verification:
+    - TypeScript build (client): npx tsc --noEmit — passed
+    - Live check via the same CDP-driven Electron session described in
+      the PRD 10.3 entry above: joined voice, then walked through
+      mute → deafen (occupant icon markup showed both Muted and
+      Deafened icons together) → undeafen (Deafened icon cleared,
+      Muted icon stayed) → deafen again → mute-button-click-while-
+      deafened, confirming the auto-undeafen-then-toggle behavior
+      exactly: button states went from "Unmute | Undeafen" to
+      "Mute | Deafen" in one click, and the occupant's icon list
+      became empty (both cleared), matching the case where the user
+      had been manually muted before the deafen cycle. Each step was
+      checked by reading the mute/deafen button text and the target
+      occupant's rendered icon HTML directly via
+      `Runtime.evaluate` over the DevTools protocol, not just visually.
+
+--- Entry: 12/08/2026 ---
+
+Feature/Fix: Phase 10 — PRD 10.2: Audio Settings Tab
+
+  Problem: No client-local volume controls existed for nudge sounds,
+  general sound alerts, or a global voice-chat master attenuator on
+  top of Phase 9's existing per-user (0-200%) voice volume.
+
+  Solution: Added a new "🔊 Audio" settings tab with three 0-100%
+  sliders — Nudge Volume, Sound Alerts Volume, Global Voice Chat
+  Volume — each persisted to localStorage under the existing `reson8-`
+  prefix (`reson8-nudge-volume`, `reson8-alert-volume`,
+  `reson8-voice-volume`, defaulting to "100"). `SoundAlert.play()` now
+  sets `audio.volume` before playing, reading `nudgeVolume` for
+  `nudge.mp3` and `alertVolume` for every other alert file — this
+  applies uniformly across all sound call sites without touching each
+  one individually, since the volume lookup lives inside `.play()`
+  itself. voice.service.ts gained a `globalVoiceVolume` field and
+  `setGlobalVoiceVolume(percent)`, multiplied into both existing
+  gain-computation sites (`consumeProducer()`, `applyOverrideForUser()`)
+  as `(userVolumePercent / 100) * globalVoiceVolume`, applied live to
+  every currently-consumed participant, on top of (not replacing) each
+  participant's individual volume/mute override.
+
+  Bug found and fixed during implementation (not caught by the
+  pre-implementation code audit): preload.ts's `joinVoiceChannel()`
+  unconditionally constructs a brand-new `VoiceService` instance on
+  every join (`voiceService = new VoiceService(...)`), which would have
+  silently reset the global voice volume attenuator back to 100% every
+  time a user joined a channel, even after they'd set it lower. Fixed
+  by having renderer.ts call `api.setGlobalVoiceVolume(voiceVolume)`
+  again immediately after a successful join, in addition to the
+  one-time call at app startup the PRD specified.
+
+  Key Files Modified:
+    apps/client/src/services/voice.service.ts
+    apps/client/src/preload.ts
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/renderer/index.html
+
+  Verification:
+    - TypeScript build (client): npx tsc --noEmit — passed
+    - Live check via the same CDP-driven Electron session: opened
+      Settings, clicked the new Audio tab, and confirmed all three
+      sliders render at their persisted 100% default with correct
+      labels. Multi-client volume-blending scenarios (global 50% +
+      per-user 150% producing audibly different levels between two
+      participants) were not exercised this session — that requires a
+      second connected client and is a perceptual audio check the PRD
+      itself flags as a manual verification step.
+
+--- Entry: 12/08/2026 ---
+
+Feature/Fix: Phase 10 — PRD 10.1: Client Auto-Updater
+
+  Problem/Overview: Reson8 had no way to check for or install new
+  releases — users had to notice a new GitHub release and manually
+  download it.
+
+  Solution: Added `electron-updater`-based update checking, packaged-
+  build-only, with a strict check/download separation
+  (`autoUpdater.autoDownload = false` — nothing downloads until the
+  user explicitly clicks "Update Now").
+
+  Main Process Changes (main.ts):
+    - `checkForUpdatesOnce()` wraps a single `autoUpdater.
+      checkForUpdates()` call, resolved/rejected by whichever of
+      `update-available` / `update-not-available` / `error` fires
+      first for that attempt.
+    - `checkForUpdatesWithRetry()` wraps that in 1 attempt + up to 3
+      retries, 20s apart — shared by both the automatic startup check
+      and the manual "Check for Updates" button, per the PRD's retry
+      spec.
+    - The startup check fires from `did-finish-load` + a 3s delay,
+      gated on `app.isPackaged`, and its result is intentionally
+      discarded — the UI only ever reacts to the `update-available`
+      event, so a failed or negative startup check is silent by
+      construction (no special-casing needed).
+    - A module-level `isDownloadingUpdate` flag distinguishes
+      download-phase `error` events (surfaced to the renderer
+      immediately, since downloads have no retry loop of their own)
+      from check-phase `error` events (already handled/retried inside
+      `checkForUpdatesWithRetry()` — forwarding those too would spam
+      an error event on every retry attempt).
+    - New `ipcMain.handle` registrations: `check-for-updates`,
+      `download-update`, `quit-and-install`, `get-app-version`.
+    - The explicit `BrowserWindow` `icon` option and `app.setName()`
+      call from PRD 10.6 were added in the same file — see that
+      entry, not duplicated here.
+
+  Client Bridge (preload.ts):
+    - `checkForUpdates()`, `downloadUpdate()`, `quitAndInstall()`,
+      `getAppVersion()` bridge methods.
+    - Event forwarding for `update-available` / `download-progress` /
+      `update-downloaded` / `update-error`, using the existing
+      `emit`/`listeners` pub-sub pattern already used for
+      `ptt-pressed`/`ptt-released`, rather than inventing a new
+      one-off callback style.
+
+  Renderer Changes (renderer.ts, index.html):
+    - New update-confirm modal with an explicit state machine (idle →
+      found → downloading → ready), driven entirely by the forwarded
+      events above. "Update Now" triggers `downloadUpdate()` and
+      switches to a progress-bar state; `update-downloaded` briefly
+      shows "Update ready — restarting..." before calling
+      `quitAndInstall()`. "Not Now" just closes the modal — no
+      persistent snooze, matching the "prompt again next check" spec.
+    - New "ℹ️ About" settings tab (added alongside the existing tab
+      pattern, no extra wiring needed since the generic
+      `.settings-tab-btn` click handler already picks up new tabs)
+      showing the app logo, version (via `getAppVersion()`), a short
+      description, and a "Check for Updates" button with
+      Checking.../"You're up to date."/inline-error states depending
+      on the result.
+
+  Packaging (package.json):
+    - Added `"electron-updater"` as a runtime dependency (it ships
+      inside the packaged app, not just used at build time).
+    - Added `build.publish: { provider: "github", owner: "fbarrella",
+      repo: "reson8" }` — required for electron-builder to emit the
+      `latest*.yml` metadata files electron-updater reads from GitHub
+      Releases; without this, nothing exists for the updater to check
+      against.
+
+  Key Files Modified:
+    apps/client/src/main.ts
+    apps/client/src/preload.ts
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/renderer/index.html
+    apps/client/package.json
+
+  Verification:
+    - TypeScript build (client): npx tsc --noEmit — passed
+    - Live check via the same CDP-driven Electron session: opened the
+      new About tab and confirmed it correctly showed "Version 1.2.0"
+      (via the real `getAppVersion()` IPC round trip); clicked "Check
+      for Updates" and confirmed the button immediately went to a
+      disabled "Checking..." state, proving the click handler and IPC
+      bridge fire correctly.
+    - Inherently limited this session, as the PRD itself anticipated:
+      no GitHub release with `latest*.yml` metadata exists yet for
+      electron-updater to check against, so the full retry-to-
+      completion path (resolving to either an inline error or
+      "up to date" message) and the entire update-available → download
+      → install flow could not be exercised end-to-end. Plan to
+      smoke-test the "up to date" path immediately after the next
+      release ships, and the "update available" path retroactively on
+      the release after that.

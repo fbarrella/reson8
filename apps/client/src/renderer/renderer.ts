@@ -676,13 +676,18 @@ interface Reson8Api {
     joinVoiceChannel(channelId: string): Promise<{ success: boolean; error?: string }>;
     leaveVoiceChannel(): void;
     toggleMute(): boolean;
-    toggleDeafen(): boolean;
+    toggleDeafen(): { isMuted: boolean; isDeafened: boolean };
     setMuted(muted: boolean): void;
     setVoiceState(isMuted: boolean, isDeafened: boolean): void;
     setLocalUserVolume(userId: string, percent: number): void;
     setLocalUserMute(userId: string, muted: boolean): void;
     getLocalUserVolume(userId: string): number;
     getLocalUserMute(userId: string): boolean;
+    setGlobalVoiceVolume(percent: number): void;
+    checkForUpdates(): Promise<{ status: "available" | "not-available" | "error" }>;
+    downloadUpdate(): Promise<void>;
+    quitAndInstall(): void;
+    getAppVersion(): Promise<string>;
     createChannel(
         serverId: string,
         name: string,
@@ -764,6 +769,7 @@ const SoundAlert = {
     play(filename: string): void {
         if (soundAlertsMuted) return;
         const audio = this._getAudio(filename);
+        audio.volume = (filename === "nudge.mp3" ? nudgeVolume : alertVolume) / 100;
         audio.currentTime = 0;
         audio.play().catch(() => {}); // Ignore autoplay restrictions
     },
@@ -948,6 +954,21 @@ const emojiPendingList = document.getElementById("emoji-pending-list") as HTMLDi
 const settingsTabServer = document.getElementById("settings-tab-server") as HTMLButtonElement;
 const chkNudgeEnabled = document.getElementById("chk-nudge-enabled") as HTMLInputElement;
 
+// About tab (PRD 10.1)
+const aboutVersion = document.getElementById("about-version") as HTMLDivElement;
+const btnCheckUpdates = document.getElementById("btn-check-updates") as HTMLButtonElement;
+const aboutUpdateStatus = document.getElementById("about-update-status") as HTMLDivElement;
+
+// Update modal (PRD 10.1)
+const updateModal = document.getElementById("update-modal") as HTMLDivElement;
+const updateModalTitle = document.getElementById("update-modal-title") as HTMLHeadingElement;
+const updateModalMessage = document.getElementById("update-modal-message") as HTMLParagraphElement;
+const updateModalProgressWrap = document.getElementById("update-modal-progress-wrap") as HTMLDivElement;
+const updateModalProgressBar = document.getElementById("update-modal-progress-bar") as HTMLDivElement;
+const updateModalStatus = document.getElementById("update-modal-status") as HTMLDivElement;
+const btnUpdateNow = document.getElementById("btn-update-now") as HTMLButtonElement;
+const btnUpdateLater = document.getElementById("btn-update-later") as HTMLButtonElement;
+
 // Audio device selects (inside settings modal voice tab)
 const audioInputSelect = document.getElementById("audio-input-select") as HTMLSelectElement;
 const audioOutputSelect = document.getElementById("audio-output-select") as HTMLSelectElement;
@@ -968,6 +989,21 @@ const chkCloseToTray = document.getElementById("chk-close-to-tray") as HTMLInput
 // Sound alerts mute checkbox
 const chkMuteAlerts = document.getElementById("chk-mute-alerts") as HTMLInputElement;
 let soundAlertsMuted = localStorage.getItem("reson8-mute-alerts") === "true";
+
+// Audio tab volume sliders (PRD 10.2) — nudge / general alerts / voice chat,
+// each 0-100%, client-local via localStorage.
+let nudgeVolume = Number(localStorage.getItem("reson8-nudge-volume") ?? "100");
+let alertVolume = Number(localStorage.getItem("reson8-alert-volume") ?? "100");
+let voiceVolume = Number(localStorage.getItem("reson8-voice-volume") ?? "100");
+const audioNudgeVolumeSlider = document.getElementById("audio-nudge-volume-slider") as HTMLInputElement;
+const audioNudgeVolumeValue = document.getElementById("audio-nudge-volume-value") as HTMLSpanElement;
+const audioAlertVolumeSlider = document.getElementById("audio-alert-volume-slider") as HTMLInputElement;
+const audioAlertVolumeValue = document.getElementById("audio-alert-volume-value") as HTMLSpanElement;
+const audioVoiceVolumeSlider = document.getElementById("audio-voice-volume-slider") as HTMLInputElement;
+const audioVoiceVolumeValue = document.getElementById("audio-voice-volume-value") as HTMLSpanElement;
+
+// Apply the saved global voice volume before the user ever joins a channel.
+api.setGlobalVoiceVolume(voiceVolume);
 
 // Mic sensitivity DOM refs
 const chkMicSensitivity = document.getElementById("chk-mic-sensitivity") as HTMLInputElement;
@@ -1266,10 +1302,15 @@ function renderChannel(node: TreeNode, siblings: TreeNode[]): HTMLDivElement {
     const count = node.occupants.length;
     const countBadge = count > 0 ? `<span class="ch-count">${count}</span>` : "";
 
-    // Session timer badge for active voice sessions
+    // Session timer badge for active voice sessions. Text is computed
+    // synchronously here (not left blank for the setInterval tick below to
+    // fill in) so a full renderTree() re-render — e.g. triggered by the
+    // sender's own mute/deafen toggle — never blinks the timer to empty.
     let timerBadge = "";
     if (isVoice && sessionTimers.has(node.id)) {
-        timerBadge = `<span class="session-timer" data-session-channel="${node.id}"></span>`;
+        const startedAt = sessionTimers.get(node.id)!;
+        const elapsed = formatDuration(Date.now() - new Date(startedAt).getTime());
+        timerBadge = `<span class="session-timer" data-session-channel="${node.id}">${elapsed}</span>`;
     }
 
     const nsfwBadge = node.isNsfw ? `<span class="nsfw-badge">NSFW</span>` : "";
@@ -1387,7 +1428,7 @@ function renderOccupants(container: HTMLElement, node: TreeNode): void {
         }
         el.setAttribute("data-user-id", occ.userId);
         const voiceStateIcons =
-            `${occ.isDeafened ? OCC_DEAFENED_ICON : occ.isMuted ? OCC_MUTED_ICON : ""}`;
+            `${occ.isMuted ? OCC_MUTED_ICON : ""}${occ.isDeafened ? OCC_DEAFENED_ICON : ""}`;
         el.innerHTML = `<span class="occ-dot"></span>${escapeHtml(occ.nickname)}${voiceStateIcons}`;
 
         // Re-apply any saved local volume/mute for this participant. Cheap and
@@ -1521,6 +1562,11 @@ async function handleChannelClick(node: TreeNode): Promise<void> {
                 isInVoice = true;
                 isDeafened = false;
 
+                // joinVoiceChannel() constructs a fresh VoiceService instance
+                // per session — reapply the saved global voice volume so it
+                // doesn't silently reset to 100% on every join.
+                api.setGlobalVoiceVolume(voiceVolume);
+
                 // Initialize previous occupants for join/leave sound detection
                 previousOccupantIds = new Set(node.occupants.map((o: any) => o.userId));
 
@@ -1602,6 +1648,16 @@ function updateVoiceUI(channelName?: string): void {
 // below and the keyboard-shortcut handlers, so sound alerts stay in sync between
 // the two triggers instead of silently drifting apart (see PRD 4.15).
 function toggleMuteAndNotify(): void {
+    if (isDeafened) {
+        // Clicking Mute while deafened auto-undeafens first — restoring
+        // whatever mute state existed before deafening — then a normal mute
+        // toggle applies on top of that resolved state below, as a single
+        // combined action (one SET_VOICE_STATE, one sound: PRD 10.4).
+        const resolved = api.toggleDeafen();
+        isMuted = resolved.isMuted;
+        isDeafened = resolved.isDeafened;
+    }
+
     if (pttModeEnabled) {
         // In PTT mode: mute = lock PTT (block key), unmute = unlock PTT (allow key)
         isMuted = !isMuted;
@@ -1620,7 +1676,9 @@ function toggleMuteAndNotify(): void {
 }
 
 function toggleDeafenAndNotify(): void {
-    isDeafened = api.toggleDeafen();
+    const resolved = api.toggleDeafen();
+    isMuted = resolved.isMuted;
+    isDeafened = resolved.isDeafened;
     updateVoiceUI();
     if (isInVoice) {
         SoundAlert.play(isDeafened ? "sound_muted.mp3" : "sound_resumed.mp3");
@@ -3473,8 +3531,8 @@ document.addEventListener("keydown", (e) => {
         if (shortcuts.disconnect && setsEqual(heldKeys, shortcuts.disconnect.keys)) {
             leaveVoiceAndNotify();
         }
-        // PTT keydown → unmute (only in PTT mode, and only if not locked/muted)
-        if (shortcuts.ptt && setsEqual(heldKeys, shortcuts.ptt.keys) && pttModeEnabled && isInVoice && !isMuted) {
+        // PTT keydown → unmute (only in PTT mode, and only if not locked/muted/deafened)
+        if (shortcuts.ptt && setsEqual(heldKeys, shortcuts.ptt.keys) && pttModeEnabled && isInVoice && !isMuted && !isDeafened) {
             api.setMuted(false);
             updateVoiceUI();
         }
@@ -3504,7 +3562,7 @@ document.addEventListener("keyup", (e) => {
         // Check if releasing breaks the combo
         const wasMatching = setsEqual(heldKeys, shortcuts.ptt.keys);
         heldKeys.delete(e.code);
-        if (wasMatching && pttModeEnabled && isInVoice && !isMuted) {
+        if (wasMatching && pttModeEnabled && isInVoice && !isMuted && !isDeafened) {
             api.setMuted(true);
             updateVoiceUI();
         }
@@ -3515,14 +3573,14 @@ document.addEventListener("keyup", (e) => {
 
 // Global PTT from main process
 api.on("ptt-pressed", () => {
-    if (shortcuts.ptt && pttModeEnabled && isInVoice && !isMuted) {
+    if (shortcuts.ptt && pttModeEnabled && isInVoice && !isMuted && !isDeafened) {
         api.setMuted(false);
         updateVoiceUI();
     }
 });
 
 api.on("ptt-released", () => {
-    if (shortcuts.ptt && pttModeEnabled && isInVoice && !isMuted) {
+    if (shortcuts.ptt && pttModeEnabled && isInVoice && !isMuted && !isDeafened) {
         api.setMuted(true);
         updateVoiceUI();
     }
@@ -3556,8 +3614,9 @@ btnVoiceActivation.addEventListener("click", () => {
     updatePttModeUI();
     // Re-enable noise gate section
     if (micSensitivitySection) micSensitivitySection.style.display = "";
-    // If currently in voice, unmute mic so it streams immediately
-    if (isInVoice) {
+    // If currently in voice, unmute mic so it streams immediately — unless
+    // deafened, in which case the mic must stay blocked (PRD 10.4).
+    if (isInVoice && !isDeafened) {
         api.setMuted(false);
         isMuted = false;
         updateVoiceUI();
@@ -4421,6 +4480,136 @@ chkMuteAlerts.checked = soundAlertsMuted;
 chkMuteAlerts.addEventListener("change", () => {
     soundAlertsMuted = chkMuteAlerts.checked;
     localStorage.setItem("reson8-mute-alerts", String(soundAlertsMuted));
+});
+
+// ── Audio Tab Volume Sliders (PRD 10.2) ────────────────────────────────────
+
+audioNudgeVolumeSlider.value = String(nudgeVolume);
+audioNudgeVolumeValue.textContent = `${nudgeVolume}%`;
+audioAlertVolumeSlider.value = String(alertVolume);
+audioAlertVolumeValue.textContent = `${alertVolume}%`;
+audioVoiceVolumeSlider.value = String(voiceVolume);
+audioVoiceVolumeValue.textContent = `${voiceVolume}%`;
+
+audioNudgeVolumeSlider.addEventListener("input", () => {
+    nudgeVolume = Number(audioNudgeVolumeSlider.value);
+    audioNudgeVolumeValue.textContent = `${nudgeVolume}%`;
+    localStorage.setItem("reson8-nudge-volume", String(nudgeVolume));
+});
+
+audioAlertVolumeSlider.addEventListener("input", () => {
+    alertVolume = Number(audioAlertVolumeSlider.value);
+    audioAlertVolumeValue.textContent = `${alertVolume}%`;
+    localStorage.setItem("reson8-alert-volume", String(alertVolume));
+});
+
+audioVoiceVolumeSlider.addEventListener("input", () => {
+    voiceVolume = Number(audioVoiceVolumeSlider.value);
+    audioVoiceVolumeValue.textContent = `${voiceVolume}%`;
+    localStorage.setItem("reson8-voice-volume", String(voiceVolume));
+    api.setGlobalVoiceVolume(voiceVolume);
+});
+
+// ── Auto-Updater (PRD 10.1) ─────────────────────────────────────────────────
+// Modal state machine: idle → found → downloading → ready. The startup check
+// (fired from main.ts) never touches this UI directly — it only ever reaches
+// the renderer via the "update-available" event below, so a failed/negative
+// startup check is silent by construction, matching the spec.
+
+type UpdateModalState = "idle" | "found" | "downloading" | "ready";
+let updateModalState: UpdateModalState = "idle";
+
+function showUpdateFoundModal(version: string): void {
+    updateModalState = "found";
+    updateModalTitle.textContent = "⬆ Update Available";
+    updateModalMessage.textContent =
+        `A newer version of Reson8 (${version}) is available. Some features might fail if you don't update.`;
+    updateModalProgressWrap.style.display = "none";
+    updateModalStatus.style.display = "none";
+    btnUpdateNow.style.display = "";
+    btnUpdateNow.disabled = false;
+    btnUpdateNow.textContent = "Update Now";
+    btnUpdateLater.style.display = "";
+    updateModal.classList.add("visible");
+}
+
+function showUpdateDownloading(): void {
+    updateModalState = "downloading";
+    updateModalTitle.textContent = "⬇ Downloading Update";
+    updateModalMessage.textContent = "Downloading the update — this may take a moment.";
+    updateModalProgressWrap.style.display = "";
+    updateModalProgressBar.style.width = "0%";
+    updateModalStatus.style.display = "none";
+    btnUpdateNow.style.display = "none";
+    btnUpdateLater.style.display = "none";
+}
+
+function showUpdateReadyToRestart(): void {
+    updateModalState = "ready";
+    updateModalTitle.textContent = "✅ Update Ready";
+    updateModalMessage.textContent = "Update ready — restarting...";
+    updateModalProgressWrap.style.display = "none";
+}
+
+function showUpdateError(message: string): void {
+    updateModalStatus.style.display = "";
+    updateModalStatus.textContent =
+        `Update failed: ${message}. Please download the latest version manually from GitHub.`;
+    updateModalProgressWrap.style.display = "none";
+    btnUpdateNow.style.display = "";
+    btnUpdateNow.disabled = false;
+    btnUpdateNow.textContent = "Update Now";
+    btnUpdateLater.style.display = "";
+}
+
+api.on("update-available", (data: { version: string }) => {
+    showUpdateFoundModal(data.version);
+});
+
+api.on("download-progress", (data: { percent: number }) => {
+    if (updateModalState === "downloading") {
+        updateModalProgressBar.style.width = `${Math.round(data.percent)}%`;
+    }
+});
+
+api.on("update-downloaded", () => {
+    showUpdateReadyToRestart();
+    setTimeout(() => api.quitAndInstall(), 1200);
+});
+
+api.on("update-error", (data: { message: string }) => {
+    showUpdateError(data.message);
+});
+
+btnUpdateNow.addEventListener("click", () => {
+    showUpdateDownloading();
+    api.downloadUpdate();
+});
+
+btnUpdateLater.addEventListener("click", () => {
+    updateModal.classList.remove("visible");
+    updateModalState = "idle";
+});
+
+// ── About Tab (PRD 10.1) ────────────────────────────────────────────────────
+
+api.getAppVersion().then((version) => {
+    aboutVersion.textContent = `Version ${version}`;
+});
+
+btnCheckUpdates.addEventListener("click", async () => {
+    btnCheckUpdates.disabled = true;
+    btnCheckUpdates.textContent = "Checking...";
+    aboutUpdateStatus.textContent = "";
+    const result = await api.checkForUpdates();
+    btnCheckUpdates.disabled = false;
+    btnCheckUpdates.textContent = "Check for Updates";
+    if (result.status === "not-available") {
+        aboutUpdateStatus.textContent = "You're up to date.";
+    } else if (result.status === "error") {
+        aboutUpdateStatus.textContent = "Could not check for updates. Try again later.";
+    }
+    // "available": the update-available listener above opens the shared modal.
 });
 
 // ── Mic Sensitivity / Noise Gate ──────────────────────────────────────────

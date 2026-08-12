@@ -332,8 +332,8 @@ const api = {
         return voiceService?.toggleMute() ?? false;
     },
 
-    toggleDeafen(): boolean {
-        return voiceService?.toggleDeafen() ?? false;
+    toggleDeafen(): { isMuted: boolean; isDeafened: boolean } {
+        return voiceService?.toggleDeafen() ?? { isMuted: false, isDeafened: false };
     },
 
     setMuted(muted: boolean): void {
@@ -358,6 +358,10 @@ const api = {
 
     getLocalUserMute(userId: string): boolean {
         return voiceService?.getLocalUserMute(userId) ?? false;
+    },
+
+    setGlobalVoiceVolume(percent: number): void {
+        voiceService?.setGlobalVoiceVolume(percent);
     },
 
     // ── Audio Settings ──────────────────────────────────────────────────────
@@ -707,6 +711,24 @@ const api = {
         ipcRenderer.send("flash-window");
     },
 
+    // ── Auto-Updater (PRD 10.1) ─────────────────────────────────────────────
+
+    async checkForUpdates(): Promise<{ status: "available" | "not-available" | "error" }> {
+        return ipcRenderer.invoke("check-for-updates");
+    },
+
+    async downloadUpdate(): Promise<void> {
+        return ipcRenderer.invoke("download-update");
+    },
+
+    quitAndInstall(): void {
+        ipcRenderer.invoke("quit-and-install");
+    },
+
+    async getAppVersion(): Promise<string> {
+        return ipcRenderer.invoke("get-app-version");
+    },
+
     // ── Mic Sensitivity / Noise Gate ──────────────────────────────────────
 
     setMicSensitivity(enabled: boolean, threshold: number): void {
@@ -850,3 +872,9 @@ contextBridge.exposeInMainWorld("reson8Api", api);
 // ── PTT IPC from main process ─────────────────────────────────────────────
 ipcRenderer.on("ptt-pressed", () => emit("ptt-pressed", null));
 ipcRenderer.on("ptt-released", () => emit("ptt-released", null));
+
+// ── Auto-Updater IPC from main process (PRD 10.1) ──────────────────────────
+ipcRenderer.on("update-available", (_event, data: { version: string }) => emit("update-available", data));
+ipcRenderer.on("download-progress", (_event, data: { percent: number }) => emit("download-progress", data));
+ipcRenderer.on("update-downloaded", () => emit("update-downloaded", null));
+ipcRenderer.on("update-error", (_event, data: { message: string }) => emit("update-error", data));
