@@ -17,6 +17,7 @@ import type {
     IDirectMessage,
 } from "@reson8/shared-types";
 import { PresenceService } from "../services/presence.service.js";
+import { deleteAttachment } from "../services/storage.service.js";
 
 type TypedIO = SocketIOServer<
     ClientToServerEvents,
@@ -45,7 +46,7 @@ export function registerDMHandlers(
         // ── SEND_DIRECT_MESSAGE ────────────────────────────────────────────
         socket.on("SEND_DIRECT_MESSAGE", async (payload, ack) => {
             try {
-                const { recipientId, content, attachmentUrl } = payload;
+                const { recipientId, content, attachmentUrl, attachmentPublicId } = payload;
 
                 if ((!content || content.trim().length === 0) && !attachmentUrl) {
                     ack({ success: false, error: "Message content is empty" });
@@ -74,6 +75,7 @@ export function registerDMHandlers(
                         receiverId: recipientId,
                         content: content?.trim() ?? "",
                         attachmentUrl: attachmentUrl ?? null,
+                        attachmentPublicId: attachmentPublicId ?? null,
                     },
                 });
 
@@ -304,6 +306,48 @@ export function registerDMHandlers(
             } catch (err) {
                 app.log.error({ err }, "Error in GET_UNREAD_DM_PARTNERS");
                 ack({ success: false, error: "Failed to fetch unread DM partners" });
+            }
+        });
+
+        // ── DELETE_DIRECT_MESSAGE ───────────────────────────────────────────
+        socket.on("DELETE_DIRECT_MESSAGE", async (payload, ack) => {
+            try {
+                const { dmId } = payload;
+
+                const dm = await app.prisma.directMessage.findUnique({
+                    where: { id: dmId },
+                });
+                if (!dm) {
+                    ack({ success: false, error: "Message not found" });
+                    return;
+                }
+                if (dm.senderId !== socket.data.userId) {
+                    ack({ success: false, error: "You can only delete your own messages" });
+                    return;
+                }
+
+                if (dm.attachmentUrl) {
+                    await deleteAttachment(dm.attachmentUrl, dm.attachmentPublicId);
+                }
+
+                await app.prisma.directMessage.delete({ where: { id: dmId } });
+
+                ack({ success: true });
+
+                // Notify both participants' sockets (mirrors SEND_DIRECT_MESSAGE's delivery pattern)
+                for (const [, s] of io.sockets.sockets) {
+                    if (s.data.userId === dm.senderId || s.data.userId === dm.receiverId) {
+                        s.emit("DIRECT_MESSAGE_DELETED", { dmId });
+                    }
+                }
+
+                app.log.info(
+                    { socketId: socket.id, dmId },
+                    "Direct message deleted",
+                );
+            } catch (err) {
+                app.log.error({ err }, "Error in DELETE_DIRECT_MESSAGE");
+                ack({ success: false, error: "Failed to delete direct message" });
             }
         });
     });

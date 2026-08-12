@@ -143,12 +143,13 @@ model UserRole {
 // ---------------------------------------------------------------------------
 
 model Message {
-  id            String   @id @default(uuid())
-  channelId     String
-  userId        String
-  content       String
-  attachmentUrl String?
-  createdAt     DateTime @default(now())
+  id                 String   @id @default(uuid())
+  channelId          String
+  userId             String
+  content            String
+  attachmentUrl      String?
+  attachmentPublicId String? // Cloudinary public_id — null for local-disk storage or text-only messages
+  createdAt          DateTime @default(now())
 
   channel   Channel    @relation(fields: [channelId], references: [id], onDelete: Cascade)
   user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -163,13 +164,14 @@ model Message {
 // ---------------------------------------------------------------------------
 
 model DirectMessage {
-  id            String    @id @default(uuid())
-  senderId      String
-  receiverId    String
-  content       String
-  attachmentUrl String?
-  createdAt     DateTime  @default(now())
-  readAt        DateTime?
+  id                 String    @id @default(uuid())
+  senderId           String
+  receiverId         String
+  content            String
+  attachmentUrl      String?
+  attachmentPublicId String? // Cloudinary public_id — null for local-disk storage or text-only messages
+  createdAt          DateTime  @default(now())
+  readAt             DateTime?
 
   sender    User       @relation("SentDMs", fields: [senderId], references: [id], onDelete: Cascade)
   receiver  User       @relation("ReceivedDMs", fields: [receiverId], references: [id], onDelete: Cascade)

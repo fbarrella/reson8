@@ -199,6 +199,8 @@ const api = {
         socket.on("PRESENCE_UPDATE", (payload) => emit("presence", payload));
         socket.on("MESSAGE_RECEIVED", (payload) => emit("message", payload));
         socket.on("DIRECT_MESSAGE_RECEIVED", (payload) => emit("dm-received", payload));
+        socket.on("MESSAGE_DELETED", (payload) => emit("message-deleted", payload));
+        socket.on("DIRECT_MESSAGE_DELETED", (payload) => emit("dm-deleted", payload));
         socket.on("CHANNEL_DELETED", (payload) => emit("channel-deleted", payload));
         socket.on("ERROR", (payload) => emit("error", payload));
         socket.on("ACTIVE_SPEAKERS", (payload) => emit("active-speakers", payload));
@@ -402,13 +404,24 @@ const api = {
         channelId: string,
         content: string,
         attachmentUrl?: string,
+        attachmentPublicId?: string,
     ): Promise<{ success: boolean; messageId?: string }> {
         return new Promise((resolve) => {
             if (!socket?.connected) {
                 resolve({ success: false });
                 return;
             }
-            socket.emit("SEND_MESSAGE", { channelId, content, attachmentUrl }, resolve);
+            socket.emit("SEND_MESSAGE", { channelId, content, attachmentUrl, attachmentPublicId }, resolve);
+        });
+    },
+
+    deleteMessage(messageId: string): Promise<{ success: boolean; error?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.emit("DELETE_MESSAGE", { messageId }, resolve);
         });
     },
 
@@ -486,13 +499,24 @@ const api = {
         recipientId: string,
         content: string,
         attachmentUrl?: string,
+        attachmentPublicId?: string,
     ): Promise<{ success: boolean; messageId?: string; error?: string }> {
         return new Promise((resolve) => {
             if (!socket?.connected) {
                 resolve({ success: false, error: "Not connected" });
                 return;
             }
-            socket.emit("SEND_DIRECT_MESSAGE", { recipientId, content, attachmentUrl }, resolve);
+            socket.emit("SEND_DIRECT_MESSAGE", { recipientId, content, attachmentUrl, attachmentPublicId }, resolve);
+        });
+    },
+
+    deleteDirectMessage(dmId: string): Promise<{ success: boolean; error?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.emit("DELETE_DIRECT_MESSAGE", { dmId }, resolve);
         });
     },
 
@@ -592,7 +616,7 @@ const api = {
         fileBuffer: ArrayBuffer,
         fileName: string,
         mimeType: string,
-    ): Promise<{ url: string }> {
+    ): Promise<{ url: string; publicId?: string }> {
         if (!serverBaseUrl) {
             throw new Error("Not connected to a server");
         }

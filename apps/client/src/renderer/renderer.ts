@@ -490,7 +490,8 @@ interface Reson8Api {
         orderedChannelIds: string[],
     ): Promise<{ success: boolean; error?: string }>;
     deleteChannel(channelId: string): Promise<{ success: boolean; error?: string }>;
-    sendMessage(channelId: string, content: string, attachmentUrl?: string): Promise<{ success: boolean; messageId?: string }>;
+    sendMessage(channelId: string, content: string, attachmentUrl?: string, attachmentPublicId?: string): Promise<{ success: boolean; messageId?: string }>;
+    deleteMessage(messageId: string): Promise<{ success: boolean; error?: string }>;
     fetchMessages(channelId: string, before?: string, limit?: number): Promise<{ success: boolean; messages?: ChatMessage[]; error?: string }>;
     markChannelRead(channelId: string): Promise<{ success: boolean }>;
     getAllUsers(serverId: string): Promise<{ success: boolean; users?: any[]; error?: string }>;
@@ -498,7 +499,8 @@ interface Reson8Api {
     assignRole(userId: string, roleId: string, action: "add" | "remove"): Promise<{ success: boolean; error?: string }>;
     enumerateAudioDevices(): Promise<{ inputs: { deviceId: string; label: string }[]; outputs: { deviceId: string; label: string }[] }>;
     setAudioInputDevice(deviceId: string | null): void;
-    sendDirectMessage(recipientId: string, content: string, attachmentUrl?: string): Promise<{ success: boolean; messageId?: string; error?: string }>;
+    sendDirectMessage(recipientId: string, content: string, attachmentUrl?: string, attachmentPublicId?: string): Promise<{ success: boolean; messageId?: string; error?: string }>;
+    deleteDirectMessage(dmId: string): Promise<{ success: boolean; error?: string }>;
     fetchDirectMessages(partnerId: string, before?: string, limit?: number): Promise<{ success: boolean; messages?: DirectMessage[]; error?: string }>;
     getOnlineUsers(): Promise<{ success: boolean; users?: { userId: string; nickname: string; isOnline: boolean }[]; error?: string }>;
     markDmsRead(partnerId: string): Promise<{ success: boolean; error?: string }>;
@@ -507,7 +509,7 @@ interface Reson8Api {
     banUser(userId: string): Promise<{ success: boolean; error?: string }>;
     unbanUser(userId: string): Promise<{ success: boolean; error?: string }>;
     getBannedUsers(): Promise<{ success: boolean; users?: { userId: string; nickname: string; bannedAt: string }[]; error?: string }>;
-    uploadFile(fileBuffer: ArrayBuffer, fileName: string, mimeType: string): Promise<{ url: string }>;
+    uploadFile(fileBuffer: ArrayBuffer, fileName: string, mimeType: string): Promise<{ url: string; publicId?: string }>;
     downloadImage(url: string): void;
     fetchLinkPreview(url: string): Promise<LinkPreviewData | null>;
     setTrayPrefs(prefs: { minimizeToTray: boolean; closeToTray: boolean }): void;
@@ -560,6 +562,7 @@ let pttModeEnabled = localStorage.getItem("reson8-ptt-mode") === "true";
 
 // Attachment state
 let pendingAttachmentUrl: string | null = null;
+let pendingAttachmentPublicId: string | null = null;
 let serverBaseUrl: string = "";
 
 // Active speakers state
@@ -756,6 +759,12 @@ let pendingNsfwChannel: TreeNode | null = null;
 
 const newChannelNsfwRow = document.getElementById("new-channel-nsfw-row") as HTMLDivElement;
 const newChannelNsfw = document.getElementById("new-channel-nsfw") as HTMLInputElement;
+
+// ── Delete Message Confirmation Modal (PRD 4.10) ────────────────────────────
+const deleteMessageModal = document.getElementById("delete-message-modal") as HTMLDivElement;
+const btnDeleteMessageCancel = document.getElementById("btn-delete-message-cancel") as HTMLButtonElement;
+const btnDeleteMessageConfirm = document.getElementById("btn-delete-message-confirm") as HTMLButtonElement;
+let pendingDeleteMessage: { msgId: string; isDm: boolean } | null = null;
 
 // State for tabs: map of channelId → { tabEl, contentEl, messagesEl }
 interface ChatTab {
@@ -1507,6 +1516,54 @@ btnNsfwConfirm.addEventListener("click", () => {
             renderTree(currentTree);
         }
     }
+});
+
+// ── Delete Message Confirmation Modal (PRD 4.10) ────────────────────────────
+
+function showDeleteMessageModal(msgId: string, isDm: boolean): void {
+    pendingDeleteMessage = { msgId, isDm };
+    deleteMessageModal.classList.add("visible");
+}
+
+btnDeleteMessageCancel.addEventListener("click", () => {
+    deleteMessageModal.classList.remove("visible");
+    pendingDeleteMessage = null;
+});
+
+deleteMessageModal.addEventListener("click", (e) => {
+    if (e.target === deleteMessageModal) {
+        deleteMessageModal.classList.remove("visible");
+        pendingDeleteMessage = null;
+    }
+});
+
+btnDeleteMessageConfirm.addEventListener("click", async () => {
+    if (!pendingDeleteMessage) return;
+    const { msgId, isDm } = pendingDeleteMessage;
+    deleteMessageModal.classList.remove("visible");
+    pendingDeleteMessage = null;
+
+    const result = isDm ? await api.deleteDirectMessage(msgId) : await api.deleteMessage(msgId);
+    if (!result.success) {
+        log(`Failed to delete message: ${result.error ?? "Unknown error"}`, "error");
+    }
+    // No optimistic DOM removal here — MESSAGE_DELETED/DIRECT_MESSAGE_DELETED
+    // is echoed back to the sender the same way MESSAGE_RECEIVED/
+    // DIRECT_MESSAGE_RECEIVED already are, so removeMessageElement() below
+    // handles it uniformly for every client including this one.
+});
+
+/** Removes a rendered message from every tab it might be showing in (a tab stays in the DOM, just hidden, when it isn't the active one). */
+function removeMessageElement(msgId: string): void {
+    document.querySelectorAll(`.chat-msg[data-msg-id="${CSS.escape(msgId)}"]`).forEach((el) => el.remove());
+}
+
+api.on("message-deleted", (payload: { channelId: string; messageId: string }) => {
+    removeMessageElement(payload.messageId);
+});
+
+api.on("dm-deleted", (payload: { dmId: string }) => {
+    removeMessageElement(payload.dmId);
 });
 
 // ── Event Listeners ───────────────────────────────────────────────────────
@@ -2271,6 +2328,7 @@ function renderChatMessage(tab: ChatTab, msg: ChatMessage): void {
     el.className = "chat-msg";
     el.setAttribute("data-msg-id", msg.id);
     el.setAttribute("data-msg-type", "channel");
+    el.setAttribute("data-msg-owner", msg.userId);
 
     const time = new Date(msg.createdAt).toLocaleTimeString();
     let html = `<span class="msg-time">${time}</span><span class="msg-nick">${escapeHtml(msg.nickname)}</span>`;
@@ -2292,7 +2350,7 @@ function renderChatMessage(tab: ChatTab, msg: ChatMessage): void {
     }
 
     // Reaction bar
-    const reactBar = buildReactionBar(msg.id, false, msg.reactions);
+    const reactBar = buildReactionBar(msg.id, false, msg.userId, msg.reactions);
     el.appendChild(reactBar);
 
     tab.messagesEl.appendChild(el);
@@ -2315,19 +2373,20 @@ async function sendChatMessage(): Promise<void> {
 
     chatInput.value = "";
     const attachmentUrl = pendingAttachmentUrl;
+    const attachmentPublicId = pendingAttachmentPublicId;
     clearAttachmentPreview();
 
     if (activeTabId.startsWith("dm:")) {
         // DM tab — send direct message
         const recipientId = activeTabId.slice(3);
-        const result = await api.sendDirectMessage(recipientId, content, attachmentUrl ?? undefined);
+        const result = await api.sendDirectMessage(recipientId, content, attachmentUrl ?? undefined, attachmentPublicId ?? undefined);
         if (!result.success) {
             log(`Failed to send DM: ${result.error ?? "Unknown error"}`, "error");
         }
     } else {
         // Channel tab — send channel message
         const channelId = activeTabId;
-        const result = await api.sendMessage(channelId, content, attachmentUrl ?? undefined);
+        const result = await api.sendMessage(channelId, content, attachmentUrl ?? undefined, attachmentPublicId ?? undefined);
         if (!result.success) {
             log("Failed to send message", "error");
         }
@@ -2398,6 +2457,7 @@ function renderDmMessage(tab: ChatTab, msg: DirectMessage): void {
     el.className = "chat-msg";
     el.setAttribute("data-msg-id", msg.id);
     el.setAttribute("data-msg-type", "dm");
+    el.setAttribute("data-msg-owner", msg.senderId);
 
     const time = new Date(msg.createdAt).toLocaleTimeString();
     let html = `<span class="msg-time">${time}</span><span class="msg-nick">${escapeHtml(msg.senderNickname)}</span>`;
@@ -2419,7 +2479,7 @@ function renderDmMessage(tab: ChatTab, msg: DirectMessage): void {
     }
 
     // Reaction bar
-    const reactBar = buildReactionBar(msg.id, true, msg.reactions);
+    const reactBar = buildReactionBar(msg.id, true, msg.senderId, msg.reactions);
     el.appendChild(reactBar);
 
     tab.messagesEl.appendChild(el);
@@ -3086,6 +3146,7 @@ async function handleFileUpload(file: File): Promise<void> {
         const buffer = await file.arrayBuffer();
         const result = await api.uploadFile(buffer, file.name, file.type);
         pendingAttachmentUrl = result.url;
+        pendingAttachmentPublicId = result.publicId ?? null;
         showAttachmentPreview(file.name);
         log(`Image ready to send: ${file.name}`, "success");
     } catch (err: any) {
@@ -3104,6 +3165,7 @@ function showAttachmentPreview(fileName: string): void {
 
 function clearAttachmentPreview(): void {
     pendingAttachmentUrl = null;
+    pendingAttachmentPublicId = null;
     attachmentPreview.style.display = "none";
     attachmentPreview.innerHTML = "";
 }
@@ -3151,6 +3213,7 @@ let reactionTargetIsDm = false;
 function buildReactionBar(
     msgId: string,
     isDm: boolean,
+    ownerId: string,
     reactions?: Array<{ emoji: string; count: number; userIds: string[] }>,
 ): HTMLDivElement {
     const bar = document.createElement("div");
@@ -3184,6 +3247,19 @@ function buildReactionBar(
     });
     bar.appendChild(btnReact);
 
+    // Delete button — own messages only (PRD 4.10)
+    if (ownerId === myId) {
+        const btnDelete = document.createElement("button");
+        btnDelete.className = "btn-delete-msg";
+        btnDelete.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>`;
+        btnDelete.title = "Delete message";
+        btnDelete.addEventListener("click", (e) => {
+            e.stopPropagation();
+            showDeleteMessageModal(msgId, isDm);
+        });
+        bar.appendChild(btnDelete);
+    }
+
     return bar;
 }
 
@@ -3215,8 +3291,11 @@ function updateReactionBar(
     for (const bar of bars) {
         const parent = bar.parentElement;
         if (!parent) continue;
-        // Rebuild the bar
-        const newBar = buildReactionBar(msgId, isDm, reactions);
+        // Rebuild the bar — ownerId is read back from the message element's
+        // own data-msg-owner attribute (set at render time) since
+        // REACTION_UPDATED doesn't carry it.
+        const ownerId = parent.getAttribute("data-msg-owner") ?? "";
+        const newBar = buildReactionBar(msgId, isDm, ownerId, reactions);
         parent.replaceChild(newBar, bar);
     }
 }

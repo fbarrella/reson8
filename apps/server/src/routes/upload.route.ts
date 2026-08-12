@@ -39,9 +39,13 @@ function isCloudinaryConfigured(): boolean {
 }
 
 /**
- * Uploads a buffer to Cloudinary and returns the secure URL.
+ * Uploads a buffer to Cloudinary and returns the secure URL + public_id
+ * (the public_id is needed later to delete the asset — see storage.service.ts).
  */
-async function uploadToCloudinary(buffer: Buffer, fileName: string): Promise<string> {
+async function uploadToCloudinary(
+    buffer: Buffer,
+    fileName: string,
+): Promise<{ url: string; publicId: string }> {
     cloudinary.config({
         cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
         api_key: process.env.CLOUDINARY_API_KEY,
@@ -59,7 +63,7 @@ async function uploadToCloudinary(buffer: Buffer, fileName: string): Promise<str
                 if (error) {
                     reject(error);
                 } else {
-                    resolve(result!.secure_url);
+                    resolve({ url: result!.secure_url, publicId: result!.public_id });
                 }
             },
         );
@@ -122,17 +126,20 @@ export async function registerUploadRoute(app: FastifyInstance): Promise<void> {
             const originalName = data.filename || "image";
 
             let url: string;
+            let publicId: string | undefined;
 
             if (isCloudinaryConfigured()) {
                 app.log.info("Uploading to Cloudinary...");
-                url = await uploadToCloudinary(buffer, originalName);
+                const result = await uploadToCloudinary(buffer, originalName);
+                url = result.url;
+                publicId = result.publicId;
             } else {
                 app.log.info("Saving locally...");
                 url = await saveLocally(buffer, originalName);
             }
 
             app.log.info({ url, size: buffer.length, mime: data.mimetype }, "File uploaded");
-            return reply.send({ url });
+            return reply.send({ url, publicId });
         } catch (err) {
             app.log.error({ err }, "Error in /api/upload");
             return reply.status(500).send({ error: "Upload failed" });

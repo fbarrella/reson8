@@ -663,3 +663,114 @@ Feature/Fix: Unread Text Channel Indicator (PRD 4.13)
   app-planning/Reson8_NextSteps_PRD.md's suggested order, followed by
   PRD 4.8 (custom emoji upload) which reuses the storage-deletion
   helper 4.10 introduces.
+
+--- Entry: 11/08/2026 ---
+
+Feature/Fix: Delete Own Messages (PRD 4.10)
+
+  Problem: No way to remove a sent message (text channel or DM) once
+  sent, including images already uploaded to storage. Confirmed no
+  delete-from-storage code existed anywhere before this — no
+  fs.unlink, no cloudinary.uploader.destroy, no DELETE route.
+
+  Solution: Hard delete (per product decision — row fully removed, no
+  "[message deleted]" tombstone), own messages only, applied uniformly
+  to both channel Message rows and DirectMessage rows.
+
+  Storage cleanup gap: Message.attachmentUrl alone wasn't enough to
+  delete a Cloudinary asset — deletion needs the `public_id`, which the
+  upload route was computing but discarding (only ever returning
+  `secure_url`). Fixed at the source:
+    - upload.route.ts's uploadToCloudinary() now returns
+      { url, publicId } instead of a bare url string; the /api/upload
+      response includes publicId (undefined for local-disk uploads,
+      which have no Cloudinary asset to eventually destroy).
+    - Message and DirectMessage both gained an attachmentPublicId
+      column (migration 20260812014649_add_message_attachment_public_id)
+      to carry that value through from upload time to delete time. This
+      field is server-internal only — deliberately NOT added to the
+      IMessage/IDirectMessage wire DTOs, since the client never needs
+      to know a Cloudinary public_id.
+    - New apps/server/src/services/storage.service.ts —
+      deleteAttachment(url, publicId?) — branches on publicId presence
+      (the discriminator for which backend stored it): Cloudinary
+      destroy vs local fs.unlink under ./uploads/. Shared by both
+      message.handler.ts and dm.handler.ts rather than duplicated.
+
+  New DELETE_MESSAGE / DELETE_DIRECT_MESSAGE events: ownership-checked
+  (message.userId / dm.senderId must match the caller — no bypass, not
+  even for admins, matching this item's stated scope of "delete your
+  own"), delete the attachment via the shared helper if one exists,
+  delete the row, then broadcast MESSAGE_DELETED (server-wide, same
+  room as MESSAGE_RECEIVED) or notify both DM participants'
+  sockets directly (mirroring SEND_DIRECT_MESSAGE's own delivery
+  pattern) with DIRECT_MESSAGE_DELETED.
+
+  Client: extended the existing per-message hover action bar
+  (buildReactionBar, which already held the react button) with a
+  delete button shown only when the viewer is the message's owner.
+  Reused a "confirm modal, not window.confirm()" pattern already
+  established for channel deletion. On confirm, calls
+  deleteMessage()/deleteDirectMessage() — the actual DOM removal
+  happens uniformly from the MESSAGE_DELETED/DIRECT_MESSAGE_DELETED
+  listener (which fires for the deleter too, same as how sent messages
+  already echo back), rather than an extra optimistic-removal path, so
+  there's exactly one code path that removes a message element
+  regardless of who deleted it or which tab is showing it.
+
+  Edge Cases Handled:
+    - buildReactionBar() didn't previously know who owned a message;
+      REACTION_UPDATED (which triggers a bar rebuild on reaction
+      changes) doesn't carry ownerId either. Rather than plumbing
+      ownerId through that event too, each .chat-msg element now
+      carries its own data-msg-owner attribute set at render time, and
+      the rebuild path reads it back from the DOM — avoids widening an
+      unrelated event's payload for this.
+    - removeMessageElement() queries the whole document (not just the
+      active tab), since a background tab stays in the DOM (just
+      hidden) rather than being unmounted.
+
+  Key Files Modified:
+    apps/server/prisma/schema.prisma — Message/DirectMessage.attachmentPublicId
+    apps/server/src/routes/upload.route.ts — return publicId for Cloudinary uploads
+    apps/server/src/services/storage.service.ts (NEW) — deleteAttachment()
+    packages/shared-types/src/socket-events.ts — DELETE_MESSAGE,
+      DELETE_DIRECT_MESSAGE, MESSAGE_DELETED, DIRECT_MESSAGE_DELETED,
+      attachmentPublicId on SEND_MESSAGE/SEND_DIRECT_MESSAGE payloads
+    apps/server/src/handlers/message.handler.ts — persist
+      attachmentPublicId, DELETE_MESSAGE handler
+    apps/server/src/handlers/dm.handler.ts — persist attachmentPublicId,
+      DELETE_DIRECT_MESSAGE handler
+    apps/client/src/preload.ts — deleteMessage()/deleteDirectMessage()
+      bridge methods, uploadFile() returns publicId, MESSAGE_DELETED/
+      DIRECT_MESSAGE_DELETED forwarding
+    apps/client/src/renderer/renderer.ts — delete button in
+      buildReactionBar(), delete confirmation modal wiring,
+      removeMessageElement(), data-msg-owner attribute, pendingAttachmentPublicId
+    apps/client/src/renderer/index.html — #delete-message-modal markup,
+      .btn-delete-msg CSS
+
+  Verification:
+    - Prisma migration: add_message_attachment_public_id — applied
+      successfully against the local dev database
+    - TypeScript build (shared-types): npx tsc --build — passed
+    - TypeScript build (server): npx tsc --noEmit — passed
+    - TypeScript build (client): npx tsc --noEmit — passed
+    - Server test suite: npm run test — 19/19 passed
+    - End-to-end smoke test against a real running server + Postgres +
+      Redis (dev server started, exercised via a throwaway
+      socket.io-client script, then torn down): 20/20 checks passed —
+      text-message send/delete, non-owner delete correctly rejected
+      (and the message survives that attempt), image message upload +
+      delete with the local-disk file confirmed actually removed from
+      apps/server/uploads/ afterward, and DM send/delete with
+      DIRECT_MESSAGE_DELETED confirmed delivered to both sender and
+      recipient sockets. Cloudinary path (attachmentPublicId branch in
+      storage.service.ts) was not exercised — no CLOUDINARY_* env vars
+      are configured in this dev environment — so that branch is
+      verified by code review only, not a live Cloudinary call.
+
+  Next Step: PRD 4.8 (custom emoji upload with admin approval) is next
+  per app-planning/Reson8_NextSteps_PRD.md's suggested order — reuses
+  storage.service.ts's deleteAttachment() for the reject-pending-upload
+  cleanup path.

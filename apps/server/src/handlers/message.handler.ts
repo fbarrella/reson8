@@ -17,6 +17,7 @@ import type {
 } from "@reson8/shared-types";
 import { PermissionFlags } from "@reson8/shared-types";
 import { requirePermission } from "../middleware/permissions.middleware.js";
+import { deleteAttachment } from "../services/storage.service.js";
 
 type TypedIO = SocketIOServer<
     ClientToServerEvents,
@@ -43,7 +44,7 @@ export function registerMessageHandlers(
         // ── SEND_MESSAGE ───────────────────────────────────────────────────
         socket.on("SEND_MESSAGE", async (payload, ack) => {
             try {
-                const { channelId, content, attachmentUrl } = payload;
+                const { channelId, content, attachmentUrl, attachmentPublicId } = payload;
 
                 if ((!content || content.trim().length === 0) && !attachmentUrl) {
                     ack({ success: false });
@@ -77,6 +78,7 @@ export function registerMessageHandlers(
                         userId: socket.data.userId,
                         content: content?.trim() ?? "",
                         attachmentUrl: attachmentUrl ?? null,
+                        attachmentPublicId: attachmentPublicId ?? null,
                     },
                 });
 
@@ -180,6 +182,46 @@ export function registerMessageHandlers(
             } catch (err) {
                 app.log.error({ err }, "Error in MARK_CHANNEL_READ");
                 ack({ success: false });
+            }
+        });
+
+        // ── DELETE_MESSAGE ──────────────────────────────────────────────────
+        socket.on("DELETE_MESSAGE", async (payload, ack) => {
+            try {
+                const { messageId } = payload;
+
+                const message = await app.prisma.message.findUnique({
+                    where: { id: messageId },
+                });
+                if (!message) {
+                    ack({ success: false, error: "Message not found" });
+                    return;
+                }
+                if (message.userId !== socket.data.userId) {
+                    ack({ success: false, error: "You can only delete your own messages" });
+                    return;
+                }
+
+                if (message.attachmentUrl) {
+                    await deleteAttachment(message.attachmentUrl, message.attachmentPublicId);
+                }
+
+                await app.prisma.message.delete({ where: { id: messageId } });
+
+                ack({ success: true });
+
+                io.to(`server:${socket.data.serverId}`).emit("MESSAGE_DELETED", {
+                    channelId: message.channelId,
+                    messageId,
+                });
+
+                app.log.info(
+                    { socketId: socket.id, messageId },
+                    "Message deleted",
+                );
+            } catch (err) {
+                app.log.error({ err }, "Error in DELETE_MESSAGE");
+                ack({ success: false, error: "Failed to delete message" });
             }
         });
     });

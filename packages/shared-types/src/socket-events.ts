@@ -85,7 +85,7 @@ export interface ClientToServerEvents {
 
     /** Client sends a text message to their current channel. */
     SEND_MESSAGE: (
-        payload: { channelId: string; content: string; attachmentUrl?: string },
+        payload: { channelId: string; content: string; attachmentUrl?: string; attachmentPublicId?: string },
         ack: (response: { success: boolean; messageId?: string }) => void,
     ) => void;
 
@@ -101,11 +101,17 @@ export interface ClientToServerEvents {
         ack: (response: { success: boolean }) => void,
     ) => void;
 
+    /** Client deletes their own channel message (hard delete — including its attachment, if any). */
+    DELETE_MESSAGE: (
+        payload: { messageId: string },
+        ack: (response: { success: boolean; error?: string }) => void,
+    ) => void;
+
     // ── Direct Messaging ─────────────────────────────────────────────────
 
     /** Client sends a direct message to another user. */
     SEND_DIRECT_MESSAGE: (
-        payload: { recipientId: string; content: string; attachmentUrl?: string },
+        payload: { recipientId: string; content: string; attachmentUrl?: string; attachmentPublicId?: string },
         ack: (response: { success: boolean; messageId?: string; error?: string }) => void,
     ) => void;
 
@@ -113,6 +119,12 @@ export interface ClientToServerEvents {
     FETCH_DIRECT_MESSAGES: (
         payload: { partnerId: string; before?: string; limit?: number },
         ack: (response: { success: boolean; messages?: IDirectMessage[]; error?: string }) => void,
+    ) => void;
+
+    /** Client deletes their own direct message (hard delete — including its attachment, if any). */
+    DELETE_DIRECT_MESSAGE: (
+        payload: { dmId: string },
+        ack: (response: { success: boolean; error?: string }) => void,
     ) => void;
 
     /** Client requests the list of currently online users on this server. */
@@ -295,6 +307,12 @@ export interface ServerToClientEvents {
 
     /** Delivers a direct message to the recipient in real-time. */
     DIRECT_MESSAGE_RECEIVED: (payload: IDirectMessage) => void;
+
+    /** Broadcasts that a channel message was deleted by its author. */
+    MESSAGE_DELETED: (payload: { channelId: string; messageId: string }) => void;
+
+    /** Notifies both participants that a direct message was deleted by its author. */
+    DIRECT_MESSAGE_DELETED: (payload: { dmId: string }) => void;
 
     /** Broadcasts that a new channel was created. */
     CHANNEL_CREATED: (payload: {
