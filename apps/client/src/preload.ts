@@ -236,6 +236,7 @@ const api = {
         socket.on("DIRECT_MESSAGE_RECEIVED", (payload) => emit("dm-received", payload));
         socket.on("MESSAGE_DELETED", (payload) => emit("message-deleted", payload));
         socket.on("DIRECT_MESSAGE_DELETED", (payload) => emit("dm-deleted", payload));
+        socket.on("MESSAGE_EDITED", (payload) => emit("message-edited", payload));
         socket.on("CHANNEL_DELETED", (payload) => emit("channel-deleted", payload));
         socket.on("ERROR", (payload) => emit("error", payload));
         socket.on("ACTIVE_SPEAKERS", (payload) => emit("active-speakers", payload));
@@ -458,6 +459,16 @@ const api = {
                 return;
             }
             socket.emit("DELETE_MESSAGE", { messageId }, resolve);
+        });
+    },
+
+    editMessage(messageId: string, content: string): Promise<{ success: boolean; error?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.emit("EDIT_MESSAGE", { messageId, content }, resolve);
         });
     },
 

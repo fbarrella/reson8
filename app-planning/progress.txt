@@ -891,3 +891,79 @@ Feature/Fix: Custom Emoji Upload with Admin Approval (PRD 4.8)
 
   Next Step: PRD 4.11 (edit own messages, 2-minute window) is next per
   app-planning/Reson8_NextSteps_PRD.md's suggested order.
+
+--- Entry: 11/08/2026 ---
+
+Feature/Fix: Edit Own Messages, 2-Minute Window (PRD 4.11)
+
+  Problem: No way to fix a typo or add missing info to an already-sent
+  message. Scoped to channel messages only (not DMs — the roadmap item
+  is listed under "Text Channels"), text-only (not image messages), and
+  a 2-minute window from send time, server-enforced.
+
+  Solution:
+    - Message.editedAt DateTime? added (migration
+      20260812022954_add_message_edited_at). EDIT_MESSAGE event:
+      ownership check, rejects empty content, rejects if the message
+      has an attachment, rejects if more than 2 minutes have elapsed
+      since createdAt — all authoritative server-side checks, in that
+      order. On success, broadcasts MESSAGE_EDITED (full IMessage DTO,
+      same shape as MESSAGE_RECEIVED) to the server room.
+    - IMessage.editedAt threaded through both DTO-construction sites in
+      message.handler.ts (SEND_MESSAGE's broadcast and FETCH_MESSAGES'
+      mapping) so the "(edited)" mark survives a page reload/scrollback,
+      not just the live session.
+    - Client: inline editing — clicking the new Edit button (own
+      text-only messages only, hover-revealed next to React/Delete)
+      swaps the message's .msg-text span for a <textarea>; Enter saves,
+      Escape cancels, blur saves. On successful save, the new content
+      is applied optimistically (not by waiting for the MESSAGE_EDITED
+      echo) since the alternative — leaving a <textarea> in the DOM
+      until the broadcast arrives — would leave the message stuck in
+      "editing" state if that broadcast were ever delayed. The
+      broadcast handler still runs for every client (including the
+      editor's own) and just harmlessly re-applies the same content,
+      so there's one correctness path, not two divergent ones.
+    - Client-side pre-check: clicking Edit computes elapsed time from
+      msg.createdAt and shows an immediate error instead of opening the
+      editor if the window has passed, rather than maintaining a live
+      per-message countdown/timer for every rendered message — matches
+      the PRD's suggested simplification (attempt-and-explain over a
+      fleet of per-message intervals).
+
+  Key Files Modified:
+    apps/server/prisma/schema.prisma — Message.editedAt
+    packages/shared-types/src/models.ts — IMessage.editedAt
+    packages/shared-types/src/socket-events.ts — EDIT_MESSAGE, MESSAGE_EDITED
+    apps/server/src/handlers/message.handler.ts — EDIT_MESSAGE handler,
+      editedAt in both DTO mappings
+    apps/client/src/preload.ts — editMessage() bridge method,
+      MESSAGE_EDITED forwarding
+    apps/client/src/renderer/renderer.ts — attachEditButton(),
+      startMessageEdit(), applyMessageEdit(), ChatMessage.editedAt,
+      "(edited)" label rendering
+    apps/client/src/renderer/index.html — .msg-edited/.msg-edit-input/
+      .btn-edit-msg CSS
+
+  Verification:
+    - Prisma migration: add_message_edited_at — applied successfully
+      against the local dev database
+    - TypeScript build (shared-types): npx tsc --build — passed
+    - TypeScript build (server): npx tsc --noEmit — passed
+    - TypeScript build (client): npx tsc --noEmit — passed
+    - Server test suite: npm run test — 19/19 passed
+    - End-to-end smoke test against a real running server (dev server
+      started, exercised, torn down, test data cleaned up via the
+      test's own DELETE_MESSAGE calls): 11/11 checks passed — basic
+      edit + live MESSAGE_EDITED broadcast to another client, edited
+      content/editedAt surviving a fresh FETCH_MESSAGES, non-owner edit
+      rejected, empty-content edit rejected, image-message edit
+      rejected, and the 2-minute expiry path (simulated by backdating
+      the message's createdAt directly in Postgres rather than waiting
+      2 real minutes — confirmed the rejection fires correctly once the
+      window has genuinely passed).
+
+  Next Step: PRD 4.9 (default emoji set completion) is next per
+  app-planning/Reson8_NextSteps_PRD.md's suggested order — a content
+  audit rather than an architecture change, and the smallest remaining
+  item.

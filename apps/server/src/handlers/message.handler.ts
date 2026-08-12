@@ -90,6 +90,7 @@ export function registerMessageHandlers(
                     content: message.content,
                     attachmentUrl: message.attachmentUrl,
                     createdAt: message.createdAt.toISOString(),
+                    editedAt: null,
                 };
 
                 // Broadcast to all clients in the server
@@ -155,6 +156,7 @@ export function registerMessageHandlers(
                             content: m.content,
                             attachmentUrl: m.attachmentUrl,
                             createdAt: m.createdAt.toISOString(),
+                            editedAt: m.editedAt?.toISOString() ?? null,
                             reactions,
                         };
                     });
@@ -222,6 +224,68 @@ export function registerMessageHandlers(
             } catch (err) {
                 app.log.error({ err }, "Error in DELETE_MESSAGE");
                 ack({ success: false, error: "Failed to delete message" });
+            }
+        });
+
+        // ── EDIT_MESSAGE ─────────────────────────────────────────────────────
+        socket.on("EDIT_MESSAGE", async (payload, ack) => {
+            try {
+                const { messageId, content } = payload;
+                const trimmed = content?.trim() ?? "";
+                if (!trimmed) {
+                    ack({ success: false, error: "Message content cannot be empty" });
+                    return;
+                }
+
+                const message = await app.prisma.message.findUnique({
+                    where: { id: messageId },
+                });
+                if (!message) {
+                    ack({ success: false, error: "Message not found" });
+                    return;
+                }
+                if (message.userId !== socket.data.userId) {
+                    ack({ success: false, error: "You can only edit your own messages" });
+                    return;
+                }
+                if (message.attachmentUrl) {
+                    ack({ success: false, error: "Image messages cannot be edited" });
+                    return;
+                }
+
+                const ageMs = Date.now() - message.createdAt.getTime();
+                if (ageMs > 2 * 60 * 1000) {
+                    ack({ success: false, error: "Edit window has expired" });
+                    return;
+                }
+
+                const updated = await app.prisma.message.update({
+                    where: { id: messageId },
+                    data: { content: trimmed, editedAt: new Date() },
+                });
+
+                const messageDto: IMessage = {
+                    id: updated.id,
+                    channelId: updated.channelId,
+                    userId: updated.userId,
+                    nickname: socket.data.nickname,
+                    content: updated.content,
+                    attachmentUrl: updated.attachmentUrl,
+                    createdAt: updated.createdAt.toISOString(),
+                    editedAt: updated.editedAt?.toISOString() ?? null,
+                };
+
+                ack({ success: true });
+
+                io.to(`server:${socket.data.serverId}`).emit("MESSAGE_EDITED", messageDto);
+
+                app.log.info(
+                    { socketId: socket.id, messageId },
+                    "Message edited",
+                );
+            } catch (err) {
+                app.log.error({ err }, "Error in EDIT_MESSAGE");
+                ack({ success: false, error: "Failed to edit message" });
             }
         });
     });

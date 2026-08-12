@@ -592,6 +592,28 @@
       color: var(--text-primary);
     }
 
+    .msg-edited {
+      color: var(--text-muted);
+      font-size: 10px;
+      margin-right: 6px;
+      font-style: italic;
+    }
+
+    .msg-edit-input {
+      display: block;
+      width: 100%;
+      background: var(--bg-input);
+      border: 1px solid var(--accent);
+      border-radius: var(--radius);
+      color: var(--text-primary);
+      font-size: 13px;
+      font-family: inherit;
+      padding: 4px 6px;
+      margin-top: 2px;
+      resize: vertical;
+      min-height: 20px;
+    }
+
     .msg-image {
       display: block;
       max-width: 300px;
@@ -692,6 +714,29 @@
       opacity: 1 !important;
       color: var(--danger);
       background: rgba(239, 83, 80, 0.1);
+    }
+
+    .btn-edit-msg {
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      padding: 2px;
+      border-radius: 4px;
+      opacity: 0;
+      transition: all 0.15s;
+      display: flex;
+      align-items: center;
+    }
+
+    .chat-msg:hover .btn-edit-msg {
+      opacity: 0.6;
+    }
+
+    .btn-edit-msg:hover {
+      opacity: 1 !important;
+      color: var(--accent);
+      background: rgba(99, 102, 241, 0.1);
     }
 
     /* ── Link Preview Card ─────────────────────────────────────── */

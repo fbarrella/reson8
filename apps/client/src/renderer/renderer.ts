@@ -15,6 +15,7 @@ interface ChatMessage {
     content: string;
     attachmentUrl?: string | null;
     createdAt: string;
+    editedAt?: string | null;
     reactions?: Array<{ emoji: string; count: number; userIds: string[] }>;
 }
 
@@ -503,6 +504,7 @@ interface Reson8Api {
     deleteChannel(channelId: string): Promise<{ success: boolean; error?: string }>;
     sendMessage(channelId: string, content: string, attachmentUrl?: string, attachmentPublicId?: string): Promise<{ success: boolean; messageId?: string }>;
     deleteMessage(messageId: string): Promise<{ success: boolean; error?: string }>;
+    editMessage(messageId: string, content: string): Promise<{ success: boolean; error?: string }>;
     fetchMessages(channelId: string, before?: string, limit?: number): Promise<{ success: boolean; messages?: ChatMessage[]; error?: string }>;
     markChannelRead(channelId: string): Promise<{ success: boolean }>;
     getAllUsers(serverId: string): Promise<{ success: boolean; users?: any[]; error?: string }>;
@@ -2416,7 +2418,8 @@ function renderChatMessage(tab: ChatTab, msg: ChatMessage): void {
     el.setAttribute("data-msg-owner", msg.userId);
 
     const time = new Date(msg.createdAt).toLocaleTimeString();
-    let html = `<span class="msg-time">${time}</span><span class="msg-nick">${escapeHtml(msg.nickname)}</span>`;
+    const editedLabel = msg.editedAt ? `<span class="msg-edited">(edited)</span>` : "";
+    let html = `<span class="msg-time">${time}</span>${editedLabel}<span class="msg-nick">${escapeHtml(msg.nickname)}</span>`;
 
     if (msg.content) {
         html += `<span class="msg-text">${linkifyContent(msg.content)}</span>`;
@@ -2437,6 +2440,7 @@ function renderChatMessage(tab: ChatTab, msg: ChatMessage): void {
     // Reaction bar
     const reactBar = buildReactionBar(msg.id, false, msg.userId, msg.reactions);
     el.appendChild(reactBar);
+    attachEditButton(reactBar, msg, el);
 
     tab.messagesEl.appendChild(el);
     tab.messagesEl.scrollTop = tab.messagesEl.scrollHeight;
@@ -3456,6 +3460,114 @@ function updateReactionBar(
 // Listen for reaction updates from server
 api.on("reaction-updated", (data: { messageId: string; isDm: boolean; reactions: Array<{ emoji: string; count: number; userIds: string[] }> }) => {
     updateReactionBar(data.messageId, data.isDm, data.reactions);
+});
+
+// ── Edit Own Messages (PRD 4.11) ────────────────────────────────────────────
+// Channel messages only (not DMs), text-only (no attachment), within 2
+// minutes of sending — all enforced authoritatively server-side; the checks
+// here are just so the user gets immediate feedback instead of a silent
+// round-trip failure.
+const EDIT_WINDOW_MS = 2 * 60 * 1000;
+
+function attachEditButton(bar: HTMLDivElement, msg: ChatMessage, el: HTMLDivElement): void {
+    const myId = api.getInstanceId();
+    if (msg.userId !== myId || msg.attachmentUrl) return;
+
+    const btnEdit = document.createElement("button");
+    btnEdit.className = "btn-edit-msg";
+    btnEdit.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>`;
+    btnEdit.title = "Edit message";
+    btnEdit.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const ageMs = Date.now() - new Date(msg.createdAt).getTime();
+        if (ageMs > EDIT_WINDOW_MS) {
+            log("Edit window has expired (2 minutes)", "error");
+            return;
+        }
+        startMessageEdit(el, msg);
+    });
+    bar.appendChild(btnEdit);
+}
+
+function startMessageEdit(el: HTMLDivElement, msg: ChatMessage): void {
+    if (el.querySelector(".msg-edit-input")) return; // already editing
+    const textEl = el.querySelector(".msg-text");
+    if (!textEl) return;
+
+    const originalHTML = textEl.outerHTML;
+    const input = document.createElement("textarea");
+    input.className = "msg-edit-input";
+    input.value = msg.content;
+    textEl.replaceWith(input);
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+
+    const finish = async (save: boolean): Promise<void> => {
+        input.removeEventListener("keydown", onKeydown);
+        input.removeEventListener("blur", onBlur);
+
+        if (!save) {
+            input.outerHTML = originalHTML;
+            return;
+        }
+
+        const newContent = input.value.trim();
+        if (!newContent || newContent === msg.content) {
+            input.outerHTML = originalHTML;
+            return;
+        }
+
+        const result = await api.editMessage(msg.id, newContent);
+        if (!result.success) {
+            log(`Failed to edit message: ${result.error}`, "error");
+            input.outerHTML = originalHTML;
+            return;
+        }
+
+        // Applied optimistically here rather than waiting for the
+        // MESSAGE_EDITED broadcast — applyMessageEdit() below still runs
+        // when that broadcast arrives (including the echo back to this
+        // client) and just harmlessly re-applies the same content.
+        msg.content = newContent;
+        const newTextEl = document.createElement("span");
+        newTextEl.className = "msg-text";
+        newTextEl.innerHTML = linkifyContent(newContent);
+        input.replaceWith(newTextEl);
+        if (!el.querySelector(".msg-edited")) {
+            el.querySelector(".msg-time")?.insertAdjacentHTML("afterend", `<span class="msg-edited">(edited)</span>`);
+        }
+    };
+
+    const onKeydown = (e: KeyboardEvent) => {
+        if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            finish(true);
+        } else if (e.key === "Escape") {
+            e.preventDefault();
+            finish(false);
+        }
+    };
+    const onBlur = () => finish(true);
+
+    input.addEventListener("keydown", onKeydown);
+    input.addEventListener("blur", onBlur);
+}
+
+/** Applies a MESSAGE_EDITED broadcast to every rendered copy of that message (a background tab stays in the DOM, just hidden). */
+function applyMessageEdit(msg: ChatMessage): void {
+    document.querySelectorAll(`.chat-msg[data-msg-id="${CSS.escape(msg.id)}"]`).forEach((el) => {
+        const textEl = el.querySelector(".msg-text");
+        if (textEl) {
+            textEl.innerHTML = linkifyContent(msg.content);
+        }
+        if (!el.querySelector(".msg-edited")) {
+            el.querySelector(".msg-time")?.insertAdjacentHTML("afterend", `<span class="msg-edited">(edited)</span>`);
+        }
+    });
+}
+
+api.on("message-edited", (msg: ChatMessage) => {
+    applyMessageEdit(msg);
 });
 
 // A custom emoji another user (or an admin reviewing this client's own

@@ -108,6 +108,12 @@ export interface ClientToServerEvents {
         ack: (response: { success: boolean; error?: string }) => void,
     ) => void;
 
+    /** Client edits their own text-only channel message, within a 2-minute window of sending. */
+    EDIT_MESSAGE: (
+        payload: { messageId: string; content: string },
+        ack: (response: { success: boolean; error?: string }) => void,
+    ) => void;
+
     // ── Direct Messaging ─────────────────────────────────────────────────
 
     /** Client sends a direct message to another user. */
@@ -335,6 +341,9 @@ export interface ServerToClientEvents {
 
     /** Broadcasts that a channel message was deleted by its author. */
     MESSAGE_DELETED: (payload: { channelId: string; messageId: string }) => void;
+
+    /** Broadcasts that a channel message was edited by its author. */
+    MESSAGE_EDITED: (payload: IMessage) => void;
 
     /** Notifies both participants that a direct message was deleted by its author. */
     DIRECT_MESSAGE_DELETED: (payload: { dmId: string }) => void;

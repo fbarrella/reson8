@@ -144,13 +144,14 @@ model UserRole {
 // ---------------------------------------------------------------------------
 
 model Message {
-  id                 String   @id @default(uuid())
+  id                 String    @id @default(uuid())
   channelId          String
   userId             String
   content            String
   attachmentUrl      String?
   attachmentPublicId String? // Cloudinary public_id — null for local-disk storage or text-only messages
-  createdAt          DateTime @default(now())
+  createdAt          DateTime  @default(now())
+  editedAt           DateTime? // set when the author edits within the 2-minute window
 
   channel   Channel    @relation(fields: [channelId], references: [id], onDelete: Cascade)
   user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)

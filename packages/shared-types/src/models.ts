@@ -130,6 +130,7 @@ export interface IMessage {
     content: string;
     attachmentUrl?: string | null;
     createdAt: string;
+    editedAt?: string | null;
     reactions?: Array<{ emoji: string; count: number; userIds: string[] }>;
 }
 
