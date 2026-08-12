@@ -565,3 +565,101 @@ Feature/Fix: Channel Reordering via Drag & Drop (PRD 4.6)
   app-planning/Reson8_NextSteps_PRD.md's suggested order — needs a new
   ChannelRead cursor table, the first item in this phase to add a new
   Prisma model rather than extending an existing one.
+
+--- Entry: 11/08/2026 ---
+
+Feature/Fix: Unread Text Channel Indicator (PRD 4.13)
+
+  Problem: No visual cue for unseen messages in text channels the user
+  didn't have open — easy to miss activity in channels you weren't
+  actively watching.
+
+  Solution: New per-user-per-channel read cursor (`ChannelRead`), a
+  design directly modeled on the existing DM unread pattern but
+  necessarily different in shape: DirectMessage.readAt is a per-row
+  flag that works because a DM only has one reader, but a channel has
+  many readers, so a per-message flag can't represent "read by whom" —
+  a cursor table (lastReadAt per user per channel) is the correct
+  analog instead.
+
+  A key architectural finding shaped the whole design: MESSAGE_RECEIVED
+  already broadcasts to the entire server room
+  (`io.to(server:${serverId})`), not just clients with that channel's
+  tab open — confirmed by reading message.handler.ts's SEND_MESSAGE
+  broadcast before assuming otherwise. That means every connected
+  client already learns about every new message in real time regardless
+  of which tab is active, so "is this unread" can be tracked **entirely
+  client-side** by comparing the incoming channelId against activeTabId
+  — no new server round-trip needed for the live-update path. The
+  server only needs to persist a cursor, purely to restore correct
+  state on reconnect/fresh load (mirroring how DMs solve the same
+  reconnect problem with their own mechanism).
+
+  This also surfaced a real constraint worth remembering for future
+  per-user annotations on the channel tree: CHANNEL_TREE_UPDATE is
+  broadcast identically to every client in the server room via
+  `io.to(...)`, so a per-user field like hasUnread can only be computed
+  correctly on the single-socket emission connection.handler.ts sends
+  at USER_JOIN_SERVER time — never on the shared broadcasts triggered
+  by other users' channel-admin actions (rename/reorder/etc, all of
+  which reuse channel.handler.ts's broadcastTreeUpdate()). Left
+  IChannelTreeNode.hasUnread optional and undocumented-false-safe for
+  exactly this reason: the client only ever ADDs a channel to its local
+  unread set when hasUnread is true, never removes based on a false/
+  missing value from a shared broadcast, so stale broadcast data can't
+  incorrectly clear a real unread flag.
+
+  Server Changes:
+    - New ChannelRead model (userId, channelId, lastReadAt,
+      @@id([userId, channelId])) — migration 20260812013822_add_channel_read.
+    - connection.handler.ts: new annotateUnreadChannels() helper, called
+      once during USER_JOIN_SERVER after tree hydration — batches two
+      queries (latest message timestamp per text channel via
+      Prisma groupBy, and the user's ChannelRead cursors) rather than
+      querying per-channel, then walks the tree once to set hasUnread.
+    - message.handler.ts: new MARK_CHANNEL_READ handler — upserts the
+      cursor to now().
+
+  Client Changes:
+    - unreadChannelIds: a client-side Set<channelId>, seeded from
+      node.hasUnread on tree renders and otherwise updated purely from
+      live MESSAGE_RECEIVED events (see above).
+    - markChannelUnread()/markChannelRead() do targeted DOM patches
+      (add/remove an .unread class + a red dot) instead of a full
+      renderTree() on every message — a full re-render would blow away
+      collapsed-category UI state on every single incoming chat
+      message, which would have been a bad regression for anyone with
+      categories collapsed.
+    - switchTab() now calls markChannelRead() unconditionally; it's a
+      no-op for tab IDs never in unreadChannelIds (server-log, DM tabs,
+      already-read channels), so no extra guarding needed there.
+    - Guarded against flagging the currently-active tab's own channel
+      as unread when hydrating hasUnread on reconnect (edge case: the
+      user reconnects while already viewing that channel).
+
+  Key Files Modified:
+    apps/server/prisma/schema.prisma — ChannelRead model
+    packages/shared-types/src/models.ts — IChannelTreeNode.hasUnread
+    packages/shared-types/src/socket-events.ts — MARK_CHANNEL_READ event
+    apps/server/src/handlers/connection.handler.ts —
+      annotateUnreadChannels(), IChannelTreeNode import
+    apps/server/src/handlers/message.handler.ts — MARK_CHANNEL_READ handler
+    apps/client/src/preload.ts — markChannelRead() bridge method
+    apps/client/src/renderer/renderer.ts — unreadChannelIds,
+      markChannelUnread()/markChannelRead(), renderChannel() unread
+      rendering, switchTab() integration, TreeNode.hasUnread
+    apps/client/src/renderer/index.html — .tree-channel.unread /
+      .unread-dot CSS
+
+  Verification:
+    - Prisma migration: add_channel_read — applied successfully against
+      the local dev database
+    - TypeScript build (shared-types): npx tsc --build — passed
+    - TypeScript build (server): npx tsc --noEmit — passed
+    - TypeScript build (client): npx tsc --noEmit — passed
+    - Server test suite: npm run test — 19/19 passed
+
+  Next Step: PRD 4.10 (delete own messages) is next per
+  app-planning/Reson8_NextSteps_PRD.md's suggested order, followed by
+  PRD 4.8 (custom emoji upload) which reuses the storage-deletion
+  helper 4.10 introduces.

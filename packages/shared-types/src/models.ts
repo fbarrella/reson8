@@ -71,6 +71,14 @@ export interface IChannelTreeNode extends IChannel {
     children: IChannelTreeNode[];
     /** Users currently in this channel (populated from Redis presence). */
     occupants: IUserPresence[];
+    /**
+     * Whether the requesting user has unread messages in this (text) channel.
+     * Only meaningfully computed on the per-socket tree sent at join time —
+     * omitted (or stale) on tree broadcasts triggered by unrelated channel
+     * admin actions, since a single broadcast tree is shared by every
+     * recipient and can't carry a different value per user.
+     */
+    hasUnread?: boolean;
 }
 
 // ---------------------------------------------------------------------------

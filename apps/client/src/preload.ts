@@ -430,6 +430,16 @@ const api = {
         });
     },
 
+    markChannelRead(channelId: string): Promise<{ success: boolean }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false });
+                return;
+            }
+            socket.emit("MARK_CHANNEL_READ", { channelId }, resolve);
+        });
+    },
+
     // ── Admin / Role Management ──────────────────────────────────────────
 
     getAllUsers(

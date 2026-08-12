@@ -163,5 +163,24 @@ export function registerMessageHandlers(
                 ack({ success: false, error: "Failed to fetch messages" });
             }
         });
+
+        // ── MARK_CHANNEL_READ ─────────────────────────────────────────────────
+        socket.on("MARK_CHANNEL_READ", async (payload, ack) => {
+            try {
+                const { channelId } = payload;
+                const userId = socket.data.userId;
+
+                await app.prisma.channelRead.upsert({
+                    where: { userId_channelId: { userId, channelId } },
+                    update: { lastReadAt: new Date() },
+                    create: { userId, channelId, lastReadAt: new Date() },
+                });
+
+                ack({ success: true });
+            } catch (err) {
+                app.log.error({ err }, "Error in MARK_CHANNEL_READ");
+                ack({ success: false });
+            }
+        });
     });
 }

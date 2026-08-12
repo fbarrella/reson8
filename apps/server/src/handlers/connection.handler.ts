@@ -13,6 +13,7 @@ import type {
     InterServerEvents,
     SocketData,
     IUserPresence,
+    IChannelTreeNode,
 } from "@reson8/shared-types";
 import { PresenceService } from "../services/presence.service.js";
 import { buildChannelTree } from "../services/channel-tree.service.js";
@@ -72,6 +73,57 @@ export async function buildOccupant(
 
 /** In-memory voice session start times (channelId → Date). */
 export const voiceSessionStartedAt = new Map<string, Date>();
+
+/**
+ * Annotates each TEXT channel node in `tree` with `hasUnread`, comparing the
+ * channel's latest message timestamp against the requesting user's
+ * ChannelRead cursor (no cursor = unread only if the channel has any
+ * messages at all, so brand-new channels never start "unread" for anyone).
+ *
+ * Only meaningful for the per-socket tree sent at join time — a single
+ * broadcast tree is shared by every recipient, so this is never called for
+ * broadcastTreeUpdate()-style updates triggered by other users' actions.
+ */
+async function annotateUnreadChannels(
+    tree: IChannelTreeNode[],
+    channelDtos: { id: string; type: string }[],
+    userId: string,
+    app: FastifyInstance,
+): Promise<void> {
+    const textChannelIds = channelDtos
+        .filter((c) => c.type === "TEXT")
+        .map((c) => c.id);
+    if (textChannelIds.length === 0) return;
+
+    const [latestMessages, readCursors] = await Promise.all([
+        app.prisma.message.groupBy({
+            by: ["channelId"],
+            where: { channelId: { in: textChannelIds } },
+            _max: { createdAt: true },
+        }),
+        app.prisma.channelRead.findMany({
+            where: { userId, channelId: { in: textChannelIds } },
+        }),
+    ]);
+
+    const latestMap = new Map<string, Date>();
+    for (const row of latestMessages) {
+        if (row._max.createdAt) latestMap.set(row.channelId, row._max.createdAt);
+    }
+    const lastReadMap = new Map(readCursors.map((r) => [r.channelId, r.lastReadAt]));
+
+    function walk(nodes: IChannelTreeNode[]): void {
+        for (const node of nodes) {
+            const latest = latestMap.get(node.id);
+            if (latest) {
+                const lastRead = lastReadMap.get(node.id);
+                node.hasUnread = !lastRead || latest > lastRead;
+            }
+            if (node.children.length > 0) walk(node.children);
+        }
+    }
+    walk(tree);
+}
 
 /**
  * Registers all Socket.io connection event handlers.
@@ -227,6 +279,7 @@ export function registerConnectionHandlers(
                     }
                 }
                 await hydrateOccupants(tree);
+                await annotateUnreadChannels(tree, channelDtos, instanceId, app);
 
                 socket.emit("CHANNEL_TREE_UPDATE", { serverId, tree });
 

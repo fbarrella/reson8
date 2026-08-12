@@ -492,6 +492,7 @@ interface Reson8Api {
     deleteChannel(channelId: string): Promise<{ success: boolean; error?: string }>;
     sendMessage(channelId: string, content: string, attachmentUrl?: string): Promise<{ success: boolean; messageId?: string }>;
     fetchMessages(channelId: string, before?: string, limit?: number): Promise<{ success: boolean; messages?: ChatMessage[]; error?: string }>;
+    markChannelRead(channelId: string): Promise<{ success: boolean }>;
     getAllUsers(serverId: string): Promise<{ success: boolean; users?: any[]; error?: string }>;
     getRoles(serverId: string): Promise<{ success: boolean; roles?: any[]; error?: string }>;
     assignRole(userId: string, roleId: string, action: "add" | "remove"): Promise<{ success: boolean; error?: string }>;
@@ -580,6 +581,14 @@ const linkPreviewCache = new Map<string, LinkPreviewData | null>();
 
 // Voice session timers: channelId → ISO startedAt
 const sessionTimers = new Map<string, string>();
+
+// Text channels with unread messages (PRD 4.13). Seeded from the server's
+// per-user hasUnread flag at join time, then kept live client-side: every
+// MESSAGE_RECEIVED for a channel that isn't the active tab adds to this set
+// (no server round-trip needed, since MESSAGE_RECEIVED already broadcasts
+// server-wide regardless of which tabs are open); opening a channel's tab
+// clears it and persists the read cursor via MARK_CHANNEL_READ.
+const unreadChannelIds = new Set<string>();
 
 function formatDuration(ms: number): string {
     const totalSeconds = Math.floor(ms / 1000);
@@ -829,6 +838,7 @@ interface TreeNode {
     type: "TEXT" | "VOICE";
     parentId: string | null;
     isNsfw?: boolean;
+    hasUnread?: boolean;
     children: TreeNode[];
     occupants: { userId: string; nickname: string; isMuted?: boolean; isDeafened?: boolean }[];
 }
@@ -974,9 +984,21 @@ function renderChannel(node: TreeNode, siblings: TreeNode[]): HTMLDivElement {
 
     const nsfwBadge = node.isNsfw ? `<span class="nsfw-badge">NSFW</span>` : "";
 
+    // Unread indicator (text channels only) — seed from the server's
+    // per-user flag (only trustworthy on the initial join-time tree, see
+    // IChannelTreeNode.hasUnread), then let it persist across re-renders
+    // via unreadChannelIds until the tab is opened.
+    if (!isVoice) {
+        channel.dataset.channelId = node.id;
+        if (node.hasUnread && node.id !== activeTabId) unreadChannelIds.add(node.id);
+        if (unreadChannelIds.has(node.id)) channel.classList.add("unread");
+    }
+    const unreadDot = !isVoice && unreadChannelIds.has(node.id) ? `<span class="unread-dot"></span>` : "";
+
     channel.innerHTML = `
         <span class="ch-icon ${iconClass}">${icon}</span>
         <span class="ch-name">${escapeHtml(node.name)}</span>
+        ${unreadDot}
         ${nsfwBadge}
         ${timerBadge}
         ${countBadge}
@@ -2055,6 +2077,7 @@ function renderAdminUsers(users: any[]): void {
 
 function switchTab(tabId: string): void {
     activeTabId = tabId;
+    markChannelRead(tabId);
 
     // Close emoji picker on tab switch
     closeEmojiPicker();
@@ -2332,7 +2355,41 @@ api.on("message", (msg: ChatMessage) => {
     if (tab) {
         renderChatMessage(tab, msg);
     }
+
+    // Unread indicator (PRD 4.13): MESSAGE_RECEIVED already broadcasts to
+    // everyone in the server regardless of which tab is open, so this can
+    // be tracked entirely client-side — no extra server round trip.
+    if (msg.channelId !== activeTabId) {
+        markChannelUnread(msg.channelId);
+    }
 });
+
+/** Flags a channel-tree row as unread without a full tree re-render (which would lose collapsed-category state). */
+function markChannelUnread(channelId: string): void {
+    if (unreadChannelIds.has(channelId)) return;
+    unreadChannelIds.add(channelId);
+
+    const el = channelTree.querySelector(`.tree-channel[data-channel-id="${CSS.escape(channelId)}"]`);
+    if (!el || el.classList.contains("unread")) return;
+    el.classList.add("unread");
+    if (!el.querySelector(".unread-dot")) {
+        const dot = document.createElement("span");
+        dot.className = "unread-dot";
+        el.querySelector(".ch-name")?.after(dot);
+    }
+}
+
+/** Clears a channel's unread state locally and persists the read cursor server-side. */
+function markChannelRead(channelId: string): void {
+    if (!unreadChannelIds.has(channelId)) return;
+    unreadChannelIds.delete(channelId);
+
+    const el = channelTree.querySelector(`.tree-channel[data-channel-id="${CSS.escape(channelId)}"]`);
+    el?.classList.remove("unread");
+    el?.querySelector(".unread-dot")?.remove();
+
+    api.markChannelRead(channelId);
+}
 
 // ── DM Event Listener ─────────────────────────────────────────────────────
 

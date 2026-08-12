@@ -95,6 +95,12 @@ export interface ClientToServerEvents {
         ack: (response: { success: boolean; messages?: IMessage[]; error?: string }) => void,
     ) => void;
 
+    /** Client marks a text channel as read up to now (clears the unread indicator). */
+    MARK_CHANNEL_READ: (
+        payload: { channelId: string },
+        ack: (response: { success: boolean }) => void,
+    ) => void;
+
     // ── Direct Messaging ─────────────────────────────────────────────────
 
     /** Client sends a direct message to another user. */
