@@ -967,3 +967,58 @@ Feature/Fix: Edit Own Messages, 2-Minute Window (PRD 4.11)
   app-planning/Reson8_NextSteps_PRD.md's suggested order — a content
   audit rather than an architecture change, and the smallest remaining
   item.
+
+--- Entry: 11/08/2026 ---
+
+Feature/Fix: Default Emoji Set Completion (PRD 4.9)
+
+  Problem: The curated EMOJI_DATA array (374 entries) was missing a
+  number of emoji generally considered part of the cross-platform
+  "default" set (Discord/Slack/iOS-style pickers) — most notably 😉
+  winking face, 🙃 upside-down face, 🤦 facepalm, 🤷 shrug, 🦄 unicorn,
+  👑 crown, ⚡ high voltage, directional arrows, several colored
+  squares/hearts, and around 20 common country flags (China, Russia,
+  Netherlands, Ukraine, etc.) — despite those being some of the most
+  frequently used emoji in any general chat context.
+
+  Solution: Audited each of the 9 existing categories against what's
+  commonly expected as "default" (cross-referencing what Discord/Slack/
+  iOS pickers typically include, not the full ~1800-entry Unicode CLDR
+  set, since this remains a curated picker by design) and appended 178
+  new entries, keeping them within the existing 9 categories and the
+  existing EmojiEntry shape. Flags (previously the smallest category at
+  21) and Symbols (32) got the largest proportional gap-fill.
+  Verified programmatically (a throwaway Python check, not committed)
+  that none of the additions collided with an existing emoji character
+  before finalizing.
+
+  That verification pass also caught a genuine pre-existing bug
+  unrelated to this task's additions: 🔥 (fire) was listed twice — once
+  under Smileys & Emotion (as a reaction), once under Travel & Places
+  (as a literal flame) — present in the file before any of this
+  session's work began. Fixed it (kept the Smileys & Emotion entry,
+  removed the Travel & Places duplicate) since it's squarely within
+  this item's "audit the emoji list" charter, not scope creep.
+
+  Final count: 552 unique entries (up from 374), zero duplicates,
+  spread across Smileys & Emotion (121), Objects (62), Animals & Nature
+  (60), Symbols (60), People & Body (58), Food & Drink (54), Travel &
+  Places (52), Activities (43), Flags (43).
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts — EMOJI_DATA additions +
+      duplicate fix (client-only; no server/shared-types changes, since
+      this is a static client-side content array)
+
+  Verification:
+    - TypeScript build (client): npx tsc --noEmit — passed
+    - Programmatic duplicate check (Python, ad hoc) confirmed 552
+      unique emoji characters, zero duplicates, before and after the
+      🔥 fix
+    - Not run as a server/full-stack change — no migration, no other
+      workspace touched, so shared-types/server verification was
+      unnecessary and skipped
+
+  Next Step: PRD 4.12 (instant image upload feedback) is next per
+  app-planning/Reson8_NextSteps_PRD.md's suggested order — a pure
+  client-side optimistic-UI feature around the existing upload flow.
