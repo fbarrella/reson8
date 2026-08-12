@@ -470,6 +470,10 @@ interface Reson8Api {
     toggleDeafen(): boolean;
     setMuted(muted: boolean): void;
     setVoiceState(isMuted: boolean, isDeafened: boolean): void;
+    setLocalUserVolume(userId: string, percent: number): void;
+    setLocalUserMute(userId: string, muted: boolean): void;
+    getLocalUserVolume(userId: string): number;
+    getLocalUserMute(userId: string): boolean;
     createChannel(
         serverId: string,
         name: string,
@@ -905,7 +909,30 @@ const OCC_MUTED_ICON =
 const OCC_DEAFENED_ICON =
     `<svg class="occ-voice-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" title="Deafened"><line x1="1" y1="1" x2="23" y2="23"/><path d="M3 18v-6a9 9 0 0 1 15.34-6.36M21 12v2.5"/><path d="M21 16v2a2 2 0 0 1-2 2h-1"/><path d="M3 18v2a2 2 0 0 0 2 2h1v-4H4a1 1 0 0 0-1 1z"/></svg>`;
 
+// Client-local (never sent to the server) per-remote-user volume/mute overrides —
+// see PRD 4.1/4.2. Persisted per target userId so a preference sticks across
+// restarts and applies the next time you're in a channel with that person.
+function getSavedLocalVolume(userId: string): number {
+    const raw = localStorage.getItem(`reson8-local-volume-${userId}`);
+    const parsed = raw !== null ? parseInt(raw, 10) : NaN;
+    return Number.isFinite(parsed) ? Math.max(0, Math.min(200, parsed)) : 100;
+}
+
+function setSavedLocalVolume(userId: string, percent: number): void {
+    localStorage.setItem(`reson8-local-volume-${userId}`, String(percent));
+}
+
+function getSavedLocalMute(userId: string): boolean {
+    return localStorage.getItem(`reson8-local-mute-${userId}`) === "1";
+}
+
+function setSavedLocalMute(userId: string, muted: boolean): void {
+    localStorage.setItem(`reson8-local-mute-${userId}`, muted ? "1" : "0");
+}
+
 function renderOccupants(container: HTMLElement, node: TreeNode): void {
+    const myId = api.getInstanceId();
+
     for (const occ of node.occupants) {
         const el = document.createElement("div");
         el.className = "tree-occupant";
@@ -917,10 +944,20 @@ function renderOccupants(container: HTMLElement, node: TreeNode): void {
             `${occ.isDeafened ? OCC_DEAFENED_ICON : occ.isMuted ? OCC_MUTED_ICON : ""}`;
         el.innerHTML = `<span class="occ-dot"></span>${escapeHtml(occ.nickname)}${voiceStateIcons}`;
 
-        // Admin right-click → Kick from Channel
+        // Re-apply any saved local volume/mute for this participant. Cheap and
+        // idempotent — voice.service.ts only touches the audio graph when a
+        // value actually differs, and this covers both "already consuming"
+        // and "not consuming yet" (the override is queued and applied as soon
+        // as their producer is consumed).
+        if (occ.userId !== myId) {
+            api.setLocalUserVolume(occ.userId, getSavedLocalVolume(occ.userId));
+            api.setLocalUserMute(occ.userId, getSavedLocalMute(occ.userId));
+        }
+
+        // Right-click → per-user local volume/mute (everyone) + Kick (admins only)
         el.addEventListener("contextmenu", (e) => {
-            const myId = api.getInstanceId();
-            if (!isAdminUser || occ.userId === myId) return;
+            const targetId = occ.userId;
+            if (targetId === myId) return;
             e.preventDefault();
             e.stopPropagation();
 
@@ -931,12 +968,41 @@ function renderOccupants(container: HTMLElement, node: TreeNode): void {
             menu.className = "occupant-ctx-menu";
             menu.style.left = `${e.clientX}px`;
             menu.style.top = `${e.clientY}px`;
-            menu.innerHTML = `<button class="ctx-kick-btn">🚫 Kick from Channel</button>`;
 
-            const kickBtn = menu.querySelector(".ctx-kick-btn") as HTMLButtonElement;
-            kickBtn.addEventListener("click", async () => {
+            const currentVolume = api.getLocalUserVolume(targetId);
+            const currentMuted = api.getLocalUserMute(targetId);
+
+            menu.innerHTML = `
+                <div class="ctx-volume-row">
+                    <span class="ctx-volume-label">Volume <span class="ctx-volume-value">${currentVolume}%</span></span>
+                    <input type="range" class="ctx-volume-slider" min="0" max="200" step="5" value="${currentVolume}">
+                </div>
+                <button class="ctx-mute-btn${currentMuted ? " active" : ""}">${currentMuted ? "🔇 Unmute Locally" : "🔊 Mute Locally"}</button>
+                ${isAdminUser ? `<button class="ctx-kick-btn">🚫 Kick from Channel</button>` : ""}
+            `;
+
+            const volumeSlider = menu.querySelector(".ctx-volume-slider") as HTMLInputElement;
+            const volumeValue = menu.querySelector(".ctx-volume-value") as HTMLSpanElement;
+            volumeSlider.addEventListener("input", () => {
+                const percent = parseInt(volumeSlider.value, 10);
+                volumeValue.textContent = `${percent}%`;
+                api.setLocalUserVolume(targetId, percent);
+                setSavedLocalVolume(targetId, percent);
+            });
+
+            const muteBtn = menu.querySelector(".ctx-mute-btn") as HTMLButtonElement;
+            muteBtn.addEventListener("click", () => {
+                const nowMuted = !muteBtn.classList.contains("active");
+                api.setLocalUserMute(targetId, nowMuted);
+                setSavedLocalMute(targetId, nowMuted);
+                muteBtn.classList.toggle("active", nowMuted);
+                muteBtn.textContent = nowMuted ? "🔇 Unmute Locally" : "🔊 Mute Locally";
+            });
+
+            const kickBtn = menu.querySelector(".ctx-kick-btn") as HTMLButtonElement | null;
+            kickBtn?.addEventListener("click", async () => {
                 menu.remove();
-                const result = await api.kickUser(occ.userId, node.id);
+                const result = await api.kickUser(targetId, node.id);
                 if (result.success) {
                     log(`Kicked ${escapeHtml(occ.nickname)} from channel`, "success");
                 } else {
@@ -947,7 +1013,7 @@ function renderOccupants(container: HTMLElement, node: TreeNode): void {
 
             document.body.appendChild(menu);
 
-            // Close on click outside
+            // Close on click outside (but not while dragging the slider)
             const closeCtx = (ev: MouseEvent) => {
                 if (!menu.contains(ev.target as Node)) {
                     menu.remove();

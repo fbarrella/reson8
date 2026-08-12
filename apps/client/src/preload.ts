@@ -210,7 +210,7 @@ const api = {
         // Voice-specific events
         socket.on("NEW_PRODUCER", (payload) => {
             emit("new-producer", payload);
-            voiceService?.queueConsumeProducer(payload.producerId);
+            voiceService?.queueConsumeProducer(payload.producerId, payload.userId);
         });
 
         socket.on("PRODUCER_CLOSED", (payload) => {
@@ -220,7 +220,7 @@ const api = {
 
         socket.on("EXISTING_PRODUCERS", (payload) => {
             for (const p of payload.producers) {
-                voiceService?.queueConsumeProducer(p.producerId);
+                voiceService?.queueConsumeProducer(p.producerId, p.userId);
             }
         });
     },
@@ -301,6 +301,22 @@ const api = {
 
     setVoiceState(isMuted: boolean, isDeafened: boolean): void {
         socket?.emit("SET_VOICE_STATE", { isMuted, isDeafened }, () => { });
+    },
+
+    setLocalUserVolume(userId: string, percent: number): void {
+        voiceService?.setLocalUserVolume(userId, percent);
+    },
+
+    setLocalUserMute(userId: string, muted: boolean): void {
+        voiceService?.setLocalUserMute(userId, muted);
+    },
+
+    getLocalUserVolume(userId: string): number {
+        return voiceService?.getLocalUserVolume(userId) ?? 100;
+    },
+
+    getLocalUserMute(userId: string): boolean {
+        return voiceService?.getLocalUserMute(userId) ?? false;
     },
 
     // ── Audio Settings ──────────────────────────────────────────────────────

@@ -75,6 +75,13 @@ export class VoiceService {
     private localStream: MediaStream | null = null;
     private _isDeafened = false;
 
+    // ── Per-remote-user local volume/mute (client-local only, PRD 4.1/4.2) ──
+    private playbackAudioContext: AudioContext | null = null;
+    private remoteGainNodes = new Map<string, GainNode>(); // keyed by consumerId
+    private remoteMediaSources = new Map<string, MediaElementAudioSourceNode>(); // keyed by consumerId
+    private consumerIdToUserId = new Map<string, string>();
+    private remoteUserOverrides = new Map<string, { volumePercent: number; muted: boolean }>(); // keyed by userId
+
     // ── Mic sensitivity / noise gate ──────────────────────────────────────
     private analyser: AnalyserNode | null = null;
     private audioContext: AudioContext | null = null;
@@ -86,7 +93,7 @@ export class VoiceService {
     private _isManuallyMuted: boolean = false;
 
     /** Producers that arrived before recv transport was ready. */
-    private pendingProducers: string[] = [];
+    private pendingProducers: { producerId: string; userId: string }[] = [];
 
     constructor(signaling: VoiceSignaling) {
         this.signaling = signaling;
@@ -123,9 +130,9 @@ export class VoiceService {
 
         // 5. Consume any producers that arrived before recv transport was ready
         if (this.pendingProducers.length > 0) {
-            for (const producerId of this.pendingProducers) {
+            for (const { producerId, userId } of this.pendingProducers) {
                 try {
-                    await this.consumeProducer(producerId);
+                    await this.consumeProducer(producerId, userId);
                 } catch (err) {
                     console.error("[voice] Failed to consume pending producer:", err);
                 }
@@ -263,18 +270,18 @@ export class VoiceService {
      * Queue a producer for consumption. If recv transport is ready, consume
      * immediately. Otherwise, defer until after the handshake completes.
      */
-    queueConsumeProducer(producerId: string): void {
+    queueConsumeProducer(producerId: string, userId: string): void {
         if (this.recvTransport && this.device) {
-            this.consumeProducer(producerId).catch((err) => {
+            this.consumeProducer(producerId, userId).catch((err) => {
                 console.error("[voice] Failed to consume producer:", err);
             });
         } else {
-            this.pendingProducers.push(producerId);
+            this.pendingProducers.push({ producerId, userId });
         }
     }
 
     /** Consume a remote user's audio producer. */
-    async consumeProducer(producerId: string): Promise<void> {
+    async consumeProducer(producerId: string, userId: string): Promise<void> {
         if (!this.recvTransport) throw new Error("Recv transport not ready");
         if (!this.device) throw new Error("Device not loaded");
 
@@ -292,6 +299,7 @@ export class VoiceService {
         });
 
         this.consumers.set(consumer.id, consumer);
+        this.consumerIdToUserId.set(consumer.id, userId);
 
         // Create an <audio> element, append to DOM, and play
         const audio = document.createElement("audio") as HTMLAudioElement;
@@ -303,6 +311,20 @@ export class VoiceService {
 
         this.audioElements.set(consumer.id, audio);
 
+        // Route playback through a per-participant GainNode so local volume/mute
+        // (client-local only — never sent to the server, see PRD 4.1/4.2) can go
+        // above 100% and be toggled independently of the element's own volume.
+        const ctx = this.getPlaybackAudioContext();
+        const source = ctx.createMediaElementSource(audio);
+        const gainNode = ctx.createGain();
+        const override = this.remoteUserOverrides.get(userId);
+        gainNode.gain.value = override
+            ? (override.muted ? 0 : override.volumePercent / 100)
+            : 1.0;
+        source.connect(gainNode).connect(ctx.destination);
+        this.remoteMediaSources.set(consumer.id, source);
+        this.remoteGainNodes.set(consumer.id, gainNode);
+
         // Resume on server (consumers start paused)
         await this.signaling.resumeConsumer(consumer.id);
     }
@@ -313,6 +335,18 @@ export class VoiceService {
             if (consumer.producerId === producerId) {
                 consumer.close();
                 this.consumers.delete(consumerId);
+                this.consumerIdToUserId.delete(consumerId);
+
+                const source = this.remoteMediaSources.get(consumerId);
+                if (source) {
+                    source.disconnect();
+                    this.remoteMediaSources.delete(consumerId);
+                }
+                const gain = this.remoteGainNodes.get(consumerId);
+                if (gain) {
+                    gain.disconnect();
+                    this.remoteGainNodes.delete(consumerId);
+                }
 
                 const audio = this.audioElements.get(consumerId);
                 if (audio) {
@@ -324,6 +358,50 @@ export class VoiceService {
                 break;
             }
         }
+    }
+
+    // ── Per-remote-user local volume/mute ───────────────────────────────────
+
+    private getPlaybackAudioContext(): AudioContext {
+        if (!this.playbackAudioContext) {
+            this.playbackAudioContext = new AudioContext();
+        }
+        return this.playbackAudioContext;
+    }
+
+    private applyOverrideForUser(userId: string, override: { volumePercent: number; muted: boolean }): void {
+        for (const [consumerId, uid] of this.consumerIdToUserId) {
+            if (uid !== userId) continue;
+            const gain = this.remoteGainNodes.get(consumerId);
+            if (gain) {
+                gain.gain.value = override.muted ? 0 : override.volumePercent / 100;
+            }
+        }
+    }
+
+    /** Set a remote participant's local playback volume (0–200%, 100% = default). Client-local only. */
+    setLocalUserVolume(userId: string, percent: number): void {
+        const clamped = Math.max(0, Math.min(200, percent));
+        const existing = this.remoteUserOverrides.get(userId) ?? { volumePercent: 100, muted: false };
+        existing.volumePercent = clamped;
+        this.remoteUserOverrides.set(userId, existing);
+        this.applyOverrideForUser(userId, existing);
+    }
+
+    /** Mute/unmute a remote participant locally, preserving their configured volume. Client-local only. */
+    setLocalUserMute(userId: string, muted: boolean): void {
+        const existing = this.remoteUserOverrides.get(userId) ?? { volumePercent: 100, muted: false };
+        existing.muted = muted;
+        this.remoteUserOverrides.set(userId, existing);
+        this.applyOverrideForUser(userId, existing);
+    }
+
+    getLocalUserVolume(userId: string): number {
+        return this.remoteUserOverrides.get(userId)?.volumePercent ?? 100;
+    }
+
+    getLocalUserMute(userId: string): boolean {
+        return this.remoteUserOverrides.get(userId)?.muted ?? false;
     }
 
     // ── Mute / Unmute ─────────────────────────────────────────────────────
@@ -584,6 +662,20 @@ export class VoiceService {
             audio.remove();
         }
         this.audioElements.clear();
+
+        for (const source of this.remoteMediaSources.values()) {
+            source.disconnect();
+        }
+        this.remoteMediaSources.clear();
+        for (const gain of this.remoteGainNodes.values()) {
+            gain.disconnect();
+        }
+        this.remoteGainNodes.clear();
+        this.consumerIdToUserId.clear();
+        if (this.playbackAudioContext) {
+            this.playbackAudioContext.close().catch(() => {});
+            this.playbackAudioContext = null;
+        }
 
         if (this.sendTransport) {
             this.sendTransport.close();

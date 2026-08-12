@@ -279,3 +279,104 @@ Feature/Fix: Self-Mute / Self-Deafen Status Icons (PRD 4.3)
   suggested implementation order — they share the same GainNode-per-
   participant infrastructure and the generalized occupant right-click
   context menu.
+
+--- Entry: 11/08/2026 ---
+
+Feature/Fix: Per-User Local Volume Levels (PRD 4.1)
+
+  Problem: While in a voice channel, there was no way to adjust how loud
+  a specific participant sounded to you personally — voice.service.ts
+  hardcoded every remote <audio> element's volume to 1.0 with no per-
+  participant control, and had no concept of userId at all (consumers/
+  audio elements were keyed only by consumerId, with the userId↔producerId
+  association discarded in preload.ts right after triggering consumption).
+
+  Solution: This is a purely client-local feature — nothing is sent to
+  the server, and nothing changes for other participants.
+    - voice.service.ts: threaded userId through queueConsumeProducer()/
+      consumeProducer() (pendingProducers now stores {producerId, userId}
+      pairs instead of bare producer IDs) and added a consumerIdToUserId
+      map.
+    - Each consumed participant is now routed through a dedicated Web
+      Audio graph: MediaElementAudioSourceNode -> GainNode ->
+      destination, using a lazily-created playbackAudioContext (kept
+      separate from the existing mic-analysis AudioContext used by the
+      noise gate, since their lifecycles are unrelated). GainNode.gain
+      supports 0–200% (the existing .volume property caps at 100%, so a
+      real Gain node was required to allow boosting quiet talkers).
+    - remoteUserOverrides: Map<userId, {volumePercent, muted}> holds the
+      desired state per user regardless of whether they're currently
+      being consumed — setLocalUserVolume()/setLocalUserMute() update
+      this map and immediately re-apply gain to any live consumer for
+      that user; if the user isn't in-channel yet, the override is
+      simply read back when their producer is eventually consumed. This
+      fully decouples "user sets a preference" from "user is currently
+      speaking," so ordering never matters.
+    - Persistence: localStorage, keyed by target userId
+      (reson8-local-volume-<userId>), applied in renderOccupants() for
+      every rendered occupant (idempotent — cheap to call on every tree
+      render, and naturally covers both "already consuming" and "not
+      consuming yet" cases without extra event plumbing).
+
+  localStorage Keys:
+    reson8-local-volume-<userId> — string, 0–200 (percent)
+
+  Key Files Modified:
+    apps/client/src/services/voice.service.ts — GainNode-per-participant
+      playback graph, remoteUserOverrides, setLocalUserVolume()/
+      getLocalUserVolume(), userId threaded through consumeProducer()
+    apps/client/src/preload.ts — queueConsumeProducer() calls now pass
+      userId; setLocalUserVolume()/getLocalUserVolume() bridge methods
+    apps/client/src/renderer/renderer.ts — getSavedLocalVolume()/
+      setSavedLocalVolume(), hydration call in renderOccupants(),
+      Reson8Api interface extended
+
+  Verification:
+    - TypeScript build (client): npx tsc --noEmit — passed
+
+  Next Step: See PRD 4.2 entry below — implemented in the same pass,
+  sharing this GainNode infrastructure.
+
+--- Entry: 11/08/2026 ---
+
+Feature/Fix: Mute a Single User Locally (PRD 4.2)
+
+  Problem: No way to locally silence a specific voice channel
+  participant (client-local only — muting them for yourself, not for
+  anyone else). The only existing right-click menu on an occupant was
+  admin-only and single-purpose (Kick from Channel).
+
+  Solution: Generalized the existing occupant-list right-click context
+  menu (previously gated entirely behind isAdminUser) into a menu
+  everyone gets: a 0–200% volume slider (PRD 4.1) plus a "Mute Locally"/
+  "Unmute Locally" toggle button, with "Kick from Channel" still
+  rendered conditionally, admin-only, and never shown when right-
+  clicking yourself. Locally muting sets the participant's GainNode to
+  0 while preserving their configured volumePercent underneath, so
+  unmuting restores their actual saved volume rather than resetting to
+  100%. Same localStorage persistence pattern as PRD 4.1.
+
+  localStorage Keys:
+    reson8-local-mute-<userId> — "1" or "0"
+
+  Key Files Modified:
+    apps/client/src/services/voice.service.ts — setLocalUserMute()/
+      getLocalUserMute(), muted flag in remoteUserOverrides
+    apps/client/src/preload.ts — setLocalUserMute()/getLocalUserMute()
+      bridge methods
+    apps/client/src/renderer/renderer.ts — getSavedLocalMute()/
+      setSavedLocalMute(), context menu rebuilt with volume slider +
+      mute toggle + conditional kick button
+    apps/client/src/renderer/index.html — .ctx-volume-row/.ctx-mute-btn
+      CSS
+
+  Verification:
+    - TypeScript build (client): npx tsc --noEmit — passed
+    - Full workspace re-check: shared-types (npx tsc --build), server
+      (npx tsc --noEmit), server test suite (npm run test, 19/19) all
+      re-verified clean after this batch — no regressions from the
+      voice.service.ts changes even though they don't touch the server.
+
+  Next Step: PRD 4.5 (channel rename) and PRD 4.7 (NSFW channels) are
+  next per app-planning/Reson8_NextSteps_PRD.md's suggested order — they
+  share the same admin "edit channel" event/UI.
