@@ -371,6 +371,19 @@ const api = {
         });
     },
 
+    reorderChannels(
+        parentId: string | null,
+        orderedChannelIds: string[],
+    ): Promise<{ success: boolean; error?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.emit("REORDER_CHANNELS", { parentId, orderedChannelIds }, resolve);
+        });
+    },
+
     deleteChannel(
         channelId: string,
     ): Promise<{ success: boolean; error?: string }> {

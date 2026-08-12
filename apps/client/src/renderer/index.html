@@ -257,6 +257,19 @@
       background: rgba(79, 195, 247, 0.08);
     }
 
+    .draggable-channel {
+      cursor: grab;
+    }
+
+    .draggable-channel:active {
+      cursor: grabbing;
+    }
+
+    .draggable-channel.drag-over {
+      box-shadow: inset 0 2px 0 var(--accent);
+      background: rgba(79, 195, 247, 0.12);
+    }
+
     .tree-channel.active {
       background: var(--accent-dim);
       color: #fff;

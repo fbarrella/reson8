@@ -485,6 +485,10 @@ interface Reson8Api {
         channelId: string,
         changes: { name?: string; position?: number; isNsfw?: boolean },
     ): Promise<{ success: boolean; error?: string }>;
+    reorderChannels(
+        parentId: string | null,
+        orderedChannelIds: string[],
+    ): Promise<{ success: boolean; error?: string }>;
     deleteChannel(channelId: string): Promise<{ success: boolean; error?: string }>;
     sendMessage(channelId: string, content: string, attachmentUrl?: string): Promise<{ success: boolean; messageId?: string }>;
     fetchMessages(channelId: string, before?: string, limit?: number): Promise<{ success: boolean; messages?: ChatMessage[]; error?: string }>;
@@ -845,10 +849,10 @@ function renderTree(tree: TreeNode[]): void {
     for (const node of tree) {
         if (node.children.length > 0) {
             // This node has children — render as a category
-            channelTree.appendChild(renderCategory(node));
+            channelTree.appendChild(renderCategory(node, tree));
         } else {
             // Leaf channel at root level
-            channelTree.appendChild(renderChannel(node));
+            channelTree.appendChild(renderChannel(node, tree));
             renderOccupants(channelTree, node);
         }
     }
@@ -856,7 +860,67 @@ function renderTree(tree: TreeNode[]): void {
     updateParentSelect(tree);
 }
 
-function renderCategory(node: TreeNode): HTMLDivElement {
+// Currently-dragged channel/category ID (PRD 4.6, admin-only sibling reordering).
+let draggedChannelId: string | null = null;
+
+/**
+ * Wires HTML5 drag-and-drop reordering onto a channel-tree row. `siblings` is
+ * the exact array `node` belongs to (the `tree` array for root nodes, or a
+ * category's `children` array) — dropping onto another row in the same array
+ * reorders the whole array and persists it via REORDER_CHANNELS. Admin-only;
+ * a no-op for everyone else so non-admins see no drag affordance at all.
+ */
+function attachChannelDragHandlers(el: HTMLElement, node: TreeNode, siblings: TreeNode[]): void {
+    if (!isAdminUser) return;
+
+    el.classList.add("draggable-channel");
+    el.draggable = true;
+
+    el.addEventListener("dragstart", (e) => {
+        draggedChannelId = node.id;
+        e.dataTransfer?.setData("text/plain", node.id);
+        if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
+    });
+
+    el.addEventListener("dragover", (e) => {
+        if (!draggedChannelId || draggedChannelId === node.id) return;
+        if (!siblings.some((s) => s.id === draggedChannelId)) return;
+        e.preventDefault();
+        el.classList.add("drag-over");
+    });
+
+    el.addEventListener("dragleave", () => {
+        el.classList.remove("drag-over");
+    });
+
+    el.addEventListener("drop", async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        el.classList.remove("drag-over");
+
+        const draggedId = draggedChannelId;
+        draggedChannelId = null;
+        if (!draggedId || draggedId === node.id) return;
+        if (!siblings.some((s) => s.id === draggedId)) return;
+
+        const orderedIds = siblings.map((s) => s.id).filter((id) => id !== draggedId);
+        const insertIdx = orderedIds.indexOf(node.id);
+        orderedIds.splice(insertIdx === -1 ? orderedIds.length : insertIdx, 0, draggedId);
+
+        const result = await api.reorderChannels(node.parentId, orderedIds);
+        if (!result.success) {
+            log(`Failed to reorder channels: ${result.error}`, "error");
+            if (result.error && /permission|denied/i.test(result.error)) SoundAlert.play("insufficient_perms.mp3");
+        }
+    });
+
+    el.addEventListener("dragend", () => {
+        draggedChannelId = null;
+        document.querySelectorAll(".drag-over").forEach((n) => n.classList.remove("drag-over"));
+    });
+}
+
+function renderCategory(node: TreeNode, siblings: TreeNode[]): HTMLDivElement {
     const category = document.createElement("div");
     category.className = "tree-category";
 
@@ -866,6 +930,7 @@ function renderCategory(node: TreeNode): HTMLDivElement {
     label.addEventListener("click", () => {
         category.classList.toggle("collapsed");
     });
+    attachChannelDragHandlers(label, node, siblings);
     category.appendChild(label);
 
     const children = document.createElement("div");
@@ -873,9 +938,9 @@ function renderCategory(node: TreeNode): HTMLDivElement {
 
     for (const child of node.children) {
         if (child.children.length > 0) {
-            children.appendChild(renderCategory(child));
+            children.appendChild(renderCategory(child, node.children));
         } else {
-            children.appendChild(renderChannel(child));
+            children.appendChild(renderChannel(child, node.children));
             renderOccupants(children, child);
         }
     }
@@ -887,7 +952,7 @@ function renderCategory(node: TreeNode): HTMLDivElement {
     return category;
 }
 
-function renderChannel(node: TreeNode): HTMLDivElement {
+function renderChannel(node: TreeNode, siblings: TreeNode[]): HTMLDivElement {
     const channel = document.createElement("div");
     channel.className = "tree-channel";
     if (currentChannelId === node.id) {
@@ -918,6 +983,7 @@ function renderChannel(node: TreeNode): HTMLDivElement {
     `;
 
     channel.addEventListener("click", () => handleChannelClick(node));
+    attachChannelDragHandlers(channel, node, siblings);
 
     // Right-click → Rename / Toggle NSFW (text only) / Delete
     channel.addEventListener("contextmenu", (e) => {

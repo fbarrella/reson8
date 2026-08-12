@@ -501,3 +501,67 @@ Feature/Fix: NSFW Text Channels (PRD 4.7)
   app-planning/Reson8_NextSteps_PRD.md's suggested order — it will build
   on the existing Channel.position field (already used for sibling
   sort order, just not yet client-editable).
+
+--- Entry: 11/08/2026 ---
+
+Feature/Fix: Channel Reordering via Drag & Drop (PRD 4.6)
+
+  Problem: Channels rendered in creation order (Channel.position, set
+  once at creation and never editable) with no way to reorder them
+  short of deleting and recreating — e.g. creating "2" then "1" left
+  them stuck in that order. Scoped to siblings-only reordering (same
+  parent) per an earlier product decision — dragging a channel into a
+  different parent group is out of scope.
+
+  Solution: buildChannelTree() already sorted siblings by `position`
+  correctly (verified before assuming a fix was needed there — the
+  original PRD draft had flagged this as a possible root cause, but it
+  wasn't; the actual gap was purely "nothing ever writes a non-default
+  position").
+    - New REORDER_CHANNELS socket event: client sends the full ordered
+      sibling ID list for one parent (`{ parentId, orderedChannelIds }`)
+      rather than a single move delta, so the server can validate the
+      set atomically and apply it in one transaction (`position = index`
+      for each ID) instead of reasoning about incremental moves. Server
+      validates the submitted ID set is exactly the current sibling set
+      for that parent/server before writing anything — rejects stale or
+      foreign IDs rather than partially applying.
+    - MANAGE_CHANNELS-gated, same as the other channel-admin actions.
+    - Client: HTML5 Drag and Drop API wired onto every channel-tree row
+      (both leaf channels and category labels, since categories are
+      channels-with-children and are siblings too). Dropping onto a row
+      inserts the dragged channel immediately before it and persists
+      the recomputed sibling order via reorderChannels(). Drag handlers
+      are admin-only and simply skip attaching (attachChannelDragHandlers
+      no-ops) for non-admins, so there's no drag affordance at all for
+      regular members — a deliberate difference from how Rename/Delete/
+      NSFW-toggle are exposed (those rely on server-side permission
+      checks + an "insufficient perms" sound on failure), because a
+      failed drag gesture is a much worse UX than a disabled menu item.
+    - renderChannel()/renderCategory() now take a `siblings: TreeNode[]`
+      parameter (the exact array the node belongs to — the root `tree`
+      array or a category's `children` array) so drop handlers can
+      compute the new sibling order directly by reference instead of
+      re-querying the DOM.
+
+  Key Files Modified:
+    packages/shared-types/src/socket-events.ts — REORDER_CHANNELS event
+    apps/server/src/handlers/channel.handler.ts — REORDER_CHANNELS
+      handler: sibling-set validation, transactional position update
+    apps/client/src/preload.ts — reorderChannels() bridge method
+    apps/client/src/renderer/renderer.ts — attachChannelDragHandlers(),
+      siblings threaded through renderTree()/renderCategory()/
+      renderChannel(), Reson8Api interface
+    apps/client/src/renderer/index.html — .draggable-channel/.drag-over
+      CSS
+
+  Verification:
+    - TypeScript build (shared-types): npx tsc --build — passed
+    - TypeScript build (server): npx tsc --noEmit — passed
+    - TypeScript build (client): npx tsc --noEmit — passed
+    - Server test suite: npm run test — 19/19 passed
+
+  Next Step: PRD 4.13 (unread text channel indicator) is next per
+  app-planning/Reson8_NextSteps_PRD.md's suggested order — needs a new
+  ChannelRead cursor table, the first item in this phase to add a new
+  Prisma model rather than extending an existing one.

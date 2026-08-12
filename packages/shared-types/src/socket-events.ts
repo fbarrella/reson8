@@ -77,6 +77,12 @@ export interface ClientToServerEvents {
         ack: (response: { success: boolean; error?: string }) => void,
     ) => void;
 
+    /** Admin reorders all channels sharing a parent in one atomic batch. */
+    REORDER_CHANNELS: (
+        payload: { parentId: string | null; orderedChannelIds: string[] },
+        ack: (response: { success: boolean; error?: string }) => void,
+    ) => void;
+
     /** Client sends a text message to their current channel. */
     SEND_MESSAGE: (
         payload: { channelId: string; content: string; attachmentUrl?: string },
