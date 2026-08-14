@@ -9,6 +9,7 @@
  * and cleaned up when the last user leaves.
  */
 
+import { EventEmitter } from "node:events";
 import * as mediasoup from "mediasoup";
 import type { types as mediasoupTypes } from "mediasoup";
 import {
@@ -32,7 +33,11 @@ export type AudioLevelCallback = (volumes: Array<{ producerId: string; volume: n
 /** Callback for silence events (no speakers detected). */
 export type SilenceCallback = () => void;
 
-export class MediasoupService {
+/**
+ * Emits `workerDied` with the channelIds that were hosted on the crashed
+ * worker's Routers (all now unrecoverable — clients must rejoin voice).
+ */
+export class MediasoupService extends EventEmitter {
     private workers: mediasoupTypes.Worker[] = [];
     private nextWorkerIdx = 0;
 
@@ -45,24 +50,68 @@ export class MediasoupService {
     /** channelId → AudioLevelObserver */
     private audioLevelObservers = new Map<string, mediasoupTypes.AudioLevelObserver>();
 
+    /** Worker → set of channelIds whose Router lives on that Worker. */
+    private workerChannels = new Map<mediasoupTypes.Worker, Set<string>>();
+
+    /** channelId → the Worker hosting its Router (reverse of workerChannels). */
+    private channelWorker = new Map<string, mediasoupTypes.Worker>();
+
     // ── Initialization ────────────────────────────────────────────────────
 
     /** Spawns the Worker pool. Must be called once at server startup. */
     async init(): Promise<void> {
         for (let i = 0; i < NUM_WORKERS; i++) {
-            const worker = await mediasoup.createWorker(WORKER_SETTINGS);
+            await this.spawnWorker();
+        }
+    }
 
-            worker.on("died", (error) => {
-                console.error(
-                    `[mediasoup] Worker ${worker.pid} died: ${error.message}`,
-                );
-                process.exit(1);
+    /** Spawns a single Worker and wires its crash-recovery handler. */
+    private async spawnWorker(): Promise<mediasoupTypes.Worker> {
+        const worker = await mediasoup.createWorker(WORKER_SETTINGS);
+        this.workerChannels.set(worker, new Set());
+
+        worker.on("died", (error) => {
+            console.error(`[mediasoup] Worker ${worker.pid} died: ${error.message}`);
+            this.handleWorkerDeath(worker).catch((respawnErr) => {
+                console.error("[mediasoup] Failed to recover from worker death:", respawnErr);
             });
+        });
 
-            this.workers.push(worker);
-            console.log(
-                `[mediasoup] Worker ${i + 1}/${NUM_WORKERS} spawned (PID: ${worker.pid})`,
-            );
+        this.workers.push(worker);
+        console.log(`[mediasoup] Worker spawned (PID: ${worker.pid})`);
+        return worker;
+    }
+
+    /**
+     * Recovers from a single Worker crash without taking the whole process
+     * down: every Router/session hosted on it is unrecoverable and is torn
+     * down, a replacement Worker is spawned to keep the pool size stable, and
+     * a `workerDied` event is emitted so callers can notify only the
+     * specific channels that were affected (see PRD 11.1 — a crash used to
+     * call process.exit(1), dropping every voice user on the server for a
+     * single worker's failure).
+     */
+    private async handleWorkerDeath(deadWorker: mediasoupTypes.Worker): Promise<void> {
+        const affectedChannels = Array.from(this.workerChannels.get(deadWorker) ?? []);
+        this.workerChannels.delete(deadWorker);
+        this.workers = this.workers.filter((w) => w !== deadWorker);
+        if (this.nextWorkerIdx >= this.workers.length) this.nextWorkerIdx = 0;
+
+        for (const channelId of affectedChannels) {
+            // The Router (and everything on it) died with the Worker — no
+            // close() calls needed/possible, just drop our references.
+            this.routers.delete(channelId);
+            this.audioLevelObservers.delete(channelId);
+            this.sessions.delete(channelId);
+            this.channelWorker.delete(channelId);
+        }
+
+        if (this.workers.length < NUM_WORKERS) {
+            await this.spawnWorker();
+        }
+
+        if (affectedChannels.length > 0) {
+            this.emit("workerDied", { channelIds: affectedChannels });
         }
     }
 
@@ -84,6 +133,8 @@ export class MediasoupService {
         router = await worker.createRouter({ mediaCodecs: MEDIA_CODECS });
         this.routers.set(channelId, router);
         this.sessions.set(channelId, new Map());
+        this.workerChannels.get(worker)?.add(channelId);
+        this.channelWorker.set(channelId, worker);
 
         console.log(`[mediasoup] Router created for channel ${channelId}`);
         return router;
@@ -103,6 +154,11 @@ export class MediasoupService {
             router.close();
             this.routers.delete(channelId);
             this.sessions.delete(channelId);
+            const worker = this.channelWorker.get(channelId);
+            if (worker) {
+                this.workerChannels.get(worker)?.delete(channelId);
+                this.channelWorker.delete(channelId);
+            }
             console.log(`[mediasoup] Router destroyed for channel ${channelId}`);
         }
     }
@@ -173,6 +229,21 @@ export class MediasoupService {
             if (state === "failed" || state === "closed") {
                 transport.close();
             }
+        });
+
+        // mediasoup's ICE state has no "failed" value (unlike DTLS) — a dead
+        // connection just sits at "disconnected" indefinitely, since ICE can
+        // also recover from a transient "disconnected" on its own. Give it a
+        // grace period before treating it as gone; this cascades into the
+        // producer/consumer "transportclose" cleanup already in place (see
+        // PRD 11.1 — previously nothing ever noticed a pure ICE-level drop).
+        transport.on("icestatechange", (iceState: mediasoupTypes.IceState) => {
+            if (iceState !== "disconnected") return;
+            setTimeout(() => {
+                if (!transport.closed && transport.iceState === "disconnected") {
+                    transport.close();
+                }
+            }, 10_000);
         });
 
         return transport;

@@ -75,6 +75,19 @@ export class VoiceService {
     private localStream: MediaStream | null = null;
     private _isDeafened = false;
 
+    /**
+     * Fired at most once per join when a transport's WebRTC connection is
+     * confirmed lost (ICE failed, or stuck "disconnected" past a grace
+     * period) — independent of the Socket.io signaling channel, which may
+     * still be perfectly healthy. The caller (preload.ts) is expected to
+     * tear down and rejoin the voice channel in response (PRD 11.1).
+     */
+    onConnectionLost: (() => void) | null = null;
+    /** Fired when a non-fatal voice error should be surfaced to the UI. */
+    onError: ((message: string) => void) | null = null;
+    private iceGraceTimer: ReturnType<typeof setTimeout> | null = null;
+    private connectionLossReported = false;
+
     // ── Per-remote-user local volume/mute (client-local only, PRD 4.1/4.2) ──
     private playbackAudioContext: AudioContext | null = null;
     private remoteGainNodes = new Map<string, GainNode>(); // keyed by consumerId
@@ -166,6 +179,10 @@ export class VoiceService {
             ...(res.iceServers ? { iceServers: res.iceServers } : {}),
         });
 
+        this.sendTransport.on("connectionstatechange", (state) => {
+            this.handleTransportConnectionStateChange(state);
+        });
+
         this.sendTransport.on(
             "connect",
             async ({ dtlsParameters }, callback, errback) => {
@@ -219,6 +236,10 @@ export class VoiceService {
             ...(res.iceServers ? { iceServers: res.iceServers } : {}),
         });
 
+        this.recvTransport.on("connectionstatechange", (state) => {
+            this.handleTransportConnectionStateChange(state);
+        });
+
         this.recvTransport.on(
             "connect",
             async ({ dtlsParameters }, callback, errback) => {
@@ -234,6 +255,46 @@ export class VoiceService {
                 }
             },
         );
+    }
+
+    /**
+     * Handles WebRTC-level connection-state changes on either transport.
+     * "disconnected" gets a grace period (ICE frequently self-recovers from
+     * it, e.g. a brief NAT rebind) before being treated as a real failure;
+     * "failed" is terminal immediately. Only reports once per join — the
+     * caller is expected to tear the whole session down in response.
+     */
+    private handleTransportConnectionStateChange(state: string): void {
+        if (state === "connected" || state === "completed") {
+            if (this.iceGraceTimer !== null) {
+                clearTimeout(this.iceGraceTimer);
+                this.iceGraceTimer = null;
+            }
+            return;
+        }
+
+        if (state === "failed") {
+            if (this.iceGraceTimer !== null) {
+                clearTimeout(this.iceGraceTimer);
+                this.iceGraceTimer = null;
+            }
+            this.reportConnectionLost();
+            return;
+        }
+
+        if (state === "disconnected") {
+            if (this.iceGraceTimer !== null) return; // already waiting
+            this.iceGraceTimer = setTimeout(() => {
+                this.iceGraceTimer = null;
+                this.reportConnectionLost();
+            }, 4000);
+        }
+    }
+
+    private reportConnectionLost(): void {
+        if (this.connectionLossReported) return;
+        this.connectionLossReported = true;
+        this.onConnectionLost?.();
     }
 
     private _audioDeviceId: string | null = null;
@@ -276,10 +337,18 @@ export class VoiceService {
      * Queue a producer for consumption. If recv transport is ready, consume
      * immediately. Otherwise, defer until after the handshake completes.
      */
-    queueConsumeProducer(producerId: string, userId: string): void {
+    queueConsumeProducer(producerId: string, userId: string, attempt: number = 1): void {
+        const MAX_ATTEMPTS = 3;
         if (this.recvTransport && this.device) {
             this.consumeProducer(producerId, userId).catch((err) => {
-                console.error("[voice] Failed to consume producer:", err);
+                console.error(`[voice] Failed to consume producer (attempt ${attempt}):`, err);
+                if (attempt < MAX_ATTEMPTS) {
+                    setTimeout(() => {
+                        this.queueConsumeProducer(producerId, userId, attempt + 1);
+                    }, 1000);
+                } else {
+                    this.onError?.("Couldn't receive audio from a participant. They may need to rejoin.");
+                }
             });
         } else {
             this.pendingProducers.push({ producerId, userId });
@@ -666,6 +735,12 @@ export class VoiceService {
 
     /** Leave voice — clean up all resources. */
     cleanup(): void {
+        if (this.iceGraceTimer !== null) {
+            clearTimeout(this.iceGraceTimer);
+            this.iceGraceTimer = null;
+        }
+        this.connectionLossReported = false;
+
         // Clean up preview if running
         this.stopPreview();
 

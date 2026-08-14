@@ -19,6 +19,13 @@ interface ChatMessage {
     reactions?: Array<{ emoji: string; count: number; userIds: string[] }>;
 }
 
+interface PinnedMessage {
+    id: string;
+    content: string;
+    authorNickname: string;
+    createdAt: string;
+}
+
 interface DirectMessage {
     id: string;
     senderId: string;
@@ -688,6 +695,7 @@ interface Reson8Api {
     downloadUpdate(): Promise<void>;
     quitAndInstall(): void;
     getAppVersion(): Promise<string>;
+    fetchReleaseNotes(version: string): Promise<{ name: string; body: string; htmlUrl: string } | null>;
     createChannel(
         serverId: string,
         name: string,
@@ -707,7 +715,9 @@ interface Reson8Api {
     sendMessage(channelId: string, content: string, attachmentUrl?: string, attachmentPublicId?: string): Promise<{ success: boolean; messageId?: string }>;
     deleteMessage(messageId: string): Promise<{ success: boolean; error?: string }>;
     editMessage(messageId: string, content: string): Promise<{ success: boolean; error?: string }>;
-    fetchMessages(channelId: string, before?: string, limit?: number): Promise<{ success: boolean; messages?: ChatMessage[]; error?: string }>;
+    fetchMessages(channelId: string, before?: string, limit?: number, aroundMessageId?: string): Promise<{ success: boolean; messages?: ChatMessage[]; pinnedMessage?: PinnedMessage | null; error?: string }>;
+    pinMessage(channelId: string, messageId: string): Promise<{ success: boolean; error?: string }>;
+    unpinMessage(channelId: string): Promise<{ success: boolean; error?: string }>;
     markChannelRead(channelId: string): Promise<{ success: boolean }>;
     getAllUsers(serverId: string): Promise<{ success: boolean; users?: any[]; error?: string }>;
     getRoles(serverId: string): Promise<{ success: boolean; roles?: any[]; error?: string }>;
@@ -737,6 +747,7 @@ interface Reson8Api {
     stopMicPreview(): void;
     getMicLevel(): number;
     getLatency(): number;
+    getClockOffset(): number;
     toggleReaction(messageId: string, emoji: string, isDm: boolean): Promise<{ success: boolean; error?: string }>;
     uploadEmojiFile(fileBuffer: ArrayBuffer, fileName: string, mimeType: string): Promise<{ url: string; publicId?: string }>;
     createCustomEmoji(name: string, imageUrl: string, imagePublicId?: string): Promise<{ success: boolean; emojiId?: string; error?: string }>;
@@ -832,7 +843,11 @@ const NUDGE_COOLDOWN_MS = 30 * 1000;
 const lastNudgeSentAt = new Map<string, number>();
 
 function formatDuration(ms: number): string {
-    const totalSeconds = Math.floor(ms / 1000);
+    // Defense in depth against residual clock skew (the offset applied by
+    // callers is a single round-trip estimate, not a full NTP sync) — a
+    // session timer should never visibly count from a negative number
+    // (PRD 11.2).
+    const totalSeconds = Math.floor(Math.max(0, ms) / 1000);
     const hours = Math.floor(totalSeconds / 3600);
     const minutes = Math.floor((totalSeconds % 3600) / 60);
     const seconds = totalSeconds % 60;
@@ -840,6 +855,13 @@ function formatDuration(ms: number): string {
         return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
     }
     return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+}
+
+/** Current time corrected for client↔server clock skew (PRD 11.2) — use
+ *  this instead of a raw Date.now() whenever diffing against a
+ *  server-issued timestamp like sessionStartedAt. */
+function correctedNow(): number {
+    return Date.now() + api.getClockOffset();
 }
 
 // Store the current tree for parent selection in the modal
@@ -866,6 +888,8 @@ const btnEmoji = document.getElementById("btn-emoji") as HTMLButtonElement;
 const emojiPicker = document.getElementById("emoji-picker") as HTMLDivElement;
 const emojiSearch = document.getElementById("emoji-search") as HTMLInputElement;
 const emojiCategoryTabs = document.getElementById("emoji-category-tabs") as HTMLDivElement;
+const emojiTabsBar = document.getElementById("emoji-tabs-bar") as HTMLDivElement;
+const emojiCustomTabSlot = document.getElementById("emoji-custom-tab-slot") as HTMLDivElement;
 const emojiGridContainer = document.getElementById("emoji-grid-container") as HTMLDivElement;
 const fileInput = document.getElementById("file-input") as HTMLInputElement;
 const attachmentPreview = document.getElementById("attachment-preview") as HTMLDivElement;
@@ -969,6 +993,12 @@ const updateModalStatus = document.getElementById("update-modal-status") as HTML
 const btnUpdateNow = document.getElementById("btn-update-now") as HTMLButtonElement;
 const btnUpdateLater = document.getElementById("btn-update-later") as HTMLButtonElement;
 
+const whatsNewModal = document.getElementById("whats-new-modal") as HTMLDivElement;
+const whatsNewTitle = document.getElementById("whats-new-title") as HTMLHeadingElement;
+const whatsNewBody = document.getElementById("whats-new-body") as HTMLDivElement;
+const btnWhatsNewGithub = document.getElementById("btn-whats-new-github") as HTMLButtonElement;
+const btnWhatsNewDismiss = document.getElementById("btn-whats-new-dismiss") as HTMLButtonElement;
+
 // Audio device selects (inside settings modal voice tab)
 const audioInputSelect = document.getElementById("audio-input-select") as HTMLSelectElement;
 const audioOutputSelect = document.getElementById("audio-output-select") as HTMLSelectElement;
@@ -1030,6 +1060,11 @@ const btnNsfwCancel = document.getElementById("btn-nsfw-cancel") as HTMLButtonEl
 const btnNsfwConfirm = document.getElementById("btn-nsfw-confirm") as HTMLButtonElement;
 let pendingNsfwChannel: TreeNode | null = null;
 
+// ── Pin-Replace Confirmation Modal (PRD 11.5) ───────────────────────────────
+const pinReplaceConfirmModal = document.getElementById("pin-replace-confirm-modal") as HTMLDivElement;
+const btnPinReplaceCancel = document.getElementById("btn-pin-replace-cancel") as HTMLButtonElement;
+const btnPinReplaceConfirm = document.getElementById("btn-pin-replace-confirm") as HTMLButtonElement;
+
 const newChannelNsfwRow = document.getElementById("new-channel-nsfw-row") as HTMLDivElement;
 const newChannelNsfw = document.getElementById("new-channel-nsfw") as HTMLInputElement;
 
@@ -1075,6 +1110,9 @@ interface ChatTab {
     contentEl: HTMLDivElement;
     messagesEl: HTMLDivElement;
     loaded: boolean;
+    /** Undefined for DM tabs — pinning is text-channel only (PRD 11.5). */
+    pinBarEl?: HTMLDivElement;
+    pinnedMessageId: string | null;
 }
 const chatTabs = new Map<string, ChatTab>();
 let activeTabId = "server-log"; // default active tab
@@ -1167,6 +1205,17 @@ interface TreeNode {
     hasUnread?: boolean;
     children: TreeNode[];
     occupants: { userId: string; nickname: string; isMuted?: boolean; isDeafened?: boolean }[];
+}
+
+function findChannelNodeById(nodes: TreeNode[], id: string): TreeNode | null {
+    for (const node of nodes) {
+        if (node.id === id) return node;
+        if (node.children.length > 0) {
+            const found = findChannelNodeById(node.children, id);
+            if (found) return found;
+        }
+    }
+    return null;
 }
 
 function renderTree(tree: TreeNode[]): void {
@@ -1309,7 +1358,7 @@ function renderChannel(node: TreeNode, siblings: TreeNode[]): HTMLDivElement {
     let timerBadge = "";
     if (isVoice && sessionTimers.has(node.id)) {
         const startedAt = sessionTimers.get(node.id)!;
-        const elapsed = formatDuration(Date.now() - new Date(startedAt).getTime());
+        const elapsed = formatDuration(correctedNow() - new Date(startedAt).getTime());
         timerBadge = `<span class="session-timer" data-session-channel="${node.id}">${elapsed}</span>`;
     }
 
@@ -2005,6 +2054,57 @@ api.on("disconnected", () => {
     SoundAlert.play("disconnected.mp3");
 });
 
+// ── Voice Auto-Reconnect (PRD 11.1) ─────────────────────────────────────────
+// Fired by preload's attemptVoiceRejoin(), which transparently replays the
+// full voice-join handshake after a Socket.io reconnect or a WebRTC-level
+// connection failure — neither the server nor mediasoup transports survive
+// either event, so nothing here resumes a session, it re-joins one.
+
+api.on("voice-connection-lost", () => {
+    log("Voice connection lost — attempting to reconnect...", "error");
+});
+
+api.on("voice-reconnecting", (data: { channelId: string }) => {
+    voicePanel.classList.add("reconnecting");
+    if (isInVoice && currentChannelId === data.channelId) {
+        voiceChannelName.textContent += " (reconnecting…)";
+    }
+});
+
+api.on("voice-reconnected", (data: { channelId: string }) => {
+    voicePanel.classList.remove("reconnecting");
+    isInVoice = true;
+    currentChannelId = data.channelId;
+
+    const node = findChannelNodeById(currentTree, data.channelId);
+    updateVoiceUI(node?.name);
+    // Reapply local voice settings the same way a fresh manual join does —
+    // a new VoiceService instance was constructed for the rejoin, so any
+    // per-session state (global volume) needs to be re-sent.
+    api.setGlobalVoiceVolume(voiceVolume);
+    api.setVoiceState(isMuted, isDeafened);
+    previousOccupantIds = new Set((node?.occupants ?? []).map((o) => o.userId));
+
+    log(`Reconnected to voice channel${node ? `: ${node.name}` : ""}`, "success");
+    if (currentTree.length > 0) renderTree(currentTree);
+});
+
+api.on("voice-rejoin-failed", (data: { channelId: string; error?: string }) => {
+    voicePanel.classList.remove("reconnecting");
+    if (currentChannelId === data.channelId) {
+        isInVoice = false;
+        currentChannelId = null;
+        previousOccupantIds = new Set();
+        updateVoiceUI();
+    }
+    log(`Couldn't reconnect to voice: ${data.error ?? "unknown error"}. Please rejoin manually.`, "error");
+    if (currentTree.length > 0) renderTree(currentTree);
+});
+
+api.on("voice-error", (data: { message: string }) => {
+    log(`Voice: ${data.message}`, "error");
+});
+
 api.on("error", (data: { code?: string; message: string }) => {
     // Suppress permission-denied errors — they are already handled
     // gracefully by ack callbacks (e.g., disabling the Roles tab).
@@ -2165,7 +2265,7 @@ api.on("channel-deleted", (data: { channelId: string }) => {
 // ── Voice Session Timer — tick every second ──────────────────────────────
 
 setInterval(() => {
-    const now = Date.now();
+    const now = correctedNow();
     for (const [chId, startedAt] of sessionTimers) {
         const treeEl = document.querySelector(
             `[data-session-channel="${chId}"]`,
@@ -2575,6 +2675,20 @@ function openChatTab(channelId: string, channelName: string): void {
     contentEl.className = "tab-content";
     contentEl.dataset.tabId = channelId;
 
+    // Pinned-message bar (PRD 11.5) — prepended above the message list, one
+    // per channel tab, hidden until a pin actually exists.
+    const pinBarEl = document.createElement("div");
+    pinBarEl.className = "pinned-bar";
+    pinBarEl.innerHTML = `
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a1 1 0 0 0 0-2H8a1 1 0 0 0 0 2h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V17z"/></svg>
+        <span class="pinned-bar-text"></span>
+    `;
+    pinBarEl.addEventListener("click", () => {
+        const msgId = pinBarEl.dataset.pinnedMsgId;
+        if (msgId) jumpToPinnedMessage(channelId, msgId);
+    });
+    contentEl.appendChild(pinBarEl);
+
     const messagesEl = document.createElement("div");
     messagesEl.className = "chat-messages";
     contentEl.appendChild(messagesEl);
@@ -2589,6 +2703,8 @@ function openChatTab(channelId: string, channelName: string): void {
         contentEl,
         messagesEl,
         loaded: false,
+        pinBarEl,
+        pinnedMessageId: null,
     };
     chatTabs.set(channelId, chatTab);
 
@@ -2645,6 +2761,7 @@ function openDmTab(userId: string, nickname: string): void {
         contentEl,
         messagesEl,
         loaded: false,
+        pinnedMessageId: null,
     };
     chatTabs.set(tabKey, chatTab);
 
@@ -2704,9 +2821,13 @@ async function loadChatHistory(tab: ChatTab): Promise<void> {
         // Channel tab — fetch channel messages
         const result = await api.fetchMessages(tab.channelId);
         if (result.success && result.messages) {
+            // Set before rendering so each message's pin button (PRD 11.5)
+            // reflects the correct active/inactive state on first paint.
+            tab.pinnedMessageId = result.pinnedMessage?.id ?? null;
             for (const msg of result.messages) {
                 renderChatMessage(tab, msg);
             }
+            updatePinBarUI(tab, result.pinnedMessage ?? null);
         }
     }
 }
@@ -2742,6 +2863,7 @@ function renderChatMessage(tab: ChatTab, msg: ChatMessage): void {
     const reactBar = buildReactionBar(msg.id, false, msg.userId, msg.reactions);
     el.appendChild(reactBar);
     attachEditButton(reactBar, msg, el);
+    attachPinButton(reactBar, msg, tab);
 
     tab.messagesEl.appendChild(el);
     tab.messagesEl.scrollTop = tab.messagesEl.scrollHeight;
@@ -3937,6 +4059,148 @@ function attachEditButton(bar: HTMLDivElement, msg: ChatMessage, el: HTMLDivElem
     bar.appendChild(btnEdit);
 }
 
+// ── Pinned Messages (PRD 11.5) ──────────────────────────────────────────────
+// Pin/unpin is gated server-side by MANAGE_CHANNELS (requirePermission()),
+// matching the existing rename/delete/NSFW-toggle channel context-menu
+// convention — the button is shown to everyone and the server rejects
+// unauthorized attempts, rather than hiding it behind a client-side
+// permission cache (see channel.handler.ts's UPDATE_CHANNEL for the
+// precedent this follows).
+
+const PIN_ICON_SVG = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a1 1 0 0 0 0-2H8a1 1 0 0 0 0 2h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V17z"/></svg>`;
+
+let pendingPinReplaceAction: (() => void) | null = null;
+
+function attachPinButton(bar: HTMLDivElement, msg: ChatMessage, tab: ChatTab): void {
+    const btnPin = document.createElement("button");
+    btnPin.className = "btn-pin-msg";
+    btnPin.innerHTML = PIN_ICON_SVG;
+    const isPinned = tab.pinnedMessageId === msg.id;
+    btnPin.classList.toggle("active", isPinned);
+    btnPin.title = isPinned ? "Unpin message" : "Pin message";
+
+    btnPin.addEventListener("click", async (e) => {
+        e.stopPropagation();
+
+        if (tab.pinnedMessageId === msg.id) {
+            const result = await api.unpinMessage(tab.channelId);
+            if (!result.success) {
+                log(`Failed to unpin message: ${result.error}`, "error");
+                if (result.error && /permission|denied/i.test(result.error)) SoundAlert.play("insufficient_perms.mp3");
+            }
+            return;
+        }
+
+        const doPin = async (): Promise<void> => {
+            const result = await api.pinMessage(tab.channelId, msg.id);
+            if (!result.success) {
+                log(`Failed to pin message: ${result.error}`, "error");
+                if (result.error && /permission|denied/i.test(result.error)) SoundAlert.play("insufficient_perms.mp3");
+            }
+        };
+
+        if (tab.pinnedMessageId) {
+            pendingPinReplaceAction = doPin;
+            pinReplaceConfirmModal.classList.add("visible");
+        } else {
+            await doPin();
+        }
+    });
+
+    bar.appendChild(btnPin);
+}
+
+/** Updates a tab's pin bar + the affected message pin buttons' active state. */
+function updatePinBarUI(tab: ChatTab, pinnedMessage: PinnedMessage | null): void {
+    const oldPinnedId = tab.pinnedMessageId;
+    tab.pinnedMessageId = pinnedMessage?.id ?? null;
+
+    for (const id of new Set([oldPinnedId, tab.pinnedMessageId])) {
+        if (!id) continue;
+        const btn = tab.messagesEl.querySelector(`[data-msg-id="${id}"] .btn-pin-msg`);
+        if (btn) {
+            const active = id === tab.pinnedMessageId;
+            btn.classList.toggle("active", active);
+            btn.setAttribute("title", active ? "Unpin message" : "Pin message");
+        }
+    }
+
+    if (!tab.pinBarEl) return;
+    if (pinnedMessage) {
+        const textEl = tab.pinBarEl.querySelector(".pinned-bar-text") as HTMLSpanElement;
+        const preview = pinnedMessage.content.length > 100
+            ? `${pinnedMessage.content.slice(0, 100)}…`
+            : pinnedMessage.content;
+        textEl.textContent = preview || "(attachment only)";
+        tab.pinBarEl.dataset.pinnedMsgId = pinnedMessage.id;
+        tab.pinBarEl.classList.add("visible");
+    } else {
+        tab.pinBarEl.classList.remove("visible");
+        delete tab.pinBarEl.dataset.pinnedMsgId;
+    }
+}
+
+/** Scrolls to and briefly highlights a pinned message, fetching a window
+ *  around it first if it isn't within the currently-loaded page. */
+async function jumpToPinnedMessage(channelId: string, messageId: string): Promise<void> {
+    const tab = chatTabs.get(channelId);
+    if (!tab) return;
+
+    let el = tab.messagesEl.querySelector(`[data-msg-id="${messageId}"]`) as HTMLDivElement | null;
+
+    if (!el) {
+        const result = await api.fetchMessages(channelId, undefined, 50, messageId);
+        if (!result.success || !result.messages) {
+            log("Couldn't load the pinned message", "error");
+            return;
+        }
+        tab.messagesEl.innerHTML = "";
+        for (const msg of result.messages) {
+            renderChatMessage(tab, msg);
+        }
+        el = tab.messagesEl.querySelector(`[data-msg-id="${messageId}"]`) as HTMLDivElement | null;
+    }
+
+    if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        el.classList.add("msg-highlight");
+        setTimeout(() => el?.classList.remove("msg-highlight"), 2000);
+    }
+}
+
+pinReplaceConfirmModal.addEventListener("click", (e) => {
+    if (e.target === pinReplaceConfirmModal) {
+        pinReplaceConfirmModal.classList.remove("visible");
+        pendingPinReplaceAction = null;
+    }
+});
+
+btnPinReplaceCancel.addEventListener("click", () => {
+    pinReplaceConfirmModal.classList.remove("visible");
+    pendingPinReplaceAction = null;
+});
+
+btnPinReplaceConfirm.addEventListener("click", async () => {
+    pinReplaceConfirmModal.classList.remove("visible");
+    const action = pendingPinReplaceAction;
+    pendingPinReplaceAction = null;
+    if (action) await action();
+});
+
+api.on("channel-pin-updated", (data: { channelId: string; channelName: string; pinnedMessage: PinnedMessage | null; actedByNickname?: string }) => {
+    const tab = chatTabs.get(data.channelId);
+    if (tab) updatePinBarUI(tab, data.pinnedMessage);
+
+    if (data.actedByNickname) {
+        log(
+            `${data.actedByNickname} ${data.pinnedMessage ? "pinned a message in" : "unpinned a message in"} #${data.channelName}`,
+            "info",
+        );
+    } else if (!data.pinnedMessage) {
+        log(`The pinned message in #${data.channelName} was deleted`, "info");
+    }
+});
+
 function startMessageEdit(el: HTMLDivElement, msg: ChatMessage): void {
     if (el.querySelector(".msg-edit-input")) return; // already editing
     const textEl = el.querySelector(".msg-text");
@@ -4083,9 +4347,18 @@ function toggleEmojiPicker(): void {
     }
 }
 
-// Build category tabs
+// Build category tabs. The custom-emoji tab lives in its own fixed slot
+// (emojiCustomTabSlot), outside the scrollable category row — previously
+// it was the row's 10th tab and could scroll out of view with no visible
+// scrollbar cue, making it hard to find (PRD 11.3).
 function buildEmojiCategoryTabs(): void {
     emojiCategoryTabs.innerHTML = "";
+    emojiCustomTabSlot.innerHTML = "";
+
+    function clearActiveTabs(): void {
+        emojiTabsBar.querySelectorAll(".emoji-cat-tab").forEach((t) => t.classList.remove("active"));
+    }
+
     for (const cat of EMOJI_CATEGORIES) {
         const btn = document.createElement("button");
         btn.className = "emoji-cat-tab";
@@ -4101,17 +4374,21 @@ function buildEmojiCategoryTabs(): void {
                 header.scrollIntoView({ behavior: "smooth", block: "start" });
             }
             // Update active tab
-            emojiCategoryTabs.querySelectorAll(".emoji-cat-tab").forEach((t) => t.classList.remove("active"));
+            clearActiveTabs();
             btn.classList.add("active");
         });
         emojiCategoryTabs.appendChild(btn);
     }
 
-    // "+" tab — custom server emoji (approved ones) + the upload entry point
+    // Custom server emoji (approved ones) + the upload entry point — a
+    // small "plus" icon in the same stroke style as the main emoji button,
+    // sized down to fit the tab, replacing the previous "➕" character
+    // (inconsistent size/weight across platforms and easy to miss at low
+    // opacity).
     const customBtn = document.createElement("button");
     customBtn.className = "emoji-cat-tab";
     customBtn.title = "Custom Emojis";
-    customBtn.textContent = "➕";
+    customBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>`;
     customBtn.addEventListener("click", () => {
         emojiSearch.value = "";
         renderEmojiGrid();
@@ -4119,10 +4396,10 @@ function buildEmojiCategoryTabs(): void {
         if (header) {
             header.scrollIntoView({ behavior: "smooth", block: "start" });
         }
-        emojiCategoryTabs.querySelectorAll(".emoji-cat-tab").forEach((t) => t.classList.remove("active"));
+        clearActiveTabs();
         customBtn.classList.add("active");
     });
-    emojiCategoryTabs.appendChild(customBtn);
+    emojiCustomTabSlot.appendChild(customBtn);
 
     // Activate first tab
     const first = emojiCategoryTabs.querySelector(".emoji-cat-tab");
@@ -4595,6 +4872,56 @@ btnUpdateLater.addEventListener("click", () => {
 
 api.getAppVersion().then((version) => {
     aboutVersion.textContent = `Version ${version}`;
+    checkForWhatsNew(version);
+});
+
+// ── Post-Update "What's New" Modal (PRD 11.4) ───────────────────────────────
+// Shown once per version bump: compares the running app version against the
+// last one the user actually dismissed this modal for (localStorage), and if
+// they differ, fetches that version's GitHub release notes and shows them.
+// The "seen" marker is only persisted once the modal has actually been shown
+// and dismissed — a failed fetch (offline, rate-limited) is retried on the
+// next launch instead of silently losing the notification.
+let pendingWhatsNewVersion: string | null = null;
+let pendingWhatsNewUrl: string | null = null;
+
+async function checkForWhatsNew(currentVersion: string): Promise<void> {
+    const lastSeen = localStorage.getItem("reson8-last-seen-version");
+    if (!lastSeen) {
+        // First-ever launch — nothing to announce "what's new" against.
+        localStorage.setItem("reson8-last-seen-version", currentVersion);
+        return;
+    }
+    if (lastSeen === currentVersion) return;
+
+    const notes = await api.fetchReleaseNotes(currentVersion);
+    if (!notes) return; // try again next launch
+
+    pendingWhatsNewVersion = currentVersion;
+    pendingWhatsNewUrl = notes.htmlUrl;
+    whatsNewTitle.textContent = `🎉 What's New in ${notes.name || `v${currentVersion}`}`;
+    whatsNewBody.textContent = notes.body.trim() || "No release notes were provided for this version.";
+    whatsNewModal.classList.add("visible");
+}
+
+btnWhatsNewDismiss.addEventListener("click", () => {
+    whatsNewModal.classList.remove("visible");
+    if (pendingWhatsNewVersion) {
+        localStorage.setItem("reson8-last-seen-version", pendingWhatsNewVersion);
+        pendingWhatsNewVersion = null;
+    }
+});
+
+btnWhatsNewGithub.addEventListener("click", () => {
+    if (pendingWhatsNewUrl) window.open(pendingWhatsNewUrl, "_blank");
+});
+
+whatsNewModal.addEventListener("click", (e) => {
+    if (e.target === whatsNewModal) {
+        whatsNewModal.classList.remove("visible");
+        // Not marked as seen — an accidental backdrop click shouldn't
+        // permanently suppress the notification.
+    }
 });
 
 btnCheckUpdates.addEventListener("click", async () => {

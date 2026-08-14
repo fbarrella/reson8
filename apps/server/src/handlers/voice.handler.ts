@@ -49,6 +49,20 @@ export function registerVoiceHandlers(
 ): void {
     const presence = new PresenceService(app.redis);
 
+    // A crashed mediasoup Worker no longer takes the whole server down (see
+    // MediasoupService.handleWorkerDeath) — instead it reports exactly which
+    // channels were hosted on it, so only those occupants are told to
+    // rejoin voice, everyone else is unaffected.
+    mediasoup.on("workerDied", ({ channelIds }: { channelIds: string[] }) => {
+        for (const channelId of channelIds) {
+            io.to(`channel:${channelId}`).emit("VOICE_SESSION_LOST", {
+                channelId,
+                reason: "server-worker-restart",
+            });
+        }
+        app.log.warn({ channelIds }, "mediasoup worker died — notified affected channels");
+    });
+
     io.on("connection", (socket: TypedSocket) => {
         // ── 1. GET_ROUTER_CAPABILITIES ──────────────────────────────────────
         socket.on("GET_ROUTER_CAPABILITIES", async (payload, ack) => {
@@ -187,9 +201,18 @@ export function registerVoiceHandlers(
 
                 session.producer = producer;
 
-                // Handle producer close
+                // Handle producer close — this fires for any transport-level
+                // close, not just the explicit CLOSE_PRODUCER/leave/kick
+                // paths (e.g. an unrecovered ICE drop closing the transport,
+                // see mediasoup.service.ts's icestatechange handling), so
+                // peers must be notified here too or they're left holding a
+                // consumer for audio that no longer exists (PRD 11.1).
                 producer.on("transportclose", () => {
                     session.producer = null;
+                    socket.to(`channel:${channelId}`).emit("PRODUCER_CLOSED", {
+                        userId: socket.data.userId,
+                        producerId: producer.id,
+                    });
                 });
 
                 // Ensure AudioLevelObserver exists for this channel and add producer

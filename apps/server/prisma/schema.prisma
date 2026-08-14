@@ -42,24 +42,26 @@ enum ChannelType {
 }
 
 model Channel {
-  id       String      @id @default(uuid())
-  serverId String
-  name     String
-  type     ChannelType @default(VOICE)
-  parentId String?
-  position Int         @default(0)
-  maxUsers Int? // null = unlimited
-  isNsfw   Boolean     @default(false) // text channels only — client prompts before opening
+  id              String      @id @default(uuid())
+  serverId        String
+  name            String
+  type            ChannelType @default(VOICE)
+  parentId        String?
+  position        Int         @default(0)
+  maxUsers        Int? // null = unlimited
+  isNsfw          Boolean     @default(false) // text channels only — client prompts before opening
+  pinnedMessageId String? @unique // text channels only — one pinned message per channel
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   // Relations
-  server   Server        @relation(fields: [serverId], references: [id], onDelete: Cascade)
-  parent   Channel?      @relation("ChannelTree", fields: [parentId], references: [id], onDelete: SetNull)
-  children Channel[]     @relation("ChannelTree")
-  messages Message[]
-  reads    ChannelRead[]
+  server        Server        @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  parent        Channel?      @relation("ChannelTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children      Channel[]     @relation("ChannelTree")
+  messages      Message[]     @relation("ChannelMessages")
+  pinnedMessage Message?      @relation("ChannelPinnedMessage", fields: [pinnedMessageId], references: [id], onDelete: SetNull)
+  reads         ChannelRead[]
 
   @@index([serverId])
   @@index([parentId])
@@ -154,9 +156,10 @@ model Message {
   createdAt          DateTime  @default(now())
   editedAt           DateTime? // set when the author edits within the 2-minute window
 
-  channel   Channel    @relation(fields: [channelId], references: [id], onDelete: Cascade)
-  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
-  reactions Reaction[] @relation("MessageReactions")
+  channel         Channel    @relation("ChannelMessages", fields: [channelId], references: [id], onDelete: Cascade)
+  user            User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reactions       Reaction[] @relation("MessageReactions")
+  pinnedInChannel Channel?   @relation("ChannelPinnedMessage")
 
   @@index([channelId, createdAt])
   @@map("messages")

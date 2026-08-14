@@ -376,6 +376,13 @@
       display: flex;
     }
 
+    /* Voice-level connection failure being auto-recovered (PRD 11.1) —
+       the panel stays visible but signals something's temporarily wrong. */
+    #voice-panel.reconnecting .voice-info .dot {
+      background: var(--warning, #e0a030);
+      animation: pulse 0.8s infinite;
+    }
+
     #voice-panel .voice-info {
       font-size: 11px;
       color: var(--success);
@@ -528,6 +535,40 @@
 
     .tab-content.active {
       display: flex;
+    }
+
+    /* ── Pinned Message Bar (PRD 11.5) ────────────────────────────────── */
+    .pinned-bar {
+      display: none;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 12px;
+      flex-shrink: 0;
+      background: var(--bg-secondary);
+      border-bottom: 1px solid var(--border);
+      color: var(--text-secondary);
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+
+    .pinned-bar.visible {
+      display: flex;
+    }
+
+    .pinned-bar:hover {
+      background: rgba(99, 102, 241, 0.08);
+    }
+
+    .pinned-bar svg {
+      flex-shrink: 0;
+      color: var(--accent);
+    }
+
+    .pinned-bar-text {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 12px;
     }
 
     #event-log {
@@ -737,6 +778,47 @@
       opacity: 1 !important;
       color: var(--accent);
       background: rgba(99, 102, 241, 0.1);
+    }
+
+    .btn-pin-msg {
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      padding: 2px;
+      border-radius: 4px;
+      opacity: 0;
+      transition: all 0.15s;
+      display: flex;
+      align-items: center;
+    }
+
+    .chat-msg:hover .btn-pin-msg {
+      opacity: 0.6;
+    }
+
+    .btn-pin-msg:hover {
+      opacity: 1 !important;
+      color: var(--accent);
+      background: rgba(99, 102, 241, 0.1);
+    }
+
+    /* A pinned message's own button stays visible even without hovering,
+       so it's clear at a glance which message is currently pinned. */
+    .btn-pin-msg.active {
+      opacity: 1;
+      color: var(--accent);
+    }
+
+    /* Brief flash applied when jumping to a message via the pinned bar. */
+    @keyframes msg-highlight-flash {
+      0%, 100% { background: transparent; }
+      25% { background: rgba(99, 102, 241, 0.25); }
+    }
+
+    .msg-highlight {
+      animation: msg-highlight-flash 2s ease;
+      border-radius: 4px;
     }
 
     /* ── Link Preview Card ─────────────────────────────────────── */
@@ -1166,7 +1248,9 @@
     #delete-message-modal,
     #emoji-upload-modal,
     #admin-modal,
-    #update-modal {
+    #update-modal,
+    #whats-new-modal,
+    #pin-replace-confirm-modal {
       display: none;
       position: fixed;
       top: 0;
@@ -1187,8 +1271,22 @@
     #delete-message-modal.visible,
     #emoji-upload-modal.visible,
     #admin-modal.visible,
-    #update-modal.visible {
+    #update-modal.visible,
+    #whats-new-modal.visible,
+    #pin-replace-confirm-modal.visible {
       display: flex;
+    }
+
+    #whats-new-modal .whats-new-body {
+      flex: 1;
+      overflow-y: auto;
+      margin-top: 4px;
+      padding-right: 4px;
+      font-size: 13px;
+      line-height: 1.6;
+      color: var(--text-secondary);
+      white-space: pre-wrap;
+      word-break: break-word;
     }
 
     #update-modal .update-progress-wrap {
@@ -2054,12 +2152,23 @@
       border-color: var(--accent);
     }
 
+    /* Two zones: a scrollable row of built-in category tabs, and a fixed
+       slot for the custom-emoji tab that's never affected by scrolling —
+       previously the custom tab was the 10th tab in the scrollable row
+       and could be scrolled out of view with no visible scrollbar cue. */
+    .emoji-tabs-bar {
+      display: flex;
+      align-items: stretch;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+
     .emoji-category-tabs {
       display: flex;
       gap: 0;
       padding: 2px 6px;
-      border-bottom: 1px solid var(--border);
-      flex-shrink: 0;
+      flex: 1 1 auto;
+      min-width: 0;
       overflow-x: auto;
       scrollbar-width: none;
     }
@@ -2068,7 +2177,17 @@
       display: none;
     }
 
+    .emoji-custom-tab-slot {
+      display: flex;
+      flex-shrink: 0;
+      padding: 2px 6px 2px 2px;
+      border-left: 1px solid var(--border);
+    }
+
     .emoji-cat-tab {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
       background: none;
       border: none;
       border-bottom: 2px solid transparent;
@@ -2405,7 +2524,10 @@
           <div class="emoji-search-wrap">
             <input type="text" id="emoji-search" placeholder="Search emojis...">
           </div>
-          <div class="emoji-category-tabs" id="emoji-category-tabs"></div>
+          <div class="emoji-tabs-bar" id="emoji-tabs-bar">
+            <div class="emoji-category-tabs" id="emoji-category-tabs"></div>
+            <div class="emoji-custom-tab-slot" id="emoji-custom-tab-slot"></div>
+          </div>
           <div class="emoji-grid-container" id="emoji-grid-container"></div>
         </div>
         <input type="file" id="file-input" accept="image/jpeg,image/png,image/gif,image/webp" style="display:none;">
@@ -2502,6 +2624,18 @@
     </div>
   </div>
 
+  <!-- ── Pin-Replace Confirmation Modal (PRD 11.5) ───────────────────────── -->
+  <div id="pin-replace-confirm-modal">
+    <div class="modal-content">
+      <h3>📌 Replace Pinned Message</h3>
+      <p>This channel already has a pinned message. Pinning this one will replace it. Continue?</p>
+      <div class="modal-actions">
+        <button class="btn btn-cancel" id="btn-pin-replace-cancel">Cancel</button>
+        <button class="btn btn-disconnect" id="btn-pin-replace-confirm">Continue</button>
+      </div>
+    </div>
+  </div>
+
   <!-- ── Auto-Updater Modal (PRD 10.1) ───────────────────────────────────── -->
   <div id="update-modal">
     <div class="modal-content">
@@ -2514,6 +2648,18 @@
       <div class="modal-actions">
         <button class="btn btn-cancel" id="btn-update-later">Not Now</button>
         <button class="btn btn-create" id="btn-update-now">Update Now</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── "What's New" Post-Update Modal (PRD 11.4) ───────────────────────── -->
+  <div id="whats-new-modal">
+    <div class="modal-content wide">
+      <h3 id="whats-new-title">🎉 What's New</h3>
+      <div id="whats-new-body" class="whats-new-body"></div>
+      <div class="modal-actions">
+        <button class="btn btn-cancel" id="btn-whats-new-github">View on GitHub</button>
+        <button class="btn btn-create" id="btn-whats-new-dismiss">Got it</button>
       </div>
     </div>
   </div>

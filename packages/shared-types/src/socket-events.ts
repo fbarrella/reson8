@@ -14,6 +14,7 @@ import type {
     IMessage,
     IDirectMessage,
     IOnlineUser,
+    IPinnedMessage,
     IRole,
     IUser,
     IUserPresence,
@@ -90,10 +91,18 @@ export interface ClientToServerEvents {
         ack: (response: { success: boolean; messageId?: string }) => void,
     ) => void;
 
-    /** Client requests paginated message history for a channel. */
+    /**
+     * Client requests paginated message history for a channel. Passing
+     * `aroundMessageId` instead of `before` fetches a window of messages
+     * centered on that message (used to jump to a pinned message that isn't
+     * within the currently-loaded page) — `before` is ignored when it's set.
+     * The channel's current pinned message (if any) is included in the ack
+     * only on the initial load (`before`/`aroundMessageId` both unset), to
+     * avoid re-querying it on every "load more" scroll.
+     */
     FETCH_MESSAGES: (
-        payload: { channelId: string; before?: string; limit?: number },
-        ack: (response: { success: boolean; messages?: IMessage[]; error?: string }) => void,
+        payload: { channelId: string; before?: string; limit?: number; aroundMessageId?: string },
+        ack: (response: { success: boolean; messages?: IMessage[]; pinnedMessage?: IPinnedMessage | null; error?: string }) => void,
     ) => void;
 
     /** Client marks a text channel as read up to now (clears the unread indicator). */
@@ -293,15 +302,38 @@ export interface ClientToServerEvents {
         ack: (response: { success: boolean; error?: string }) => void,
     ) => void;
 
-    /** Lightweight ping for client-side latency measurement. */
+    /**
+     * Lightweight ping for client-side latency measurement. The ack carries
+     * the server's own current timestamp (ms since epoch) so the client can
+     * also derive a client↔server clock offset (NTP-style: offset ≈
+     * serverTime - (localSendTime + rtt / 2)) — used to correct the voice
+     * session timer against clock skew between the two machines (PRD 11.2).
+     */
     PING_LATENCY: (
-        ack: () => void,
+        ack: (serverTime: number) => void,
     ) => void;
 
     /** Reports the caller's own mute/deafen state so other occupants can display it. */
     SET_VOICE_STATE: (
         payload: { isMuted: boolean; isDeafened: boolean },
         ack: (response: { success: boolean }) => void,
+    ) => void;
+
+    // ── Pinned Messages ──────────────────────────────────────────────────
+
+    /**
+     * Pins a message in a text channel, replacing any existing pin.
+     * Requires MANAGE_CHANNELS.
+     */
+    PIN_MESSAGE: (
+        payload: { channelId: string; messageId: string },
+        ack: (response: { success: boolean; error?: string }) => void,
+    ) => void;
+
+    /** Clears a text channel's pinned message, if any. Requires MANAGE_CHANNELS. */
+    UNPIN_MESSAGE: (
+        payload: { channelId: string },
+        ack: (response: { success: boolean; error?: string }) => void,
     ) => void;
 
     // ── Nudge ────────────────────────────────────────────────────────────
@@ -443,6 +475,27 @@ export interface ServerToClientEvents {
 
     /** Broadcasts a server settings change so every connected client updates live. */
     SERVER_SETTINGS_UPDATED: (payload: { nudgeEnabled: boolean }) => void;
+
+    /**
+     * Notifies a channel's occupants that their voice session was force-closed
+     * by the server (e.g. the mediasoup worker hosting it crashed and had to be
+     * recycled). Clients still in that channel should attempt to rejoin voice.
+     */
+    VOICE_SESSION_LOST: (payload: { channelId: string; reason: string }) => void;
+
+    /**
+     * Broadcasts a text channel's pin-state change to every server member,
+     * so an open (or later-opened) chat tab always reflects the current
+     * pin without a separate fetch. `actedByNickname` is omitted when the
+     * change was an automatic unpin caused by the pinned message itself
+     * being deleted, rather than an explicit admin action.
+     */
+    CHANNEL_PIN_UPDATED: (payload: {
+        channelId: string;
+        channelName: string;
+        pinnedMessage: IPinnedMessage | null;
+        actedByNickname?: string;
+    }) => void;
 }
 
 // ---------------------------------------------------------------------------

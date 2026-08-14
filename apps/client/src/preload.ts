@@ -14,6 +14,7 @@ import type {
     IMessage,
     IDirectMessage,
     ICustomEmoji,
+    IPinnedMessage,
 } from "@reson8/shared-types";
 import { VoiceService, VoiceSignaling } from "./services/voice.service";
 
@@ -25,6 +26,24 @@ let voiceService: VoiceService | null = null;
 let serverBaseUrl: string = "";
 let joinServerInFlight = false;
 let latencyMs: number = -1;
+/**
+ * Best current estimate of (server clock) - (this machine's clock), in ms.
+ * Derived from each PING_LATENCY round trip (NTP-style: offset ≈ serverTime
+ * - (localSendTime + rtt / 2)) and refreshed every ~3s alongside latency.
+ * Used to correct the voice session timer against clock skew between the
+ * client and server hosts — see PRD 11.2.
+ */
+let clockOffsetMs: number = 0;
+
+/**
+ * The voice channel the user is meant to be in — set on every successful
+ * join, cleared on an explicit leave/disconnect. Used to auto-rejoin voice
+ * after a Socket.io reconnect or a WebRTC-level connection failure, since
+ * neither the server nor mediasoup transports survive either event (PRD
+ * 11.1) and nothing previously re-established voice automatically.
+ */
+let lastVoiceChannelId: string | null = null;
+let voiceRejoinInFlight = false;
 
 async function uploadTo(
     endpoint: string,
@@ -134,6 +153,80 @@ function createSignaling(): VoiceSignaling {
     };
 }
 
+/** Measures round-trip latency and derives the client↔server clock offset
+ *  from a single PING_LATENCY round trip (PRD 11.2). */
+function measureLatencyAndClockOffset(): void {
+    if (!socket?.connected) return;
+    const localSendTime = Date.now();
+    socket.emit("PING_LATENCY", (serverTime: number) => {
+        const localReceiveTime = Date.now();
+        const rtt = localReceiveTime - localSendTime;
+        latencyMs = rtt;
+        clockOffsetMs = serverTime - (localSendTime + rtt / 2);
+    });
+}
+
+/** Wires a freshly-constructed VoiceService's failure callbacks. */
+function wireVoiceServiceCallbacks(vs: VoiceService): void {
+    vs.onConnectionLost = () => {
+        emit("voice-connection-lost", null);
+        if (lastVoiceChannelId) {
+            attemptVoiceRejoin(lastVoiceChannelId);
+        }
+    };
+    vs.onError = (message: string) => {
+        emit("voice-error", { message });
+    };
+}
+
+/**
+ * Rejoins a voice channel after it was lost — either because the Socket.io
+ * connection dropped and reconnected, or because a WebRTC transport reported
+ * an unrecovered connection failure while signaling stayed up. Retries the
+ * full join handshake a few times before giving up, since the very first
+ * attempt can race a server that's still finishing its own cleanup of the
+ * old session.
+ */
+async function attemptVoiceRejoin(channelId: string): Promise<void> {
+    if (voiceRejoinInFlight) return;
+    if (!socket?.connected) return; // the "connect" handler will retry once reconnected
+    voiceRejoinInFlight = true;
+    emit("voice-reconnecting", { channelId });
+
+    const MAX_ATTEMPTS = 3;
+    let lastError: string | undefined;
+
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        try {
+            voiceService?.cleanup();
+            voiceService = new VoiceService(createSignaling());
+            wireVoiceServiceCallbacks(voiceService);
+
+            const joinRes = await new Promise<{ success: boolean; error?: string }>((resolve) => {
+                socket!.emit("USER_JOIN_CHANNEL", { channelId }, resolve);
+            });
+            if (!joinRes.success) throw new Error(joinRes.error ?? "Failed to rejoin channel");
+
+            await voiceService.joinVoiceChannel(channelId);
+
+            lastVoiceChannelId = channelId;
+            emit("voice-reconnected", { channelId });
+            voiceRejoinInFlight = false;
+            return;
+        } catch (err: any) {
+            lastError = err?.message ?? "Unknown error";
+            if (attempt < MAX_ATTEMPTS) {
+                await new Promise((resolve) => setTimeout(resolve, 1500));
+            }
+        }
+    }
+
+    voiceRejoinInFlight = false;
+    lastVoiceChannelId = null;
+    voiceService?.cleanup();
+    emit("voice-rejoin-failed", { channelId, error: lastError });
+}
+
 const api = {
     // ── Identity ─────────────────────────────────────────────────────────────
 
@@ -164,6 +257,7 @@ const api = {
 
         // Initialize voice service with signaling adapter
         voiceService = new VoiceService(createSignaling());
+        wireVoiceServiceCallbacks(voiceService);
 
         // Latency measurement — started after connect, cleared on disconnect
         let latencyInterval: ReturnType<typeof setInterval> | null = null;
@@ -182,20 +276,24 @@ const api = {
                     if (res.success && res.serverId) {
                         emit("connected", { serverId: res.serverId, instanceId });
 
-                        // Start latency measurement interval
+                        // If we were in a voice channel before this connect
+                        // (i.e. this is a reconnect, not the first-ever
+                        // connect — lastVoiceChannelId is only set after a
+                        // real join), silently rejoin it. The server already
+                        // tore down our old mediasoup session on disconnect,
+                        // so this is a fresh join, not a resume (PRD 11.1).
+                        if (lastVoiceChannelId) {
+                            attemptVoiceRejoin(lastVoiceChannelId);
+                        }
+
+                        // Start latency + clock-offset measurement interval
                         if (latencyInterval) clearInterval(latencyInterval);
                         latencyInterval = setInterval(() => {
                             if (!socket?.connected) return;
-                            const start = Date.now();
-                            socket.emit("PING_LATENCY", () => {
-                                latencyMs = Date.now() - start;
-                            });
+                            measureLatencyAndClockOffset();
                         }, 3000);
                         // Measure immediately on connect
-                        const start0 = Date.now();
-                        socket!.emit("PING_LATENCY", () => {
-                            latencyMs = Date.now() - start0;
-                        });
+                        measureLatencyAndClockOffset();
                     } else {
                         emit("error", {
                             code: "JOIN_FAILED",
@@ -215,6 +313,7 @@ const api = {
 
         socket.on("disconnect", (reason) => {
             latencyMs = -1;
+            clockOffsetMs = 0;
             if (latencyInterval) {
                 clearInterval(latencyInterval);
                 latencyInterval = null;
@@ -247,6 +346,7 @@ const api = {
         socket.on("CUSTOM_EMOJI_APPROVED", (payload) => emit("custom-emoji-approved", payload));
         socket.on("NUDGE_RECEIVED", (payload) => emit("nudge-received", payload));
         socket.on("SERVER_SETTINGS_UPDATED", (payload) => emit("server-settings-updated", payload));
+        socket.on("CHANNEL_PIN_UPDATED", (payload) => emit("channel-pin-updated", payload));
 
         // Voice-specific events
         socket.on("NEW_PRODUCER", (payload) => {
@@ -264,10 +364,20 @@ const api = {
                 voiceService?.queueConsumeProducer(p.producerId, p.userId);
             }
         });
+
+        // Server-initiated voice-session loss (e.g. the mediasoup worker
+        // hosting this channel crashed and was recycled) — rejoin exactly
+        // like any other voice failure (PRD 11.1).
+        socket.on("VOICE_SESSION_LOST", (payload) => {
+            if (payload.channelId !== lastVoiceChannelId) return;
+            attemptVoiceRejoin(payload.channelId);
+        });
     },
 
     disconnect(): void {
         joinServerInFlight = false;
+        lastVoiceChannelId = null;
+        voiceRejoinInFlight = false;
         voiceService?.cleanup();
         voiceService = null;
         socket?.disconnect();
@@ -294,6 +404,7 @@ const api = {
             // Clean up any existing voice session before starting a new one
             voiceService?.cleanup();
             voiceService = new VoiceService(createSignaling());
+            wireVoiceServiceCallbacks(voiceService);
 
             // First, join the channel via Socket.io so the server sets currentChannelId
             const joinRes = await new Promise<{ success: boolean; error?: string }>(
@@ -307,6 +418,7 @@ const api = {
 
             // Now do the mediasoup voice handshake
             await voiceService.joinVoiceChannel(channelId);
+            lastVoiceChannelId = channelId;
             return { success: true };
         } catch (err: any) {
             return { success: false, error: err.message };
@@ -314,6 +426,7 @@ const api = {
     },
 
     leaveVoiceChannel(): void {
+        lastVoiceChannelId = null;
         if (socket?.connected) {
             // Notify server we're leaving the channel
             const channelId = voiceService?.currentChannelId;
@@ -325,6 +438,7 @@ const api = {
         // Reinitialize voice service for next join
         if (socket?.connected) {
             voiceService = new VoiceService(createSignaling());
+            wireVoiceServiceCallbacks(voiceService);
         }
     },
 
@@ -482,7 +596,8 @@ const api = {
         channelId: string,
         before?: string,
         limit?: number,
-    ): Promise<{ success: boolean; messages?: IMessage[]; error?: string }> {
+        aroundMessageId?: string,
+    ): Promise<{ success: boolean; messages?: IMessage[]; pinnedMessage?: IPinnedMessage | null; error?: string }> {
         return new Promise((resolve) => {
             if (!socket?.connected) {
                 resolve({ success: false, error: "Not connected" });
@@ -490,9 +605,31 @@ const api = {
             }
             socket.emit(
                 "FETCH_MESSAGES",
-                { channelId, before, limit },
+                { channelId, before, limit, aroundMessageId },
                 resolve,
             );
+        });
+    },
+
+    // ── Pinned Messages ─────────────────────────────────────────────────
+
+    pinMessage(channelId: string, messageId: string): Promise<{ success: boolean; error?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.emit("PIN_MESSAGE", { channelId, messageId }, resolve);
+        });
+    },
+
+    unpinMessage(channelId: string): Promise<{ success: boolean; error?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.emit("UNPIN_MESSAGE", { channelId }, resolve);
         });
     },
 
@@ -729,6 +866,11 @@ const api = {
         return ipcRenderer.invoke("get-app-version");
     },
 
+    /** Fetches the GitHub release notes for a given app version (PRD 11.4). */
+    async fetchReleaseNotes(version: string): Promise<{ name: string; body: string; htmlUrl: string } | null> {
+        return ipcRenderer.invoke("fetch-release-notes", version);
+    },
+
     // ── Mic Sensitivity / Noise Gate ──────────────────────────────────────
 
     setMicSensitivity(enabled: boolean, threshold: number): void {
@@ -769,6 +911,12 @@ const api = {
 
     getLatency(): number {
         return latencyMs;
+    },
+
+    /** Best current estimate of (server clock) - (this machine's clock), in
+     *  ms — see PRD 11.2. 0 until the first PING_LATENCY round trip resolves. */
+    getClockOffset(): number {
+        return clockOffsetMs;
     },
 
     toggleReaction(
