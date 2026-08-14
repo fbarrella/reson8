@@ -8,7 +8,7 @@ A high-performance desktop communication platform inspired by TeamSpeak 3,
 built with modern technology for low-latency voice, hierarchical channel trees,
 and private server ownership.
 
-[![Version](https://img.shields.io/badge/version-1.4.0-blue.svg)](#)
+[![Version](https://img.shields.io/badge/version-1.4.1-blue.svg)](#)
 [![Electron](https://img.shields.io/badge/Electron-33-47848F?logo=electron&logoColor=white)](https://www.electronjs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D20-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
@@ -184,6 +184,19 @@ Because Cloudflare Tunnels only proxy TCP, WebRTC voice (UDP) requires a **TURN 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.turn.yml up --build
 ```
+
+---
+
+## 📦 Releasing
+
+The client checks GitHub Releases for updates via `electron-updater`. Building installers is **not** the same as publishing an update:
+
+```bash
+cd apps/client
+npm run build:win      # or build:linux, build:mac
+```
+
+Each of these also generates `latest.yml` / `latest-linux.yml` / `latest-mac.yml` in `apps/client/release/`, alongside the installer. **All of these files — the installer(s) *and* the matching `latest*.yml` — must be uploaded together as assets on the GitHub release.** Uploading only the installer (e.g. a manual drag-and-drop onto a GitHub release) leaves out the metadata `electron-updater` actually reads to detect a new version, and the auto-updater will silently fail to find the update on every platform, with no visible error until a user tries "Check for Updates" and gets a generic failure message.
 
 ---
 

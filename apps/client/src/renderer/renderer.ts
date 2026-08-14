@@ -678,6 +678,7 @@ const EMOJI_DATA: EmojiEntry[] = [
 
 interface Reson8Api {
     getInstanceId(): string;
+    isExistingInstall(): Promise<boolean>;
     connect(host: string, port: number | undefined, nickname: string, password?: string): Promise<void>;
     disconnect(): void;
     joinVoiceChannel(channelId: string): Promise<{ success: boolean; error?: string }>;
@@ -691,7 +692,7 @@ interface Reson8Api {
     getLocalUserVolume(userId: string): number;
     getLocalUserMute(userId: string): boolean;
     setGlobalVoiceVolume(percent: number): void;
-    checkForUpdates(): Promise<{ status: "available" | "not-available" | "error" }>;
+    checkForUpdates(): Promise<{ status: "available" | "not-available" | "error"; message?: string }>;
     downloadUpdate(): Promise<void>;
     quitAndInstall(): void;
     getAppVersion(): Promise<string>;
@@ -4888,11 +4889,23 @@ let pendingWhatsNewUrl: string | null = null;
 async function checkForWhatsNew(currentVersion: string): Promise<void> {
     const lastSeen = localStorage.getItem("reson8-last-seen-version");
     if (!lastSeen) {
-        // First-ever launch — nothing to announce "what's new" against.
-        localStorage.setItem("reson8-last-seen-version", currentVersion);
+        // No local record of a "last seen" version. This is either a truly
+        // fresh install (nothing to announce "what's new" against) or an
+        // upgrade from a pre-11.4 client that predates this feature and so
+        // never wrote the marker in the first place — telling those apart
+        // needs a signal older than this feature itself, so we reuse the
+        // instance ID file's presence (written on this client's actual
+        // first-ever launch, independent of any single feature's state).
+        const isExistingInstall = await api.isExistingInstall();
+        if (!isExistingInstall) {
+            localStorage.setItem("reson8-last-seen-version", currentVersion);
+            return;
+        }
+        // Existing install, first launch with this feature — fall through
+        // and show this version's notes, same as any other version bump.
+    } else if (lastSeen === currentVersion) {
         return;
     }
-    if (lastSeen === currentVersion) return;
 
     const notes = await api.fetchReleaseNotes(currentVersion);
     if (!notes) return; // try again next launch
@@ -4934,7 +4947,9 @@ btnCheckUpdates.addEventListener("click", async () => {
     if (result.status === "not-available") {
         aboutUpdateStatus.textContent = "You're up to date.";
     } else if (result.status === "error") {
-        aboutUpdateStatus.textContent = "Could not check for updates. Try again later.";
+        aboutUpdateStatus.textContent = result.message
+            ? `Could not check for updates: ${result.message}`
+            : "Could not check for updates. Try again later.";
     }
     // "available": the update-available listener above opens the shared modal.
 });

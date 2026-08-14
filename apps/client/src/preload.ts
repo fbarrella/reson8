@@ -234,6 +234,10 @@ const api = {
         return instanceId;
     },
 
+    async isExistingInstall(): Promise<boolean> {
+        return ipcRenderer.invoke("is-existing-install");
+    },
+
     // ── Connection ──────────────────────────────────────────────────────────
 
     async connect(host: string, port: number | undefined, nickname: string, password?: string): Promise<void> {
@@ -850,7 +854,7 @@ const api = {
 
     // ── Auto-Updater (PRD 10.1) ─────────────────────────────────────────────
 
-    async checkForUpdates(): Promise<{ status: "available" | "not-available" | "error" }> {
+    async checkForUpdates(): Promise<{ status: "available" | "not-available" | "error"; message?: string }> {
         return ipcRenderer.invoke("check-for-updates");
     },
 
