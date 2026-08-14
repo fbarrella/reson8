@@ -225,3 +225,508 @@ Feature/Fix: <name>
     ...
   Next Step: ...
 
+--- Entry: 13/08/2026 ---
+
+Feature/Fix: Phase 11 — PRD 11.1: Fix Random Voice Chat Disconnections
+
+  Problem: Voice chat participants would intermittently and
+  unpredictably get dropped from a voice channel with no clear
+  trigger. An audit of the full voice lifecycle (Socket.io signaling +
+  mediasoup WebRTC handshake) found several independent gaps: nothing
+  ever re-established a voice channel after a Socket.io reconnect
+  (the server fully tears down mediasoup + presence on every
+  disconnect, but the client never replayed the join handshake on
+  reconnect); a 10s/5s Socket.io ping/pong timeout tight enough to
+  trip a full disconnect on ordinary jitter (GC pause, laptop
+  sleep/wake); no client- or server-side WebRTC connection-state
+  monitoring, so a pure ICE-level drop (independent of the signaling
+  channel) went completely undetected; and a single mediasoup worker
+  crash called process.exit(1), taking down every voice session on
+  the server instead of just the ones on that worker.
+
+  Solution: Comprehensive fix addressing all four gaps, plus two
+  related bugs found during the audit.
+
+  Server Changes:
+    - apps/server/src/index.ts: retuned Socket.io pingInterval/
+      pingTimeout from 10_000/5_000 to 25_000/20_000 (Socket.io's own
+      defaults), which alone removes a class of false-positive
+      disconnects.
+    - apps/server/src/services/mediasoup.service.ts: MediasoupService
+      now extends EventEmitter. Added workerChannels (Worker → Set
+      <channelId>) and channelWorker (channelId → Worker) tracking,
+      maintained in getOrCreateRouter()/removeRouter(). The worker
+      "died" handler no longer calls process.exit(1) — a new
+      handleWorkerDeath() looks up exactly which channels were hosted
+      on the dead worker, drops the now-unrecoverable routers/
+      sessions/observers for just those channels, spawns a
+      replacement worker to keep the pool size stable, and emits a
+      "workerDied" event with the affected channelIds. Also added an
+      icestatechange listener on WebRtcTransport alongside the
+      existing dtlsstatechange one — mediasoup's ICE state has no
+      "failed" value (unlike DTLS), so a stuck "disconnected" state
+      is given a 10s grace period (ICE can self-recover) before the
+      transport is force-closed.
+    - apps/server/src/handlers/voice.handler.ts: registered a
+      one-time mediasoup.on("workerDied", ...) listener that emits
+      the new VOICE_SESSION_LOST event to every affected
+      `channel:${channelId}` room. Also fixed producer.on
+      ("transportclose") to emit PRODUCER_CLOSED to the rest of the
+      channel — previously this only nulled the session's producer
+      locally, so any transport-level close that wasn't routed
+      through the explicit CLOSE_PRODUCER/leave/kick paths (e.g. the
+      new ICE-grace-period close above) left peers holding a phantom
+      consumer.
+
+  Shared Types Changes:
+    - packages/shared-types/src/socket-events.ts: added
+      VOICE_SESSION_LOST: (payload: { channelId: string; reason:
+      string }) => void to ServerToClientEvents.
+
+  Client Changes:
+    - apps/client/src/services/voice.service.ts: added
+      connectionstatechange listeners on both sendTransport and
+      recvTransport. "disconnected" gets a 4s grace period (mirroring
+      the server-side ICE grace period) before being treated as a
+      real failure; "failed" is terminal immediately. Reports through
+      a new public onConnectionLost callback, at most once per join
+      (connectionLossReported flag, reset in cleanup()). Also added a
+      bounded retry (3 attempts, 1s apart) to queueConsumeProducer(),
+      surfacing a final failure through a new onError callback
+      instead of only console.error.
+    - apps/client/src/preload.ts: added module-level
+      lastVoiceChannelId (set on every successful joinVoiceChannel(),
+      cleared on leaveVoiceChannel()/disconnect()) and a new
+      attemptVoiceRejoin(channelId) helper that replays the full
+      USER_JOIN_CHANNEL + voiceService.joinVoiceChannel() handshake,
+      retrying up to 3 times (1.5s apart) before giving up and
+      clearing lastVoiceChannelId. Wired to fire from three triggers:
+      (1) the socket "connect" handler, when lastVoiceChannelId is
+      set (i.e. this is a reconnect, not the first-ever connect); (2)
+      VoiceService.onConnectionLost, for a pure WebRTC-level failure
+      with no Socket.io disconnect; (3) a new VOICE_SESSION_LOST
+      socket listener, for the server-initiated worker-crash case.
+      Emits voice-reconnecting / voice-reconnected / voice-rejoin-
+      failed / voice-connection-lost / voice-error events for the
+      renderer to react to.
+    - apps/client/src/renderer/renderer.ts: added a
+      findChannelNodeById() tree-lookup helper, and handlers for the
+      five new preload events — voice-reconnecting adds a
+      "reconnecting" CSS class to the voice panel and appends "
+      (reconnecting…)" to the channel name if still shown;
+      voice-reconnected restores isInVoice/currentChannelId, re-
+      applies the saved global voice volume and mute/deafen state to
+      the fresh VoiceService instance, and reseeds
+      previousOccupantIds so the next presence update doesn't fire a
+      spurious join sound; voice-rejoin-failed falls back to a clean
+      "left voice" state; voice-connection-lost and voice-error log
+      to the server log tab.
+    - apps/client/src/renderer/index.html: added
+      #voice-panel.reconnecting CSS (pulsing amber presence dot)
+      using the existing --warning token.
+
+  Key Files Modified:
+    apps/server/src/index.ts
+    apps/server/src/services/mediasoup.service.ts
+    apps/server/src/handlers/voice.handler.ts
+    packages/shared-types/src/socket-events.ts
+    apps/client/src/services/voice.service.ts
+    apps/client/src/preload.ts
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/renderer/index.html
+
+  Verification:
+    - npx tsc --build (shared-types) — passed
+    - npx tsc --noEmit (server) — passed
+    - npx tsc --noEmit (client) — passed
+    - npm run test (server, vitest) — 19/19 passed, no regressions
+    - Server boot smoke test: started via `npm run dev`, confirmed
+      all mediasoup workers spawn, Socket.io listens, and shutdown is
+      clean (no behavior change from the ping/pong retune or the
+      worker-crash-handling rewrite under normal operation).
+    - Client smoke test: built via tsc + copy-html.mjs, launched with
+      `npx electron .` against the running dev server — no renderer
+      exceptions on startup.
+    - Not yet exercised: an actual reconnect/rejoin cycle (killing
+      the network or a mediasoup worker mid-call) and the extended
+      soak test the PRD calls for — this bug is inherently
+      intermittent, so absence of a repro over a longer real-world
+      session is the only meaningful signal beyond the targeted
+      code-path fixes above.
+
+  Next Step: PRD 11.2 — fix the voice session timer starting from
+  negative numbers (clock-offset correction).
+
+--- Entry: 13/08/2026 ---
+
+Feature/Fix: Phase 11 — PRD 11.2: Fix Voice Session Timer Starting From Negative Numbers
+
+  Problem: Joining a voice channel would briefly show the session
+  timer starting at a negative value (e.g. -1:00 or -2:00) before
+  counting up to positive. Root cause: the client computed elapsed
+  time as `Date.now() - new Date(sessionStartedAt).getTime()`, i.e.
+  its own wall clock diffed against a server-issued absolute
+  timestamp, with no correction for clock skew between the two
+  machines — any skew where the client's clock read behind the
+  server's surfaced directly as a negative timer.
+
+  Solution: Derive a client↔server clock offset from the existing
+  ping/latency round trip and apply it everywhere sessionStartedAt is
+  diffed against, instead of only clamping the visible symptom.
+
+  Shared Types Changes:
+    - packages/shared-types/src/socket-events.ts: PING_LATENCY's ack
+      signature changed from `() => void` to `(serverTime: number) =>
+      void` — the server now hands back its own current timestamp on
+      every ping.
+
+  Server Changes:
+    - apps/server/src/handlers/connection.handler.ts: the PING_LATENCY
+      handler now calls `ack(Date.now())` instead of `ack()`.
+
+  Client Changes:
+    - apps/client/src/preload.ts: added module-level clockOffsetMs
+      (starts at 0, reset to 0 on disconnect). New
+      measureLatencyAndClockOffset() helper replaces the two ad-hoc
+      PING_LATENCY call sites (the 3s interval and the immediate
+      post-connect measurement) with one shared implementation that
+      computes both latencyMs (unchanged RTT calculation) and
+      clockOffsetMs using the standard NTP-style approximation:
+      offset ≈ serverTime - (localSendTime + rtt / 2). New
+      getClockOffset(): number bridge method exposes the latest
+      estimate, mirroring the existing getLatency().
+    - apps/client/src/renderer/renderer.ts: added a correctedNow() =
+      Date.now() + api.getClockOffset() helper (and the matching
+      getClockOffset() declaration on the Reson8Api interface). Both
+      elapsed-time computation sites — the synchronous timer-badge
+      render inside renderChannel() and the 1s setInterval tick that
+      updates both the tree badge and the voice panel timer — now
+      call correctedNow() instead of a raw Date.now(). formatDuration()
+      additionally clamps its input to a minimum of 0 before
+      formatting, as a defense-in-depth safety net for any residual
+      skew (the offset is a single round-trip estimate, not a full
+      NTP sync), not the primary fix.
+
+  Key Files Modified:
+    packages/shared-types/src/socket-events.ts
+    apps/server/src/handlers/connection.handler.ts
+    apps/client/src/preload.ts
+    apps/client/src/renderer/renderer.ts
+
+  Verification:
+    - npx tsc --build (shared-types) — passed
+    - npx tsc --noEmit (server) — passed
+    - npx tsc --noEmit (client) — passed
+    - npm run test (server, vitest) — 19/19 passed, no regressions
+    - Not yet exercised: no way in this session to artificially skew
+      a test machine's clock relative to the server to visually
+      confirm the timer no longer starts negative — the latency
+      display (which shares the same round-trip mechanism) was
+      unaffected by the change, but the clock-skew scenario itself
+      still needs a manual pass per the PRD's verification steps.
+
+  Next Step: PRD 11.3 — fix the emoji picker's custom-emoji tab
+  visibility.
+
+--- Entry: 13/08/2026 ---
+
+Feature/Fix: Phase 11 — PRD 11.3: Fix Emoji Picker Custom-Emoji Tab Visibility
+
+  Problem: The custom-emoji tab was the 10th tab appended to a single
+  non-wrapping, horizontally-scrolling category-tab row
+  (.emoji-category-tabs) with a deliberately hidden scrollbar
+  (scrollbar-width: none). With 9 built-in categories ahead of it, the
+  tab could scroll out of view with no visible cue that more tabs
+  existed. It also used a plain "➕" emoji character as its icon,
+  rendering inconsistently in size/weight across platforms/fonts and
+  at a dimmed 0.5 opacity unless active — easy to miss even when
+  technically visible.
+
+  Solution: Moved the custom-emoji tab into its own fixed slot,
+  outside the scrollable row, so it's always visible regardless of
+  category count or scroll position, and replaced its icon with an
+  inline SVG matching the app's existing icon convention.
+
+  Client Changes:
+    - apps/client/src/renderer/index.html: wrapped the tab bar in a
+      new .emoji-tabs-bar flex container holding two children — the
+      existing #emoji-category-tabs (unchanged scroll/overflow
+      behavior, now flex: 1 1 auto with min-width: 0 so it shrinks
+      instead of pushing the fixed slot off-screen) and a new
+      #emoji-custom-tab-slot (flex-shrink: 0, separated by a left
+      border) that permanently hosts just the custom-emoji tab.
+      Added display: inline-flex/align-items/justify-content to
+      .emoji-cat-tab so the new SVG-based tab centers correctly
+      (harmless for the existing text/emoji-character tabs too).
+    - apps/client/src/renderer/renderer.ts: added emojiTabsBar and
+      emojiCustomTabSlot element refs. buildEmojiCategoryTabs() now
+      appends the 9 built-in category buttons to
+      emojiCategoryTabs as before, but appends the custom-emoji
+      button to emojiCustomTabSlot instead. Replaced
+      `customBtn.textContent = "➕"` with
+      `customBtn.innerHTML = <svg ...>` — a 12x12 plus-in-circle icon
+      in the same stroke style (viewBox 0 0 24 24, stroke=
+      currentColor, stroke-width 2) as #btn-emoji's smiley icon,
+      sized down to fit the tab. A new clearActiveTabs() helper
+      queries emojiTabsBar (the shared parent of both zones) instead
+      of just emojiCategoryTabs, so clicking either a built-in
+      category tab or the custom tab still correctly clears/sets the
+      "active" class across both zones.
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html
+    apps/client/src/renderer/renderer.ts
+
+  Verification:
+    - npx tsc --noEmit (client) — passed
+    - No xdotool/ydotool/pyautogui was available to click through the
+      UI directly, so instead drove a real packaged-and-launched
+      instance (built via tsc --build + copy-html.mjs, run with
+      `electron --remote-debugging-port=9222 .`) through the Chrome
+      DevTools Protocol (Node's `ws` package + Runtime.evaluate/
+      Page.captureScreenshot over the CDP websocket): connected to
+      the local dev server, opened a real text channel tab, opened
+      the emoji picker, and confirmed live in the running app that
+      #emoji-custom-tab-slot renders the new SVG icon, stays visible
+      outside the scrollable category row, and correctly toggles its
+      "active" class and switches the grid on click — screenshots
+      confirmed the same visually. (First pass against a stale,
+      un-rebuilt dist/ falsely looked plausible — caught by dumping
+      the live DOM and cross-checking against a clean rebuild.)
+
+  Next Step: PRD 11.4 — post-update "what's new" modal.
+
+--- Entry: 13/08/2026 ---
+
+Feature/Fix: Phase 11 — PRD 11.4: Post-Update "What's New" Modal
+
+  Problem: Reson8 had no way to tell a user what changed after an
+  update — the auto-updater (Phase 10) installs new versions silently,
+  with no in-app summary of what's new beyond manually visiting
+  GitHub Releases.
+
+  Solution: On startup, compare the running app version against the
+  last version the user actually dismissed this modal for; if they
+  differ, fetch that version's GitHub release notes and show them
+  once, dismissible via a "Got it" button that persists the new
+  version so it doesn't reappear until the next bump.
+
+  Main Process Changes (main.ts):
+    - New fetchReleaseNotes(version) — fetches
+      https://api.github.com/repos/fbarrella/reson8/releases/tags/v{version}
+      (5s timeout via AbortController), returns { name, body, htmlUrl }
+      or null on any failure (offline, rate-limited, no matching
+      tag). Follows the same fetch-from-main pattern already used by
+      fetchLinkPreview().
+    - New ipcMain.handle("fetch-release-notes", ...) wired to it.
+    - No new "open external" IPC needed — the existing
+      mainWindow.webContents.setWindowOpenHandler() already routes
+      any http(s) window.open() call from the renderer through
+      shell.openExternal(), so the modal's "View on GitHub" button
+      reuses that.
+
+  Client Bridge (preload.ts):
+    - fetchReleaseNotes(version): Promise<{name, body, htmlUrl} | null>
+      bridge method.
+
+  Renderer Changes (renderer.ts, index.html):
+    - checkForWhatsNew(currentVersion), called right after the
+      existing api.getAppVersion() call in the About-tab startup
+      hydration. Compares currentVersion against
+      localStorage["reson8-last-seen-version"]:
+        - unset (first-ever launch) → silently records currentVersion,
+          no modal (a brand-new install shouldn't be greeted with a
+          "what's new since your last version" prompt).
+        - differs → calls fetchReleaseNotes(); on success shows the
+          new #whats-new-modal; on failure (null) does nothing this
+          launch — the version is deliberately NOT marked as seen
+          yet, so the check retries on the next launch instead of
+          the notification being silently lost to one bad network
+          moment.
+        - matches → no-op.
+      The "seen" marker is only written when "Got it" is clicked.
+      Clicking the backdrop closes the modal like other modals in
+      the app but does not persist "seen", so an accidental dismiss
+      isn't permanent.
+    - Release notes are rendered via `textContent`, never
+      `innerHTML` — the body is untrusted remote content, so raw
+      Markdown syntax (headers, **bold**, etc.) displays as plain
+      text rather than being parsed/rendered. Deliberate
+      security-over-polish tradeoff — no HTML injection surface at
+      all, no Markdown-to-HTML dependency needed.
+    - New #whats-new-modal markup (index.html), styled with the
+      existing .modal-content.wide variant (480px, 70vh max-height,
+      scrollable body) and added to the shared modal show/hide
+      selector group, consistent with every other modal in the app
+      (never a native alert/confirm).
+
+  localStorage Keys:
+    - reson8-last-seen-version — the last app version the user has
+      either launched for the first time or explicitly dismissed
+      this modal for.
+
+  Key Files Modified:
+    apps/client/src/main.ts
+    apps/client/src/preload.ts
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/renderer/index.html
+
+  Verification:
+    - npx tsc --noEmit (client) — passed
+    - Full live verification via Chrome DevTools Protocol against a
+      freshly rebuilt dist (tsc --build + copy-html.mjs), launched
+      with `electron --remote-debugging-port=9222 .`, driven with
+      Node's `ws` package: seeded reson8-last-seen-version to an
+      older version via localStorage, reloaded the renderer, and
+      confirmed against the real (not mocked) GitHub API that the
+      actual published v1.3.0 release notes were fetched and
+      rendered, the modal appeared with the correct title/body/
+      buttons (screenshotted), clicking "Got it" hid it and updated
+      last-seen-version to the current version, and a second run
+      confirmed the true first-launch path (no stored key) records
+      the version silently with no modal shown.
+
+  Next Step: PRD 11.5 — pin messages in text channels.
+
+--- Entry: 13/08/2026 ---
+
+Feature/Fix: Phase 11 — PRD 11.5: Pin Messages in Text Channels
+
+  Problem: There was no way to surface an important message in a text
+  channel — anything relevant (rules, an announcement, a pinned link)
+  scrolled away with the rest of the history.
+
+  Solution: Admins (MANAGE_CHANNELS) can pin exactly one message per
+  text channel. A bar above the message list shows a cropped preview
+  with a pin icon; clicking it scrolls to and briefly highlights the
+  original message, fetching it from the server first if it isn't
+  within the currently-loaded page.
+
+  Database Changes:
+    - schema.prisma: Channel gained `pinnedMessageId String? @unique`
+      + a `pinnedMessage` relation to Message (onDelete: SetNull —
+      deleting the pinned message clears the pin at the DB level
+      automatically), and Message gained the `pinnedInChannel`
+      back-relation. Migration
+      `20260813210500_add_channel_pinned_message` (hand-written from
+      `prisma migrate diff` since `prisma migrate dev` refused to run
+      non-interactively in this session; applied via
+      `prisma migrate deploy`).
+
+  Shared Types Changes:
+    - New `IPinnedMessage` model ({ id, content, authorNickname,
+      createdAt }); `IChannel` gained an optional `pinnedMessage`
+      field (present for symmetry, not actually populated in channel-
+      tree broadcasts — see Client Changes for why).
+    - New client→server events `PIN_MESSAGE` / `UNPIN_MESSAGE`
+      (MANAGE_CHANNELS-gated, ack-based — modeled directly on the
+      existing `UPDATE_CHANNEL` pattern).
+    - New server→client `CHANNEL_PIN_UPDATED` broadcast: `{ channelId,
+      channelName, pinnedMessage, actedByNickname? }` —
+      `actedByNickname` is omitted when the change was an automatic
+      unpin caused by the pinned message being deleted, so the client
+      can log a different message for that case.
+    - `FETCH_MESSAGES` extended with an optional `aroundMessageId`
+      (fetches a window of messages centered on a specific message,
+      ignoring `before` — used for the jump-to-pin fallback) and a
+      `pinnedMessage` field on the ack, populated only on the initial
+      load (`before`/`aroundMessageId` both unset) to avoid an extra
+      query on every "load more" scroll.
+
+  Server Changes:
+    - channel.handler.ts: `PIN_MESSAGE` validates the channel is
+      TEXT and the message actually belongs to it, then sets
+      `pinnedMessageId` and broadcasts; `UNPIN_MESSAGE` clears it.
+      Both require MANAGE_CHANNELS via the existing
+      `requirePermission()` middleware.
+    - message.handler.ts: `DELETE_MESSAGE` now checks — before
+      deleting — whether the message was the channel's current pin,
+      and broadcasts `CHANNEL_PIN_UPDATED` with `pinnedMessage: null`
+      if so (no `actedByNickname`), since the FK's `onDelete: SetNull`
+      only fixes the DB row, not already-connected clients' UI.
+      `FETCH_MESSAGES` gained the `aroundMessageId` window query
+      (half the page before the target + the target + half after, by
+      `createdAt`) and its Prisma-row→DTO mapping was refactored into
+      a shared `toMessageDto()` helper (previously duplicated inline).
+
+  Client Changes:
+    - Permission gating follows the existing rename/delete/NSFW-
+      toggle context-menu convention discovered during this session's
+      audit: the pin button is shown to **everyone**, and the server
+      rejects unauthorized attempts (inline `log()` error +
+      `insufficient_perms.mp3`) — not a client-side cached-permission
+      check like the Settings-modal admin tabs use. This is why
+      channel-tree hydration doesn't need to carry `pinnedMessage` at
+      all; pin state is instead sourced lazily per-tab from
+      `FETCH_MESSAGES`'s response and kept live via
+      `CHANNEL_PIN_UPDATED`.
+    - `attachPinButton()`: new per-message pin/unpin button in the
+      reaction bar (same 14×14 feather-icon convention as edit/
+      delete/react), added alongside `attachEditButton()`. Active
+      state (persistently visible, not just on hover) = this message
+      is the channel's current pin; click toggles pin/unpin.
+    - Pinning while a different message is already pinned shows a new
+      `#pin-replace-confirm-modal` (matches the existing NSFW-confirm
+      custom-modal pattern, not a native `confirm()`) before
+      replacing — confirmed with you as the desired UX.
+    - New pinned-bar element, one per channel tab (`ChatTab.pinBarEl`
+      / `pinnedMessageId`), prepended above `.chat-messages` inside
+      `.tab-content` — structurally isolated from `#voice-panel`, so
+      no voice-UI regression risk. Shows a ≤100-char cropped preview;
+      clicking it calls `jumpToPinnedMessage()`, which scrolls
+      directly to the message via its existing `data-msg-id` if
+      already loaded, or falls back to
+      `api.fetchMessages(channelId, undefined, 50, messageId)` (the
+      new `aroundMessageId` path) to fetch a window around it,
+      replaces the tab's rendered messages with that window, then
+      scrolls and applies a 2s `.msg-highlight` flash animation.
+    - `api.on("channel-pin-updated", ...)` updates the open tab's bar
+      and the affected message(s)' button active-state live, and logs
+      a system-style line to the server log tab — confirmed with you:
+      `"{nickname} pinned/unpinned a message in #{channel}"`, or
+      `"The pinned message in #{channel} was deleted"` for the
+      no-`actedByNickname` auto-unpin case.
+
+  Key Files Modified:
+    apps/server/prisma/schema.prisma
+    apps/server/prisma/migrations/20260813210500_add_channel_pinned_message/migration.sql (NEW)
+    packages/shared-types/src/models.ts
+    packages/shared-types/src/socket-events.ts
+    apps/server/src/handlers/channel.handler.ts
+    apps/server/src/handlers/message.handler.ts
+    apps/client/src/preload.ts
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/renderer/index.html
+
+  Verification:
+    - npx tsc --build (shared-types) — passed
+    - npx tsc --noEmit (server) — passed
+    - npm run test (server, vitest) — 19/19 passed, no regressions
+    - npx tsc --noEmit (client) — passed
+    - Full live verification via Chrome DevTools Protocol against a
+      real running server + Postgres (freshly rebuilt dist, launched
+      with `electron --remote-debugging-port`): granted the test
+      client's random dev-mode instance ID the admin role via a
+      direct `INSERT INTO user_roles` (dev-mode regenerates instance
+      IDs per launch, so `ADMIN_INSTANCE_ID` couldn't be pre-seeded),
+      sent real messages in a real text channel, then confirmed
+      end-to-end: pinning with no existing pin (no confirm shown),
+      pinning over an existing pin (confirm modal appears, replacing
+      correctly updates the bar and both messages' button states),
+      clicking the bar scrolls to and highlights the message,
+      unpinning clears the bar, deleting the pinned message
+      auto-unpins it, and the server log records the expected
+      pin/unpin/auto-unpin lines. A separate follow-up test cleared a
+      tab's rendered DOM to simulate the pinned message being
+      scrolled out of the loaded page, then confirmed clicking the
+      bar correctly triggered the `aroundMessageId` fetch fallback,
+      re-rendered a window of messages, and highlighted the target.
+    - Not exercised: no second (non-admin) client was tested for the
+      "server rejects unauthorized PIN_MESSAGE" path specifically —
+      inferred correct from `requirePermission()` being identical to
+      the already-proven UPDATE_CHANNEL gate, but not directly
+      observed this session.
+
+  Next Step: none — this was the final Phase 11 PRD item. Remaining
+  work is bumping the version to 1.4.0 and updating README.md.
+

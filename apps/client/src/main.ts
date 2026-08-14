@@ -73,6 +73,51 @@ function extractOgTags(html: string): Record<string, string> {
     return tags;
 }
 
+interface ReleaseNotes {
+    name: string;
+    body: string;
+    htmlUrl: string;
+}
+
+/**
+ * Fetches the published GitHub release notes for a given app version (PRD
+ * 11.4). Returns null on any failure (offline, rate-limited, no matching
+ * tag) — the renderer treats that as "try again next launch" rather than
+ * marking the version as seen, so the notification is never silently lost.
+ */
+async function fetchReleaseNotes(version: string): Promise<ReleaseNotes | null> {
+    try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 5000);
+
+        const response = await fetch(
+            `https://api.github.com/repos/fbarrella/reson8/releases/tags/v${version}`,
+            {
+                signal: controller.signal,
+                headers: {
+                    Accept: "application/vnd.github+json",
+                    "User-Agent": "Mozilla/5.0 (compatible; Reson8Client/1.0; +https://github.com/fbarrella/reson8)",
+                },
+            },
+        );
+        clearTimeout(timeout);
+
+        if (!response.ok) return null;
+
+        const data = await response.json();
+        return {
+            name: typeof data.name === "string" && data.name ? data.name : `v${version}`,
+            body: typeof data.body === "string" ? data.body : "",
+            htmlUrl:
+                typeof data.html_url === "string"
+                    ? data.html_url
+                    : `https://github.com/fbarrella/reson8/releases/tag/v${version}`,
+        };
+    } catch {
+        return null;
+    }
+}
+
 async function fetchLinkPreview(url: string): Promise<LinkPreviewData | null> {
     // Check cache first
     if (linkPreviewCache.has(url)) {
@@ -415,6 +460,10 @@ app.whenReady().then(() => {
 
     ipcMain.handle("fetch-link-preview", async (_event, url: string) => {
         return fetchLinkPreview(url);
+    });
+
+    ipcMain.handle("fetch-release-notes", async (_event, version: string) => {
+        return fetchReleaseNotes(version);
     });
 
     // ── Tray preferences IPC ─────────────────────────────────────────────

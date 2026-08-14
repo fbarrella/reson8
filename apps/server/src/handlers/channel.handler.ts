@@ -286,6 +286,98 @@ export function registerChannelHandlers(
                 ack({ success: false, error: "Failed to reorder channels" });
             }
         });
+
+        // ── PIN_MESSAGE ─────────────────────────────────────────────────────
+        socket.on("PIN_MESSAGE", async (payload, ack) => {
+            try {
+                const { channelId, messageId } = payload;
+
+                const allowed = await requirePermission(
+                    app, socket, BigInt(PermissionFlags.MANAGE_CHANNELS),
+                );
+                if (!allowed) {
+                    ack({ success: false, error: "Permission denied" });
+                    return;
+                }
+
+                const channel = await app.prisma.channel.findUnique({ where: { id: channelId } });
+                if (!channel) {
+                    ack({ success: false, error: "Channel not found" });
+                    return;
+                }
+                if (channel.type !== "TEXT") {
+                    ack({ success: false, error: "Only text channels can have a pinned message" });
+                    return;
+                }
+
+                const message = await app.prisma.message.findUnique({
+                    where: { id: messageId },
+                    include: { user: { select: { nickname: true } } },
+                });
+                if (!message || message.channelId !== channelId) {
+                    ack({ success: false, error: "Message not found in this channel" });
+                    return;
+                }
+
+                await app.prisma.channel.update({
+                    where: { id: channelId },
+                    data: { pinnedMessageId: messageId },
+                });
+
+                ack({ success: true });
+
+                io.to(`server:${channel.serverId}`).emit("CHANNEL_PIN_UPDATED", {
+                    channelId,
+                    channelName: channel.name,
+                    pinnedMessage: {
+                        id: message.id,
+                        content: message.content,
+                        authorNickname: message.user.nickname,
+                        createdAt: message.createdAt.toISOString(),
+                    },
+                    actedByNickname: socket.data.nickname,
+                });
+
+                app.log.info({ socketId: socket.id, channelId, messageId }, "Message pinned");
+            } catch (err) {
+                app.log.error({ err }, "Error in PIN_MESSAGE");
+                ack({ success: false, error: "Failed to pin message" });
+            }
+        });
+
+        // ── UNPIN_MESSAGE ───────────────────────────────────────────────────
+        socket.on("UNPIN_MESSAGE", async (payload, ack) => {
+            try {
+                const { channelId } = payload;
+
+                const allowed = await requirePermission(
+                    app, socket, BigInt(PermissionFlags.MANAGE_CHANNELS),
+                );
+                if (!allowed) {
+                    ack({ success: false, error: "Permission denied" });
+                    return;
+                }
+
+                const channel = await app.prisma.channel.update({
+                    where: { id: channelId },
+                    data: { pinnedMessageId: null },
+                });
+
+                ack({ success: true });
+
+                io.to(`server:${channel.serverId}`).emit("CHANNEL_PIN_UPDATED", {
+                    channelId,
+                    channelName: channel.name,
+                    pinnedMessage: null,
+                    actedByNickname: socket.data.nickname,
+                });
+
+                app.log.info({ socketId: socket.id, channelId }, "Message unpinned");
+            } catch (err) {
+                app.log.error({ err }, "Error in UNPIN_MESSAGE");
+                ack({ success: false, error: "Failed to unpin message" });
+            }
+        });
     });
 }
 

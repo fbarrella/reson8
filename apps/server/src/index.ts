@@ -111,8 +111,13 @@ async function main(): Promise<void> {
         SocketData
     >(app.server, {
         cors: { origin: "*" },
-        pingInterval: 10_000,
-        pingTimeout: 5_000,
+        // Matches Socket.io's own defaults — the previous 10s/5s pair was
+        // aggressive enough to trip a full disconnect (and the resulting
+        // mediasoup teardown) on ordinary jitter like a brief GC pause or a
+        // laptop sleep/wake, well before the underlying connection actually
+        // died (see PRD 11.1).
+        pingInterval: 25_000,
+        pingTimeout: 20_000,
     });
 
     // Register socket event handlers

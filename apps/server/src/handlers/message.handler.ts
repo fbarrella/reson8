@@ -14,6 +14,7 @@ import type {
     InterServerEvents,
     SocketData,
     IMessage,
+    IPinnedMessage,
 } from "@reson8/shared-types";
 import { PermissionFlags } from "@reson8/shared-types";
 import { requirePermission } from "../middleware/permissions.middleware.js";
@@ -32,6 +33,48 @@ type TypedSocket = Socket<
     InterServerEvents,
     SocketData
 >;
+
+const messageInclude = {
+    user: { select: { nickname: true } },
+    reactions: { select: { emoji: true, userId: true }, orderBy: { createdAt: "asc" as const } },
+};
+
+type MessageWithRelations = {
+    id: string;
+    channelId: string;
+    userId: string;
+    content: string;
+    attachmentUrl: string | null;
+    createdAt: Date;
+    editedAt: Date | null;
+    user: { nickname: string };
+    reactions: { emoji: string; userId: string }[];
+};
+
+/** Maps a Prisma message row (with user + reactions included) to the wire DTO. */
+function toMessageDto(m: MessageWithRelations): IMessage {
+    const rMap = new Map<string, string[]>();
+    for (const r of m.reactions) {
+        let list = rMap.get(r.emoji);
+        if (!list) { list = []; rMap.set(r.emoji, list); }
+        list.push(r.userId);
+    }
+    const reactions = Array.from(rMap.entries()).map(([emoji, userIds]) => ({
+        emoji, count: userIds.length, userIds,
+    }));
+
+    return {
+        id: m.id,
+        channelId: m.channelId,
+        userId: m.userId,
+        nickname: m.user.nickname,
+        content: m.content,
+        attachmentUrl: m.attachmentUrl,
+        createdAt: m.createdAt.toISOString(),
+        editedAt: m.editedAt?.toISOString() ?? null,
+        reactions,
+    };
+}
 
 /**
  * Registers message-related handlers on each socket connection.
@@ -123,53 +166,92 @@ export function registerMessageHandlers(
         // ── FETCH_MESSAGES ─────────────────────────────────────────────────
         socket.on("FETCH_MESSAGES", async (payload, ack) => {
             try {
-                const { channelId, before, limit = 50 } = payload;
+                const { channelId, before, limit = 50, aroundMessageId } = payload;
                 const take = Math.min(limit, 100); // cap at 100
 
-                const where: any = { channelId };
-                if (before) {
-                    where.createdAt = { lt: new Date(before) };
-                }
+                let dtos: IMessage[];
 
-                const messages = await app.prisma.message.findMany({
-                    where,
-                    orderBy: { createdAt: "desc" },
-                    take,
-                    include: {
-                        user: { select: { nickname: true } },
-                        reactions: { select: { emoji: true, userId: true }, orderBy: { createdAt: "asc" } },
-                    },
-                });
+                if (aroundMessageId) {
+                    // Jump-to-message: fetch a window centered on a specific
+                    // message rather than the most recent page — used when
+                    // clicking the pinned-message bar for a pin outside the
+                    // currently-loaded history (PRD 11.5).
+                    const target = await app.prisma.message.findUnique({
+                        where: { id: aroundMessageId },
+                    });
+                    if (!target || target.channelId !== channelId) {
+                        ack({ success: false, error: "Message not found" });
+                        return;
+                    }
 
-                // Convert to DTOs in chronological order
-                const dtos: IMessage[] = messages
-                    .reverse()
-                    .map((m) => {
-                        // Aggregate reactions by emoji
-                        const rMap = new Map<string, string[]>();
-                        for (const r of m.reactions) {
-                            let list = rMap.get(r.emoji);
-                            if (!list) { list = []; rMap.set(r.emoji, list); }
-                            list.push(r.userId);
-                        }
-                        const reactions = Array.from(rMap.entries()).map(([emoji, userIds]) => ({
-                            emoji, count: userIds.length, userIds,
-                        }));
+                    const halfBefore = Math.floor((take - 1) / 2);
+                    const halfAfter = take - 1 - halfBefore;
 
-                        return {
-                            id: m.id,
-                            channelId: m.channelId,
-                            userId: m.userId,
-                            nickname: m.user.nickname,
-                            content: m.content,
-                            attachmentUrl: m.attachmentUrl,
-                            createdAt: m.createdAt.toISOString(),
-                            editedAt: m.editedAt?.toISOString() ?? null,
-                            reactions,
-                        };
+                    const [beforeMsgs, targetMsg, afterMsgs] = await Promise.all([
+                        app.prisma.message.findMany({
+                            where: { channelId, createdAt: { lt: target.createdAt } },
+                            orderBy: { createdAt: "desc" },
+                            take: halfBefore,
+                            include: messageInclude,
+                        }),
+                        app.prisma.message.findUniqueOrThrow({
+                            where: { id: aroundMessageId },
+                            include: messageInclude,
+                        }),
+                        app.prisma.message.findMany({
+                            where: { channelId, createdAt: { gt: target.createdAt } },
+                            orderBy: { createdAt: "asc" },
+                            take: halfAfter,
+                            include: messageInclude,
+                        }),
+                    ]);
+
+                    dtos = [...beforeMsgs.reverse(), targetMsg, ...afterMsgs].map(toMessageDto);
+                } else {
+                    const where: any = { channelId };
+                    if (before) {
+                        where.createdAt = { lt: new Date(before) };
+                    }
+
+                    const messages = await app.prisma.message.findMany({
+                        where,
+                        orderBy: { createdAt: "desc" },
+                        take,
+                        include: messageInclude,
                     });
 
-                ack({ success: true, messages: dtos });
+                    dtos = messages.reverse().map(toMessageDto);
+                }
+
+                // Only resolve the channel's current pin on the initial load
+                // (not on "load more"/jump-to-message calls) to avoid an
+                // extra query on every scroll-triggered page fetch.
+                let pinnedMessage: IPinnedMessage | null = null;
+                if (!before && !aroundMessageId) {
+                    const channel = await app.prisma.channel.findUnique({
+                        where: { id: channelId },
+                        select: {
+                            pinnedMessage: {
+                                select: {
+                                    id: true,
+                                    content: true,
+                                    createdAt: true,
+                                    user: { select: { nickname: true } },
+                                },
+                            },
+                        },
+                    });
+                    if (channel?.pinnedMessage) {
+                        pinnedMessage = {
+                            id: channel.pinnedMessage.id,
+                            content: channel.pinnedMessage.content,
+                            authorNickname: channel.pinnedMessage.user.nickname,
+                            createdAt: channel.pinnedMessage.createdAt.toISOString(),
+                        };
+                    }
+                }
+
+                ack({ success: true, messages: dtos, pinnedMessage });
             } catch (err) {
                 app.log.error({ err }, "Error in FETCH_MESSAGES");
                 ack({ success: false, error: "Failed to fetch messages" });
@@ -216,6 +298,16 @@ export function registerMessageHandlers(
                     await deleteAttachment(message.attachmentUrl, message.attachmentPublicId);
                 }
 
+                // Was this the channel's pinned message? Check before
+                // deleting — the FK's onDelete: SetNull clears it at the DB
+                // level automatically, but connected clients still need to
+                // be told so their pin bar disappears in real time (PRD 11.5).
+                const channel = await app.prisma.channel.findUnique({
+                    where: { id: message.channelId },
+                    select: { name: true, pinnedMessageId: true },
+                });
+                const wasPinned = channel?.pinnedMessageId === messageId;
+
                 await app.prisma.message.delete({ where: { id: messageId } });
 
                 ack({ success: true });
@@ -224,6 +316,16 @@ export function registerMessageHandlers(
                     channelId: message.channelId,
                     messageId,
                 });
+
+                if (wasPinned && channel) {
+                    io.to(`server:${socket.data.serverId}`).emit("CHANNEL_PIN_UPDATED", {
+                        channelId: message.channelId,
+                        channelName: channel.name,
+                        pinnedMessage: null,
+                        // No actedByNickname — this was an automatic
+                        // unpin, not an explicit pin/unpin action.
+                    });
+                }
 
                 app.log.info(
                     { socketId: socket.id, messageId },

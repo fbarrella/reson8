@@ -63,6 +63,16 @@ export interface IChannel {
     maxUsers: number | null; // null = unlimited
     isNsfw: boolean; // text channels only
     createdAt: string;
+    /** The channel's single pinned message (text channels only), or null/undefined if none. */
+    pinnedMessage?: IPinnedMessage | null;
+}
+
+/** A cropped preview of a text channel's pinned message. */
+export interface IPinnedMessage {
+    id: string;
+    content: string;
+    authorNickname: string;
+    createdAt: string;
 }
 
 /**

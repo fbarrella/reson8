@@ -8,7 +8,7 @@ A high-performance desktop communication platform inspired by TeamSpeak 3,
 built with modern technology for low-latency voice, hierarchical channel trees,
 and private server ownership.
 
-[![Version](https://img.shields.io/badge/version-1.3.0-blue.svg)](#)
+[![Version](https://img.shields.io/badge/version-1.4.0-blue.svg)](#)
 [![Electron](https://img.shields.io/badge/Electron-33-47848F?logo=electron&logoColor=white)](https://www.electronjs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D20-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
@@ -35,6 +35,9 @@ and private server ownership.
 - **Voice Session Timers** — Live elapsed timers indicating how long a voice conversation has been active.
 - **Per-User Volume & Local Mute** — Right-click anyone in a voice channel to adjust their volume (0–200%) or mute them locally — just for you, with no effect on what anyone else hears.
 - **Self Mute/Deafen Indicators** — Small icons next to a participant's name show when they've muted their mic or deafened themselves, so silence never looks like being ignored.
+- **Mute/Deafen That Work Together** — Deafening yourself automatically mutes your mic too, and un-deafening restores exactly the mute state you had before. Push-to-talk is fully blocked while deafened.
+- **Audio Settings Tab** — Independent volume sliders for Nudge alerts, Sound Alerts, and a master Global Voice Chat Volume that layers on top of each participant's individual volume.
+- **Automatic Voice Reconnection** — A brief network hiccup or WebRTC connection drop no longer permanently ejects you from a voice channel — Reson8 detects it and silently rejoins.
 
 ### 🌳 Channels & Presence
 - **Channel Tree** — Hierarchical channel structure with categories, voice rooms, and text channels — just like TeamSpeak.
@@ -53,6 +56,7 @@ and private server ownership.
 - **Emoji Picker & Reactions** — Insert any of 550+ curated emojis into chat, or react directly to messages with persistent, tallied emoji pills.
 - **Custom Emoji** — Upload your own emoji with a built-in crop tool; new uploads are queued for admin approval before becoming usable server-wide.
 - **Link Previews** — URLs in chat auto-expand with title, description, and image. YouTube/video embeds supported.
+- **Pinned Messages** — Admins can pin one message per text channel; a bar above the chat shows a preview and jumps you straight to it (loading older history if needed), with a click.
 
 ### 🛡️ Administration & Security
 - **Role-Based Permissions** — Bitwise permission system with admin role management. Fine-grained access control.
@@ -60,6 +64,8 @@ and private server ownership.
 - **Kick & Ban** — Admin right-click to kick users from voice channels. Ban button in the Users modal blacklists by instance ID with persistent unban support.
 
 ### 🖥️ Desktop Experience
+- **Auto-Updates** — Checks for new releases on launch and installs them with one click; a "Check for Updates" button in the About tab lets you trigger it anytime.
+- **"What's New" Modal** — The first time you open Reson8 after an update, a one-time modal summarizes what changed, sourced live from the GitHub release notes.
 - **System Tray** — Minimize-to-tray and close-to-tray options with a tray context menu (Restore / Quit).
 - **Remember Me** — Save server URL, nickname, and password across sessions with a single checkbox.
 - **Sound Alerts & Connectivity** — Audible notifications for key events and a real-time latency ping display.
@@ -266,6 +272,8 @@ reson8/
 | 7 | **Evolutions** — DMs, link previews, emoji picker, active speaker, moderation, password protection, remember me | ✅ Done |
 | 8 | **Improvements** — Sound alerts, noise gate, session timers, emoji reactions, latency display | ✅ Done |
 | 9 | **Next Steps** — Per-user voice controls, mute/deafen status icons, channel rename/reorder/NSFW, custom emoji uploads, message edit/delete, unread indicators, nudge | ✅ Done |
+| 10 | **Auto-Updater & Audio Settings** — electron-updater, Audio settings tab, mute/deafen accumulation, timer/unread/AppImage-icon fixes | ✅ Done |
+| 11 | **Client Fixes & Pinned Messages** — Voice disconnect resilience, session timer fix, emoji picker fix, post-update "what's new" modal, pinned messages in text channels | ✅ Done |
 
 ---
 
