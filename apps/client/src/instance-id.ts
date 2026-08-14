@@ -15,6 +15,17 @@ import { randomUUID } from "crypto";
 const ID_FILE = join(app.getPath("userData"), "instance-id.txt");
 
 /**
+ * Whether this client has run before, independent of any particular
+ * feature's own persisted state — the ID file is written on this client's
+ * actual first-ever launch, before anything else touches userData. Must be
+ * called before getInstanceId(), which creates the file as a side effect.
+ */
+export function hasExistingInstanceId(): boolean {
+    const isDev = process.env.NODE_ENV === "development" || !app.isPackaged;
+    return !isDev && existsSync(ID_FILE);
+}
+
+/**
  * Returns (or creates) the persistent instance ID for this client.
  * In development mode, generates a fresh random UUID every time to allow
  * easily testing with multiple local clients.

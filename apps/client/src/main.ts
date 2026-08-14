@@ -7,7 +7,7 @@
 
 import { app, BrowserWindow, session, ipcMain, globalShortcut, Menu, Tray, nativeImage, shell } from "electron";
 import path from "node:path";
-import { getInstanceId } from "./instance-id.js";
+import { getInstanceId, hasExistingInstanceId } from "./instance-id.js";
 import { autoUpdater } from "electron-updater";
 
 // ── Link Preview (metascraper) ───────────────────────────────────────────
@@ -388,21 +388,26 @@ function checkForUpdatesOnce(): Promise<"available" | "not-available"> {
 /**
  * Metadata-only update check: 1 attempt, then up to 3 retries 20s apart —
  * shared by the automatic startup check and the manual "Check for Updates"
- * button, per PRD 10.1.
+ * button, per PRD 10.1. On exhausted retries, `message` carries the last
+ * attempt's error (e.g. a 404 fetching latest.yml from a release missing
+ * its electron-builder metadata) so the UI can show why, not just that.
  */
-async function checkForUpdatesWithRetry(): Promise<"available" | "not-available" | "error"> {
+async function checkForUpdatesWithRetry(): Promise<{ status: "available" | "not-available" | "error"; message?: string }> {
     const maxAttempts = 4; // 1 initial + 3 retries
+    let lastError: Error | undefined;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         try {
-            return await checkForUpdatesOnce();
+            const status = await checkForUpdatesOnce();
+            return { status };
         } catch (err) {
+            lastError = err as Error;
             console.error(`[main] Update check attempt ${attempt}/${maxAttempts} failed:`, err);
             if (attempt < maxAttempts) {
                 await new Promise((resolve) => setTimeout(resolve, 20_000));
             }
         }
     }
-    return "error";
+    return { status: "error", message: lastError?.message };
 }
 
 function setupAutoUpdater(): void {
@@ -440,6 +445,10 @@ app.whenReady().then(() => {
     }
 
     // Expose instance ID to renderer/preload
+    // Must run before getInstanceId(), which creates the ID file as a side effect.
+    const isExistingInstall = hasExistingInstanceId();
+    ipcMain.handle("is-existing-install", () => isExistingInstall);
+
     const instanceId = getInstanceId();
     ipcMain.handle("get-instance-id", () => instanceId);
 
@@ -481,8 +490,7 @@ app.whenReady().then(() => {
 
     // ── Auto-Updater IPC (PRD 10.1) ──────────────────────────────────────
     ipcMain.handle("check-for-updates", async () => {
-        const status = await checkForUpdatesWithRetry();
-        return { status };
+        return checkForUpdatesWithRetry();
     });
 
     ipcMain.handle("download-update", async () => {

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Reson8 is a self-hosted voice and text communication platform (TeamSpeak-3-style) with an Electron desktop client and a standalone Node.js server. Current version: 1.4.0, phases 1–11 complete — see "Project history" below before assuming something is unbuilt.
+Reson8 is a self-hosted voice and text communication platform (TeamSpeak-3-style) with an Electron desktop client and a standalone Node.js server. Current version: 1.4.1, phases 1–11 complete — see "Project history" below before assuming something is unbuilt.
 
 npm workspaces monorepo:
 - `apps/client/` — Electron desktop client (TypeScript, no framework — vanilla DOM in the renderer)
@@ -70,6 +70,7 @@ Shared-types must be built (`npx tsc --build`) before server/client typecheck ag
 - `getUserMedia` is silently blocked by default — `session.defaultSession.setPermissionRequestHandler` in `main.ts` must auto-grant mic/audio permissions.
 - Detached `new Audio()` elements produce no sound in the renderer; audio elements must be `document.createElement("audio")`, appended to `document.body`, and removed after use.
 - Files referenced by the main process (tray icon, sound alerts under `apps/client/assets/`) must be listed in electron-builder's `build.files` in `apps/client/package.json` or they silently vanish from packaged builds while working fine in dev.
+- electron-updater's GitHub provider needs `latest.yml`/`latest-linux.yml`/`latest-mac.yml` (electron-builder generates them locally under `apps/client/release/` alongside the installers) uploaded as release assets on every GitHub release — `npm run build:*` alone does not publish anything, so a release built and uploaded by hand without those yml files leaves every platform's update check silently failing (v1.3.0 → v1.4.0 incident, see progress.txt).
 
 ## Environment
 

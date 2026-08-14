@@ -730,3 +730,164 @@ Feature/Fix: Phase 11 — PRD 11.5: Pin Messages in Text Channels
   Next Step: none — this was the final Phase 11 PRD item. Remaining
   work is bumping the version to 1.4.0 and updating README.md.
 
+--- Entry: 13/08/2026 ---
+
+Feature/Fix: Auto-Update Failure Investigation & Fix (v1.3.0 → v1.4.0
+didn't detect the new release)
+
+  Problem: The client's electron-updater-based auto-update feature
+  (Phase 10, PRD 10.1) failed to detect v1.4.0 from a v1.3.0 install,
+  both via the automatic startup check and the manual "Check for
+  Updates" button in Settings → About, which showed a generic "Could
+  not check for updates. Try again later."
+
+  Root cause: The v1.3.0 and v1.4.0 GitHub releases were missing the
+  latest.yml/latest-linux.yml/latest-mac.yml metadata files
+  electron-updater's GitHub provider requires to detect a newer
+  version. Only the human-facing installers were uploaded by hand —
+  never through electron-builder's --publish step, which is the only
+  thing that uploads the yml files alongside installers.
+  electron-builder correctly generates all three yml files locally
+  under apps/client/release/, they just never left the machine.
+  Confirmed live against api.github.com/repos/fbarrella/reson8: the
+  v1.4.0 release assets contained only the installers, no yml files.
+  Everything else (build.publish owner/repo, app-update.yml, repo
+  visibility, electron-updater/electron-builder versions) checked out
+  correctly — owner/repo matches `git remote -v` exactly. This exact
+  gap was foreseen in the original PRD 10.1 implementation notes
+  (app-planning/archive/progress-phases-9-10.txt) — a planned
+  post-release smoke test to confirm the "up to date" path was never
+  followed through, and the manual release process kept omitting the
+  metadata files.
+
+  Solution: Two-part fix, decided with the user: (1) surface the real
+  underlying error in the UI instead of a swallowed generic message,
+  so future update-check failures are diagnosable without
+  main-process console access; (2) document the release-asset
+  requirement prominently so it isn't missed on future releases. The
+  user explicitly chose NOT to have this session upload the missing
+  yml files to the existing v1.4.0 GitHub release (will do so
+  manually) and NOT to add electron-builder --publish=always scripts
+  (documentation-only fix instead).
+
+  Client Changes:
+    - apps/client/src/main.ts: checkForUpdatesWithRetry() now returns
+      { status, message? } instead of a bare status string, capturing
+      the last attempt's Error message on exhausted retries; the
+      check-for-updates IPC handler now returns this directly instead
+      of re-wrapping just the status.
+    - apps/client/src/preload.ts: checkForUpdates() return type
+      updated to include the optional message field.
+    - apps/client/src/renderer/renderer.ts: the duplicated Reson8Api
+      interface's checkForUpdates() signature updated to match; the
+      "Check for Updates" button handler now shows "Could not check
+      for updates: {message}" when a message is present, falling back
+      to the old generic text otherwise.
+
+  Documentation Changes:
+    - CLAUDE.md: added a bullet to the "Electron gotchas that have
+      bitten this project before" list documenting the latest*.yml
+      release-asset requirement.
+    - README.md: added a new "Releasing" section explaining that
+      npm run build:win/linux/mac alone does not publish an update,
+      and that the generated latest*.yml files must be uploaded
+      alongside the installers on every GitHub release.
+    - app-planning/nextsteps.txt: deleted (all 5 items, including this
+      session's starting point, were already implemented across Phase
+      11's entries above).
+
+  Key Files Modified:
+    apps/client/src/main.ts
+    apps/client/src/preload.ts
+    apps/client/src/renderer/renderer.ts
+    CLAUDE.md
+    README.md
+    app-planning/nextsteps.txt (DELETED)
+
+  Verification:
+    - npx tsc --noEmit (client) — passed
+    - Not fixed in this session (by explicit user choice): the actual
+      missing latest.yml/latest-linux.yml/latest-mac.yml assets on the
+      live v1.3.0/v1.4.0 GitHub releases — the user will upload
+      apps/client/release/latest*.yml (already correctly generated
+      locally from the original v1.4.0 build) to the v1.4.0 release
+      manually. Until that's done, existing v1.3.0 installs will still
+      not detect v1.4.0 as available, though the About tab will now
+      explain why if checked again before that upload happens.
+    - Not exercised: a live "Check for Updates" click against a
+      release that IS missing the yml files, to visually confirm the
+      new message text end-to-end (the error-message plumbing was
+      verified by type-checking and code inspection only).
+
+  Next Step: none — this was the full scope of the requested fix.
+  Future releases must follow the newly-documented process (upload
+  latest*.yml alongside installers) or auto-update will silently
+  break again.
+
+--- Entry: 13/08/2026 ---
+
+Feature/Fix: "What's New" Modal Silently Skipped on Upgrade From a
+Pre-11.4 Client
+
+  Problem: After manually uploading the missing latest*.yml files to
+  the v1.4.0 GitHub release (closing out the prior entry above), the
+  user confirmed the auto-update itself now worked end-to-end — but
+  the post-update "What's New" modal (PRD 11.4) never appeared.
+
+  Root cause: The "What's New" modal feature was introduced IN
+  v1.4.0 itself. checkForWhatsNew() in renderer.ts treats an unset
+  reson8-last-seen-version localStorage key as "first-ever launch,
+  nothing to announce" and silently records the current version
+  without showing the modal — a deliberate design choice so
+  brand-new installs aren't greeted with a "what's new since your
+  last version" prompt. But a v1.3.0 client (which predates this
+  feature entirely) never wrote that key either, so on the very
+  first launch after auto-updating from v1.3.0 to v1.4.0, this code
+  saw the same "unset" state as a truly fresh install and incorrectly
+  took the silent-record path, permanently losing the modal for that
+  transition.
+
+  Solution: Reused an existing, more fundamental "has this client run
+  before" signal instead of inventing a new one:
+  apps/client/src/instance-id.ts's persisted instance-id.txt file,
+  written on this client's actual first-ever launch, independent of
+  any single feature's own state. Added hasExistingInstanceId() to
+  instance-id.ts (must be called before getInstanceId(), which
+  creates the file as a side effect), wired through a new
+  is-existing-install IPC handler in main.ts, a new
+  isExistingInstall() preload bridge method, and a matching Reson8Api
+  interface entry in renderer.ts. checkForWhatsNew() now only takes
+  the silent "brand-new install" path when isExistingInstall() is
+  false; otherwise (an unset marker on an existing install) it falls
+  through to fetch and show the current version's release notes,
+  same as any other version bump.
+
+  Key Files Modified:
+    apps/client/src/instance-id.ts — new exported hasExistingInstanceId()
+    apps/client/src/main.ts — computes isExistingInstall before
+      getInstanceId() creates the ID file; new is-existing-install
+      IPC handler
+    apps/client/src/preload.ts — new isExistingInstall() bridge method
+    apps/client/src/renderer/renderer.ts — Reson8Api interface gained
+      isExistingInstall(); checkForWhatsNew() no longer conflates
+      "unset marker" with "brand-new install"
+    app-planning/releases/v1.4.1.md — added this fix to the Bug Fixes
+      section
+
+  Verification:
+    - npx tsc --noEmit (client) — passed
+    - Not exercised: no way in this session to simulate a second real
+      upgrade cycle to confirm the modal now appears live; reasoned
+      through the exact code path instead. Noted for the user: their
+      own install already has reson8-last-seen-version incorrectly
+      set to "1.4.0" by the pre-fix bug, so this specific machine
+      won't retroactively see v1.4.0's notes, but will see the modal
+      correctly on the next update (to v1.4.1, which carries this
+      fix) since lastSeen will differ from currentVersion again at
+      that point — no manual localStorage cleanup needed.
+
+  Next Step: none — build and publish v1.4.1 (with this fix and the
+  auto-update error-surfacing fix included) following the
+  newly-documented release process (installers + latest*.yml
+  uploaded together).
+
