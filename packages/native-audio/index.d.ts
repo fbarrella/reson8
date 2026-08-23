@@ -29,3 +29,13 @@ export function startCapture(
 ): CaptureHandle;
 
 export function platformSupportsCapture(): boolean;
+
+/**
+ * Windows only (PRD 12.2) — resolves an OS process id from an Electron
+ * `desktopCapturer` window source id, formatted `"window:<HWND>:<id>"` on
+ * Windows. Returns `undefined` for non-window sources, unparsable ids, or
+ * on any other platform (this export doesn't exist in the compiled addon
+ * outside Windows — calling code must check `process.platform` first, not
+ * rely on this returning `undefined` there).
+ */
+export function resolvePidForWindowSourceId(sourceId: string): number | undefined;

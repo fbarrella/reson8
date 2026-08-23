@@ -71,3 +71,6 @@ if (!nativeBinding) {
 
 module.exports.platformSupportsCapture = nativeBinding.platformSupportsCapture;
 module.exports.startCapture = nativeBinding.startCapture;
+// Windows-only export (PRD 12.2) — undefined on other platforms, since the
+// Rust module doesn't compile this binding outside `cfg(target_os = "windows")`.
+module.exports.resolvePidForWindowSourceId = nativeBinding.resolvePidForWindowSourceId;

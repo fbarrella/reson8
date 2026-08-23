@@ -11,10 +11,25 @@ crate-type = ["cdylib"]
 napi = { version = "2", default-features = false, features = ["napi4"] }
 napi-derive = "2"
 
-# Platform-specific capture dependencies (WASAPI via `windows`, PipeWire/Pulse
-# bindings) are added in PRD 12.2/12.3 alongside the real per-OS capture code.
-# This crate compiles and loads on every target today; every platform module
-# is a stub that reports CaptureStatus::Unsupported until those land.
+# Linux capture dependencies (PipeWire/Pulse bindings) are added in PRD
+# 12.3 alongside the real capture code; that module is still a stub, so
+# nothing is needed here for it yet.
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# PRD 12.2 — WASAPI process-loopback capture via ActivateAudioInterfaceAsync.
+# Pinned loosely (major line only) since this hasn't been resolved against a
+# real registry fetch in this environment (no network-verified `cargo build`
+# happened while writing this) — confirm 0.58 is still current when this
+# first actually builds, and adjust feature names if `cargo build` reports
+# any of them as unknown for the resolved version.
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_Media_Audio",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Variant",
+    "Win32_UI_WindowsAndMessaging",
+] }
 
 [build-dependencies]
 napi-build = "2"

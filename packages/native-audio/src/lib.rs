@@ -12,10 +12,20 @@ use napi::bindgen_prelude::*;
 use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction};
 use napi_derive::napi;
 
-mod linux;
-mod macos;
 mod types;
+
+// Each backend is only *parsed* on its own OS, not just conditionally
+// used — `windows.rs` calls into the `windows` crate, which isn't even a
+// dependency on non-Windows targets (see Cargo.toml's target-gated
+// `[target.'cfg(target_os = "windows")'.dependencies]`), so `mod windows;`
+// itself must be behind `cfg(target_os = "windows")` or a Linux/macOS build
+// fails to resolve those crate paths at all.
+#[cfg(target_os = "windows")]
 mod windows;
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "macos")]
+mod macos;
 
 pub use types::AudioSourceTarget;
 use types::PcmFrame;
