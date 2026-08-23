@@ -17,6 +17,19 @@ function requirePrebuild(fileName) {
   return require(join(__dirname, "prebuilds", fileName));
 }
 
+function requireFirstAvailable(fileNames) {
+  let lastError = null;
+  for (const fileName of fileNames) {
+    try {
+      return requirePrebuild(fileName);
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  if (lastError) throw lastError;
+  return null;
+}
+
 let nativeBinding = null;
 let loadError = null;
 
@@ -24,7 +37,17 @@ switch (platform) {
   case "win32":
     if (arch === "x64") {
       try {
-        nativeBinding = requirePrebuild("native-audio.win32-x64-msvc.node");
+        // Two possible ABIs, tried in the order PRD 12.5's release
+        // pipeline actually produces them: `gnu` is what cross-compiling
+        // from the Linux dev machine via mingw-w64 produces (there's no
+        // realistic path to cross-compile an `msvc` build from Linux —
+        // that toolchain isn't available outside Windows itself); `msvc`
+        // is only present if someone built natively on a Windows box with
+        // Visual Studio Build Tools installed instead.
+        nativeBinding = requireFirstAvailable([
+          "native-audio.win32-x64-gnu.node",
+          "native-audio.win32-x64-msvc.node",
+        ]);
       } catch (err) {
         loadError = err;
       }

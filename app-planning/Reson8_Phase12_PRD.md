@@ -387,19 +387,34 @@ npm run release:all
 
 1. Detects host OS (`process.platform`).
 2. Builds `packages/native-audio` for every target reachable from this host:
-   - **On Linux:** `cargo build --release` for `x86_64-unknown-linux-gnu`
-     (native), and `cross build --release --target
-     x86_64-pc-windows-gnu` (via the `cross` tool, which uses a
-     Docker/Podman container with the mingw-w64 toolchain — cross-compiling
-     Rust to Windows from Linux is a well-supported path unlike cross-
-     compiling *to* macOS). Copies resulting `.node` files into
-     `packages/native-audio/prebuilds/`.
-   - **On macOS:** `cargo build --release` for the host's native target
-     (`aarch64-apple-darwin` or `x86_64-apple-darwin`) — and the other Mac
-     arch too if `rustup target add` has it installed, since both are
-     buildable from any Mac.
-   - **On Windows:** `cargo build --release` for
-     `x86_64-pc-windows-msvc` natively.
+   - **On Linux:** `napi build --release --target x86_64-unknown-linux-gnu`
+     (native), and `napi build --release --target x86_64-pc-windows-gnu`
+     for Windows — cross-compiled directly via `cargo` with the mingw-w64
+     toolchain installed locally (`apt install mingw-w64` /
+     `pacman -S mingw-w64-gcc` / `dnf install mingw64-gcc`), no Docker/
+     Podman or the `cross` tool needed. **Correction from an earlier draft
+     of this PRD:** that draft called for the `cross` tool in a Docker/
+     Podman container; implementing PRD 12.1 surfaced that this also has
+     to target `x86_64-pc-windows-gnu` rather than `-msvc` (there's no
+     realistic way to cross-compile an MSVC-ABI binary from Linux at all —
+     that toolchain only exists on Windows), and once the target is
+     `-gnu`, plain `cargo`/`napi build` with mingw-w64 on `PATH` handles it
+     directly — Docker was never actually necessary. `index.js`'s loader
+     tries `win32-x64-gnu` before `win32-x64-msvc`, so a native Windows
+     build (which typically defaults to MSVC) still works if ever produced
+     that way instead. `napi build` (rather than raw `cargo build`) is used
+     throughout so `@napi-rs/cli` handles the target-triple-to-filename
+     mapping (`native-audio.<platform>-<arch>-<abi>.node`) instead of this
+     script re-implementing that convention by hand. Output lands directly
+     in `packages/native-audio/prebuilds/` via `--output-dir`.
+   - **On macOS:** `napi build --release --target <host-triple>`
+     (`aarch64-apple-darwin` or `x86_64-apple-darwin`, whichever matches
+     the host) — and the other Mac arch too, but *only* if
+     `rustup target list --installed` already shows it installed (the
+     script checks and skips with a `rustup target add ...` hint rather
+     than silently installing a new target on its own).
+   - **On Windows:** `napi build --release --target x86_64-pc-windows-msvc`
+     natively.
 3. Runs `apps/client`'s `tsc --build` + `copy-html.mjs` (same as today's
    `prebuild`).
 4. Runs `electron-builder` for every platform target reachable from this
@@ -409,11 +424,24 @@ npm run release:all
      bundled Wine — this already works today, unrelated to native-audio).
    - **From macOS:** `--mac`, plus `--linux`/`--win` if the maintainer wants
      to cut a full release from a Mac in one pass.
-   - **From Windows:** `--win` only.
+   - **From Windows:** `--win` only; Linux is deliberately not attempted
+     from a Windows host — electron-builder's Linux cross-build story from
+     Windows is far less reliable than from Linux/macOS.
 5. Prints a **summary table** at the end: which platform artifacts were
    produced, and which were skipped with a one-line reason (e.g. `mac: SKIPPED — macOS artifacts require running this script on macOS hardware (Apple toolchain/codesigning cannot be cross-compiled)`). No silent gaps — the whole point of "one npm run" is knowing exactly what you got out of it.
 6. Exits non-zero if any *attempted* platform build fails; skipped (not
-   attempted) platforms don't fail the run.
+   attempted) platforms don't fail the run. A missing `cargo` on `PATH`
+   entirely skips the whole native-audio phase (with that reason) rather
+   than attempting and failing each target individually.
+
+Implemented as `scripts/release-all.mjs` (root) + a `"release:all"` script
+in root `package.json`. Verified in this environment via `node --check` and
+an actual `--dry-run` pass on the Linux dev machine — the orchestration
+logic (host detection, plan construction, skip reasons, summary table, exit
+code) is real, tested Node.js, unlike the unverified Rust in Epic 1. The
+individual `cargo`/`napi build`/`electron-builder` subprocess invocations
+themselves weren't run for real (no Rust toolchain, no mingw-w64, no
+network-verified electron-builder run in this environment).
 
 **Explicit limitation (see [Decisions Confirmed](#decisions-confirmed-with-the-user) #2):**
 this script cannot make a Linux-only machine produce macOS build artifacts —
@@ -1067,13 +1095,17 @@ parallel) → 12.7 → 12.9 → 12.10 → 12.11 → 12.12 → 12.13 → 12.5.**
    (role tagging, a dedicated `VIEWER_AUTHENTICATE` path, disconnect-cleanup
    branching, no auto-rejoin for viewer sockets). This deserves explicit
    testing per item 6 there, not just code-review confidence.
-3. **`cross`-based Windows cross-compilation from Linux requires
-   Docker/Podman** to be installed on the dev machine for
-   [PRD 12.5](#prd-125--unified-local-build--release-script) — an
-   additional local dependency beyond what's needed today. Worth confirming
-   this is acceptable before building the release script around it (the
-   alternative is a native `mingw-w64` toolchain install without
-   containers, also workable, slightly more manual to set up once).
+3. ~~`cross`-based Windows cross-compilation from Linux requires
+   Docker/Podman.~~ **Resolved during implementation:** the release script
+   ([PRD 12.5](#prd-125--unified-local-build--release-script)) doesn't use
+   `cross`/Docker at all — cross-compiling to `x86_64-pc-windows-gnu` works
+   directly via `cargo`/`napi build` once `mingw-w64` is installed locally
+   (`apt install mingw-w64` / `pacman -S mingw-w64-gcc` /
+   `dnf install mingw64-gcc`). Still a new local dependency beyond what's
+   needed today, just a much lighter one than Docker — `scripts/release-all.mjs`
+   detects whether `mingw-w64` is on `PATH` and skips the Windows
+   native-audio target with an install hint if it isn't, rather than
+   failing opaquely mid-build.
 4. **PID-to-window resolution on Linux is inherently fuzzier** than on
    Windows (no universal, permission-free "get PID for this window handle"
    primitive across all compositors/window managers) — the `processName`
