@@ -5,6 +5,13 @@
 //! Known Risks). This module still needs to exist and compile so
 //! `require('@reson8/native-audio')` loads cleanly on macOS; it never
 //! attempts capture, never prompts for permissions.
+//!
+//! Unchanged since the PRD 12.1 scaffold — PRD 12.4's requirements
+//! (`platformSupportsCapture` always `false`, `startCapture` always
+//! `unsupported`, no capture/permission attempt) are exactly what the
+//! stub already did. Nothing else needed here; this file also has zero
+//! external dependencies, unlike `windows.rs`/`linux.rs`, so it carries
+//! none of their FFI/build-toolchain risk.
 
 use crate::types::{AudioSourceTarget, STATUS_UNSUPPORTED};
 use crate::FrameCallback;

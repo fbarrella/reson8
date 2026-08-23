@@ -1081,7 +1081,22 @@ parallel) → 12.7 → 12.9 → 12.10 → 12.11 → 12.12 → 12.13 → 12.5.**
    Flatpak/sandboxed apps may never resolve cleanly. Treat "audio capture
    unavailable for this window" as an expected, not exceptional, outcome
    for a nonzero slice of Linux windows.
-5. **First native (Rust) dependency in an otherwise pure-TS/npm monorepo**
+5. **PulseAudio-only systems (no PipeWire underneath) reroute the target
+   app's live audio during a share, rather than just tapping it.** Isolating
+   one app's audio in plain PulseAudio has no native per-app monitor to tap
+   — the PRD 12.3 implementation works around this by temporarily moving
+   the app's `sink-input` onto a virtual null-sink and looping that back to
+   the user's original sink so they still hear themselves. Unlike the
+   Windows and PipeWire backends, which are non-invasive taps, this is a
+   real (if brief) change to the user's live audio routing: a short audio
+   blip is plausible when a share starts or stops, and an unclean crash
+   mid-share could in principle leave the app's audio routed through the
+   virtual device until the user notices and fixes it manually (e.g. via
+   `pavucontrol`). Worth deciding whether `native-audio` should also sweep
+   for and clean up stale `reson8_share_capture` null-sink/loopback modules
+   on startup, not only on a clean `stop()`, to bound how long a crash can
+   leave this in a broken state.
+6. **First native (Rust) dependency in an otherwise pure-TS/npm monorepo**
    raises the contribution bar for anyone touching Epic 1 — worth being
    upfront in `README.md`/`CONTRIBUTING` (if one exists) that
    `packages/native-audio` requires a Rust toolchain to modify, even though
