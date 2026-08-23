@@ -11,9 +11,20 @@ crate-type = ["cdylib"]
 napi = { version = "2", default-features = false, features = ["napi4"] }
 napi-derive = "2"
 
-# Linux capture dependencies (PipeWire/Pulse bindings) are added in PRD
-# 12.3 alongside the real capture code; that module is still a stub, so
-# nothing is needed here for it yet.
+[target.'cfg(target_os = "linux")'.dependencies]
+# PRD 12.3 — PipeWire native capture, PulseAudio fallback. Both crates wrap
+# system C libraries via their `-sys` crates, which need `pkg-config` plus
+# the matching dev headers present on the BUILD machine (not just the end
+# user's machine) to compile at all:
+#   Debian/Ubuntu: libpipewire-0.3-dev libpulse-dev pkg-config
+#   Fedora:        pipewire-devel pulseaudio-libs-devel pkgconf-pkg-config
+#   Arch/CachyOS:  libpipewire libpulse pkgconf
+# This is a new build-time system dependency beyond anything PRD 12.1/12.2
+# needed — worth folding into PRD 12.5's release-script assumptions and
+# into whatever dev-setup docs exist, not just noted here.
+pipewire = "0.8"
+libpulse-binding = "2"
+libpulse-simple-binding = "2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # PRD 12.2 — WASAPI process-loopback capture via ActivateAudioInterfaceAsync.
