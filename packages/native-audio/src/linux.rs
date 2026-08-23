@@ -1,11 +1,22 @@
 //! Linux capture backend — PipeWire → PulseAudio → ALSA cascade (PRD 12.3).
 //!
-//! NOT COMPILED OR TESTED. No Rust toolchain was available while writing
-//! this, and even with one, `pipewire`/`libpulse-binding` need system dev
-//! headers (see `Cargo.toml`) this environment doesn't have either. Treat
-//! everything below as a structurally-complete best-effort transcription of
-//! documented behavior, not verified output — see the per-backend doc
-//! comments for which specific calls are the highest-risk guesses.
+//! **Compiles, links, and loads for real** (verified 2026-08-23 with `cargo
+//! build --release` + system libpipewire-0.3 1.6.8 / libpulse 17.0 dev
+//! headers, then `require()`d from Node directly). This module went through
+//! two real rounds of `cargo check` iteration against actual compiler
+//! errors before that — see the pipewire_backend doc comment for what
+//! changed and why. Runtime-exercised beyond just loading: calling
+//! `startCapture` with a bogus PID drove the real PipeWire registry
+//! lookup (mainloop run/sync/done round-trip) to completion and correctly
+//! returned `"unsupported"` when no matching node was found, without
+//! hanging or crashing — the part of this file that was hardest to get
+//! right sight-unseen. What's **not** verified: the actual audio-capture
+//! path once a real target node IS found (phase 2 of `pipewire_backend`,
+//! and all of `pulse_backend`'s reroute-and-record flow) — that needs a
+//! real target application actually producing audio to test against, not
+//! attempted here. Treat the registry/session-lifecycle code as
+//! meaningfully de-risked; treat the capture-callback and PulseAudio
+//! reroute code as still best-effort.
 //!
 //! **Detection order** (PRD 12.3): PipeWire, then PulseAudio, then ALSA
 //! (which can't do per-app capture at all, so it's always "unsupported").
@@ -109,16 +120,20 @@ fn f32_to_i16le_bytes(samples: &[f32]) -> Vec<u8> {
 mod pipewire_backend {
     use super::*;
     use pipewire as pw;
-    use std::cell::RefCell;
+    use std::cell::Cell;
     use std::rc::Rc;
 
-    /// Highest-risk section of this file: PipeWire's Rust bindings require
-    /// hand-building an SPA "POD" (Plain Old Data) object to negotiate the
-    /// audio format, and that serialization API shape has shifted across
-    /// `pipewire`-crate versions. This follows the structure of the
-    /// upstream `pipewire-rs` repo's `examples/audio-capture.rs` — treat
-    /// any POD-building mismatch reported by `cargo build` as expected,
-    /// and diff against that example for whatever version resolves here.
+    /// Verified against the `pipewire` crate's own `examples/roundtrip.rs`
+    /// (registry + sync/done pattern) and `examples/audio-capture.rs`
+    /// (stream setup + POD format negotiation) for pipewire = "0.10.1" —
+    /// the exact version this resolved to when first built with a real
+    /// Rust toolchain (2026-08-23), against system PipeWire 1.6.8. The
+    /// `TARGET_OBJECT`/`STREAM_CAPTURE_SINK` keys require this crate's
+    /// `v0_3_44` feature (or higher) to be enabled in `Cargo.toml` — they
+    /// don't exist at all without it, which was the first compile error
+    /// this hit. Re-check both examples if `pipewire` gets bumped again;
+    /// this crate's API has changed release to release (e.g. `MainLoop` →
+    /// `MainLoopRc`/`MainLoopBox`, `Context` → `ContextRc`).
     pub fn start_capture(
         target: AudioSourceTarget,
         on_frame: FrameCallback,
@@ -169,58 +184,60 @@ mod pipewire_backend {
     ) -> Result<(), String> {
         pw::init();
 
-        let mainloop = pw::main_loop::MainLoop::new(None).map_err(|e| e.to_string())?;
-        let context = pw::context::Context::new(&mainloop).map_err(|e| e.to_string())?;
-        let core = context.connect(None).map_err(|e| e.to_string())?;
+        let mainloop = pw::main_loop::MainLoopRc::new(None).map_err(|e| e.to_string())?;
+        let context = pw::context::ContextRc::new(&mainloop, None).map_err(|e| e.to_string())?;
+        let core = context.connect_rc(None).map_err(|e| e.to_string())?;
         let registry = core.get_registry().map_err(|e| e.to_string())?;
 
         // ── Phase 1: find the target's output-audio node id ────────────
-        let found_node_id: Rc<RefCell<Option<u32>>> = Rc::new(RefCell::new(None));
-        let done = Rc::new(RefCell::new(false));
+        // Mirrors `examples/roundtrip.rs`'s sync/done pattern exactly:
+        // `mainloop.run()` blocks until the `done` callback (fired once
+        // the registry enumeration catches up to our `sync()` barrier)
+        // calls `.quit()` — no manual `iterate()` polling needed.
+        let found_node_id: Rc<Cell<Option<u32>>> = Rc::new(Cell::new(None));
+        let done = Rc::new(Cell::new(false));
 
         let found_node_id_cb = Rc::clone(&found_node_id);
         let target_pid = target.pid;
         let target_name = target.process_name.clone();
-        let _listener = registry
+        let _registry_listener = registry
             .add_listener_local()
             .global(move |global| {
                 let Some(props) = global.props else { return };
-                let is_audio_output = props.get("media.class") == Some("Stream/Output/Audio");
-                if !is_audio_output {
+                if props.get("media.class") != Some("Stream/Output/Audio") {
                     return;
                 }
                 let pid_matches = target_pid
-                    .and_then(|pid| props.get("application.process.id").map(|p| p == pid.to_string()))
-                    .unwrap_or(false);
+                    .zip(props.get("application.process.id"))
+                    .is_some_and(|(pid, p)| p == pid.to_string());
                 let name_matches = target_name
                     .as_deref()
-                    .and_then(|name| props.get("application.name").map(|n| n.eq_ignore_ascii_case(name)))
-                    .unwrap_or(false);
+                    .zip(props.get("application.name"))
+                    .is_some_and(|(name, n)| n.eq_ignore_ascii_case(name));
                 if pid_matches || name_matches {
-                    *found_node_id_cb.borrow_mut() = Some(global.id);
+                    found_node_id_cb.set(Some(global.id));
                 }
             })
             .register();
 
-        let core_clone = core.clone();
         let done_cb = Rc::clone(&done);
-        let pending = core_clone.sync(0).map_err(|e| e.to_string())?;
+        let mainloop_for_sync = mainloop.clone();
+        let pending = core.sync(0).map_err(|e| e.to_string())?;
         let _core_listener = core
             .add_listener_local()
             .done(move |id, seq| {
                 if id == pw::core::PW_ID_CORE && seq == pending {
-                    *done_cb.borrow_mut() = true;
+                    done_cb.set(true);
+                    mainloop_for_sync.quit();
                 }
             })
             .register();
 
-        // Bounded synchronous wait for the registry enumeration to settle.
-        let deadline = std::time::Instant::now() + Duration::from_secs(3);
-        while !*done.borrow() && std::time::Instant::now() < deadline {
-            mainloop.loop_().iterate(Duration::from_millis(50));
+        while !done.get() {
+            mainloop.run();
         }
 
-        let Some(node_id) = *found_node_id.borrow() else {
+        let Some(node_id) = found_node_id.get() else {
             let _ = ready_tx.send(STATUS_UNSUPPORTED.to_string());
             return Ok(());
         };
@@ -234,33 +251,31 @@ mod pipewire_backend {
             *pw::keys::TARGET_OBJECT => node_id.to_string(),
             *pw::keys::STREAM_CAPTURE_SINK => "true",
         };
-        let stream = pw::stream::Stream::new(&core, "reson8-screen-share-audio", props)
+        let stream = pw::stream::StreamBox::new(&core, "reson8-screen-share-audio", props)
             .map_err(|e| e.to_string())?;
 
         let on_frame_cb = on_frame.clone();
         let _stream_listener = stream
             .add_local_listener::<()>()
             .process(move |stream, _| {
-                if let Some(mut buffer) = stream.dequeue_buffer() {
-                    let datas = buffer.datas_mut();
-                    if let Some(data) = datas.get_mut(0) {
-                        if let Some(chunk) = data.data() {
-                            let sample_count = chunk.len() / std::mem::size_of::<f32>();
-                            // SAFETY: PipeWire guarantees `chunk` is valid,
-                            // correctly-aligned f32 PCM for the format
-                            // negotiated below for the lifetime of this
-                            // callback invocation.
-                            let floats = unsafe {
-                                std::slice::from_raw_parts(chunk.as_ptr() as *const f32, sample_count)
-                            };
-                            let pcm = f32_to_i16le_bytes(floats);
-                            on_frame_cb.call(
-                                PcmFrame { pcm, sample_rate: CAPTURE_SAMPLE_RATE, channels: CAPTURE_CHANNELS },
-                                napi::threadsafe_function::ThreadsafeFunctionCallMode::NonBlocking,
-                            );
-                        }
-                    }
-                }
+                let Some(mut buffer) = stream.dequeue_buffer() else { return };
+                let datas = buffer.datas_mut();
+                let Some(data) = datas.get_mut(0) else { return };
+                let byte_len = data.chunk().size() as usize;
+                let Some(samples) = data.data() else { return };
+                let valid = &samples[..byte_len.min(samples.len())];
+                // Safe f32 reconstruction from raw bytes (no alignment
+                // assumptions on the underlying buffer, unlike casting the
+                // pointer directly to `*const f32`).
+                let floats: Vec<f32> = valid
+                    .chunks_exact(4)
+                    .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+                    .collect();
+                let pcm = f32_to_i16le_bytes(&floats);
+                on_frame_cb.call(
+                    PcmFrame { pcm, sample_rate: CAPTURE_SAMPLE_RATE, channels: CAPTURE_CHANNELS },
+                    napi::threadsafe_function::ThreadsafeFunctionCallMode::NonBlocking,
+                );
             })
             .register()
             .map_err(|e| e.to_string())?;
@@ -269,28 +284,34 @@ mod pipewire_backend {
         audio_info.set_format(pw::spa::param::audio::AudioFormat::F32LE);
         audio_info.set_rate(CAPTURE_SAMPLE_RATE);
         audio_info.set_channels(CAPTURE_CHANNELS as u32);
-        let pod_bytes = pw::spa::pod::serialize::PodSerializer::serialize(
+        let obj = pw::spa::pod::Object {
+            type_: pw::spa::utils::SpaTypes::ObjectParamFormat.as_raw(),
+            id: pw::spa::param::ParamType::EnumFormat.as_raw(),
+            properties: audio_info.into(),
+        };
+        let pod_bytes: Vec<u8> = pw::spa::pod::serialize::PodSerializer::serialize(
             std::io::Cursor::new(Vec::new()),
-            &pw::spa::pod::Value::Object(pw::spa::pod::Object {
-                type_: pw::spa::sys::SPA_TYPE_OBJECT_Format,
-                id: pw::spa::sys::SPA_PARAM_EnumFormat,
-                properties: audio_info.into(),
-            }),
+            &pw::spa::pod::Value::Object(obj),
         )
         .map_err(|e| format!("{e:?}"))?
         .0
         .into_inner();
-        let pod = pw::spa::pod::Pod::from_bytes(&pod_bytes).ok_or("failed to build format POD")?;
+        let mut params = [pw::spa::pod::Pod::from_bytes(&pod_bytes).ok_or("failed to build format POD")?];
 
         stream
             .connect(
                 pw::spa::utils::Direction::Input,
                 None,
                 pw::stream::StreamFlags::AUTOCONNECT | pw::stream::StreamFlags::MAP_BUFFERS,
-                &mut [pod],
+                &mut params,
             )
             .map_err(|e| e.to_string())?;
 
+        // ── Stop-signal bridge ──────────────────────────────────────────
+        // Bridges the plain `AtomicBool` stop signal (set from whatever
+        // thread called `CaptureHandle.stop()`) into the mainloop's own
+        // channel mechanism, since the mainloop can only be told to quit
+        // from something attached to its own loop.
         let mainloop_weak = mainloop.downgrade();
         let (terminate_tx, terminate_rx) = pw::channel::channel::<()>();
         let _terminate_receiver = terminate_rx.attach(mainloop.loop_(), move |()| {
@@ -299,24 +320,14 @@ mod pipewire_backend {
             }
         });
 
-        // Bridge the plain `AtomicBool` stop signal (set from whatever
-        // thread called `CaptureHandle.stop()`) into the mainloop's own
-        // channel mechanism, since the mainloop can only be told to quit
-        // from something attached to its own loop. `add_timer`'s closure
-        // needs `'static` — cloning the `Arc` in is the sound way to get
-        // that, rather than smuggling a borrowed reference across the
-        // boundary with a raw-pointer cast.
         let poll_stop_flag = Arc::clone(&stop_flag);
         let timer_terminate_tx = terminate_tx.clone();
-        let _stop_poll_timer = mainloop.loop_().add_timer(move |_| {
+        let stop_poll_timer = mainloop.loop_().add_timer(move |_| {
             if poll_stop_flag.load(Ordering::SeqCst) {
                 let _ = timer_terminate_tx.send(());
             }
         });
-        _stop_poll_timer
-            .update_timer(Some(Duration::from_millis(100)), Some(Duration::from_millis(100)))
-            .into_result()
-            .map_err(|e| e.to_string())?;
+        stop_poll_timer.update_timer(Some(Duration::from_millis(100)), Some(Duration::from_millis(100)));
 
         let _ = ready_tx.send(STATUS_CAPTURING.to_string());
         mainloop.run();
@@ -429,18 +440,16 @@ mod pulse_backend {
         let list_done_cb = Rc::clone(&list_done);
         let target_pid = target.pid;
         let target_name = target.process_name.clone();
-        let introspector = context.introspect();
+        let mut introspector = context.introspect();
         let _op = introspector.get_sink_input_info_list(move |result| match result {
             pulse::callbacks::ListResult::Item(info) => {
                 let pid_matches = target_pid
-                    .and_then(|pid| info.proplist.get_str("application.process.id"))
-                    .map(|p| target_pid.map(|pid| p == pid.to_string()).unwrap_or(false))
-                    .unwrap_or(false);
+                    .zip(info.proplist.get_str("application.process.id"))
+                    .is_some_and(|(pid, p)| p == pid.to_string());
                 let name_matches = target_name
                     .as_deref()
-                    .and_then(|_| info.proplist.get_str("application.name"))
-                    .map(|n| target_name.as_deref().map(|t| n.eq_ignore_ascii_case(t)).unwrap_or(false))
-                    .unwrap_or(false);
+                    .zip(info.proplist.get_str("application.name"))
+                    .is_some_and(|(name, n)| n.eq_ignore_ascii_case(name));
                 if pid_matches || name_matches {
                     *matched_cb.borrow_mut() = Some((info.index, info.sink));
                 }
@@ -467,7 +476,7 @@ mod pulse_backend {
             "module-null-sink",
             &format!("sink_name={NULL_SINK_NAME} sink_properties=device.description=Reson8Share"),
             move |idx| {
-                *module_index_cb.borrow_mut() = idx;
+                *module_index_cb.borrow_mut() = Some(idx);
                 *module_done_cb.borrow_mut() = true;
             },
         );
@@ -479,14 +488,21 @@ mod pulse_backend {
         let null_sink_module_index = (*module_index.borrow())?;
 
         // Step 3: move the target sink-input onto the null sink.
+        // `move_sink_input_by_name`'s callback param is
+        // `Option<Box<dyn FnMut(bool)>>` (unlike `load_module`'s bare
+        // `FnMut`) — confirmed against libpulse-binding 2.30.1's source.
         let move_done = Rc::new(RefCell::new(false));
         let move_ok = Rc::new(RefCell::new(false));
         let move_done_cb = Rc::clone(&move_done);
         let move_ok_cb = Rc::clone(&move_ok);
-        introspector.move_sink_input_by_name(sink_input_index, NULL_SINK_NAME, move |ok| {
-            *move_ok_cb.borrow_mut() = ok;
-            *move_done_cb.borrow_mut() = true;
-        });
+        introspector.move_sink_input_by_name(
+            sink_input_index,
+            NULL_SINK_NAME,
+            Some(Box::new(move |ok| {
+                *move_ok_cb.borrow_mut() = ok;
+                *move_done_cb.borrow_mut() = true;
+            })),
+        );
         while !*move_done.borrow() {
             if matches!(mainloop.iterate(true), IterateResult::Quit(_) | IterateResult::Err(_)) {
                 return None;
@@ -506,7 +522,7 @@ mod pulse_backend {
             "module-loopback",
             &format!("source={NULL_SINK_NAME}.monitor sink={original_sink_index}"),
             move |idx| {
-                *loopback_index_cb.borrow_mut() = idx;
+                *loopback_index_cb.borrow_mut() = Some(idx);
                 *loopback_done_cb.borrow_mut() = true;
             },
         );
@@ -544,12 +560,16 @@ mod pulse_backend {
             }
         }
 
-        let introspector = context.introspect();
+        let mut introspector = context.introspect();
         // Best-effort: move the app's sink-input back to wherever it was,
         // then unload both modules. Each is fire-and-forget with a short
         // spin — this is cleanup on the way out, not worth the complexity
         // of fully synchronizing three more callback round-trips.
-        introspector.move_sink_input_by_index(state.sink_input_index, state.original_sink_index, |_| {});
+        introspector.move_sink_input_by_index(
+            state.sink_input_index,
+            state.original_sink_index,
+            Some(Box::new(|_| {})),
+        );
         introspector.unload_module(state.loopback_module_index, |_| {});
         introspector.unload_module(state.null_sink_module_index, |_| {});
         for _ in 0..20 {
@@ -591,13 +611,18 @@ mod pulse_backend {
             None,
             Some(&attr),
         )
-        .map_err(|e| e.to_string())?;
+        // `PAErr` has an inherent `to_string(&self) -> Option<String>`
+        // that shadows `ToString::to_string`, so `.to_string()` here
+        // resolves to that (confirmed via libpulse-binding 2.30.1's
+        // source) rather than the `Display`-based `String` one might
+        // expect — `format!("{e}")` routes through `Display` instead.
+        .map_err(|e| format!("{e}"))?;
 
         let _ = ready_tx.send(STATUS_CAPTURING.to_string());
 
         let mut buf = vec![0u8; frame_bytes];
         while !stop_flag.load(Ordering::SeqCst) {
-            simple.read(&mut buf).map_err(|e| e.to_string())?;
+            simple.read(&mut buf).map_err(|e| format!("{e}"))?;
             on_frame.call(
                 PcmFrame { pcm: buf.clone(), sample_rate: CAPTURE_SAMPLE_RATE, channels: CAPTURE_CHANNELS },
                 napi::threadsafe_function::ThreadsafeFunctionCallMode::NonBlocking,

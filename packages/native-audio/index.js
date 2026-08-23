@@ -38,15 +38,17 @@ switch (platform) {
     if (arch === "x64") {
       try {
         // Two possible ABIs, tried in the order PRD 12.5's release
-        // pipeline actually produces them: `gnu` is what cross-compiling
-        // from the Linux dev machine via mingw-w64 produces (there's no
-        // realistic path to cross-compile an `msvc` build from Linux —
-        // that toolchain isn't available outside Windows itself); `msvc`
-        // is only present if someone built natively on a Windows box with
-        // Visual Studio Build Tools installed instead.
+        // pipeline actually produces them: `msvc` is what cross-compiling
+        // from the Linux dev machine via `cargo-xwin` produces (confirmed
+        // working 2026-08-23 — it downloads the MSVC CRT/SDK automatically,
+        // no Windows license/machine needed) and is also what a native
+        // Windows build with Visual Studio Build Tools produces; `gnu`
+        // would need a real `libnode.dll` to cross-compile from Linux
+        // (see src/windows.rs's module doc comment), which was never
+        // resolved, so it's the unlikely fallback here, not the primary.
         nativeBinding = requireFirstAvailable([
-          "native-audio.win32-x64-gnu.node",
           "native-audio.win32-x64-msvc.node",
+          "native-audio.win32-x64-gnu.node",
         ]);
       } catch (err) {
         loadError = err;

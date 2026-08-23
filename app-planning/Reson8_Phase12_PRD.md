@@ -388,25 +388,45 @@ npm run release:all
 1. Detects host OS (`process.platform`).
 2. Builds `packages/native-audio` for every target reachable from this host:
    - **On Linux:** `napi build --release --target x86_64-unknown-linux-gnu`
-     (native), and `napi build --release --target x86_64-pc-windows-gnu`
-     for Windows — cross-compiled directly via `cargo` with the mingw-w64
-     toolchain installed locally (`apt install mingw-w64` /
-     `pacman -S mingw-w64-gcc` / `dnf install mingw64-gcc`), no Docker/
-     Podman or the `cross` tool needed. **Correction from an earlier draft
-     of this PRD:** that draft called for the `cross` tool in a Docker/
-     Podman container; implementing PRD 12.1 surfaced that this also has
-     to target `x86_64-pc-windows-gnu` rather than `-msvc` (there's no
-     realistic way to cross-compile an MSVC-ABI binary from Linux at all —
-     that toolchain only exists on Windows), and once the target is
-     `-gnu`, plain `cargo`/`napi build` with mingw-w64 on `PATH` handles it
-     directly — Docker was never actually necessary. `index.js`'s loader
-     tries `win32-x64-gnu` before `win32-x64-msvc`, so a native Windows
-     build (which typically defaults to MSVC) still works if ever produced
-     that way instead. `napi build` (rather than raw `cargo build`) is used
-     throughout so `@napi-rs/cli` handles the target-triple-to-filename
-     mapping (`native-audio.<platform>-<arch>-<abi>.node`) instead of this
-     script re-implementing that convention by hand. Output lands directly
-     in `packages/native-audio/prebuilds/` via `--output-dir`.
+     (native), and `napi build --release --target x86_64-pc-windows-msvc`
+     for Windows — cross-compiled via `cargo-xwin` (`cargo install
+     cargo-xwin`), which downloads the MSVC CRT/Windows SDK automatically
+     on first use (no Windows license or machine needed). **This PRD's
+     Windows cross-compile story changed twice during implementation** —
+     worth recording the full arc since both earlier drafts were reasoned
+     through and still wrong:
+     1. Original draft: the `cross` tool in a Docker/Podman container,
+        targeting `x86_64-pc-windows-gnu`.
+     2. Revised after PRD 12.1: Docker turned out unnecessary — plain
+        `cargo`/`napi build` with mingw-w64 installed locally handles the
+        `-gnu` target directly. Still targeted `-gnu` specifically because
+        an MSVC-ABI binary seemed uncross-compilable from Linux at all.
+     3. **Final, verified working (2026-08-23):** actually attempting the
+        `-gnu` build end-to-end surfaced that `napi-build`'s Windows
+        linking step for the GNU target needs a real `libnode.dll` — the
+        shared-library form of Node's runtime — which the standard
+        nodejs.org distribution simply doesn't ship (see PRD 12.2's
+        implementation notes / `src/windows.rs`'s module doc comment).
+        That path was never resolved. Trying the MSVC target instead
+        (via `cargo-xwin`, mentioned only as a fallback in draft 2)
+        turned out to have **no such requirement at all** — MSVC-built
+        addons delay-load `node.exe`'s exports at runtime rather than
+        needing a link-time stub, so `napi-build` does nothing special
+        for that target. It built, linked, and produced a real, valid
+        PE32+ DLL. MSVC via `cargo-xwin` is the proven path; GNU via
+        mingw-w64 is kept only as a fallback filename in `index.js`'s
+        loader in case someone resolves the libnode.dll problem later.
+     `napi build` (rather than raw `cargo build`) is used throughout so
+     `@napi-rs/cli` handles the target-triple-to-filename mapping
+     (`native-audio.<platform>-<arch>-<abi>.node`) instead of this script
+     re-implementing that convention by hand — this also caught a real
+     bug: the config key is `napi.name` in `package.json`, not
+     `napi.binaryName` as an earlier draft of PRD 12.1 had it, which
+     silently made every build fall back to `index.*.node` instead.
+     Output lands directly in `packages/native-audio/prebuilds/` via a
+     positional argument, not an `--output-dir` flag (another real CLI
+     mismatch this surfaced — `@napi-rs/cli` 2.18.4 doesn't have that
+     flag at all).
    - **On macOS:** `napi build --release --target <host-triple>`
      (`aarch64-apple-darwin` or `x86_64-apple-darwin`, whichever matches
      the host) — and the other Mac arch too, but *only* if
@@ -435,13 +455,16 @@ npm run release:all
    than attempting and failing each target individually.
 
 Implemented as `scripts/release-all.mjs` (root) + a `"release:all"` script
-in root `package.json`. Verified in this environment via `node --check` and
-an actual `--dry-run` pass on the Linux dev machine — the orchestration
-logic (host detection, plan construction, skip reasons, summary table, exit
-code) is real, tested Node.js, unlike the unverified Rust in Epic 1. The
-individual `cargo`/`napi build`/`electron-builder` subprocess invocations
-themselves weren't run for real (no Rust toolchain, no mingw-w64, no
-network-verified electron-builder run in this environment).
+in root `package.json`. The orchestration logic (host detection, plan
+construction, skip reasons, summary table, exit code) was verified via
+`node --check` and an actual `--dry-run` pass. The `native-audio` build
+steps themselves are now **fully verified for real** (2026-08-23): both
+`x86_64-unknown-linux-gnu` and `x86_64-pc-windows-msvc` were built
+end-to-end via the exact commands this script runs, producing real,
+correctly-named, valid binaries (confirmed via `file` — ELF and PE32+
+respectively — and the Linux one was `require()`d successfully from Node).
+Only the `electron-builder` packaging steps and anything on an actual
+macOS/Windows host remain unverified.
 
 **Explicit limitation (see [Decisions Confirmed](#decisions-confirmed-with-the-user) #2):**
 this script cannot make a Linux-only machine produce macOS build artifacts —
@@ -1096,16 +1119,21 @@ parallel) → 12.7 → 12.9 → 12.10 → 12.11 → 12.12 → 12.13 → 12.5.**
    branching, no auto-rejoin for viewer sockets). This deserves explicit
    testing per item 6 there, not just code-review confidence.
 3. ~~`cross`-based Windows cross-compilation from Linux requires
-   Docker/Podman.~~ **Resolved during implementation:** the release script
-   ([PRD 12.5](#prd-125--unified-local-build--release-script)) doesn't use
-   `cross`/Docker at all — cross-compiling to `x86_64-pc-windows-gnu` works
-   directly via `cargo`/`napi build` once `mingw-w64` is installed locally
-   (`apt install mingw-w64` / `pacman -S mingw-w64-gcc` /
-   `dnf install mingw64-gcc`). Still a new local dependency beyond what's
-   needed today, just a much lighter one than Docker — `scripts/release-all.mjs`
-   detects whether `mingw-w64` is on `PATH` and skips the Windows
-   native-audio target with an install hint if it isn't, rather than
-   failing opaquely mid-build.
+   Docker/Podman.~~ ~~Resolved via `mingw-w64` instead.~~ **Fully resolved
+   and verified working (2026-08-23):** neither Docker nor mingw-w64 is
+   used. The release script
+   ([PRD 12.5](#prd-125--unified-local-build--release-script)) cross-compiles
+   to `x86_64-pc-windows-msvc` via `cargo-xwin` (`cargo install cargo-xwin`),
+   which downloads the MSVC CRT/Windows SDK automatically on first use — no
+   Windows license or machine needed, and (unlike the `-gnu` target this
+   PRD originally planned around) no `libnode.dll` requirement either, since
+   MSVC-built addons delay-load `node.exe`'s exports at runtime instead of
+   needing a link-time stub. This was actually built end-to-end in this
+   environment: a real, valid PE32+ DLL, confirmed via `file`. Still a new
+   local dependency beyond what's needed today (one `cargo install` away,
+   nothing system-level) — `scripts/release-all.mjs` detects whether
+   `cargo-xwin` is on `PATH` and skips the Windows native-audio target with
+   an install hint if it isn't, rather than failing opaquely mid-build.
 4. **PID-to-window resolution on Linux is inherently fuzzier** than on
    Windows (no universal, permission-free "get PID for this window handle"
    primitive across all compositors/window managers) — the `processName`

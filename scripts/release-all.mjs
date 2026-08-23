@@ -16,13 +16,26 @@
  *   npm run release:all            # build + package everything reachable
  *   npm run release:all -- --dry-run   # print the plan without running it
  *
- * NOT RUN END-TO-END while writing this — no Rust toolchain, no
- * mingw-w64, and no verified electron-builder/Wine setup were available in
- * this environment. The orchestration logic below (host detection, plan
- * construction, summary reporting) was sanity-checked with `node --check`
- * and an actual `--dry-run` pass; the individual `cargo`/`napi
- * build`/`electron-builder` invocations match each tool's documented CLI
- * but haven't been run for real.
+ * Orchestration logic verified via `node --check` and an actual `--dry-run`
+ * pass. The `native-audio` build steps (`napi build --target ...`) are now
+ * ALSO verified for real (2026-08-23): both `x86_64-unknown-linux-gnu`
+ * (native) and `x86_64-pc-windows-msvc` (cross-compiled from this Linux
+ * machine via `cargo-xwin`) were built end-to-end, producing real,
+ * correctly-named `.node` binaries (confirmed valid ELF/PE32+ via `file`,
+ * and the Linux one was `require()`d successfully). Two real bugs this
+ * caught and fixed here: `--output-dir` isn't a valid `napi build` flag in
+ * `@napi-rs/cli` 2.18.4 (it's a positional arg — same mistake was also in
+ * `packages/native-audio/package.json`'s own scripts, fixed there too),
+ * and the Windows cross-compile target itself: GNU-target cross-compilation
+ * needs a real `libnode.dll` that's genuinely hard to obtain (see
+ * `src/windows.rs`'s module doc comment for the full story) — MSVC-target
+ * cross-compilation via `cargo-xwin` has no such requirement and just
+ * works, so that's what this script does now, superseding the mingw-w64
+ * plan from an earlier draft of PRD 12.5.
+ *
+ * Still not run for real: the `electron-builder` packaging steps (no
+ * network-verified run in this environment) and anything on macOS/Windows
+ * hosts (no such machine available here).
  */
 
 import { spawnSync } from "node:child_process";
@@ -85,15 +98,22 @@ if (!hasCargo) {
   skip("native-audio (all targets)", "no Rust toolchain (`cargo`) found on PATH — install one to build native-audio at all");
 } else if (process.platform === "linux") {
   nativeAudioTargets.push({ triple: "x86_64-unknown-linux-gnu", label: "native-audio: linux-x64-gnu (native)" });
-  if (commandExists("x86_64-w64-mingw32-gcc")) {
+  // MSVC via `cargo-xwin`, not GNU via mingw-w64 — see the module doc
+  // comment above for why. `cargo install cargo-xwin` puts the binary in
+  // `~/.cargo/bin`, which a normal `rustup`-managed shell profile already
+  // has on `PATH` — but this sandboxed environment's didn't (needed an
+  // explicit `export PATH="$HOME/.cargo/bin:$PATH"` to find it), so if this
+  // still reports "not found" right after installing, check `PATH` before
+  // assuming the install failed.
+  if (commandExists("cargo-xwin")) {
     nativeAudioTargets.push({
-      triple: "x86_64-pc-windows-gnu",
-      label: "native-audio: win32-x64-gnu (cross-compiled via mingw-w64)",
+      triple: "x86_64-pc-windows-msvc",
+      label: "native-audio: win32-x64-msvc (cross-compiled via cargo-xwin)",
     });
   } else {
     skip(
-      "native-audio: win32-x64-gnu (cross-compiled via mingw-w64)",
-      "mingw-w64 not found on PATH — install it (e.g. `apt install mingw-w64`, `pacman -S mingw-w64-gcc`, `dnf install mingw64-gcc`) to cross-compile the Windows native-audio binary from Linux",
+      "native-audio: win32-x64-msvc (cross-compiled via cargo-xwin)",
+      "cargo-xwin not found on PATH — install it with `cargo install cargo-xwin` to cross-compile the Windows native-audio binary from Linux (downloads the MSVC CRT/SDK automatically on first use, no Windows license needed)",
     );
   }
 } else if (process.platform === "darwin") {
@@ -115,7 +135,7 @@ if (!hasCargo) {
 }
 
 for (const { triple, label } of nativeAudioTargets) {
-  runStep(label, "npx", ["napi", "build", "--platform", "--release", "--target", triple, "--output-dir", "prebuilds"], {
+  runStep(label, "npx", ["napi", "build", "--platform", "--release", "--target", triple, "prebuilds"], {
     cwd: NATIVE_AUDIO_DIR,
   });
 }

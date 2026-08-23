@@ -8,22 +8,56 @@
 //! (Windows-classic-samples/Samples/ApplicationLoopback) and the
 //! accompanying WASAPI capture-loop pattern from `CaptureSharedTimerDriven`.
 //!
-//! NOT COMPILED OR TESTED. No Windows machine and no Rust toolchain were
-//! available while writing this — every `unsafe`/COM call below is a
-//! best-effort transcription of the documented Win32 flow against the
-//! `windows` crate's typical binding conventions, not verified output.
-//! Three spots are the most likely to need correction against real
-//! `cargo build` errors, roughly in order of risk:
-//!   1. `PROPVARIANT` field access in `activate_process_loopback_client` —
-//!      the raw union path (`prop.Anonymous.Anonymous.vt` / `.blob`) is the
-//!      part of `windows`-crate bindings most prone to shifting between
-//!      versions.
-//!   2. `IActivateAudioInterfaceCompletionHandler_Impl::ActivateCompleted`'s
-//!      exact parameter type (`Option<&IActivateAudioInterfaceAsyncOperation>`
-//!      is a reasonable guess, not a confirmed signature).
-//!   3. `IAudioCaptureClient::GetBuffer`'s parameter list/count.
-//! Cross-reference each against the `windows` crate docs for whatever
-//! version ends up resolved in `Cargo.lock` once this is first built.
+//! **Compiles and links for real** — full success, confirmed 2026-08-23.
+//! The path there took two real toolchain discoveries worth recording:
+//!
+//! 1. GNU-target Windows cross-compilation (`x86_64-pc-windows-gnu`) hits a
+//!    wall regardless of build tool — `napi-build`'s linking step for that
+//!    target needs a real `libnode.dll` (the shared-library form of Node's
+//!    runtime, needed at *link* time to resolve N-API symbols on Windows),
+//!    and the standard nodejs.org Windows distribution doesn't ship one
+//!    (only a statically-linked `node.exe`) — it's specific to shared-lib
+//!    Node builds like what Electron uses internally. Never resolved this
+//!    path; abandoned it in favor of MSVC instead.
+//! 2. **MSVC-target cross-compilation (`x86_64-pc-windows-msvc`) has no
+//!    such requirement** — `napi-build` does nothing special for MSVC at
+//!    all (only the GNU branch triggers the libnode search), because
+//!    MSVC-built addons delay-load `node.exe`'s exports at runtime instead
+//!    of needing a link-time stub. Installing `cargo-xwin`
+//!    (`cargo install cargo-xwin`, then `rustup target add
+//!    x86_64-pc-windows-msvc`) and running `napi build --platform --release
+//!    --target x86_64-pc-windows-msvc prebuilds` from `packages/native-audio`
+//!    downloads the MSVC CRT/Windows SDK automatically (no Windows license
+//!    or machine needed) and produces a real, valid PE32+ DLL. This
+//!    supersedes the GNU/mingw-w64 plan from an earlier PRD 12.5 draft —
+//!    see `scripts/release-all.mjs`.
+//!
+//! Getting from "resolves at all" to "actually compiles" took four more
+//! real, now-fixed mistakes, all confirmed against the real windows-0.58.0 /
+//! windows-core-0.58.0 source (not guessed twice):
+//!   1. `PROPVARIANT` isn't `windows::Win32::System::Com::StructuredStorage::
+//!      PROPVARIANT` (that path doesn't exist in 0.58) — it's
+//!      `windows_core::PROPVARIANT`, a safe wrapper with no VT_BLOB
+//!      constructor; built via the raw `windows_core::imp::PROPVARIANT`
+//!      union and `PROPVARIANT::from_raw`.
+//!   2. The `windows` crate's `implement` feature must be enabled, and
+//!      `windows-core` must be a *direct* Cargo.toml dependency (not just
+//!      reachable via `windows::core`) — the `#[implement]` macro expands
+//!      to absolute `windows_core::...` paths.
+//!   3. `#[implement(IFoo)]` on a struct `Bar` generates an "outer"
+//!      `Bar_Impl` wrapper type — confusingly distinct from the
+//!      `IFoo_Impl` per-interface trait — and it's `Bar_Impl`, not `Bar`,
+//!      that the trait must be implemented for.
+//!   4. `WAVE_FORMAT_IEEE_FLOAT` lives in `Media::Multimedia`, not
+//!      `Media::Audio`; `.cast()`/`::IID` need `windows_core::Interface`
+//!      explicitly in scope (trait methods, not inherent ones).
+//!
+//! What's still **not** verified: actual runtime behavior. No Windows
+//! machine was available to run the compiled DLL against a real target
+//! process — everything here is now real, compiler-checked Rust, but the
+//! *logic* (does WASAPI actually hand back the audio you'd expect for a
+//! given PID?) has never been exercised, unlike `linux.rs`'s registry
+//! lookup, which was.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -41,12 +75,28 @@ use windows::Win32::Media::Audio::{
     IAudioCaptureClient, IAudioClient, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK,
     AUDIOCLIENT_ACTIVATION_PARAMS, AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK,
     AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS, PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE,
-    VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK, WAVEFORMATEX, WAVE_FORMAT_IEEE_FLOAT,
+    VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK, WAVEFORMATEX,
 };
-use windows::Win32::System::Com::StructuredStorage::PROPVARIANT;
+// `WAVE_FORMAT_IEEE_FLOAT` lives under `Media::Multimedia`, not
+// `Media::Audio` — confirmed against the real windows-0.58.0 crate source
+// (a real `cargo-xwin` MSVC cross-compile, 2026-08-23) after the first
+// attempt guessed `Media::Audio` and failed to compile.
+use windows::Win32::Media::Multimedia::WAVE_FORMAT_IEEE_FLOAT;
+// `PROPVARIANT` is `windows_core::PROPVARIANT` (a safe `#[repr(transparent)]`
+// wrapper around the raw `windows_core::imp::PROPVARIANT` union), not
+// `windows::Win32::System::Com::StructuredStorage::PROPVARIANT` — that path
+// doesn't exist in 0.58; the compiler's own "did you mean CAPROPVARIANT"
+// suggestion was a red herring. `windows_core` also needs to be a direct
+// Cargo.toml dependency (not just reachable via `windows::core`) for the
+// `#[windows::core::implement(...)]` macro below to resolve its generated
+// `windows_core::...` paths.
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
 use windows::Win32::System::Variant::VT_BLOB;
 use windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
+use windows_core::PROPVARIANT;
+// Needed for `.cast::<IAudioClient>()` and `IAudioClient::IID` below —
+// both are trait methods/consts on `Interface`, not inherent ones.
+use windows_core::Interface;
 
 use crate::types::{AudioSourceTarget, PcmFrame, STATUS_CAPTURING, STATUS_ERROR, STATUS_UNSUPPORTED};
 use crate::FrameCallback;
@@ -153,7 +203,14 @@ struct ActivationCompletionHandler {
     sender: std::sync::Mutex<Option<mpsc::Sender<WinResult<IAudioClient>>>>,
 }
 
-impl IActivateAudioInterfaceCompletionHandler_Impl for ActivationCompletionHandler {
+// The `#[implement]` macro on `ActivationCompletionHandler` above generates
+// an "outer" `ActivationCompletionHandler_Impl` wrapper type (vtable +
+// refcounting) — confirmed against windows-core-0.58.0's own docs — and
+// it's that generated type the per-interface `_Impl` trait must target,
+// not the plain struct itself. Confusingly, both windows-rs's own
+// `_Impl`-suffix convention and this macro's generated-type naming use the
+// same suffix for two different things.
+impl IActivateAudioInterfaceCompletionHandler_Impl for ActivationCompletionHandler_Impl {
     fn ActivateCompleted(
         &self,
         operation: Option<&IActivateAudioInterfaceAsyncOperation>,
@@ -189,27 +246,36 @@ fn activate_process_loopback_client(pid: u32) -> WinResult<IAudioClient> {
         ProcessLoopbackMode: PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE,
     };
 
-    // The Process Loopback activation parameters are passed as a
-    // VT_BLOB PROPVARIANT pointing at `activation_params`. See the
-    // module-level doc comment — this raw union field path is the single
-    // most likely thing here to need adjusting once this actually builds.
-    let mut prop = PROPVARIANT::default();
+    // The Process Loopback activation parameters are passed as a VT_BLOB
+    // PROPVARIANT pointing at `activation_params`. `windows_core::PROPVARIANT`
+    // is a safe `#[repr(transparent)]` wrapper with no VT_BLOB constructor
+    // built in (only common VTs like VT_UNKNOWN get a `From` impl) — build
+    // the raw `windows_core::imp::PROPVARIANT` union by hand (field layout
+    // confirmed against windows-core-0.58.0's actual source) and wrap it via
+    // the crate's own documented escape hatch, `PROPVARIANT::from_raw`.
+    let mut raw_prop: windows_core::imp::PROPVARIANT = unsafe { std::mem::zeroed() };
     unsafe {
-        let inner = &mut prop.Anonymous.Anonymous;
-        inner.vt = VT_BLOB.0 as u16;
-        inner.Anonymous.blob.cbSize = std::mem::size_of::<AUDIOCLIENT_ACTIVATION_PARAMS>() as u32;
-        inner.Anonymous.blob.pBlobData = &mut activation_params as *mut _ as *mut u8;
+        let inner = &mut raw_prop.Anonymous.Anonymous;
+        inner.vt = VT_BLOB.0; // imp::VARENUM is a plain u16, unlike the public windows::...::VARENUM(u16) newtype VT_BLOB is defined as
+        inner.Anonymous.blob = windows_core::imp::BLOB {
+            cbSize: std::mem::size_of::<AUDIOCLIENT_ACTIVATION_PARAMS>() as u32,
+            pBlobData: &mut activation_params as *mut _ as *mut u8,
+        };
     }
+    let prop = unsafe { PROPVARIANT::from_raw(raw_prop) };
 
     let (tx, rx) = mpsc::channel();
     let handler: IActivateAudioInterfaceCompletionHandler =
         ActivationCompletionHandler { sender: std::sync::Mutex::new(Some(tx)) }.into();
 
+    // `ActivateAudioInterfaceAsync` takes the PROPVARIANT as a raw pointer
+    // (`Option<*const PROPVARIANT>`), not a reference — confirmed against
+    // the real function signature in windows-0.58.0's generated bindings.
     let _operation: IActivateAudioInterfaceAsyncOperation = unsafe {
         ActivateAudioInterfaceAsync(
             VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
             &IAudioClient::IID,
-            Some(&prop),
+            Some(&prop as *const PROPVARIANT),
             &handler,
         )?
     };
