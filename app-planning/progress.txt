@@ -1639,3 +1639,54 @@ Less" (Phase 12 sub-phase, item 5/11)
   Next Step: continue through the remaining 6 items in this
   sub-phase.
 
+--- Entry: 24/08/2026 (8) ---
+
+Feature/Fix: Nudge Button Fixed Width and Countdown "Blink" (Phase
+12 sub-phase, item 6/11)
+
+  Problem: The Nudge button (Online Users modal) had no fixed
+  width, so switching its label between "👋 Nudge" and a short
+  countdown ("5s") shrank the button and misaligned rows against
+  other users still showing the full label. Separately, closing and
+  reopening the modal made an already-on-cooldown nudge button
+  briefly flash back to the normal "Nudge" label before correcting
+  to the countdown a moment later.
+
+  Investigation (a fork, before touching anything): confirmed the
+  cooldown-state logic itself is synchronous and race-free —
+  `applyCooldownState()` runs and corrects the button's label
+  *before* the button is ever appended to the DOM, both at initial
+  render and via the click handler. No second `renderOnlineUsers()`
+  call exists that could explain a genuine re-render race either.
+  Given that, `.btn-nudge`'s `transition: all 0.15s` — combined with
+  no fixed width — was the more likely actual cause: without a
+  fixed width, the button's own rendered width changes shape between
+  "👋 Nudge" and "5s", and `transition: all` would animate that
+  width change, which can visually read as "flashes back to normal
+  before snapping to the countdown" even though the underlying label
+  was already correct throughout.
+
+  Solution: added `min-width: 84px` + `text-align: center` so the
+  button never changes size regardless of label, and narrowed
+  `transition: all` to `transition: color 0.15s, border-color
+  0.15s` — nothing layout-affecting can animate here again even if
+  a future label change alters the button's natural width. This is
+  a single fix addressing both reported symptoms, not two separate
+  ones, since the width fix is what removes the animation the
+  "blink" almost certainly was.
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html — `.btn-nudge`
+
+  Verification:
+    - npx tsc --noEmit / --build — clean (CSS-only change)
+    - NOT live-tested yet — queued for the user's manual pass; if
+      the "blink" persists after this fix, it would mean the CSS-
+      transition theory was wrong and there's a genuine timing bug
+      elsewhere not found by static analysis, worth a live-diagnostic
+      pass (e.g. console logging inside applyCooldownState) at that
+      point rather than guessing further
+
+  Next Step: continue through the remaining 5 items in this
+  sub-phase.
+

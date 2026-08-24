@@ -2005,9 +2005,23 @@
       padding: 6px 12px;
       border-radius: var(--radius);
       cursor: pointer;
-      transition: all 0.15s;
+      /* Was `transition: all`, which — combined with no fixed width below
+         — animated the button's own width every time its label switched
+         between "👋 Nudge" and a short countdown like "5s", misaligning
+         Online Users rows where other buttons still show the full label.
+         Scoped to color/border only now that width is fixed, so nothing
+         layout-affecting can ever animate here again even if the label
+         changes shape in the future. This is also the most likely actual
+         cause of the reported "blinks back to normal for a second" on
+         modal reopen — not a JS timing bug (the cooldown state is applied
+         synchronously before the button is even appended, confirmed via
+         both static reading and a fork investigation), but this width
+         animation visually reading as one. */
+      transition: color 0.15s, border-color 0.15s;
       flex-shrink: 0;
       font-weight: 500;
+      min-width: 84px;
+      text-align: center;
     }
 
     .btn-nudge:hover {
