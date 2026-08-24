@@ -77,6 +77,22 @@ export async function buildOccupant(
 export const voiceSessionStartedAt = new Map<string, Date>();
 
 /**
+ * Resolves the key `MediasoupService`'s per-channel session map should use
+ * for this socket (PRD 12.13). `UserVoiceSession`s are keyed by plain
+ * `userId` for the normal one-socket-per-user case — but a Viewer window's
+ * second socket authenticates as the SAME `userId` as that user's primary
+ * connection, so reusing `socket.data.userId` directly there would make the
+ * viewer's recv-only session silently overwrite (or read/mutate) the
+ * primary connection's real `sendTransport`/`recvTransport`/producers —
+ * exactly the collision PRD 12.13's "Robustness" design exists to prevent.
+ * A viewer socket instead gets its own key scoped to `socket.id`, which is
+ * already guaranteed unique per connection.
+ */
+export function getMediasoupSessionKey(socket: TypedSocket): string {
+    return socket.data.role === "viewer" ? `viewer:${socket.id}` : socket.data.userId;
+}
+
+/**
  * Annotates each TEXT channel node in `tree` with `hasUnread`, comparing the
  * channel's latest message timestamp against the requesting user's
  * ChannelRead cursor (no cursor = unread only if the channel has any
@@ -298,6 +314,34 @@ export function registerConnectionHandlers(
             }
         });
 
+        // ── VIEWER_AUTHENTICATE (PRD 12.13) ─────────────────────────────────
+        // The Viewer window's equivalent of USER_JOIN_SERVER — deliberately
+        // much narrower. No ban check, no room join, no presence write, no
+        // channel tree, no USER_JOINED broadcast: a viewer socket is not a
+        // "user joining the server" in any of the senses those exist for,
+        // it's a second connection an *already-present* user opened solely
+        // to pull one video/audio stream. Skipping all of that is the point
+        // (see `SocketData.role`'s doc comment) — a banned/kicked user
+        // can't get here anyway, since `WATCH_SCREEN_SHARE` (voice.handler.ts)
+        // separately requires the caller to currently be a channel occupant.
+        socket.on("VIEWER_AUTHENTICATE", (payload, ack) => {
+            try {
+                const { instanceId } = payload;
+                socket.data.serverId = app.serverId;
+                socket.data.userId = instanceId;
+                socket.data.nickname = "";
+                socket.data.currentChannelId = null;
+                ack({ success: true });
+                app.log.info(
+                    { socketId: socket.id, role: "viewer", userId: instanceId },
+                    "Viewer socket authenticated",
+                );
+            } catch (err) {
+                app.log.error({ err }, "Error in VIEWER_AUTHENTICATE");
+                ack({ success: false, error: "Failed to authenticate" });
+            }
+        });
+
         // ── USER_LEAVE_SERVER ───────────────────────────────────────────────
         socket.on("USER_LEAVE_SERVER", async (payload) => {
             try {
@@ -463,6 +507,27 @@ export function registerConnectionHandlers(
         // ── DISCONNECT ──────────────────────────────────────────────────────
         socket.on("disconnect", async (reason) => {
             try {
+                // Viewer sockets (PRD 12.13) get an entirely separate,
+                // minimal cleanup path — only their own recv-only mediasoup
+                // session, keyed by `socket.id` (see `getMediasoupSessionKey`).
+                // They never touched presence, rooms, or `USER_JOINED`/
+                // `USER_LEFT` broadcasts in the first place, so none of that
+                // runs here — doing so would incorrectly affect this same
+                // user's separate primary connection, if they have one.
+                if (socket.data.role === "viewer") {
+                    if (socket.data.currentChannelId) {
+                        mediasoup.cleanupUserSession(
+                            socket.data.currentChannelId,
+                            getMediasoupSessionKey(socket),
+                        );
+                    }
+                    app.log.info(
+                        { socketId: socket.id, role: "viewer", reason },
+                        "Viewer socket disconnected",
+                    );
+                    return;
+                }
+
                 const { serverId, currentChannelId, nickname, userId } = socket.data;
 
                 if (serverId) {

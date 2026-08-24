@@ -120,6 +120,19 @@ async function main(): Promise<void> {
         pingTimeout: 20_000,
     });
 
+    // Tags every socket with its role (PRD 12.13) before any `connection`
+    // handler can run — a Viewer window's client connects with
+    // `?role=viewer` in the query string; everything else (including a
+    // plain reconnect with no query at all) defaults to "primary". This
+    // MUST run as `io.use()` middleware, not inside a `connection` handler,
+    // since Socket.io guarantees middleware completes before any
+    // `io.on("connection", ...)` listener fires, and several of those
+    // listeners (registered below) branch on `socket.data.role`.
+    io.use((socket, next) => {
+        socket.data.role = socket.handshake.query.role === "viewer" ? "viewer" : "primary";
+        next();
+    });
+
     // Register socket event handlers
     registerConnectionHandlers(io, app, mediasoupService);
     registerVoiceHandlers(io, app, mediasoupService);

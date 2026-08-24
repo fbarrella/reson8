@@ -582,6 +582,45 @@ app.whenReady().then(() => {
         screenAudioCapture = null;
     });
 
+    // ── Screen Share Viewer window (PRD 12.13) ───────────────────────────
+    // The confirm prompt ("Do you want to watch X's stream?") lives in the
+    // main renderer, styled like #nsfw-confirm-modal — this handler only
+    // runs after that's already been confirmed. Multiple Viewer windows can
+    // be open at once (PRD 12.13's Decision #4), each fully independent, so
+    // this is just "create one more" with no dedup/tracking against
+    // existing ones.
+    ipcMain.handle(
+        "open-screen-share-viewer",
+        (
+            _event,
+            args: { targetUserId: string; nickname: string; channelId: string; serverBaseUrl: string },
+        ) => {
+            const viewerWindow = new BrowserWindow({
+                width: 960,
+                height: 600,
+                minWidth: 480,
+                minHeight: 320,
+                title: `Watching ${args.nickname}'s screen share`,
+                webPreferences: {
+                    preload: path.join(__dirname, "preload-viewer.js"),
+                    contextIsolation: true,
+                    nodeIntegration: false,
+                    sandbox: false,
+                    // The only way to hand initial data to a new window's
+                    // preload script — read back via `process.argv` there.
+                    additionalArguments: [
+                        `--viewer-target-user-id=${args.targetUserId}`,
+                        `--viewer-channel-id=${args.channelId}`,
+                        `--viewer-nickname=${encodeURIComponent(args.nickname)}`,
+                        `--viewer-server-base-url=${encodeURIComponent(args.serverBaseUrl)}`,
+                    ],
+                },
+            });
+            viewerWindow.loadFile(path.join(__dirname, "renderer", "viewer.html"));
+            return { success: true };
+        },
+    );
+
     createTray();
     createWindow();
 });

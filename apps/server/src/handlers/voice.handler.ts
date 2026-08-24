@@ -23,7 +23,7 @@ import type {
 } from "@reson8/shared-types";
 import type { MediasoupService } from "../services/mediasoup.service.js";
 import { PresenceService } from "../services/presence.service.js";
-import { buildOccupant, voiceSessionStartedAt } from "./connection.handler.js";
+import { buildOccupant, voiceSessionStartedAt, getMediasoupSessionKey } from "./connection.handler.js";
 
 type TypedIO = SocketIOServer<
     ClientToServerEvents,
@@ -92,10 +92,14 @@ export function registerVoiceHandlers(
                 const router = await mediasoup.getOrCreateRouter(channelId);
                 const transport = await mediasoup.createWebRtcTransport(router);
 
-                // Store transport in user session
+                // Store transport in user session — keyed by the resolved
+                // session key (PRD 12.13), not raw `socket.data.userId`, so
+                // a Viewer window's recv-only transport gets its own slot
+                // instead of colliding with this same user's primary
+                // connection (see `getMediasoupSessionKey`'s doc comment).
                 const session = mediasoup.getOrCreateSession(
                     channelId,
-                    socket.data.userId,
+                    getMediasoupSessionKey(socket),
                 );
                 if (direction === "send") {
                     session.sendTransport = transport;
@@ -146,7 +150,7 @@ export function registerVoiceHandlers(
                     return;
                 }
 
-                const session = mediasoup.getSession(channelId, socket.data.userId);
+                const session = mediasoup.getSession(channelId, getMediasoupSessionKey(socket));
                 if (!session) {
                     ack({ success: false, error: "No voice session" });
                     return;
@@ -189,7 +193,7 @@ export function registerVoiceHandlers(
                     return;
                 }
 
-                const session = mediasoup.getSession(channelId, socket.data.userId);
+                const session = mediasoup.getSession(channelId, getMediasoupSessionKey(socket));
                 if (!session?.sendTransport || session.sendTransport.id !== transportId) {
                     ack({ success: false, error: "Send transport not found" });
                     return;
@@ -292,7 +296,7 @@ export function registerVoiceHandlers(
                 }
 
                 const router = mediasoup.getRouter(channelId);
-                const session = mediasoup.getSession(channelId, socket.data.userId);
+                const session = mediasoup.getSession(channelId, getMediasoupSessionKey(socket));
                 if (!router || !session?.recvTransport) {
                     ack({ success: false, error: "Recv transport not ready" });
                     return;
@@ -360,7 +364,7 @@ export function registerVoiceHandlers(
                     return;
                 }
 
-                const session = mediasoup.getSession(channelId, socket.data.userId);
+                const session = mediasoup.getSession(channelId, getMediasoupSessionKey(socket));
                 const consumer = session?.consumers.get(consumerId);
                 if (!consumer) {
                     ack({ success: false, error: "Consumer not found" });
@@ -387,7 +391,7 @@ export function registerVoiceHandlers(
                 const channelId = socket.data.currentChannelId;
                 if (!channelId) return;
 
-                const session = mediasoup.getSession(channelId, socket.data.userId);
+                const session = mediasoup.getSession(channelId, getMediasoupSessionKey(socket));
                 if (session?.producer?.id === producerId) {
                     session.producer.close();
                     session.producer = null;
@@ -476,6 +480,87 @@ export function registerVoiceHandlers(
             } catch (err) {
                 app.log.error({ err }, "Error in SET_SCREEN_SHARE_STATE");
                 ack({ success: false, error: "Failed to update screen share state" });
+            }
+        });
+
+        // ── WATCH_SCREEN_SHARE (PRD 12.13) ──────────────────────────────────
+        // Called only from a Viewer window's own "viewer"-role socket, after
+        // VIEWER_AUTHENTICATE. Deliberately does not require
+        // `socket.data.role === "viewer"` — a primary socket calling this
+        // would just open a second, redundant recv-only session under its
+        // real userId, which is wasteful but not unsafe, so it isn't worth
+        // guarding against.
+        socket.on("WATCH_SCREEN_SHARE", async (payload, ack) => {
+            try {
+                const { targetUserId, channelId } = payload;
+
+                // Caller must currently be an occupant of this channel —
+                // this is the actual access control for screen sharing
+                // (anyone in the room can watch); it's also what keeps a
+                // banned/kicked user from reaching this via a fresh viewer
+                // socket, since VIEWER_AUTHENTICATE itself has no ban check.
+                const occupantIds = await presence.getChannelOccupants(channelId);
+                if (!occupantIds.includes(socket.data.userId)) {
+                    ack({ success: false, error: "You must be in this channel to watch a share" });
+                    return;
+                }
+
+                // Target must currently be sharing in this same channel —
+                // handles the race where a share ends between the badge
+                // rendering and this call.
+                const targetSession = mediasoup.getSession(channelId, targetUserId);
+                if (!targetSession?.screenVideoProducer) {
+                    ack({ success: false, error: "This user is not currently sharing their screen" });
+                    return;
+                }
+
+                const router = mediasoup.getRouter(channelId);
+                if (!router) {
+                    ack({ success: false, error: "No active voice session in this channel" });
+                    return;
+                }
+
+                // Scopes this socket to the channel so the existing
+                // CREATE_WEBRTC_TRANSPORT/CONNECT_TRANSPORT/CONSUME/
+                // RESUME_CONSUMER handlers' `socket.data.currentChannelId`
+                // checks pass — without going through USER_JOIN_CHANNEL,
+                // which would touch presence/rooms/broadcasts this viewer
+                // socket must stay invisible to.
+                socket.data.currentChannelId = channelId;
+
+                ack({
+                    success: true,
+                    rtpCapabilities: router.rtpCapabilities,
+                    screenVideoProducerId: targetSession.screenVideoProducer.id,
+                    screenAudioProducerId: targetSession.screenAudioProducer?.id,
+                });
+
+                app.log.info(
+                    { socketId: socket.id, role: "viewer", targetUserId, channelId },
+                    "Viewer started watching screen share",
+                );
+            } catch (err) {
+                app.log.error({ err }, "Error in WATCH_SCREEN_SHARE");
+                ack({ success: false, error: "Failed to start watching screen share" });
+            }
+        });
+
+        // ── STOP_WATCHING_SCREEN_SHARE (PRD 12.13) ──────────────────────────
+        // "Leave Stream" / window-close cleanup — closes only this viewer
+        // socket's own recv-only session, keyed by `socket.id`. The primary
+        // `disconnect` handler's `role === "viewer"` branch in
+        // connection.handler.ts does the same thing if the window is closed
+        // without this ever firing (e.g. a crash), so this isn't the only
+        // path to correct cleanup, just the clean one.
+        socket.on("STOP_WATCHING_SCREEN_SHARE", (payload, ack) => {
+            try {
+                const { channelId } = payload;
+                mediasoup.cleanupUserSession(channelId, getMediasoupSessionKey(socket));
+                socket.data.currentChannelId = null;
+                ack({ success: true });
+            } catch (err) {
+                app.log.error({ err }, "Error in STOP_WATCHING_SCREEN_SHARE");
+                ack({ success: false });
             }
         });
     });

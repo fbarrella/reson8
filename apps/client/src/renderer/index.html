@@ -1266,7 +1266,8 @@
     #update-modal,
     #whats-new-modal,
     #pin-replace-confirm-modal,
-    #screen-share-modal {
+    #screen-share-modal,
+    #watch-share-confirm-modal {
       display: none;
       position: fixed;
       top: 0;
@@ -1290,7 +1291,8 @@
     #update-modal.visible,
     #whats-new-modal.visible,
     #pin-replace-confirm-modal.visible,
-    #screen-share-modal.visible {
+    #screen-share-modal.visible,
+    #watch-share-confirm-modal.visible {
       display: flex;
     }
 
@@ -1427,9 +1429,8 @@
     /* Screen-share indicator next to a user's name in the channel tree
        (PRD 12.12) — same sizing/shape as .nsfw-badge but filled solid red
        rather than outlined, reading as an active "LIVE" state rather than
-       a static content-warning label. PRD 12.13 makes this clickable
-       (opens a Viewer window) — no `cursor: pointer` yet, since there's no
-       click behavior attached until then. */
+       a static content-warning label. Clickable by anyone, including the
+       streamer themself, to open a Viewer window (PRD 12.13). */
     .sharing-badge {
       display: inline-flex;
       align-items: center;
@@ -1441,6 +1442,7 @@
       padding: 0 4px;
       margin-left: 4px;
       letter-spacing: 0.3px;
+      cursor: pointer;
     }
 
     .channel-ctx-menu-item {
@@ -2787,9 +2789,6 @@
       <div class="toggle-row">
         <div>
           <span class="toggle-row-title">Share Audio</span>
-          <!-- PRD 12.11 fills in the real enable/disable + tooltip logic
-               (window vs. screen, per-platform capability); for now this
-               stays a plain, always-present checkbox. -->
           <span class="toggle-row-desc" id="source-share-audio-desc">Select a source first</span>
         </div>
         <input type="checkbox" id="source-share-audio-checkbox" disabled>
@@ -2797,6 +2796,18 @@
       <div class="modal-actions">
         <button class="btn btn-cancel" id="btn-screen-share-cancel">Cancel</button>
         <button class="btn btn-connect" id="btn-screen-share-start" disabled>Start Sharing</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Watch Screen Share Confirmation Modal (PRD 12.13) ────────────────── -->
+  <div id="watch-share-confirm-modal">
+    <div class="modal-content">
+      <h3>🖥️ Watch Screen Share</h3>
+      <p>Do you want to watch <strong id="watch-share-confirm-nickname"></strong>'s stream?</p>
+      <div class="modal-actions">
+        <button class="btn btn-cancel" id="btn-watch-share-cancel">Cancel</button>
+        <button class="btn btn-connect" id="btn-watch-share-confirm">Watch</button>
       </div>
     </div>
   </div>

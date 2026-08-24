@@ -342,6 +342,51 @@ export interface ClientToServerEvents {
         ack: (response: { success: boolean; error?: string }) => void,
     ) => void;
 
+    // ── Screen Share Viewing (PRD 12.13) ──────────────────────────────────
+    // Emitted only by a Viewer window's own second ("viewer"-role) socket —
+    // see `SocketData.role`'s doc comment for the full dual-socket design.
+
+    /**
+     * Resolves this viewer socket's `userId` from the same persisted
+     * instance ID the primary connection uses, WITHOUT touching presence,
+     * rooms, or anything `USER_JOIN_SERVER` would (that's the whole point —
+     * this socket must stay invisible to everyone else).
+     */
+    VIEWER_AUTHENTICATE: (
+        payload: { instanceId: string },
+        ack: (response: { success: boolean; error?: string }) => void,
+    ) => void;
+
+    /**
+     * Requests to watch `targetUserId`'s screen share in `channelId`. The
+     * server validates the caller is currently an occupant of that channel
+     * and that the target currently has an active screen-video Producer
+     * there — rejects otherwise (handles the race where a share ends
+     * between the badge rendering and this call). On success, bundles the
+     * Router's `rtpCapabilities` directly in the ack (skipping a separate
+     * `GET_ROUTER_CAPABILITIES` round trip, since the handler already has
+     * to look up the Router to check the target's Producers) and also
+     * scopes this socket to `channelId` so the existing
+     * `CREATE_WEBRTC_TRANSPORT`/`CONNECT_TRANSPORT`/`CONSUME`/
+     * `RESUME_CONSUMER` handlers work unmodified from here.
+     */
+    WATCH_SCREEN_SHARE: (
+        payload: { targetUserId: string; channelId: string },
+        ack: (response: {
+            success: boolean;
+            rtpCapabilities?: any;
+            screenVideoProducerId?: string;
+            screenAudioProducerId?: string;
+            error?: string;
+        }) => void,
+    ) => void;
+
+    /** Leave-Stream / window-close cleanup — closes this viewer socket's own recv Transport/Consumers only. */
+    STOP_WATCHING_SCREEN_SHARE: (
+        payload: { channelId: string },
+        ack: (response: { success: boolean }) => void,
+    ) => void;
+
     // ── Pinned Messages ──────────────────────────────────────────────────
 
     /**
@@ -550,4 +595,16 @@ export interface SocketData {
     serverId: string;
     /** The channel the user is currently in (if any). */
     currentChannelId: string | null;
+    /**
+     * `"primary"` (default) is the normal one-socket-per-user connection —
+     * everything before PRD 12.13 assumed this implicitly. `"viewer"` is a
+     * second, independent socket a Viewer window (PRD 12.13) opens to
+     * consume one specific screen share; it authenticates via
+     * `VIEWER_AUTHENTICATE` (not `USER_JOIN_SERVER`), never joins presence
+     * or the `server:{id}` room, and its disconnect only tears down its own
+     * recv-only mediasoup session — never presence, never broadcasts. Set
+     * once, in `index.ts`'s `io.use()` middleware, from the connection
+     * query string, before any handler can run.
+     */
+    role: "primary" | "viewer";
 }

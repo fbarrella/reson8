@@ -778,6 +778,11 @@ interface Reson8Api {
     stopAppAudioCapture(): Promise<void>;
     stopScreenShare(): Promise<void>;
     startScreenShareVideo(chromeMediaSourceId: string): Promise<{ success: boolean; error?: string }>;
+    openScreenShareViewer(
+        targetUserId: string,
+        nickname: string,
+        channelId: string,
+    ): Promise<{ success: boolean; error?: string }>;
     on(event: string, callback: (...args: any[]) => void): void;
 }
 
@@ -1111,6 +1116,13 @@ type DesktopSource = {
     sourceType: "screen" | "window";
 };
 let selectedShareSource: DesktopSource | null = null;
+
+// ── Watch Screen Share Confirmation Modal (PRD 12.13) ───────────────────────
+const watchShareConfirmModal = document.getElementById("watch-share-confirm-modal") as HTMLDivElement;
+const watchShareConfirmNickname = document.getElementById("watch-share-confirm-nickname") as HTMLElement;
+const btnWatchShareCancel = document.getElementById("btn-watch-share-cancel") as HTMLButtonElement;
+const btnWatchShareConfirm = document.getElementById("btn-watch-share-confirm") as HTMLButtonElement;
+let pendingWatchShare: { userId: string; nickname: string; channelId: string } | null = null;
 
 const newChannelNsfwRow = document.getElementById("new-channel-nsfw-row") as HTMLDivElement;
 const newChannelNsfw = document.getElementById("new-channel-nsfw") as HTMLInputElement;
@@ -1525,10 +1537,18 @@ function renderOccupants(container: HTMLElement, node: TreeNode): void {
         el.setAttribute("data-user-id", occ.userId);
         const voiceStateIcons =
             `${occ.isMuted ? OCC_MUTED_ICON : ""}${occ.isDeafened ? OCC_DEAFENED_ICON : ""}`;
-        // PRD 12.13 makes this clickable (opens a Viewer window) — not
-        // wired up yet, just rendered.
         const sharingBadge = occ.isSharingScreen ? `<span class="sharing-badge">LIVE</span>` : "";
         el.innerHTML = `<span class="occ-dot"></span>${escapeHtml(occ.nickname)}${voiceStateIcons}${sharingBadge}`;
+
+        // Clickable by anyone in the room, including the streamer
+        // themself (PRD 12.13) — the badge only exists in the DOM when
+        // `occ.isSharingScreen` is true, so no extra guard needed here.
+        el.querySelector(".sharing-badge")?.addEventListener("click", (e) => {
+            e.stopPropagation();
+            pendingWatchShare = { userId: occ.userId, nickname: occ.nickname, channelId: node.id };
+            watchShareConfirmNickname.textContent = occ.nickname;
+            watchShareConfirmModal.classList.add("visible");
+        });
 
         // Re-apply any saved local volume/mute for this participant. Cheap and
         // idempotent — voice.service.ts only touches the audio graph when a
@@ -4263,6 +4283,32 @@ btnPinReplaceConfirm.addEventListener("click", async () => {
     const action = pendingPinReplaceAction;
     pendingPinReplaceAction = null;
     if (action) await action();
+});
+
+// ── Watch Screen Share Confirmation Modal (PRD 12.13) ───────────────────────
+
+watchShareConfirmModal.addEventListener("click", (e) => {
+    if (e.target === watchShareConfirmModal) {
+        watchShareConfirmModal.classList.remove("visible");
+        pendingWatchShare = null;
+    }
+});
+
+btnWatchShareCancel.addEventListener("click", () => {
+    watchShareConfirmModal.classList.remove("visible");
+    pendingWatchShare = null;
+});
+
+btnWatchShareConfirm.addEventListener("click", async () => {
+    watchShareConfirmModal.classList.remove("visible");
+    const target = pendingWatchShare;
+    pendingWatchShare = null;
+    if (!target) return;
+
+    const res = await api.openScreenShareViewer(target.userId, target.nickname, target.channelId);
+    if (!res.success) {
+        log(`Failed to open viewer: ${res.error}`, "error");
+    }
 });
 
 // ── Screen Share Selection Modal (PRD 12.10) ────────────────────────────────

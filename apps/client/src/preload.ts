@@ -997,6 +997,31 @@ const api = {
         }
     },
 
+    // ── Screen Share Viewer window (PRD 12.13) ───────────────────────────
+
+    /**
+     * Opens a Viewer window watching `targetUserId`'s screen share in
+     * `channelId`. `serverBaseUrl` is included here (from this connection's
+     * own in-scope state) rather than asked of the renderer, since the
+     * renderer has no other way to know it — it's set once, during
+     * `connect()`, and never exposed as its own getter.
+     */
+    async openScreenShareViewer(
+        targetUserId: string,
+        nickname: string,
+        channelId: string,
+    ): Promise<{ success: boolean; error?: string }> {
+        if (!serverBaseUrl) {
+            return { success: false, error: "Not connected to a server" };
+        }
+        return ipcRenderer.invoke("open-screen-share-viewer", {
+            targetUserId,
+            nickname,
+            channelId,
+            serverBaseUrl,
+        });
+    },
+
     // ── Auto-Updater (PRD 10.1) ─────────────────────────────────────────────
 
     async checkForUpdates(): Promise<{ status: "available" | "not-available" | "error"; message?: string }> {
