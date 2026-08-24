@@ -39,3 +39,20 @@ export function platformSupportsCapture(): boolean;
  * rely on this returning `undefined` there).
  */
 export function resolvePidForWindowSourceId(sourceId: string): number | undefined;
+
+/**
+ * Linux only — lists the `application.name` of every app currently
+ * producing audio (PipeWire/PulseAudio), excluding any stream whose
+ * `application.process.id` is in `excludePids`. This export doesn't exist
+ * in the compiled addon outside Linux; calling code must check
+ * `process.platform` first, not rely on this returning `undefined`/`[]`
+ * there. Exists because matching a shared *window* to its owning app by
+ * name/PID (what `startCapture` tries first via `AudioSourceTarget`) isn't
+ * reliable on Linux/Wayland: the portal never exposes a real per-window
+ * name or PID to the requesting app, so there's nothing to match against
+ * in the first place — the caller offers this list as an explicit choice
+ * instead. Pass every PID from Electron's own `app.getAppMetrics()` as
+ * `excludePids` so the caller's own app doesn't show up as an option to
+ * "share" its own audio back at itself.
+ */
+export function listAudioProducingApps(excludePids: number[]): string[];

@@ -163,6 +163,9 @@ function createSignaling(): VoiceSignaling {
                 socket!.emit("RESUME_CONSUMER", { consumerId }, resolve);
             });
         },
+        closeProducer(producerId) {
+            socket?.emit("CLOSE_PRODUCER", { producerId });
+        },
     };
 }
 
@@ -246,6 +249,17 @@ const api = {
     // one) — a plain property, not a method, since it never changes and an
     // async round-trip would be pointless for it.
     platform: process.platform,
+
+    // Linux/Wayland sessions route `desktopCapturer.getSources()` itself
+    // through the xdg-desktop-portal ScreenCast picker (KDE/GNOME show
+    // their own OS-level dialog before we ever get data back) — our own
+    // Selection Modal would just be a second, redundant picker stacked on
+    // top of that one. `XDG_SESSION_TYPE`/`WAYLAND_DISPLAY` are the
+    // standard way to detect this; X11 sessions (where `getSources()`
+    // silently enumerates with no OS dialog) keep the existing modal.
+    isLinuxWayland:
+        process.platform === "linux" &&
+        (process.env.XDG_SESSION_TYPE === "wayland" || !!process.env.WAYLAND_DISPLAY),
 
     // ── Identity ─────────────────────────────────────────────────────────────
 
@@ -495,9 +509,15 @@ const api = {
         socket?.emit("SET_VOICE_STATE", { isMuted, isDeafened }, () => { });
     },
 
-    /** Tells other occupants whether this user currently has an active screen share (PRD 12.12). */
-    setScreenShareState(isSharingScreen: boolean): void {
-        socket?.emit("SET_SCREEN_SHARE_STATE", { isSharingScreen }, () => { });
+    /**
+     * Tells other occupants whether this user currently has an active
+     * screen share (PRD 12.12). `streamName`, when sharing, should be the
+     * caller's own already-resolved display name (custom name if set,
+     * else the real source name, else the generic fallback) — see
+     * `SET_SCREEN_SHARE_STATE`'s doc comment in socket-events.ts.
+     */
+    setScreenShareState(isSharingScreen: boolean, streamName?: string): void {
+        socket?.emit("SET_SCREEN_SHARE_STATE", { isSharingScreen, streamName }, () => { });
     },
 
     setLocalUserVolume(userId: string, percent: number): void {
@@ -999,6 +1019,43 @@ const api = {
         }
     },
 
+    /** Linux/Wayland bypass path — see `voiceService.startScreenVideoProducingViaSystemPicker`. */
+    async startScreenShareViaSystemPicker(): Promise<{
+        success: boolean;
+        label?: string;
+        sourceType?: "screen" | "window";
+        error?: string;
+    }> {
+        if (!voiceService) {
+            return { success: false, error: "Not connected to voice" };
+        }
+        try {
+            const { label } = await voiceService.startScreenVideoProducingViaSystemPicker();
+            // The real picked-source name (and screen-vs-window type)
+            // main.ts's `setDisplayMediaRequestHandler` saw — preferred
+            // over `label` (the MediaStreamTrack's own `.label`, which
+            // comes back empty for portal-based captures).
+            const source: { name: string; sourceType: "screen" | "window" } | null = await ipcRenderer.invoke(
+                "get-last-screen-share-source",
+            );
+            return { success: true, label: source?.name || label, sourceType: source?.sourceType };
+        } catch (err: any) {
+            return { success: false, error: err?.message ?? "Failed to start screen video" };
+        }
+    },
+
+    /**
+     * Linux/Wayland bypass path — native prompt letting the user pick which
+     * currently-audio-producing app (if any) to also share, since the
+     * picked video source carries no name/PID to auto-match against on
+     * this platform. Resolves the exact app name to pass straight to
+     * `startAppAudioCapture`, or `null` if there's nothing to offer (no app
+     * producing audio right now) or the user chose "Video Only".
+     */
+    async pickAudioAppToShare(): Promise<string | null> {
+        return ipcRenderer.invoke("pick-audio-app-to-share");
+    },
+
     // ── Screen Share Viewer window (PRD 12.13) ───────────────────────────
 
     /**
@@ -1071,6 +1128,7 @@ const api = {
                 produce: () => Promise.resolve({ success: false }),
                 consume: () => Promise.resolve({ success: false }),
                 resumeConsumer: () => Promise.resolve({ success: false }),
+                closeProducer: () => {},
             };
             voiceService = new VoiceService(dummySignaling);
         }

@@ -5,11 +5,11 @@
  * This is the entry point for the Electron desktop client.
  */
 
-import { app, BrowserWindow, session, ipcMain, globalShortcut, Menu, Tray, nativeImage, shell, desktopCapturer } from "electron";
+import { app, BrowserWindow, session, ipcMain, globalShortcut, Menu, Tray, nativeImage, shell, desktopCapturer, dialog } from "electron";
 import path from "node:path";
 import { getInstanceId, hasExistingInstanceId } from "./instance-id.js";
 import { autoUpdater } from "electron-updater";
-import { startCapture, resolvePidForWindowSourceId, platformSupportsCapture } from "@reson8/native-audio";
+import { startCapture, resolvePidForWindowSourceId, listAudioProducingApps, platformSupportsCapture } from "@reson8/native-audio";
 import type { CaptureHandle } from "@reson8/native-audio";
 
 // ── Link Preview (metascraper) ───────────────────────────────────────────
@@ -200,11 +200,51 @@ async function fetchLinkPreview(url: string): Promise<LinkPreviewData | null> {
 let mainWindow: BrowserWindow | null = null;
 let pttKey: string | null = null;
 
+// Set by `setDisplayMediaRequestHandler` (Linux/Wayland screen-share
+// bypass) right before it grants a source, since that's the only place a
+// real, non-empty `DesktopCapturerSource.name` (and its screen-vs-window
+// type) for the picked source is ever available — `getDisplayMedia()`'s
+// resulting MediaStreamTrack.label comes back empty for portal-based
+// captures, so the renderer can't read either off the stream itself. Read
+// once via `get-last-screen-share-source` right after `getDisplayMedia()`
+// resolves.
+let lastScreenShareSource: { name: string; sourceType: "screen" | "window" } | null = null;
+
+/**
+ * Same screen-vs-window heuristic PRD 12.11/12.14's audio-share gating
+ * already relies on for the Selection Modal path — `display_id` (non-empty
+ * only for real monitors, per Electron's own `DesktopCapturerSource` docs)
+ * checked ahead of the `id` prefix, since the prefix alone isn't reliable
+ * on Linux/Wayland where every source comes back through the
+ * xdg-desktop-portal picker rather than X11/Win32 enumeration.
+ */
+function classifySourceType(source: Electron.DesktopCapturerSource): "screen" | "window" {
+    return source.display_id || source.id.toLowerCase().startsWith("screen:") ? "screen" : "window";
+}
+
 // ── System Tray State ────────────────────────────────────────────────────
 let tray: Tray | null = null;
 let isQuitting = false;
 let minimizeToTray = false;
 let closeToTray = false;
+
+/**
+ * `desktopCapturer.getSources()`, raced against a timeout. On Linux/Wayland
+ * a broken portal backend (e.g. xdg-desktop-portal-kde stopped) can leave
+ * this promise hanging forever — neither resolving nor rejecting — so every
+ * caller (the Selection Modal's source list, and the `getDisplayMedia()`
+ * handler below) needs this race, not just a try/catch.
+ */
+function getDesktopSourcesWithTimeout(
+    options: Electron.SourcesOptions,
+): Promise<Electron.DesktopCapturerSource[]> {
+    return Promise.race([
+        desktopCapturer.getSources(options),
+        new Promise<never>((_resolve, reject) => {
+            setTimeout(() => reject(new Error("Timed out waiting for screen/window sources")), 20_000);
+        }),
+    ]);
+}
 
 function createWindow(): void {
     // Grant mic/camera permission requests automatically
@@ -214,6 +254,30 @@ function createWindow(): void {
             callback(allowed.includes(permission));
         },
     );
+
+    // Required for `getDisplayMedia()` in the renderer (Linux/Wayland
+    // screen-share bypass) — with no handler registered at all, Electron
+    // rejects `getDisplayMedia()` immediately with "Not supported"
+    // (confirmed against this exact Electron version). Calling
+    // `desktopCapturer.getSources()` from *inside* this handler — rather
+    // than the renderer separately calling `getSources()` then
+    // `getUserMedia({chromeMediaSourceId})`, as an earlier version of this
+    // did — is what actually fixes the Wayland double-picker/black-feed bug
+    // that approach had: `getDisplayMedia()`'s single request/callback
+    // cycle correlates the picked source to the resulting stream itself,
+    // instead of two independent renderer→main round trips that each
+    // separately negotiated the xdg-desktop-portal ScreenCast session.
+    session.defaultSession.setDisplayMediaRequestHandler(async (_request, callback) => {
+        try {
+            const sources = await getDesktopSourcesWithTimeout({ types: ["screen", "window"] });
+            const source = sources[0];
+            lastScreenShareSource = source ? { name: source.name, sourceType: classifySourceType(source) } : null;
+            callback(source ? { video: source } : {});
+        } catch {
+            lastScreenShareSource = null;
+            callback({});
+        }
+    });
 
     mainWindow = new BrowserWindow({
         width: 1024,
@@ -546,16 +610,11 @@ app.whenReady().then(() => {
     // stuck on "Loading sources…" forever with no way to know why.
     ipcMain.handle("get-desktop-sources", async () => {
         try {
-            const sources = await Promise.race([
-                desktopCapturer.getSources({
-                    types: ["screen", "window"],
-                    thumbnailSize: { width: 240, height: 135 },
-                    fetchWindowIcons: true,
-                }),
-                new Promise<never>((_resolve, reject) => {
-                    setTimeout(() => reject(new Error("Timed out waiting for screen/window sources")), 20_000);
-                }),
-            ]);
+            const sources = await getDesktopSourcesWithTimeout({
+                types: ["screen", "window"],
+                thumbnailSize: { width: 240, height: 135 },
+                fetchWindowIcons: true,
+            });
             return {
                 success: true,
                 sources: sources.map((source) => ({
@@ -563,24 +622,62 @@ app.whenReady().then(() => {
                     name: source.name,
                     thumbnail: source.thumbnail.toDataURL(),
                     appIcon: source.appIcon && !source.appIcon.isEmpty() ? source.appIcon.toDataURL() : null,
-                    // `display_id` (non-empty only for real monitors, per
-                    // Electron's own docs on `DesktopCapturerSource`) is
-                    // checked ahead of the `id` prefix — on Linux/Wayland,
-                    // where every source comes back through the
-                    // xdg-desktop-portal picker rather than X11/Win32
-                    // enumeration, this prefix isn't a reliable signal on its
-                    // own (screen sharing gates the audio-share checkbox on
-                    // this, PRD 12.11/12.14 — the checkbox must never light
-                    // up for a full-monitor share, since native-audio only
-                    // captures per-process, not a desktop mix).
-                    sourceType: (source.display_id || source.id.toLowerCase().startsWith("screen:")
-                        ? "screen"
-                        : "window") as "screen" | "window",
+                    // Screen sharing gates the audio-share checkbox on this
+                    // (PRD 12.11/12.14 — must never light up for a
+                    // full-monitor share, since native-audio only captures
+                    // per-process, not a desktop mix).
+                    sourceType: classifySourceType(source),
                 })),
             };
         } catch (err: any) {
             return { success: false, error: err?.message ?? "Failed to list screen/window sources" };
         }
+    });
+
+    // Linux/Wayland bypass only — see `lastScreenShareSource`'s declaration
+    // for why this can't just be read off the MediaStreamTrack.
+    ipcMain.handle("get-last-screen-share-source", () => lastScreenShareSource);
+
+    // Linux/Wayland bypass only (PRD 12.11's audio-share business rule
+    // still applies: only ever offered for an individual window, never a
+    // full-monitor share). There's no in-app step on this path to surface
+    // the modal's "share this window's audio too" checkbox, so this asks
+    // via a native dialog instead — but NOT "share <picked source>'s audio
+    // too?" the way an earlier version of this did. Confirmed live that
+    // `desktopCapturer`'s window sources carry no real per-window name at
+    // all under the Wayland/portal capture path (the portal doesn't
+    // expose one to the requesting app, by design) — there's no title to
+    // ask about or match against in the first place. Instead this lists
+    // apps `listAudioProducingApps()` (Linux-only export) says are
+    // *actually* producing audio right now, via PipeWire/PulseAudio
+    // introspection directly — that's not privacy-gated the way window
+    // capture is — and lets the user pick which one, if any, rather than
+    // guessing.
+    //
+    // `app.getAppMetrics()`'s PIDs (every one of Reson8's own processes —
+    // main, renderer, GPU, audio service, etc.) are passed through to
+    // exclude this app's own audio-output stream from the list — confirmed
+    // live that without this, Reson8 could "share" its own audio back at
+    // itself. Excluding by PID rather than matching the name "Reson8" /
+    // "Chromium" / "Electron" is deliberate: a name-based filter would
+    // also hide a real, separate Chrome/Chromium browser window, since
+    // Electron self-identifies with the same underlying engine name.
+    ipcMain.handle("pick-audio-app-to-share", async () => {
+        if (!mainWindow) return null;
+        const ownPids = app.getAppMetrics().map((m) => m.pid);
+        const candidates =
+            typeof listAudioProducingApps === "function" ? listAudioProducingApps(ownPids) : [];
+        if (candidates.length === 0) return null;
+
+        const result = await dialog.showMessageBox(mainWindow, {
+            type: "question",
+            buttons: [...candidates, "Video Only"],
+            defaultId: 0,
+            cancelId: candidates.length,
+            title: "Share App Audio?",
+            message: "Which app's audio would you like to share too?",
+        });
+        return result.response < candidates.length ? candidates[result.response] : null;
     });
 
     // ── Screen Share audio capture (PRD 12.7) ────────────────────────────

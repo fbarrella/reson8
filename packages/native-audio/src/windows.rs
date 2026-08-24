@@ -285,6 +285,25 @@ fn activate_process_loopback_client(pid: u32) -> WinResult<IAudioClient> {
     // outlive the async completion itself; the OS copies what it needs
     // during `ActivateAudioInterfaceAsync` per Microsoft's documented
     // contract for this API.
+    //
+    // `prop` must never actually be *dropped*, though — confirmed as the
+    // real cause of a live STATUS_HEAP_CORRUPTION (0xC0000374) crash on
+    // Windows, the first time this code ever ran on real hardware.
+    // `windows_core::PROPVARIANT`'s `Drop` impl unconditionally calls
+    // `PropVariantClear`, which — because `vt` here is `VT_BLOB` — frees
+    // `blob.pBlobData` via `CoTaskMemFree`. That pointer is
+    // `&mut activation_params` above: a plain stack local, never allocated
+    // via `CoTaskMemAlloc` as `VT_BLOB`'s ownership contract requires.
+    // Freeing it corrupts the process heap, which ntdll's heap manager
+    // then flags as corruption later, on some unrelated allocation — not
+    // at the moment of the bad free itself, which is why the crash's
+    // timing only loosely correlated with when audio capture started.
+    // `activation_params`'s real backing memory is already cleaned up by
+    // the normal stack unwind when this function returns; `prop` never
+    // owned anything that legitimately needs `PropVariantClear`, so
+    // `forget` it instead of letting it drop.
+    std::mem::forget(prop);
+
     rx.recv_timeout(Duration::from_secs(5))
         .map_err(|_| windows::core::Error::from(HRESULT(-1)))?
 }

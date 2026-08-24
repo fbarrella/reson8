@@ -678,6 +678,7 @@ const EMOJI_DATA: EmojiEntry[] = [
 
 interface Reson8Api {
     readonly platform: string;
+    readonly isLinuxWayland: boolean;
     getInstanceId(): string;
     isExistingInstall(): Promise<boolean>;
     connect(host: string, port: number | undefined, nickname: string, password?: string): Promise<void>;
@@ -688,7 +689,7 @@ interface Reson8Api {
     toggleDeafen(): { isMuted: boolean; isDeafened: boolean };
     setMuted(muted: boolean): void;
     setVoiceState(isMuted: boolean, isDeafened: boolean): void;
-    setScreenShareState(isSharingScreen: boolean): void;
+    setScreenShareState(isSharingScreen: boolean, streamName?: string): void;
     setLocalUserVolume(userId: string, percent: number): void;
     setLocalUserMute(userId: string, muted: boolean): void;
     getLocalUserVolume(userId: string): number;
@@ -787,6 +788,13 @@ interface Reson8Api {
     stopAppAudioCapture(): Promise<void>;
     stopScreenShare(): Promise<void>;
     startScreenShareVideo(chromeMediaSourceId: string): Promise<{ success: boolean; error?: string }>;
+    startScreenShareViaSystemPicker(): Promise<{
+        success: boolean;
+        label?: string;
+        sourceType?: "screen" | "window";
+        error?: string;
+    }>;
+    pickAudioAppToShare(): Promise<string | null>;
     openScreenShareViewer(
         targetUserId: string,
         nickname: string,
@@ -1117,6 +1125,13 @@ const sourceShareAudioCheckbox = document.getElementById("source-share-audio-che
 const sourceShareAudioDesc = document.getElementById("source-share-audio-desc") as HTMLSpanElement;
 const btnScreenShareCancel = document.getElementById("btn-screen-share-cancel") as HTMLButtonElement;
 const btnScreenShareStart = document.getElementById("btn-screen-share-start") as HTMLButtonElement;
+const sourceShareNameInput = document.getElementById("source-share-name-input") as HTMLInputElement;
+
+// ── Screen Share Custom Name Modal (Linux/Wayland bypass) ───────────────────
+const streamNameModal = document.getElementById("stream-name-modal") as HTMLDivElement;
+const streamNameInput = document.getElementById("stream-name-input") as HTMLInputElement;
+const btnStreamNameSkip = document.getElementById("btn-stream-name-skip") as HTMLButtonElement;
+const btnStreamNameConfirm = document.getElementById("btn-stream-name-confirm") as HTMLButtonElement;
 
 type DesktopSource = {
     id: string;
@@ -1778,8 +1793,21 @@ function updateVoiceUI(channelName?: string): void {
 }
 
 /** Reflects sharing/enabled state on the Share Screen button (PRD 12.9). */
+/**
+ * Screen sharing is disabled outright on macOS builds — the packaging
+ * pipeline (see `apps/client/package.json`'s `build.mac`) has never been
+ * run on real macOS hardware, so this ships with the feature turned off
+ * rather than an untested code path reaching users. Checked ahead of the
+ * server-side `serverScreenShareEnabled` toggle so the tooltip explains
+ * the more specific reason.
+ */
 function updateShareScreenButton(): void {
     btnShareScreen.classList.toggle("active", isSharingScreen);
+    if (api.platform === "darwin") {
+        btnShareScreen.title = "Screen sharing isn't available on macOS yet";
+        btnShareScreen.disabled = true;
+        return;
+    }
     btnShareScreen.title = isSharingScreen
         ? "Stop Sharing"
         : serverScreenShareEnabled
@@ -1857,8 +1885,116 @@ btnShareScreen.addEventListener("click", async () => {
         api.setScreenShareState(false);
         return;
     }
+    if (api.isLinuxWayland) {
+        await startScreenShareViaSystemPicker();
+        return;
+    }
     await openScreenShareModal();
 });
+
+/**
+ * Linux/Wayland-only path: uses `getDisplayMedia()` (via
+ * `startScreenShareViaSystemPicker`'s underlying voice-service call), not
+ * `getDesktopSources()` + `startScreenShareVideo()` — that two-step API
+ * showed the OS portal picker a *second* time inside the video-capture
+ * step even after our own `getDesktopSources()` call had already shown it
+ * once, with the resulting feed not reliably tied to what was actually
+ * granted (observed as a black feed on the viewer side). `getDisplayMedia`
+ * is Electron's single-round-trip native path for the Wayland portal
+ * picker instead of a redundant second one on top of it.
+ *
+ * There's no in-app modal step left to surface the "share this window's
+ * audio too" checkbox on this path (the whole point here is trusting the
+ * OS picker instead of our own UI for video) — the OS picker itself has no
+ * concept of it either, since it only ever asks about video. PRD 12.11's
+ * business rule (audio only for an individual window, never a full-monitor
+ * share) still has to be respected, so this asks via a native dialog
+ * instead — but not "share <picked source>'s audio too?": confirmed live
+ * that `videoRes.label` here is never a real per-window name on this
+ * platform (the Wayland portal doesn't expose one to the requesting app at
+ * all), so there'd be nothing meaningful to ask about or match against.
+ * `pickAudioAppToShare()` instead offers a direct choice from whichever
+ * apps are *actually* producing audio right now (queried via PipeWire/
+ * PulseAudio introspection, which isn't privacy-gated the way window
+ * capture is), and returns the exact name to hand to
+ * `startAppAudioCapture` — no name-matching heuristic involved.
+ *
+ * Confirmed live (via a temporary diagnostic, since removed) that the
+ * portal's source id (`"window:1:0"`) is just a sequential handle scoped
+ * to the one grant in this request, not a real identifier of any kind —
+ * there's no PID or name to recover from it by any means, not just an
+ * unreliable one, so `videoRes.label` here always ends up the generic
+ * "your screen" fallback for a window share. `promptForStreamName()`
+ * lets the user set their own display name instead, purely a local/UI
+ * concern (never sent to the OS picker or portal) — a new modal because
+ * there's no existing in-app step on this path to attach a field to,
+ * unlike the Selection Modal's own name input on other platforms.
+ */
+async function startScreenShareViaSystemPicker(): Promise<void> {
+    const videoRes = await api.startScreenShareViaSystemPicker();
+    if (!videoRes.success) {
+        log(`Failed to start screen share: ${videoRes.error}`, "error");
+        return;
+    }
+
+    isSharingScreen = true;
+    updateShareScreenButton();
+
+    const customName = await promptForStreamName();
+    const resolvedName = customName || videoRes.label || "your screen";
+    // Sent only once the resolved name is known, so viewers' Viewer window
+    // (which reads this back via WATCH_SCREEN_SHARE) shows the exact same
+    // name this client's own "Started sharing" log does, not a stale
+    // pre-naming placeholder.
+    api.setScreenShareState(true, resolvedName);
+    log(`Started sharing "${resolvedName}"`, "success");
+
+    if (videoRes.sourceType === "window" && (await api.platformSupportsAudioCapture())) {
+        const chosenApp = await api.pickAudioAppToShare();
+        if (chosenApp) {
+            const audioRes = await api.startAppAudioCapture(undefined, chosenApp);
+            if (!audioRes.success) {
+                log(`Screen video is sharing, but audio couldn't start: ${audioRes.error}`, "error");
+            }
+        }
+    }
+}
+
+/**
+ * Shows `#stream-name-modal` and resolves with the trimmed name the user
+ * entered, or `""` if they clicked Skip / clicked outside the modal —
+ * callers treat an empty string as "use the default name" (see call site).
+ */
+function promptForStreamName(): Promise<string> {
+    return new Promise((resolve) => {
+        streamNameInput.value = "";
+        streamNameModal.classList.add("visible");
+        streamNameInput.focus();
+
+        const cleanup = (): void => {
+            streamNameModal.classList.remove("visible");
+            btnStreamNameConfirm.removeEventListener("click", onConfirm);
+            btnStreamNameSkip.removeEventListener("click", onSkip);
+            streamNameModal.removeEventListener("click", onBackdropClick);
+        };
+        const onConfirm = (): void => {
+            const value = streamNameInput.value.trim();
+            cleanup();
+            resolve(value);
+        };
+        const onSkip = (): void => {
+            cleanup();
+            resolve("");
+        };
+        const onBackdropClick = (e: MouseEvent): void => {
+            if (e.target === streamNameModal) onSkip();
+        };
+
+        btnStreamNameConfirm.addEventListener("click", onConfirm);
+        btnStreamNameSkip.addEventListener("click", onSkip);
+        streamNameModal.addEventListener("click", onBackdropClick);
+    });
+}
 
 btnLeaveVoice.addEventListener("click", leaveVoiceAndNotify);
 
@@ -4440,6 +4576,7 @@ async function openScreenShareModal(): Promise<void> {
     sourceShareAudioCheckbox.disabled = true;
     sourceShareAudioCheckbox.checked = false;
     sourceShareAudioDesc.textContent = "Select a source first";
+    sourceShareNameInput.value = "";
 
     sourceShareGroups.innerHTML = "";
     const loading = document.createElement("div");
@@ -4533,9 +4670,13 @@ btnScreenShareStart.addEventListener("click", async () => {
     isSharingScreen = true;
     updateShareScreenButton();
     closeScreenShareModal();
-    // Makes the sharing badge (PRD 12.12) appear for other occupants.
-    api.setScreenShareState(true);
-    log(`Started sharing "${source.name}"`, "success");
+    const customName = sourceShareNameInput.value.trim();
+    const resolvedName = customName || source.name || "your screen";
+    // Makes the sharing badge (PRD 12.12) appear for other occupants, and
+    // — via `streamName` — lets a viewer's Viewer window show this same
+    // resolved name.
+    api.setScreenShareState(true, resolvedName);
+    log(`Started sharing "${resolvedName}"`, "success");
 });
 
 api.on("channel-pin-updated", (data: { channelId: string; channelName: string; pinnedMessage: PinnedMessage | null; actedByNickname?: string }) => {

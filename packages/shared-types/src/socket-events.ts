@@ -336,9 +336,18 @@ export interface ClientToServerEvents {
      * `SET_VOICE_STATE`. The server re-checks the server-wide screen-share
      * toggle before honoring `true` (PRD 12.14; until that toggle exists,
      * this is always honored — see the handler for the current caveat).
+     *
+     * `streamName`, when `isSharingScreen` is true, is the *already fully
+     * resolved* display name the sharer's own client computed (custom
+     * name if the user set one, else the real source name where
+     * available, else the generic "your screen" fallback) — not a raw
+     * user-entered string the server needs to fall back on itself.
+     * Surfaced back to viewers via `WATCH_SCREEN_SHARE`'s ack so the
+     * Viewer window's title bar shows the same name the sharer's own
+     * "Started sharing" log did.
      */
     SET_SCREEN_SHARE_STATE: (
-        payload: { isSharingScreen: boolean },
+        payload: { isSharingScreen: boolean; streamName?: string },
         ack: (response: { success: boolean; error?: string }) => void,
     ) => void;
 
@@ -377,6 +386,8 @@ export interface ClientToServerEvents {
             rtpCapabilities?: any;
             screenVideoProducerId?: string;
             screenAudioProducerId?: string;
+            /** The sharer's own resolved stream name — see `SET_SCREEN_SHARE_STATE`'s doc comment. */
+            streamName?: string;
             error?: string;
         }) => void,
     ) => void;

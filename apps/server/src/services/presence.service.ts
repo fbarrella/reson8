@@ -7,7 +7,7 @@
  * Key schema:
  *   presence:server:{serverId}    → SET of userIds
  *   presence:channel:{channelId}  → SET of userIds
- *   presence:user:{userId}        → HASH { serverId, channelId, nickname, isMuted, isDeafened, isSharingScreen }
+ *   presence:user:{userId}        → HASH { serverId, channelId, nickname, isMuted, isDeafened, isSharingScreen, screenShareName }
  */
 
 import type { Redis } from "ioredis";
@@ -84,8 +84,9 @@ export class PresenceService {
         // Also clears isSharingScreen (PRD 12.12) — otherwise a stale "1"
         // would incorrectly show the sharing badge if this user later joins
         // a different voice channel without having cleanly stopped a share
-        // (e.g. an ungraceful disconnect mid-share).
-        pipe.hset(KEY.user(userId), { channelId: "", isSharingScreen: "0" });
+        // (e.g. an ungraceful disconnect mid-share). screenShareName goes
+        // stale the same way, for the same reason.
+        pipe.hset(KEY.user(userId), { channelId: "", isSharingScreen: "0", screenShareName: "" });
         await pipe.exec();
     }
 
@@ -111,6 +112,7 @@ export class PresenceService {
         isMuted: boolean;
         isDeafened: boolean;
         isSharingScreen: boolean;
+        screenShareName: string;
     } | null> {
         const data = await this.redis.hgetall(KEY.user(userId));
         if (!data.serverId) return null;
@@ -121,6 +123,7 @@ export class PresenceService {
             isMuted: data.isMuted === "1",
             isDeafened: data.isDeafened === "1",
             isSharingScreen: data.isSharingScreen === "1",
+            screenShareName: data.screenShareName ?? "",
         };
     }
 
@@ -139,14 +142,23 @@ export class PresenceService {
         await pipe.exec();
     }
 
-    /** Records whether a user currently has an active screen share (PRD 12.12), for the sharing badge. */
+    /**
+     * Records whether a user currently has an active screen share (PRD
+     * 12.12), for the sharing badge. `screenShareName` (the sharer's own
+     * already-resolved display name — see `SET_SCREEN_SHARE_STATE`'s doc
+     * comment in socket-events.ts) is stored alongside it so
+     * `WATCH_SCREEN_SHARE` can hand it to a viewer later; always cleared
+     * when `isSharingScreen` is false, regardless of what's passed.
+     */
     async setScreenShareState(
         userId: string,
         isSharingScreen: boolean,
+        screenShareName?: string,
     ): Promise<void> {
         const pipe = this.redis.pipeline();
         pipe.hset(KEY.user(userId), {
             isSharingScreen: isSharingScreen ? "1" : "0",
+            screenShareName: isSharingScreen ? (screenShareName ?? "") : "",
         });
         pipe.expire(KEY.user(userId), USER_TTL);
         await pipe.exec();

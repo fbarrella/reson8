@@ -103,6 +103,59 @@ pub fn start_capture(
     }
 }
 
+/// Linux-only export (mirrors `resolve_pid_for_window_source_id`'s
+/// Windows-only pattern) — lists the `application.name` of every app
+/// currently producing audio. Exists because matching a shared *window* to
+/// its owning app by name/PID (what `start_capture` above tries first)
+/// fundamentally can't be made reliable here: confirmed live that
+/// `desktopCapturer`'s window sources carry no real per-window name at all
+/// under the Wayland/xdg-desktop-portal capture path (the portal doesn't
+/// expose one to the requesting app, by design, for sandboxing/privacy) —
+/// so there's no title or PID to match against in the first place, not
+/// just an imperfect one. The Linux/Wayland screen-share-audio consent
+/// flow (main.ts's `pick-audio-app-to-share`) uses this to offer an
+/// explicit choice instead of guessing.
+///
+/// `exclude_pids` filters out Reson8's own audio-output stream(s) —
+/// confirmed live that this app's own Chromium audio process shows up in
+/// the unfiltered list (self-identified as "Reson8" or "Chromium"
+/// depending on which of its sub-processes actually opened the stream),
+/// which would otherwise let a user "share" their own app's audio back at
+/// itself. Filtering by PID (the caller passes every PID from Electron's
+/// own `app.getAppMetrics()` — main, renderer, GPU, audio service, etc.)
+/// rather than matching the name "Reson8"/"Chromium"/"Electron" is
+/// deliberate: a name-based filter would also hide a *real*, separate
+/// Chrome/Chromium browser window the user might legitimately want to
+/// share audio from, since Electron self-identifies with the same
+/// underlying engine name.
+/// Deliberately *not* dispatched through `detect_audio_server()` the way
+/// `start_capture` above is. Confirmed live: on a native-PipeWire system,
+/// ordinary desktop apps (Firefox, Electron/Chromium apps, ...) connect
+/// through PipeWire's PulseAudio-compatibility layer (`client.api:
+/// "pipewire-pulse"`, confirmed via each stream's own reported props), and
+/// that layer's nodes simply don't carry `application.process.id` in the
+/// plain PipeWire registry's `global` event at all — `pipewire_backend`'s
+/// listener saw every other prop (name, media.class, ...) correctly, just
+/// never a PID, for a stream `pw-dump` independently confirms *does* have
+/// one. The exact same information is reliably available through the
+/// PulseAudio protocol's own introspection API instead (`pulse_backend`
+/// already reads PID from it correctly, for `start_capture`'s Pulse-only-
+/// system fallback) — and that protocol socket exists here too, provided
+/// by `pipewire-pulse`, regardless of which backend `detect_audio_server`
+/// would pick for actual capture. So: always go through Pulse
+/// introspection for *listing*, since self-exclusion needs the PID to
+/// actually be present, not just the name.
+#[napi_derive::napi]
+pub fn list_audio_producing_apps(exclude_pids: Vec<u32>) -> Vec<String> {
+    if pulseaudio_socket_present() {
+        pulse_backend::list_audio_producing_apps(&exclude_pids)
+    } else if pipewire_socket_present() {
+        pipewire_backend::list_audio_producing_apps(&exclude_pids)
+    } else {
+        Vec::new()
+    }
+}
+
 fn f32_to_i16le_bytes(samples: &[f32]) -> Vec<u8> {
     let mut out = Vec::with_capacity(samples.len() * 2);
     for &s in samples {
@@ -113,6 +166,29 @@ fn f32_to_i16le_bytes(samples: &[f32]) -> Vec<u8> {
     out
 }
 
+/// `AudioSourceTarget.process_name` (both backends below) is really
+/// Electron `DesktopCapturerSource.name` — the **window title** (e.g.
+/// "GitHub - Mozilla Firefox"), not the application name PipeWire/Pulse
+/// report on their audio-stream nodes (e.g. "Firefox"). `target.pid` is
+/// always `None` on Linux — `resolvePidForWindowSourceId` (the only PID
+/// resolver this crate has) is Windows-only, since there's no portable,
+/// permission-less window-id → PID lookup under Wayland/the portal the
+/// way `GetWindowThreadProcessId` gives one on Windows — so name-matching
+/// is the *only* signal available here, and an exact match (what this
+/// used to do) essentially never holds between a full window title and a
+/// bare app name. Confirmed live: a real screen-share-with-audio attempt
+/// always came back "unsupported" because of exactly this mismatch, not
+/// because no matching PipeWire/Pulse node existed. Substring matching
+/// (either direction, case-insensitive) is a pragmatic heuristic given
+/// that constraint — most apps' window titles do contain their own app
+/// name somewhere (e.g. "... - Mozilla Firefox"), though not as a
+/// guarantee for every app.
+fn names_plausibly_match(window_title: &str, stream_app_name: &str) -> bool {
+    let title = window_title.to_ascii_lowercase();
+    let app_name = stream_app_name.to_ascii_lowercase();
+    !app_name.is_empty() && (title.contains(&app_name) || app_name.contains(&title))
+}
+
 // ═══════════════════════════════════════════════════════════════════════
 // PipeWire backend
 // ═══════════════════════════════════════════════════════════════════════
@@ -120,7 +196,7 @@ fn f32_to_i16le_bytes(samples: &[f32]) -> Vec<u8> {
 mod pipewire_backend {
     use super::*;
     use pipewire as pw;
-    use std::cell::Cell;
+    use std::cell::{Cell, RefCell};
     use std::rc::Rc;
 
     /// Verified against the `pipewire` crate's own `examples/roundtrip.rs`
@@ -196,10 +272,19 @@ mod pipewire_backend {
         // calls `.quit()` — no manual `iterate()` polling needed.
         let found_node_id: Rc<Cell<Option<u32>>> = Rc::new(Cell::new(None));
         let done = Rc::new(Cell::new(false));
+        // Collected purely for diagnostics — if nothing matches, the
+        // returned status includes what *was* seen so a mismatch (wrong
+        // window title vs. app name, or simply no audio-producing app
+        // open) is visible without needing a temporary debug build to
+        // find out, given how many rounds this exact class of bug has
+        // already taken to pin down.
+        let seen_app_names: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
 
         let found_node_id_cb = Rc::clone(&found_node_id);
+        let seen_app_names_cb = Rc::clone(&seen_app_names);
         let target_pid = target.pid;
         let target_name = target.process_name.clone();
+        let target_name_for_match = target_name.clone();
         let _registry_listener = registry
             .add_listener_local()
             .global(move |global| {
@@ -207,13 +292,16 @@ mod pipewire_backend {
                 if props.get("media.class") != Some("Stream/Output/Audio") {
                     return;
                 }
+                if let Some(app_name) = props.get("application.name") {
+                    seen_app_names_cb.borrow_mut().push(app_name.to_string());
+                }
                 let pid_matches = target_pid
                     .zip(props.get("application.process.id"))
                     .is_some_and(|(pid, p)| p == pid.to_string());
-                let name_matches = target_name
+                let name_matches = target_name_for_match
                     .as_deref()
                     .zip(props.get("application.name"))
-                    .is_some_and(|(name, n)| n.eq_ignore_ascii_case(name));
+                    .is_some_and(|(name, n)| names_plausibly_match(name, n));
                 if pid_matches || name_matches {
                     found_node_id_cb.set(Some(global.id));
                 }
@@ -238,7 +326,17 @@ mod pipewire_backend {
         }
 
         let Some(node_id) = found_node_id.get() else {
-            let _ = ready_tx.send(STATUS_UNSUPPORTED.to_string());
+            let seen = seen_app_names.borrow();
+            let target_display = target_name.as_deref().unwrap_or("(no name given)");
+            let status = if seen.is_empty() {
+                format!("{STATUS_UNSUPPORTED}: no app is currently producing audio")
+            } else {
+                format!(
+                    "{STATUS_UNSUPPORTED}: no audio stream matched \"{target_display}\" (currently playing: {})",
+                    seen.join(", "),
+                )
+            };
+            let _ = ready_tx.send(status);
             return Ok(());
         };
 
@@ -332,6 +430,81 @@ mod pipewire_backend {
         let _ = ready_tx.send(STATUS_CAPTURING.to_string());
         mainloop.run();
         Ok(())
+    }
+
+    /// One-shot registry enumeration, no capture session involved — same
+    /// sync/done pattern as `run_session`'s phase 1, minus the pid/name
+    /// matching (there's nothing to match against here, this *is* the
+    /// list a caller matches against themselves). `exclude_pids` drops
+    /// any stream whose `application.process.id` is in that set — see
+    /// the exported `list_audio_producing_apps`'s doc comment for why.
+    pub fn list_audio_producing_apps(exclude_pids: &[u32]) -> Vec<String> {
+        run_enumeration(exclude_pids).unwrap_or_default()
+    }
+
+    fn run_enumeration(exclude_pids: &[u32]) -> Result<Vec<String>, String> {
+        pw::init();
+
+        let mainloop = pw::main_loop::MainLoopRc::new(None).map_err(|e| e.to_string())?;
+        let context = pw::context::ContextRc::new(&mainloop, None).map_err(|e| e.to_string())?;
+        let core = context.connect_rc(None).map_err(|e| e.to_string())?;
+        let registry = core.get_registry().map_err(|e| e.to_string())?;
+
+        let names: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
+        let done = Rc::new(Cell::new(false));
+
+        let names_cb = Rc::clone(&names);
+        // `.global()`'s closure bound requires `'static` — an owned copy,
+        // not the borrowed `&[u32]` parameter, is what can actually be
+        // moved into it.
+        let exclude_pids = exclude_pids.to_vec();
+        let _registry_listener = registry
+            .add_listener_local()
+            .global(move |global| {
+                let Some(props) = global.props else { return };
+                if props.get("media.class") != Some("Stream/Output/Audio") {
+                    return;
+                }
+                // NOTE: on a native-PipeWire system, ordinary desktop apps'
+                // nodes (connected via the PulseAudio-compatibility layer,
+                // `client.api: "pipewire-pulse"`) don't carry
+                // `application.process.id` in this registry event at all —
+                // confirmed live, see `list_audio_producing_apps`'s doc
+                // comment above. PID exclusion here is best-effort for
+                // that reason; it's the Pulse-introspection path
+                // (`pulse_backend::list_audio_producing_apps`) that's
+                // actually relied on whenever a Pulse-compatible socket is
+                // present, which this fallback only runs without.
+                let pid = props.get("application.process.id").and_then(|p| p.parse::<u32>().ok());
+                let is_excluded = pid.is_some_and(|pid| exclude_pids.contains(&pid));
+                if is_excluded {
+                    return;
+                }
+                if let Some(app_name) = props.get("application.name") {
+                    names_cb.borrow_mut().push(app_name.to_string());
+                }
+            })
+            .register();
+
+        let done_cb = Rc::clone(&done);
+        let mainloop_for_sync = mainloop.clone();
+        let pending = core.sync(0).map_err(|e| e.to_string())?;
+        let _core_listener = core
+            .add_listener_local()
+            .done(move |id, seq| {
+                if id == pw::core::PW_ID_CORE && seq == pending {
+                    done_cb.set(true);
+                    mainloop_for_sync.quit();
+                }
+            })
+            .register();
+
+        while !done.get() {
+            mainloop.run();
+        }
+
+        let result = names.borrow().clone();
+        Ok(result)
     }
 }
 
@@ -449,7 +622,7 @@ mod pulse_backend {
                 let name_matches = target_name
                     .as_deref()
                     .zip(info.proplist.get_str("application.name"))
-                    .is_some_and(|(name, n)| n.eq_ignore_ascii_case(name));
+                    .is_some_and(|(name, n)| names_plausibly_match(name, &n));
                 if pid_matches || name_matches {
                     *matched_cb.borrow_mut() = Some((info.index, info.sink));
                 }
@@ -629,5 +802,70 @@ mod pulse_backend {
             );
         }
         Ok(())
+    }
+
+    /// Same rationale as `pipewire_backend::list_audio_producing_apps` —
+    /// plain introspection, no rerouting, just the app names of current
+    /// sink-inputs (excluding `exclude_pids`).
+    pub fn list_audio_producing_apps(exclude_pids: &[u32]) -> Vec<String> {
+        use pulse::context::{Context, FlagSet as ContextFlagSet};
+        use pulse::mainloop::standard::{IterateResult, Mainloop};
+
+        let Some(mut mainloop) = Mainloop::new() else { return Vec::new() };
+        let Some(mut context) = Context::new(&mainloop, "reson8-native-audio-list") else {
+            return Vec::new();
+        };
+        if context.connect(None, ContextFlagSet::NOFLAGS, None).is_err() {
+            return Vec::new();
+        }
+
+        loop {
+            match mainloop.iterate(true) {
+                IterateResult::Quit(_) | IterateResult::Err(_) => return Vec::new(),
+                IterateResult::Success(_) => {}
+            }
+            match context.get_state() {
+                pulse::context::State::Ready => break,
+                pulse::context::State::Failed | pulse::context::State::Terminated => return Vec::new(),
+                _ => {}
+            }
+        }
+
+        let names: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
+        let list_done = Rc::new(RefCell::new(false));
+        let names_cb = Rc::clone(&names);
+        let list_done_cb = Rc::clone(&list_done);
+        // Same reasoning as the PipeWire backend's equivalent — the
+        // callback's `'static` bound needs an owned copy, not the
+        // borrowed `&[u32]` parameter.
+        let exclude_pids = exclude_pids.to_vec();
+        let introspector = context.introspect();
+        let _op = introspector.get_sink_input_info_list(move |result| match result {
+            pulse::callbacks::ListResult::Item(info) => {
+                let is_excluded = info
+                    .proplist
+                    .get_str("application.process.id")
+                    .and_then(|p| p.parse::<u32>().ok())
+                    .is_some_and(|pid| exclude_pids.contains(&pid));
+                if is_excluded {
+                    return;
+                }
+                if let Some(name) = info.proplist.get_str("application.name") {
+                    names_cb.borrow_mut().push(name);
+                }
+            }
+            pulse::callbacks::ListResult::End | pulse::callbacks::ListResult::Error => {
+                *list_done_cb.borrow_mut() = true;
+            }
+        });
+
+        while !*list_done.borrow() {
+            if matches!(mainloop.iterate(true), IterateResult::Quit(_) | IterateResult::Err(_)) {
+                break;
+            }
+        }
+
+        let result = names.borrow().clone();
+        result
     }
 }

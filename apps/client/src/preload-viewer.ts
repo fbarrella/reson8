@@ -40,6 +40,7 @@ let recvTransport: msTypes.Transport | null = null;
 const consumers = new Map<string, msTypes.Consumer>();
 let screenVideoProducerId: string | null = null;
 let screenAudioProducerId: string | null = null;
+let streamName: string = "";
 
 const statusListeners: Array<(status: ViewerStatus, message?: string) => void> = [];
 // `start()` runs immediately, before `viewer.html`'s own script has parsed
@@ -94,6 +95,7 @@ function watchScreenShare(): Promise<{
     rtpCapabilities?: any;
     screenVideoProducerId?: string;
     screenAudioProducerId?: string;
+    streamName?: string;
     error?: string;
 }> {
     return new Promise((resolve) =>
@@ -206,6 +208,7 @@ async function authenticateAndWatch(instanceId: string): Promise<void> {
 
     screenVideoProducerId = watchRes.screenVideoProducerId;
     screenAudioProducerId = watchRes.screenAudioProducerId ?? null;
+    streamName = watchRes.streamName ?? "";
 
     device = new Device();
     await device.load({ routerRtpCapabilities: watchRes.rtpCapabilities });
@@ -277,6 +280,16 @@ window.addEventListener("beforeunload", cleanup);
 
 contextBridge.exposeInMainWorld("reson8ViewerApi", {
     info: { nickname, targetUserId, channelId },
+
+    // A function, not a plain property like `info` above — `streamName`
+    // is only known once `authenticateAndWatch()`'s WATCH_SCREEN_SHARE ack
+    // resolves (well after this object is exposed), and contextBridge
+    // snapshots plain data properties at expose time, so a later mutation
+    // here would never reach the renderer's own view of a plain field the
+    // way it does for a function call.
+    getStreamName(): string {
+        return streamName;
+    },
 
     onStatus(cb: (status: ViewerStatus, message?: string) => void): void {
         statusListeners.push(cb);

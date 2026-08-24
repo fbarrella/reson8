@@ -17,6 +17,7 @@
 
     interface Reson8ViewerApi {
         info: { nickname: string; targetUserId: string; channelId: string };
+        getStreamName(): string;
         onStatus(cb: (status: ViewerStatus, message?: string) => void): void;
         setVolume(percent: number): void;
         toggleMute(): boolean;
@@ -35,7 +36,19 @@
     const btnFullscreen = document.getElementById("btn-fullscreen") as HTMLButtonElement;
     const btnExitStream = document.getElementById("btn-exit-stream") as HTMLButtonElement;
 
-    document.title = `Watching ${api.info.nickname}'s screen share`;
+    // Window title bar only — the controls-bar label next to it stays the
+    // plain nickname, unchanged from before this.
+    function setWindowTitle(): void {
+        // Only meaningful once watching has actually started —
+        // `getStreamName()` reads back what WATCH_SCREEN_SHARE's ack
+        // resolved to, which happens well after this script first runs.
+        const streamName = api.getStreamName();
+        document.title = streamName
+            ? `Watching ${api.info.nickname}'s screen share: ${streamName}`
+            : `Watching ${api.info.nickname}'s screen share`;
+    }
+
+    setWindowTitle();
     nicknameLabel.textContent = api.info.nickname;
 
     const STATUS_TEXT: Record<ViewerStatus, string> = {
@@ -50,11 +63,12 @@
         statusOverlay.classList.toggle("error", status === "error");
         statusTitle.textContent = STATUS_TEXT[status];
         statusMessage.textContent = message ?? "";
+        if (status === "watching") setWindowTitle();
     });
 
     btnMute.addEventListener("click", () => {
         const muted = api.toggleMute();
-        btnMute.classList.toggle("active", muted);
+        btnMute.classList.toggle("muted", muted);
     });
 
     volumeSlider.addEventListener("input", () => {

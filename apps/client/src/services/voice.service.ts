@@ -62,6 +62,19 @@ export interface VoiceSignaling {
     resumeConsumer(
         consumerId: string,
     ): Promise<{ success: boolean; error?: string }>;
+
+    /**
+     * Fire-and-forget — tells the server to close this Producer *now*,
+     * rather than leaving viewers to find out only when the whole
+     * Transport eventually closes (full voice disconnect). Confirmed live
+     * this was the actual cause of viewers waiting a long time (in
+     * practice, until the sharer fully left voice) to learn a screen
+     * share had ended: closing a mediasoup-client Producer locally
+     * (`producer.close()`) does NOT itself notify the server — the
+     * server-side Producer stayed open indefinitely until something else
+     * (a full disconnect) closed the Transport it belonged to.
+     */
+    closeProducer(producerId: string): void;
 }
 
 export class VoiceService {
@@ -337,6 +350,7 @@ export class VoiceService {
     /** Stops and closes the screen-share audio Producer, if one is active. */
     closeScreenAudioProducer(): void {
         if (this.screenAudioProducer) {
+            this.signaling.closeProducer(this.screenAudioProducer.id);
             this.screenAudioProducer.close();
             this.screenAudioProducer = null;
         }
@@ -347,14 +361,33 @@ export class VoiceService {
     /**
      * Captures the chosen screen/window via Electron's `chromeMediaSource`
      * `getUserMedia` constraint and produces it with SVC (Scalable Video
-     * Coding): one encode, three spatial + three temporal layers
-     * (`L3T3_KEY`), so each viewer's Consumer can independently request a
-     * lower layer via `setPreferredLayers()` (PRD 12.13) without the
-     * sharer re-encoding. Unlike the audio pipeline (PRD 12.7), capture and
-     * produce are bundled in one method here, mirroring `startProducing()`
-     * — `getUserMedia` needs no IPC/native-module frame assembly, so there's
-     * no reason to split them across preload.ts and this class the way the
+     * Coding) temporal layering (`L1T3`: one spatial layer, three temporal),
+     * so a viewer's Consumer can independently drop to a lower framerate via
+     * `setPreferredLayers()` (PRD 12.13) without the sharer re-encoding.
+     * Unlike the audio pipeline (PRD 12.7), capture and produce are bundled
+     * in one method here, mirroring `startProducing()` — `getUserMedia`
+     * needs no IPC/native-module frame assembly, so there's no reason to
+     * split them across preload.ts and this class the way the
      * native-audio-fed path had to.
+     *
+     * Originally `L3T3_KEY` (3 spatial + 3 temporal layers, K-SVC), matching
+     * PRD 12.8's intent of also letting viewers drop to a lower
+     * *resolution*. Confirmed live that this silently produced a black feed
+     * for every real (non-synthetic) screen capture, on every platform, not
+     * just Wayland: Chromium's VP9 encoder rejects multi-spatial-layer
+     * K-SVC specifically for screen-content-flagged tracks —
+     * `libvpx_vp9_encoder.cc: "Flexible mode is required for screenshare
+     * with several spatial layers"`, then `simulcast_encoder_adapter.cc:
+     * InitEncode failed with WEBRTC_VIDEO_CODEC_ERR_PARAMETER`, then
+     * `video_stream_encoder.cc: Failed to initialize the encoder... Error:
+     * -4` — meaning the Producer's track was never actually encoded, hence
+     * black on every viewer. A synthetic (canvas-sourced) test track isn't
+     * flagged as screen content, so it never hit this and looked fine,
+     * masking the bug. `L1T3` sidesteps it entirely by only ever using one
+     * spatial layer. Revisit multi-resolution SVC only with a scalability
+     * mode Chromium's screen-content path actually accepts (a flexible-mode
+     * one, not K-SVC), verified against a *real* screen capture before
+     * trusting it again.
      */
     async startScreenVideoProducing(chromeMediaSourceId: string): Promise<void> {
         if (!this.sendTransport) throw new Error("Send transport not ready");
@@ -373,10 +406,46 @@ export class VoiceService {
             // real type mismatch.
         } as unknown as MediaStreamConstraints);
 
+        await this.produceScreenVideoStream();
+    }
+
+    /**
+     * Linux/Wayland-only path (renderer.ts's `isLinuxWayland` bypass):
+     * `getDisplayMedia()` — not `desktopCapturer.getSources()` +
+     * `getUserMedia({chromeMediaSourceId})` — because on Wayland only
+     * `getDisplayMedia()` is a single round trip through the xdg-desktop-
+     * portal ScreenCast picker (Electron hands off to Chromium's native
+     * portal integration for it directly when no
+     * `session.setDisplayMediaRequestHandler` is registered, which this app
+     * doesn't do). The two-step `getSources()`/`getUserMedia()` API was
+     * never designed around the portal's session-based consent model, and
+     * confirmed live: it shows the OS picker a *second* time inside
+     * `getUserMedia` even after `getSources()` already showed it once, with
+     * the stream it eventually resolves not reliably wired to what was
+     * actually granted (observed as a black feed on the viewer side) — and
+     * `getSources()`'s placeholder source has no real name yet at that
+     * point, which is also why that path logged `Started sharing ""`.
+     * `track.label` here is the real post-grant label instead.
+     */
+    async startScreenVideoProducingViaSystemPicker(): Promise<{ label: string }> {
+        if (!this.sendTransport) throw new Error("Send transport not ready");
+
+        this.screenVideoStream = await navigator.mediaDevices.getDisplayMedia({
+            video: true,
+            audio: false,
+        });
+
+        await this.produceScreenVideoStream();
+        return { label: this.screenVideoStream.getVideoTracks()[0]?.label || "your screen" };
+    }
+
+    private async produceScreenVideoStream(): Promise<void> {
+        if (!this.sendTransport || !this.screenVideoStream) throw new Error("Send transport not ready");
+
         const track = this.screenVideoStream.getVideoTracks()[0];
         this.screenVideoProducer = await this.sendTransport.produce({
             track,
-            encodings: [{ scalabilityMode: "L3T3_KEY", maxBitrate: 2_500_000 }],
+            encodings: [{ scalabilityMode: "L1T3", maxBitrate: 2_500_000 }],
             codecOptions: { videoGoogleStartBitrate: 1000 },
             appData: { mediaType: "screen-video" },
         });
@@ -385,6 +454,7 @@ export class VoiceService {
     /** Stops screen-share video capture and closes its Producer. */
     stopScreenVideoProducing(): void {
         if (this.screenVideoProducer) {
+            this.signaling.closeProducer(this.screenVideoProducer.id);
             this.screenVideoProducer.close();
             this.screenVideoProducer = null;
         }

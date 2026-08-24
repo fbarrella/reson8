@@ -445,6 +445,21 @@
       color: #fff;
     }
 
+    /* Share-screen button: "stop sharing" (crossed-out monitor) icon only
+       shows while actively sharing (PRD 12.10's `.active` state), swapped
+       with the normal monitor icon otherwise. */
+    #btn-share-screen .icon-share-stop {
+      display: none;
+    }
+
+    #btn-share-screen.active .icon-share-start {
+      display: none;
+    }
+
+    #btn-share-screen.active .icon-share-stop {
+      display: block;
+    }
+
     .voice-btn.leave {
       border-color: var(--danger);
       color: var(--danger);
@@ -1267,7 +1282,8 @@
     #whats-new-modal,
     #pin-replace-confirm-modal,
     #screen-share-modal,
-    #watch-share-confirm-modal {
+    #watch-share-confirm-modal,
+    #stream-name-modal {
       display: none;
       position: fixed;
       top: 0;
@@ -1292,7 +1308,8 @@
     #whats-new-modal.visible,
     #pin-replace-confirm-modal.visible,
     #screen-share-modal.visible,
-    #watch-share-confirm-modal.visible {
+    #watch-share-confirm-modal.visible,
+    #stream-name-modal.visible {
       display: flex;
     }
 
@@ -2634,12 +2651,18 @@
               <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
               <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07" />
             </svg></button>
-          <button class="voice-btn" id="btn-share-screen" title="Share Screen"><svg width="14" height="14"
-              viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
-              stroke-linejoin="round">
+          <button class="voice-btn" id="btn-share-screen" title="Share Screen"><svg class="icon-share-start"
+              width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+              stroke-linecap="round" stroke-linejoin="round">
               <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
               <line x1="8" y1="21" x2="16" y2="21" />
               <line x1="12" y1="17" x2="12" y2="21" />
+            </svg><svg class="icon-share-stop" width="14" height="14" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+              <line x1="8" y1="21" x2="16" y2="21" />
+              <line x1="12" y1="17" x2="12" y2="21" />
+              <line x1="3" y1="21" x2="21" y2="3" />
             </svg></button>
           <button class="voice-btn leave" id="btn-leave-voice" title="Leave Voice"><svg width="14" height="14"
               viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
@@ -2793,9 +2816,26 @@
         </div>
         <input type="checkbox" id="source-share-audio-checkbox" disabled>
       </div>
+      <label for="source-share-name-input">Custom Stream Name (optional)</label>
+      <input type="text" id="source-share-name-input" placeholder="Leave blank to use the source's own name" maxlength="64">
       <div class="modal-actions">
         <button class="btn btn-cancel" id="btn-screen-share-cancel">Cancel</button>
         <button class="btn btn-connect" id="btn-screen-share-start" disabled>Start Sharing</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Screen Share Custom Name Modal (Linux/Wayland bypass — no in-app
+       source picker to attach this field to, since that step is entirely
+       the OS's own) ──────────────────────────────────────────────────── -->
+  <div id="stream-name-modal">
+    <div class="modal-content">
+      <h3>Name Your Stream</h3>
+      <label for="stream-name-input">Custom Stream Name (optional)</label>
+      <input type="text" id="stream-name-input" placeholder="Leave blank to use the default" maxlength="64">
+      <div class="modal-actions">
+        <button class="btn btn-cancel" id="btn-stream-name-skip">Skip</button>
+        <button class="btn btn-connect" id="btn-stream-name-confirm">Start Sharing</button>
       </div>
     </div>
   </div>

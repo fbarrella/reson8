@@ -124,21 +124,54 @@
       color: var(--accent);
     }
 
+    /* Mute button: blue by default (sound is on), opaque grey once muted —
+       the opposite of what a plain `.active`-on-mute toggle would give
+       (that class means "highlighted because this is turned ON", which
+       reads backwards for mute specifically — muted should look OFF/
+       dimmed, not highlighted). Two IDs to outrank the generic
+       `#controls-bar button`/`button.active` rules above, same reasoning
+       as `#btn-exit-stream` below. */
+    #controls-bar #btn-mute {
+      color: var(--accent);
+    }
+
+    #controls-bar #btn-mute.muted {
+      color: var(--text-muted);
+    }
+
+    #btn-mute .icon-muted {
+      display: none;
+    }
+
+    #btn-mute.muted .icon-unmuted {
+      display: none;
+    }
+
+    #btn-mute.muted .icon-muted {
+      display: block;
+    }
+
     #volume-slider {
       width: 90px;
       accent-color: var(--accent);
     }
 
-    #btn-exit-stream {
+    /* `#controls-bar #btn-exit-stream` (two IDs), not just `#btn-exit-
+       stream` — needs to outrank `#controls-bar button`/`button:hover`
+       above (ID + element beats a single ID) or those generic rules win
+       the cascade and this stays the default gray/accent-blue instead of
+       red, regardless of source order. */
+    #controls-bar #btn-exit-stream {
       width: auto;
       gap: 6px;
       padding: 6px 10px;
+      border: 1px solid var(--danger);
       color: var(--danger);
     }
 
-    #btn-exit-stream:hover {
-      background: rgba(229, 115, 115, 0.15);
-      color: var(--danger);
+    #controls-bar #btn-exit-stream:hover {
+      background: var(--danger);
+      color: #fff;
     }
   </style>
 </head>
@@ -154,11 +187,16 @@
     <div id="controls-bar">
       <span class="nickname" id="viewer-nickname-label"></span>
       <button id="btn-mute" title="Mute">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-          stroke-linecap="round" stroke-linejoin="round">
+        <svg class="icon-unmuted" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+          stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
           <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
           <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+        </svg>
+        <svg class="icon-muted" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+          stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+          <line x1="3" y1="21" x2="21" y2="3" />
         </svg>
       </button>
       <input type="range" id="volume-slider" min="0" max="100" value="100" title="Volume" />

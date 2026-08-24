@@ -891,3 +891,247 @@ Pre-11.4 Client
   newly-documented release process (installers + latest*.yml
   uploaded together).
 
+--- Entry: 24/08/2026 ---
+
+Feature/Fix: Linux/Wayland Screen-Share Fixes, VP9 Black-Video Root
+Cause, Packaging Build Fix, and Viewer UI Polish
+
+  Problem: Live testing on the user's CachyOS/KDE Plasma (Wayland)
+  machine, continuing from the 13/08/2026 entry's screen-sharing
+  work, surfaced several distinct issues: (1) the in-app Selection
+  Modal was redundant on Wayland, since desktopCapturer.getSources()
+  already drives the OS-level xdg-desktop-portal picker itself; (2)
+  once a Linux/Wayland bypass was attempted, real screen captures
+  always rendered black on the viewer side, on every platform, not
+  just Wayland; (3) `npm run build:linux`, `build:win`, and the
+  newly-added `release:all` (PRD 12.5) all failed outright with
+  "Cargo.lock must be under apps/client/"; and (4) three smaller
+  Viewer/UI issues once video was working: the "Started sharing"
+  log showed an empty/generic source name, the Viewer's "Exit
+  Stream" button didn't read as a destructive action, and the
+  Share Screen button's icon didn't change to signal "stop sharing"
+  while active.
+
+  Linux/Wayland Screen-Share Bypass:
+    Per user decision, the bypass applies only when Wayland is
+    actually detected (XDG_SESSION_TYPE=wayland or WAYLAND_DISPLAY
+    set), not to all Linux sessions — X11 has no OS-level picker to
+    defer to, so it keeps the existing in-app Selection Modal.
+    preload.ts exposes a new `isLinuxWayland` flag; renderer.ts's
+    Share Screen click handler branches on it.
+
+    Went through three iterations before landing on a working
+    approach, each confirmed live against the real portal (not
+    guessed):
+      1. First attempt: renderer calls the existing
+         `get-desktop-sources` IPC handler, then
+         `startScreenShareVideo(source.id)` (the same
+         getUserMedia({chromeMediaSourceId}) path the modal already
+         used). Confirmed broken: showed the OS picker a *second*
+         time inside the getUserMedia call, the resulting video was
+         black, and the log showed `Started sharing ""` — the
+         getSources() placeholder source's `name` field is empty at
+         that point.
+      2. Second attempt: switched capture to
+         navigator.mediaDevices.getDisplayMedia() directly (new
+         voiceService.startScreenVideoProducingViaSystemPicker()).
+         Confirmed broken differently: rejected immediately with
+         "Not supported" — Electron requires a
+         session.setDisplayMediaRequestHandler to be registered at
+         all before getDisplayMedia() works, contrary to an initial
+         (wrong) assumption that omitting it falls back to a native
+         Wayland picker.
+      3. Final approach: registered
+         session.defaultSession.setDisplayMediaRequestHandler in
+         main.ts's createWindow(), whose handler calls
+         desktopCapturer.getSources() itself (via a new shared
+         getDesktopSourcesWithTimeout() helper, refactored out of
+         the existing get-desktop-sources handler, keeping the same
+         20s hang-protection for a broken portal backend) and calls
+         back with the first source. This unifies picker-selection
+         and stream-negotiation into getDisplayMedia()'s single
+         request/callback cycle instead of two independent IPC round
+         trips. Note: `useSystemPicker` (DisplayMediaRequestHandlerOpts)
+         was investigated and confirmed, from Electron 34.5.8's own
+         bundled type definitions, to be "currently available for
+         MacOS 15+ only" — not usable here, despite external
+         information suggesting otherwise.
+
+    Real source name for the "Started sharing" log: since
+    getDisplayMedia()'s resulting MediaStreamTrack.label comes back
+    empty for portal-based captures, main.ts's
+    setDisplayMediaRequestHandler now stashes the real
+    DesktopCapturerSource.name it saw (module-level
+    lastScreenShareSourceName) right before granting it, exposed via
+    a new get-last-screen-share-source-name IPC handler that
+    preload.ts's startScreenShareViaSystemPicker() reads right after
+    the stream resolves, preferring it over the empty track label.
+
+    Remaining known issue, investigated but NOT fixed (deliberately,
+    per user decision): the OS portal picker still sometimes shows
+    twice before succeeding. Root-caused via correlated journalctl
+    logs (system journal, not user journal — KWin/portal services
+    log there): the first negotiation genuinely fails inside
+    Chromium's C++ capturer (`xdg-desktop-portal-kde: rejecting` →
+    `screencast_portal.cc: Failed to start the screen cast session`
+    → `base_capturer_pipewire.cc: ScreenCastPortal failed: 2`, all
+    within ~10ms), correlated with the same `kwin_wayland: atomic
+    commit failed: Dispositivo ou recurso está ocupado` (DRM/KMS
+    "device busy") signature already root-caused in the prior
+    session as NVIDIA-Optimus + KWin + PipeWire Wayland contention.
+    Chromium retries by re-showing the picker entirely inside its
+    own native code, with no JS-visible rejection and no Electron
+    API hook to intervene. User explicitly decided (after weighing
+    a force-iGPU-only launch experiment and further driver-level
+    digging) to accept this as a known platform quirk and move on,
+    since it self-recovers and video now works correctly once past
+    it.
+
+  VP9 SVC Black-Video Root Cause (separate bug, not Wayland-specific):
+    The black video during bypass testing was NOT primarily a
+    Wayland/portal issue. Electron main-process stderr showed, ~45s
+    after a successful capture grant: `libvpx_vp9_encoder.cc:
+    "Flexible mode is required for screenshare with several spatial
+    layers"` → `simulcast_encoder_adapter.cc: InitEncode failed
+    WEBRTC_VIDEO_CODEC_ERR_PARAMETER` → `video_stream_encoder.cc:
+    Failed to initialize the encoder... Error: -4`.
+    voice.service.ts's screen-video Producer used `scalabilityMode:
+    "L3T3_KEY"` (3 spatial + 3 temporal layers, K-SVC) — Chromium's
+    VP9 encoder rejects multi-spatial-layer K-SVC outright for any
+    track flagged as screen content, so the encoder never
+    initialized and no frame was ever sent to any viewer, on any
+    platform. This had been silently broken since the original
+    Phase 12 implementation; a synthetic canvas-sourced test track
+    used in the prior session's investigation wasn't flagged as
+    screen content, so it never hit this and masked the bug (the
+    mediasoup/transport/Viewer-window pipeline itself was never
+    actually broken). Fixed by switching to `scalabilityMode:
+    "L1T3"` (single spatial layer, still temporal scaling) —
+    confirmed working end-to-end live. Multi-resolution SVC (not
+    just multi-framerate) can be revisited later, but needs a
+    flexible-mode-compatible scalability mode, not K-SVC, and must
+    be verified against a real screen capture, not a synthetic one.
+
+  Packaging Build Fix (build:linux, build:win, release:all):
+    Root cause: `@reson8/native-audio` and `@reson8/shared-types`
+    are npm workspace packages — `node_modules/@reson8/*` are
+    symlinks whose real target (packages/native-audio,
+    packages/shared-types) sits outside apps/client/. Two separate
+    electron-builder code paths choke on that: (a) the asar
+    packager's per-file relative-path check (getRelativePath in
+    app-builder-lib), which throws for any packaged file whose real
+    disk path is both outside apps/client/ and contains no literal
+    "node_modules" path segment, regardless of any `files` entry's
+    `to` destination; and (b) a second, independent automatic
+    production-dependency walk electron-builder runs whenever
+    something is listed under `dependencies`, which resolves the
+    same symlinks itself and hits the identical crash.
+
+    Fix, in apps/client/package.json's `build` config and a new
+    apps/client/scripts/before-pack.mjs (beforePack hook):
+      - before-pack.mjs stages real, filtered copies of both
+        packages under apps/client/.release-vendor/ (gitignored)
+        before packing — genuinely under apps/client/, so the
+        relative-path check never needs its node_modules-searching
+        fallback.
+      - `files` maps that staging dir to the correct
+        node_modules/@reson8/... destination via `from`/`to`
+        entries, with the raw symlinked paths explicitly excluded
+        from the blanket node_modules/**/* glob.
+      - `asarUnpack` points at the staging-relative path
+        (.release-vendor/native-audio/prebuilds/**/*.node), not the
+        final node_modules/... path — the asar unpack-pattern check
+        matches a file's source-relative path, not its mapped
+        destination, so this had to change too (confirmed via a
+        second bug where the .node binary packed into the asar
+        proper instead of unpacking, ELF binaries can't dlopen from
+        inside an asar).
+      - `@reson8/native-audio` and `@reson8/shared-types` moved from
+        `dependencies` to `devDependencies` — not because they're
+        dev-only (they're required at runtime, shipped via the
+        staging mechanism instead), but so electron-builder's
+        separate automatic dependency walk skips them entirely.
+
+    Also added apps/client/scripts/test-build.mjs and three new
+    root-package.json-adjacent scripts (test-build:win/linux/mac) —
+    same electron-builder pipeline as build:win/linux/mac, but with
+    an artifactName override producing e.g. "Reson8 Setup 1.4.1
+    (test build).exe", for cutting ad hoc test builds without
+    touching a real release's naming. Implemented as a script rather
+    than an inline `-c.artifactName=...` shell one-liner in
+    package.json, since a shell would try to expand
+    `${version}`/`${ext}` itself before electron-builder ever saw
+    them.
+
+  Viewer/UI Polish:
+    - Exit Stream button (Viewer window) now styled like the main
+      window's "Leave Voice" button (red outline, solid red fill +
+      white text on hover) instead of blending in. First attempt
+      used a plain `#btn-exit-stream` selector, which silently lost
+      the cascade to the pre-existing `#controls-bar button`/`button
+      :hover` rules (higher specificity — ID + element type beats a
+      single ID) — fixed by scoping to `#controls-bar
+      #btn-exit-stream` (two IDs).
+    - Share Screen button now swaps to a crossed-out-monitor icon
+      while actively sharing, purely via CSS keyed off the existing
+      `.active` class the JS already toggles (two SVGs in the
+      button markup, shown/hidden by `#btn-share-screen.active`) —
+      no new JS needed.
+
+  Key Files Modified:
+    apps/client/src/main.ts — getDesktopSourcesWithTimeout() shared
+      helper; setDisplayMediaRequestHandler registration;
+      lastScreenShareSourceName state + get-last-screen-share-
+      source-name IPC handler
+    apps/client/src/preload.ts — isLinuxWayland flag;
+      startScreenShareViaSystemPicker() bridge method
+    apps/client/src/services/voice.service.ts —
+      startScreenVideoProducingViaSystemPicker() (getDisplayMedia
+      path); produceScreenVideoStream() extracted as a shared
+      helper; scalabilityMode L3T3_KEY → L1T3
+    apps/client/src/renderer/renderer.ts — Share Screen click
+      handler branches on isLinuxWayland; startScreenShareViaSystem
+      Picker() bypass function; Reson8Api interface additions
+    apps/client/src/renderer/index.html — Share Screen button
+      two-SVG icon swap + CSS
+    apps/client/src/renderer/viewer.html — Exit Stream button red
+      styling, fixed for CSS specificity
+    apps/client/package.json — build.files/asarUnpack/beforePack
+      config; @reson8/native-audio and @reson8/shared-types moved
+      to devDependencies; test-build:win/linux/mac scripts
+    apps/client/scripts/before-pack.mjs (NEW) — beforePack staging
+      script
+    apps/client/scripts/test-build.mjs (NEW) — test-build wrapper
+      script
+    .gitignore — apps/client/.release-vendor/
+    package-lock.json — reflects the dependencies → devDependencies
+      move
+
+  Verification:
+    - npx tsc --noEmit / --build — clean across shared-types,
+      server, and client, run repeatedly through the session as
+      each change landed
+    - `npx electron-builder --linux --dir` and `--win --dir` —
+      both succeed; confirmed the native-audio binary unpacks to
+      the correct location (app.asar.unpacked/node_modules/
+      @reson8/native-audio/prebuilds/*.node, correct ELF/PE
+      format) and is absent from the packed asar itself
+    - `npm run release:all` — full end-to-end run succeeds,
+      producing real Reson8-1.4.1.AppImage and "Reson8 Setup
+      1.4.1.exe"; smoke-tested the AppImage launch (extracted and
+      ran for 8s, no MODULE_NOT_FOUND/require errors)
+    - Live, user-confirmed testing on the real Linux/Wayland
+      machine: screen-share video now renders correctly (not
+      black); Exit Stream button styling confirmed correct after
+      the specificity fix; user's own words: "everything on linux
+      is tested and working"
+    - NOT exercised: the Windows build has only been verified at
+      the packaging level (`--win --dir` succeeds, correct files
+      present) — no actual run on Windows yet; user is testing that
+      separately before deciding whether to bump the version
+
+  Next Step: user is testing the Windows build next. Do not bump
+  the version (`/bump-version`) until they explicitly confirm the
+  Windows build also passes — this was an explicit instruction, not
+  a default to infer.
+

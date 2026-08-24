@@ -385,6 +385,14 @@ export function registerVoiceHandlers(
         });
 
         // ── CLOSE_PRODUCER ──────────────────────────────────────────────────
+        // Checks all three of a session's independent Producer slots (mic,
+        // screen-video, screen-audio — see PRODUCE's own `sessionField`
+        // logic above), not just mic. This used to only ever match the mic
+        // producer, so a client closing its screen-video/screen-audio
+        // Producer here silently no-opped — the server-side Producer
+        // stayed open until the whole Transport eventually closed (full
+        // voice disconnect), leaving viewers to find out a share had ended
+        // far later than the sharer actually stopped it.
         socket.on("CLOSE_PRODUCER", (payload) => {
             try {
                 const { producerId } = payload;
@@ -392,21 +400,24 @@ export function registerVoiceHandlers(
                 if (!channelId) return;
 
                 const session = mediasoup.getSession(channelId, getMediasoupSessionKey(socket));
-                if (session?.producer?.id === producerId) {
-                    session.producer.close();
-                    session.producer = null;
+                if (!session) return;
 
-                    // Notify other users
-                    socket.to(`channel:${channelId}`).emit("PRODUCER_CLOSED", {
-                        userId: socket.data.userId,
-                        producerId,
-                    });
+                let sessionField: "producer" | "screenVideoProducer" | "screenAudioProducer" | null = null;
+                if (session.producer?.id === producerId) sessionField = "producer";
+                else if (session.screenVideoProducer?.id === producerId) sessionField = "screenVideoProducer";
+                else if (session.screenAudioProducer?.id === producerId) sessionField = "screenAudioProducer";
+                if (!sessionField) return;
 
-                    app.log.info(
-                        { socketId: socket.id, producerId },
-                        "Producer closed (muted)",
-                    );
-                }
+                session[sessionField]!.close();
+                session[sessionField] = null;
+
+                // Notify other users
+                socket.to(`channel:${channelId}`).emit("PRODUCER_CLOSED", {
+                    userId: socket.data.userId,
+                    producerId,
+                });
+
+                app.log.info({ socketId: socket.id, producerId, sessionField }, "Producer closed");
             } catch (err) {
                 app.log.error({ err }, "Error in CLOSE_PRODUCER");
             }
@@ -444,7 +455,7 @@ export function registerVoiceHandlers(
         // ── SET_SCREEN_SHARE_STATE (PRD 12.12) ──────────────────────────────
         socket.on("SET_SCREEN_SHARE_STATE", async (payload, ack) => {
             try {
-                let { isSharingScreen } = payload;
+                let { isSharingScreen, streamName } = payload;
                 const userId = socket.data.userId;
                 const channelId = socket.data.currentChannelId;
 
@@ -469,7 +480,7 @@ export function registerVoiceHandlers(
                     }
                 }
 
-                await presence.setScreenShareState(userId, isSharingScreen);
+                await presence.setScreenShareState(userId, isSharingScreen, streamName);
 
                 if (channelId) {
                     const occupantIds = await presence.getChannelOccupants(channelId);
@@ -551,11 +562,14 @@ export function registerVoiceHandlers(
                 // socket must stay invisible to.
                 socket.data.currentChannelId = channelId;
 
+                const targetPresence = await presence.getUserPresence(targetUserId);
+
                 ack({
                     success: true,
                     rtpCapabilities: router.rtpCapabilities,
                     screenVideoProducerId: targetSession.screenVideoProducer.id,
                     screenAudioProducerId: targetSession.screenAudioProducer?.id,
+                    streamName: targetPresence?.screenShareName || undefined,
                 });
 
                 app.log.info(

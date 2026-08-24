@@ -99,3 +99,10 @@ module.exports.startCapture = nativeBinding.startCapture;
 // Windows-only export (PRD 12.2) — undefined on other platforms, since the
 // Rust module doesn't compile this binding outside `cfg(target_os = "windows")`.
 module.exports.resolvePidForWindowSourceId = nativeBinding.resolvePidForWindowSourceId;
+// Linux-only export — same reasoning as the Windows-only one above, mirrored
+// (`cfg(target_os = "linux")`). See its doc comment in src/linux.rs for why
+// this exists: matching a shared window to its owning app by name/PID isn't
+// reliable on Linux/Wayland at all (no real per-window name is ever
+// available via the portal), so the audio-share flow offers an explicit
+// choice from this list instead of guessing.
+module.exports.listAudioProducingApps = nativeBinding.listAudioProducingApps;
