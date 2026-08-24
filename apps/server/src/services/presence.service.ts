@@ -7,7 +7,7 @@
  * Key schema:
  *   presence:server:{serverId}    → SET of userIds
  *   presence:channel:{channelId}  → SET of userIds
- *   presence:user:{userId}        → HASH { serverId, channelId, nickname, isMuted, isDeafened }
+ *   presence:user:{userId}        → HASH { serverId, channelId, nickname, isMuted, isDeafened, isSharingScreen }
  */
 
 import type { Redis } from "ioredis";
@@ -81,7 +81,11 @@ export class PresenceService {
     async leaveChannel(userId: string, channelId: string): Promise<void> {
         const pipe = this.redis.pipeline();
         pipe.srem(KEY.channel(channelId), userId);
-        pipe.hset(KEY.user(userId), "channelId", "");
+        // Also clears isSharingScreen (PRD 12.12) — otherwise a stale "1"
+        // would incorrectly show the sharing badge if this user later joins
+        // a different voice channel without having cleanly stopped a share
+        // (e.g. an ungraceful disconnect mid-share).
+        pipe.hset(KEY.user(userId), { channelId: "", isSharingScreen: "0" });
         await pipe.exec();
     }
 
@@ -106,6 +110,7 @@ export class PresenceService {
         nickname: string;
         isMuted: boolean;
         isDeafened: boolean;
+        isSharingScreen: boolean;
     } | null> {
         const data = await this.redis.hgetall(KEY.user(userId));
         if (!data.serverId) return null;
@@ -115,6 +120,7 @@ export class PresenceService {
             nickname: data.nickname ?? "Unknown",
             isMuted: data.isMuted === "1",
             isDeafened: data.isDeafened === "1",
+            isSharingScreen: data.isSharingScreen === "1",
         };
     }
 
@@ -128,6 +134,19 @@ export class PresenceService {
         pipe.hset(KEY.user(userId), {
             isMuted: isMuted ? "1" : "0",
             isDeafened: isDeafened ? "1" : "0",
+        });
+        pipe.expire(KEY.user(userId), USER_TTL);
+        await pipe.exec();
+    }
+
+    /** Records whether a user currently has an active screen share (PRD 12.12), for the sharing badge. */
+    async setScreenShareState(
+        userId: string,
+        isSharingScreen: boolean,
+    ): Promise<void> {
+        const pipe = this.redis.pipeline();
+        pipe.hset(KEY.user(userId), {
+            isSharingScreen: isSharingScreen ? "1" : "0",
         });
         pipe.expire(KEY.user(userId), USER_TTL);
         await pipe.exec();

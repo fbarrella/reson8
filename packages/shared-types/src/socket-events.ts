@@ -330,6 +330,18 @@ export interface ClientToServerEvents {
         ack: (response: { success: boolean }) => void,
     ) => void;
 
+    /**
+     * Reports the caller's own screen-share state (PRD 12.12) so other
+     * occupants can display the sharing badge — handled identically to
+     * `SET_VOICE_STATE`. The server re-checks the server-wide screen-share
+     * toggle before honoring `true` (PRD 12.14; until that toggle exists,
+     * this is always honored — see the handler for the current caveat).
+     */
+    SET_SCREEN_SHARE_STATE: (
+        payload: { isSharingScreen: boolean },
+        ack: (response: { success: boolean; error?: string }) => void,
+    ) => void;
+
     // ── Pinned Messages ──────────────────────────────────────────────────
 
     /**

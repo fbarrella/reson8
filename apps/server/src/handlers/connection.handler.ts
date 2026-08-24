@@ -55,6 +55,7 @@ export async function buildOccupant(
             isMuted: p.isMuted,
             isDeafened: p.isDeafened,
             isAway: false,
+            isSharingScreen: p.isSharingScreen,
         };
     }
 
@@ -68,6 +69,7 @@ export async function buildOccupant(
         isMuted: false,
         isDeafened: false,
         isAway: false,
+        isSharingScreen: false,
     };
 }
 

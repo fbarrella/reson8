@@ -436,5 +436,47 @@ export function registerVoiceHandlers(
                 ack({ success: false });
             }
         });
+
+        // ── SET_SCREEN_SHARE_STATE (PRD 12.12) ──────────────────────────────
+        socket.on("SET_SCREEN_SHARE_STATE", async (payload, ack) => {
+            try {
+                const { isSharingScreen } = payload;
+                const userId = socket.data.userId;
+                const channelId = socket.data.currentChannelId;
+
+                // Defense in depth (never trust client-only gating) — same
+                // pattern as nudge.handler.ts checking `nudgeEnabled`
+                // server-side even though the client already hides the
+                // button when disabled. PRD 12.14 adds the real
+                // `screenShareEnabled` server column/toggle; until that
+                // lands there's nothing to check here yet, so `true` is
+                // always honored. This is the marker for where that check
+                // plugs in once it exists (will need `isSharingScreen`
+                // changed from `const` to `let` at that point):
+                //   if (isSharingScreen && !(await getServerScreenShareEnabled(serverId))) {
+                //       isSharingScreen = false;
+                //   }
+
+                await presence.setScreenShareState(userId, isSharingScreen);
+
+                if (channelId) {
+                    const occupantIds = await presence.getChannelOccupants(channelId);
+                    const occupants: IUserPresence[] = await Promise.all(
+                        occupantIds.map((uid) => buildOccupant(uid, presence, app.prisma)),
+                    );
+
+                    io.to(`server:${socket.data.serverId}`).emit("PRESENCE_UPDATE", {
+                        channelId,
+                        occupants,
+                        sessionStartedAt: voiceSessionStartedAt.get(channelId)?.toISOString(),
+                    });
+                }
+
+                ack({ success: true });
+            } catch (err) {
+                app.log.error({ err }, "Error in SET_SCREEN_SHARE_STATE");
+                ack({ success: false, error: "Failed to update screen share state" });
+            }
+        });
     });
 }

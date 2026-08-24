@@ -688,6 +688,7 @@ interface Reson8Api {
     toggleDeafen(): { isMuted: boolean; isDeafened: boolean };
     setMuted(muted: boolean): void;
     setVoiceState(isMuted: boolean, isDeafened: boolean): void;
+    setScreenShareState(isSharingScreen: boolean): void;
     setLocalUserVolume(userId: string, percent: number): void;
     setLocalUserMute(userId: string, muted: boolean): void;
     getLocalUserVolume(userId: string): number;
@@ -1250,7 +1251,7 @@ interface TreeNode {
     isNsfw?: boolean;
     hasUnread?: boolean;
     children: TreeNode[];
-    occupants: { userId: string; nickname: string; isMuted?: boolean; isDeafened?: boolean }[];
+    occupants: { userId: string; nickname: string; isMuted?: boolean; isDeafened?: boolean; isSharingScreen?: boolean }[];
 }
 
 function findChannelNodeById(nodes: TreeNode[], id: string): TreeNode | null {
@@ -1524,7 +1525,10 @@ function renderOccupants(container: HTMLElement, node: TreeNode): void {
         el.setAttribute("data-user-id", occ.userId);
         const voiceStateIcons =
             `${occ.isMuted ? OCC_MUTED_ICON : ""}${occ.isDeafened ? OCC_DEAFENED_ICON : ""}`;
-        el.innerHTML = `<span class="occ-dot"></span>${escapeHtml(occ.nickname)}${voiceStateIcons}`;
+        // PRD 12.13 makes this clickable (opens a Viewer window) — not
+        // wired up yet, just rendered.
+        const sharingBadge = occ.isSharingScreen ? `<span class="sharing-badge">LIVE</span>` : "";
+        el.innerHTML = `<span class="occ-dot"></span>${escapeHtml(occ.nickname)}${voiceStateIcons}${sharingBadge}`;
 
         // Re-apply any saved local volume/mute for this participant. Cheap and
         // idempotent — voice.service.ts only touches the audio graph when a
@@ -1819,6 +1823,8 @@ btnShareScreen.addEventListener("click", async () => {
         await api.stopScreenShare();
         isSharingScreen = false;
         updateShareScreenButton();
+        // Lets other occupants' sharing badge disappear (PRD 12.12).
+        api.setScreenShareState(false);
         return;
     }
     await openScreenShareModal();
@@ -2382,6 +2388,7 @@ function updateOccupants(channelId: string, occupants: any[]): void {
                     nickname: o.nickname,
                     isMuted: o.isMuted,
                     isDeafened: o.isDeafened,
+                    isSharingScreen: o.isSharingScreen,
                 }));
                 return true;
             }
@@ -4431,8 +4438,8 @@ btnScreenShareStart.addEventListener("click", async () => {
     isSharingScreen = true;
     updateShareScreenButton();
     closeScreenShareModal();
-    // PRD 12.12 adds emitting SET_SCREEN_SHARE_STATE here so the sharing
-    // badge appears for other channel members — not implemented yet.
+    // Makes the sharing badge (PRD 12.12) appear for other occupants.
+    api.setScreenShareState(true);
     log(`Started sharing "${source.name}"`, "success");
 });
 

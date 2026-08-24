@@ -1424,6 +1424,25 @@
       letter-spacing: 0.3px;
     }
 
+    /* Screen-share indicator next to a user's name in the channel tree
+       (PRD 12.12) — same sizing/shape as .nsfw-badge but filled solid red
+       rather than outlined, reading as an active "LIVE" state rather than
+       a static content-warning label. PRD 12.13 makes this clickable
+       (opens a Viewer window) — no `cursor: pointer` yet, since there's no
+       click behavior attached until then. */
+    .sharing-badge {
+      display: inline-flex;
+      align-items: center;
+      font-size: 9px;
+      font-weight: 700;
+      color: #fff;
+      background: var(--danger);
+      border-radius: 3px;
+      padding: 0 4px;
+      margin-left: 4px;
+      letter-spacing: 0.3px;
+    }
+
     .channel-ctx-menu-item {
       width: 100%;
       background: none;

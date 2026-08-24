@@ -111,6 +111,8 @@ export interface IUserPresence {
     isMuted: boolean;
     isDeafened: boolean;
     isAway: boolean;
+    /** Whether this user currently has an active screen share (PRD 12.12). */
+    isSharingScreen: boolean;
 }
 
 // ---------------------------------------------------------------------------

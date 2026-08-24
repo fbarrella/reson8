@@ -495,6 +495,11 @@ const api = {
         socket?.emit("SET_VOICE_STATE", { isMuted, isDeafened }, () => { });
     },
 
+    /** Tells other occupants whether this user currently has an active screen share (PRD 12.12). */
+    setScreenShareState(isSharingScreen: boolean): void {
+        socket?.emit("SET_SCREEN_SHARE_STATE", { isSharingScreen }, () => { });
+    },
+
     setLocalUserVolume(userId: string, percent: number): void {
         voiceService?.setLocalUserVolume(userId, percent);
     },
