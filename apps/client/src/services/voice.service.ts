@@ -471,7 +471,19 @@ export class VoiceService {
         const audioConstraints: MediaTrackConstraints = {
             echoCancellation: true,
             noiseSuppression: true,
-            autoGainControl: true,
+            // Deliberately false (Phase 12 sub-phase item 7) — Chromium's
+            // AGC implementation has a documented history of driving the
+            // OS-level input volume itself as a side effect on Windows,
+            // not just adjusting gain purely in software the way the W3C
+            // spec describes it. Investigated after a report of Windows
+            // mic input volume changing unexpectedly with no other code
+            // anywhere in this app (main.ts, preload.ts, native-audio)
+            // touching system/input volume at all — this constraint was
+            // the only plausible mechanism found. Reson8 already has its
+            // own client-side noise gate/threshold (see the mic
+            // sensitivity settings), which covers most of what AGC would
+            // otherwise be doing, so disabling it costs little.
+            autoGainControl: false,
         };
 
         if (this._audioDeviceId) {
@@ -850,7 +862,19 @@ export class VoiceService {
         const audioConstraints: MediaTrackConstraints = {
             echoCancellation: true,
             noiseSuppression: true,
-            autoGainControl: true,
+            // Deliberately false (Phase 12 sub-phase item 7) — Chromium's
+            // AGC implementation has a documented history of driving the
+            // OS-level input volume itself as a side effect on Windows,
+            // not just adjusting gain purely in software the way the W3C
+            // spec describes it. Investigated after a report of Windows
+            // mic input volume changing unexpectedly with no other code
+            // anywhere in this app (main.ts, preload.ts, native-audio)
+            // touching system/input volume at all — this constraint was
+            // the only plausible mechanism found. Reson8 already has its
+            // own client-side noise gate/threshold (see the mic
+            // sensitivity settings), which covers most of what AGC would
+            // otherwise be doing, so disabling it costs little.
+            autoGainControl: false,
         };
         if (this._audioDeviceId) {
             audioConstraints.deviceId = { exact: this._audioDeviceId };

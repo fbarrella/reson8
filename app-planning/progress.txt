@@ -1690,3 +1690,54 @@ Feature/Fix: Nudge Button Fixed Width and Countdown "Blink" (Phase
   Next Step: continue through the remaining 5 items in this
   sub-phase.
 
+--- Entry: 24/08/2026 (9) ---
+
+Feature/Fix: Disabled Mic autoGainControl After a Windows Mic-Gain
+Investigation (Phase 12 sub-phase, item 7/11)
+
+  Problem: A user's Windows mic input gain changed unexpectedly
+  (once), unconfirmed whether Reson8's own code was responsible.
+
+  Investigation (a fork, before touching anything): searched
+  voice.service.ts, main.ts, preload.ts, and native-audio's Windows
+  backend for any code that writes to OS-level input/mixer volume
+  (Windows Core Audio APIs, mixer calls, unusual getUserMedia
+  constraints) — found none. native-audio's Windows code only
+  implements process-loopback *output* capture (reading another
+  app's audio for screen-share-with-audio); it never opens or
+  touches a mic/input device at all. The one plausible mechanism
+  found: `autoGainControl: true` in the mic's `getUserMedia`
+  constraints. Chromium's AGC implementation has a documented
+  history (WebRTC/browser community reports) of driving the actual
+  OS-level input volume on Windows as a side effect, not just
+  applying gain purely in its own software pipeline the way the W3C
+  spec describes the constraint — a single unexplained gain change
+  is consistent with one such AGC adjustment pass, not a bug
+  introduced by this app's own code.
+
+  Solution: since this can't be fixed (it's Chromium/OS-driver
+  interaction, not something this codebase controls) but can be
+  avoided, set `autoGainControl: false` in both places the mic is
+  opened (`startProducing()` for real voice, `startPreview()` for
+  the Settings mic preview — kept consistent with each other).
+  Reson8 already has its own client-side noise gate/threshold
+  (mic sensitivity settings), which covers most of what AGC would
+  otherwise be doing, so this costs little.
+
+  Key Files Modified:
+    apps/client/src/services/voice.service.ts — both
+      `autoGainControl` constraints
+
+  Verification:
+    - npx tsc --noEmit / --build — clean
+    - NOT independently verifiable that this actually prevents a
+      recurrence (the original report was a single, not reliably
+      reproducible, event) — this is a reasoned mitigation of the
+      only plausible mechanism found, not a confirmed fix for a
+      confirmed root cause; flag if a mic-gain change is ever
+      observed again after this change ships, since that would mean
+      the AGC theory was wrong
+
+  Next Step: continue through the remaining 4 items in this
+  sub-phase.
+
