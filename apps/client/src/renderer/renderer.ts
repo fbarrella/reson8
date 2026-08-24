@@ -954,6 +954,8 @@ const btnMute = document.getElementById("btn-mute") as HTMLButtonElement;
 const btnDeafen = document.getElementById("btn-deafen") as HTMLButtonElement;
 const btnShareScreen = document.getElementById("btn-share-screen") as HTMLButtonElement;
 const btnLeaveVoice = document.getElementById("btn-leave-voice") as HTMLButtonElement;
+const screenShareAlertBanner = document.getElementById("screen-share-alert-banner") as HTMLDivElement;
+const btnStopShareAlert = document.getElementById("btn-stop-share-alert") as HTMLButtonElement;
 
 const statusDot = document.getElementById("status-dot") as HTMLSpanElement;
 const statusText = document.getElementById("status-text") as HTMLSpanElement;
@@ -1789,6 +1791,12 @@ function updateVoiceUI(channelName?: string): void {
     } else {
         voicePanel.classList.remove("visible");
         isSharingScreen = false;
+        // Leaving voice while sharing (Leave Voice, a kick, a disconnect)
+        // skips the explicit stop-sharing path — without this, the title
+        // bar's 🔴 marker and (harmlessly, since #voice-panel itself is
+        // now hidden) the alert banner's `.visible` class would stay
+        // stuck set.
+        updateShareScreenButton();
     }
 }
 
@@ -1803,6 +1811,13 @@ function updateVoiceUI(channelName?: string): void {
  */
 function updateShareScreenButton(): void {
     btnShareScreen.classList.toggle("active", isSharingScreen);
+    // The LIVE badge (visible to others) and this button's own red/icon
+    // state are easy to miss while actually paying attention to whatever's
+    // on the shared screen — a loud, impossible-to-miss banner + a second,
+    // bigger stop button (`btnStopShareAlert`, wired below) and a
+    // title-bar marker are the redundant, harder-to-miss cues instead.
+    screenShareAlertBanner.classList.toggle("visible", isSharingScreen);
+    document.title = isSharingScreen ? "🔴 Reson8" : "Reson8";
     if (api.platform === "darwin") {
         btnShareScreen.title = "Screen sharing isn't available on macOS yet";
         btnShareScreen.disabled = true;
@@ -1876,13 +1891,18 @@ btnMute.addEventListener("click", toggleMuteAndNotify);
 
 btnDeafen.addEventListener("click", toggleDeafenAndNotify);
 
+/** Shared by the Share Screen button's own stop path and the redundant, harder-to-miss `btnStopShareAlert`. */
+async function stopSharingScreen(): Promise<void> {
+    await api.stopScreenShare();
+    isSharingScreen = false;
+    updateShareScreenButton();
+    // Lets other occupants' sharing badge disappear (PRD 12.12).
+    api.setScreenShareState(false);
+}
+
 btnShareScreen.addEventListener("click", async () => {
     if (isSharingScreen) {
-        await api.stopScreenShare();
-        isSharingScreen = false;
-        updateShareScreenButton();
-        // Lets other occupants' sharing badge disappear (PRD 12.12).
-        api.setScreenShareState(false);
+        await stopSharingScreen();
         return;
     }
     if (api.isLinuxWayland) {
@@ -1891,6 +1911,8 @@ btnShareScreen.addEventListener("click", async () => {
     }
     await openScreenShareModal();
 });
+
+btnStopShareAlert.addEventListener("click", stopSharingScreen);
 
 /**
  * Linux/Wayland-only path: uses `getDisplayMedia()` (via

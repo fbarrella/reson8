@@ -383,6 +383,46 @@
       animation: pulse 0.8s infinite;
     }
 
+    /* Deliberately much louder than the LIVE badge/red share-screen-button
+       icon alone — those are easy to miss while actually paying attention
+       to whatever's on the shared screen, and this is a "you might be
+       showing something private" situation, not an ordinary status
+       indicator. */
+    #screen-share-alert-banner {
+      display: none;
+      flex-direction: column;
+      gap: 6px;
+      background: var(--danger);
+      border-radius: var(--radius);
+      padding: 8px 10px;
+    }
+
+    #screen-share-alert-banner.visible {
+      display: flex;
+    }
+
+    #screen-share-alert-banner .screen-share-alert-text {
+      color: #fff;
+      font-weight: 700;
+      font-size: 12px;
+      text-align: center;
+    }
+
+    #screen-share-alert-banner button {
+      background: #fff;
+      color: var(--danger);
+      border: none;
+      border-radius: var(--radius);
+      padding: 7px 0;
+      font-weight: 700;
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    #screen-share-alert-banner button:hover {
+      background: rgba(255, 255, 255, 0.85);
+    }
+
     #voice-panel .voice-info {
       font-size: 11px;
       color: var(--success);
@@ -2631,6 +2671,10 @@
         </div>
       </div>
       <div id="voice-panel">
+        <div id="screen-share-alert-banner">
+          <span class="screen-share-alert-text">You are sharing your screen</span>
+          <button id="btn-stop-share-alert">Stop Sharing</button>
+        </div>
         <div class="voice-info">
           <span class="dot"></span>
           <div style="display:flex; flex-direction:column;">

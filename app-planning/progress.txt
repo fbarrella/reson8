@@ -1135,3 +1135,242 @@ Cause, Packaging Build Fix, and Viewer UI Polish
   Windows build also passes — this was an explicit instruction, not
   a default to infer.
 
+--- Entry: 24/08/2026 (2) ---
+
+Feature/Fix: Windows Audio-Capture Crash Fix, Linux Audio-Share
+Consent Redesign, macOS Gating, Custom Stream Names, and
+Viewer/Sharer-Awareness Polish
+
+  Problem: Continuing the same day's cross-platform screen-share
+  testing (previous entry), the user ran real Windows testing and
+  hit an immediate whole-app crash when starting an app-with-audio
+  share. Separately, Linux's new audio-share picker (from the
+  previous entry) returned "unsupported" every time despite a real
+  audio-producing app being open, and once fixed, also showed
+  Reson8's own audio as a shareable option. There was also no way
+  to set a custom name for a share (Wayland's "your screen"
+  fallback in particular reads poorly), no visibility for the
+  sharer that a share had actually stopped promptly for viewers,
+  and only subtle cues (a LIVE badge others see, a button color) let
+  a user know they were actively sharing their own screen at all.
+
+  Windows Crash — Root-Caused via Real Event Viewer Data:
+    Windows Event Viewer's Application Error report gave exception
+    code 0xC0000374 (STATUS_HEAP_CORRUPTION), faulting module
+    ntdll.dll. Traced to `packages/native-audio/src/windows.rs`'s
+    `activate_process_loopback_client()`: it builds a raw PROPVARIANT
+    with `vt = VT_BLOB` whose `blob.pBlobData` points at
+    `&mut activation_params` — a plain stack local, never allocated
+    via `CoTaskMemAlloc`. Confirmed against the actual
+    `windows-core-0.58.0` crate source (cached locally, not
+    guessed): `PROPVARIANT`'s `Drop` impl unconditionally calls
+    `PropVariantClear`, which for `VT_BLOB` frees `pBlobData` via
+    `CoTaskMemFree` — freeing a non-heap pointer through the process
+    heap allocator, corrupting it. The corruption was only detected
+    later, on some unrelated allocation, which is why the crash's
+    timing only loosely correlated with when audio capture started
+    (masked by concurrent WGC video-capture noise in the logs, which
+    turned out to be an unrelated red herring). Fixed with
+    `std::mem::forget(prop)` right after the synchronous
+    `ActivateAudioInterfaceAsync` call — `prop` never legitimately
+    owned anything `PropVariantClear` needed to touch.
+    User-confirmed live on real Windows hardware after this fix:
+    "the windows sound worked perfectly!! It didn't even stutter,
+    it just plain shared the app + audio."
+
+  Linux Audio-Share Consent Redesign:
+    The PRD 12.11-style "share this window's audio too?" checkbox
+    doesn't exist on the Wayland bypass path (no in-app modal for
+    video source selection at all) — a native
+    `dialog.showMessageBox` was added instead, but naming it required
+    knowing which app the picked window belonged to, and there's no
+    reliable signal for that on Wayland (confirmed live: the picked
+    source's `id` is just `"window:1:0"`, a sequential handle scoped
+    to the one portal grant, not a PID or anything else
+    correlatable). Solution: a new Linux-only native-audio export,
+    `listAudioProducingApps(excludePids)`, queries PipeWire/
+    PulseAudio directly for apps *actually* producing audio right
+    now (not privacy-gated the way window capture is) and offers a
+    direct choice via dynamic dialog buttons — exact name, no
+    guessing.
+    Two real bugs found and fixed getting this working:
+      1. First implementation matched by name only, using an exact
+         string comparison — always failed ("unsupported: no audio
+         stream matched..."). Root cause found via the diagnostic
+         message itself: ordinary desktop apps (Firefox, Electron
+         apps) connect to PipeWire through its PulseAudio-
+         compatibility layer (`client.api: "pipewire-pulse"`,
+         confirmed by dumping every prop PipeWire returned), and
+         that layer's nodes simply never carry
+         `application.process.id` in the plain PipeWire registry's
+         `global` event — even though `pw-dump`/`pactl` independently
+         confirm the same node genuinely has one. Fixed by having
+         `list_audio_producing_apps` always go through PulseAudio's
+         own introspection API (which does reliably carry PID) when
+         its compatibility socket is present, rather than the native
+         PipeWire registry.
+      2. Once PID exclusion worked, Reson8's own audio stream
+         (self-identified generically as "Chromium", indistinguishable
+         by name from a real separate Chrome/Chromium browser) still
+         appeared as a shareable option. Fixed by passing every PID
+         from Electron's own `app.getAppMetrics()` (main, renderer,
+         GPU, audio service, etc.) as `excludePids` — deliberately
+         PID-based, not name-based, so a real separate Chromium
+         browser window stays a valid, distinct option.
+    User-confirmed live after both fixes: "It worked perfectly!!
+    This is really good now!"
+
+  macOS Gating:
+    Share Screen button now `disabled` with an explanatory tooltip
+    whenever `platform === "darwin"` — the macOS packaging pipeline
+    has never been run on real Apple hardware, so this ships with
+    the feature off rather than an untested path reaching users.
+
+  Custom Stream Names:
+    Both screen-share paths now let the user set an optional custom
+    display name instead of the source's own name:
+      - Windows/macOS/X11 (existing Selection Modal): a new text
+        input alongside the audio checkbox.
+      - Linux/Wayland bypass: a new `#stream-name-modal` (a real
+        in-app modal, since this path has no existing UI step to
+        attach a field to), shown right after video capture starts.
+    Fallback chain on both paths, left empty: custom name → real
+    source name (where available) → generic "your screen" — the
+    Selection Modal path previously had no explicit fallback at all
+    for an empty source name, now also covered.
+    The resolved name (not the raw user input) is sent to the
+    server via a new `streamName` field on `SET_SCREEN_SHARE_STATE`,
+    stored in Redis presence alongside `isSharingScreen`, and
+    returned via `WATCH_SCREEN_SHARE`'s ack so a viewer's Viewer
+    window shows the exact same name — see next section.
+
+  Viewer Window Fixes:
+    - Stream name now shown in the Viewer window's OS title bar only
+      ("Watching X's screen share: [name]") — NOT the controls-bar
+      nickname label next to the mute button, which stays the plain
+      nickname; an earlier pass had mistakenly changed both, caught
+      and reverted per explicit user feedback.
+    - Mute button: was reusing the generic `.active` class (meant
+      for "this is turned ON, highlight it") for mute, which read
+      backwards — muted looked *brighter* than unmuted, and the icon
+      never changed at all. Fixed: blue (`--accent`) by default,
+      opaque grey (`--text-muted`) once muted via a dedicated
+      `.muted` class (correctly scoped with two IDs to outrank the
+      generic `#controls-bar button` rules, same specificity issue
+      as the Exit Stream button fix from the previous entry), plus a
+      real icon swap (speaker → speaker with a diagonal line through
+      it).
+    - Instant stream-end detection: viewers were waiting a long time
+      (in practice, until the sharer's whole voice session ended) to
+      learn a share had stopped. Root cause: stopping a screen share
+      only ever closed the mediasoup-client Producer *locally* —
+      `producer.close()` does not itself notify the server, and
+      nothing called the existing (but entirely unused until now)
+      `CLOSE_PRODUCER` signal, so the server-side Producer stayed
+      open indefinitely. Compounding bug found in the same handler:
+      it only ever checked the mic Producer slot (`session.producer`),
+      never `screenVideoProducer`/`screenAudioProducer`, so even a
+      correct client-side call would have silently no-opped. Fixed
+      both: `voice.service.ts`'s `stopScreenVideoProducing()`/
+      `closeScreenAudioProducer()` now call a new
+      `VoiceSignaling.closeProducer()` before closing locally, and
+      the server's `CLOSE_PRODUCER` handler now checks all three
+      Producer slots (mirroring `PRODUCE`'s own `sessionField`
+      logic). Viewers already had the correct
+      `consumer.on('producerclose')` listener for this — it just
+      never fired because the server-side Producer never actually
+      closed.
+
+  Sharer-Awareness Features:
+    The LIVE badge (visible to others) and the Share Screen button's
+    own color/icon state are easy to miss while paying attention to
+    whatever's on the shared screen — added three louder, redundant
+    cues for the sharer's own client while `isSharingScreen` is true:
+      - A red banner (bold white text on a solid red background)
+        directly above the voice channel status/action buttons.
+      - A second, bigger, full-width "Stop Sharing" button inside
+        that banner — wired to a new shared `stopSharingScreen()`
+        function also used by the original Share Screen button's
+        stop path, so both stay in sync.
+      - 🔴 prefixed onto the OS window title bar
+        (`document.title = "🔴 Reson8"`) — no IPC/main-process work
+        needed, since Electron mirrors `document.title` to the
+        native title bar by default and nothing in main.ts
+        intercepts `page-title-updated`.
+    All three are driven centrally through the existing
+    `updateShareScreenButton()`, which is now also called from
+    `updateVoiceUI()`'s "left voice" branch (previously skipped),
+    so leaving voice entirely while sharing (not just the explicit
+    stop paths) correctly resets the title bar and banner instead of
+    leaving them stuck.
+    User-confirmed live: "It worked like a charm! Awesome!"
+
+  Key Files Modified:
+    packages/native-audio/src/windows.rs — the `std::mem::forget(prop)`
+      heap-corruption fix
+    packages/native-audio/src/linux.rs — `list_audio_producing_apps`
+      (new export, PID-exclusion, PulseAudio-introspection routing),
+      `names_plausibly_match` substring heuristic (superseded by the
+      app-picker approach but left in as the fallback path's best
+      effort)
+    packages/native-audio/index.js / index.d.ts — hand-maintained
+      forwarding/typing for the new export
+    packages/shared-types/src/socket-events.ts — `streamName` added
+      to `SET_SCREEN_SHARE_STATE` and `WATCH_SCREEN_SHARE`'s ack
+    apps/server/src/services/presence.service.ts — `screenShareName`
+      field alongside `isSharingScreen` in the Redis presence hash
+    apps/server/src/handlers/voice.handler.ts — `CLOSE_PRODUCER`
+      handler now checks all three Producer slots; `streamName`
+      plumbed through `SET_SCREEN_SHARE_STATE`/`WATCH_SCREEN_SHARE`
+    apps/client/src/main.ts — `pick-audio-app-to-share` IPC handler
+      (native dialog with dynamic app-name buttons), macOS gating is
+      renderer-only (no main.ts change needed there)
+    apps/client/src/preload.ts — `pickAudioAppToShare`,
+      `setScreenShareState` gained `streamName`,
+      `closeProducer` added to both `VoiceSignaling` implementations
+    apps/client/src/preload-viewer.ts — `streamName` read from
+      `WATCH_SCREEN_SHARE`'s ack, exposed via a new `getStreamName()`
+      function (not a plain `info` property — contextBridge
+      snapshots those at expose time, before the async watch
+      resolves)
+    apps/client/src/services/voice.service.ts — `VoiceSignaling`
+      gained `closeProducer`; both screen Producer stop paths call it
+    apps/client/src/renderer/renderer.ts — custom-name modal +
+      Selection Modal input, macOS gating, `stopSharingScreen()`
+      extracted/shared, screen-share alert banner + title bar toggle
+    apps/client/src/renderer/index.html — `#stream-name-modal`,
+      Selection Modal's name input, `#screen-share-alert-banner` +
+      its "Stop Sharing" button and CSS
+    apps/client/src/renderer/viewer.ts — window-title-only stream
+      name display (reverted an initial over-broad change to the
+      controls-bar label too), `.muted` class instead of `.active`
+      for mute
+    apps/client/src/renderer/viewer.html — mute button icon swap +
+      corrected color scheme (two-ID-scoped CSS, same specificity
+      fix pattern as Exit Stream)
+
+  Verification:
+    - npx tsc --noEmit — clean across shared-types, server, and
+      client, run repeatedly through the session as each change
+      landed
+    - Windows: user-confirmed live on real hardware — app+audio
+      sharing works with no crash and no stuttering
+    - Linux: user-confirmed live — audio-share app picker excludes
+      Reson8's own stream correctly, offers real separate apps
+      (Firefox, a real Chromium/VS Code-class app) correctly
+    - Custom stream names, Viewer window fixes (title-only name
+      display, mute icon/color, instant stream-end), and the
+      sharer-awareness banner/button/title — all user-confirmed live
+      on Linux ("worked like a charm", "worked perfectly")
+    - NOT independently re-verified on Windows/macOS after the
+      Viewer/sharer-awareness changes (those landed after the
+      Windows testing session ended) — low risk, since they're
+      renderer-only UI changes with no platform-specific branching,
+      but worth keeping in mind if anything looks off there later
+
+  Next Step: user is moving on to a list of general Reson8 bug
+  fixes unrelated to screen sharing. Do not bump the version
+  (`/bump-version`) until explicitly told to — still pending per the
+  previous entry's instruction, now also covering all of this
+  entry's work.
+
