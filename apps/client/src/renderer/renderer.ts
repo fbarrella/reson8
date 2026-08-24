@@ -767,15 +767,17 @@ interface Reson8Api {
     updateServerSettings(
         settings: { nudgeEnabled?: boolean; screenShareEnabled?: boolean },
     ): Promise<{ success: boolean; error?: string }>;
-    getDesktopSources(): Promise<
-        Array<{
+    getDesktopSources(): Promise<{
+        success: boolean;
+        sources?: Array<{
             id: string;
             name: string;
             thumbnail: string;
             appIcon: string | null;
             sourceType: "screen" | "window";
-        }>
-    >;
+        }>;
+        error?: string;
+    }>;
     resolvePidForWindowSourceId(sourceId: string): Promise<number | undefined>;
     platformSupportsAudioCapture(): Promise<boolean>;
     startAppAudioCapture(
@@ -4452,13 +4454,33 @@ async function openScreenShareModal(): Promise<void> {
     // can be slow (on Linux/Wayland it may wait on an OS-level consent
     // dialog, see PRD 12.10), and there's no reason the fast native check
     // should wait behind that.
-    const [, sources] = await Promise.all([
+    //
+    // That OS-level consent dialog is also the one place this call can fail
+    // outright rather than just come back empty — the user cancelling it,
+    // closing it, or (on some Linux/Wayland setups) the desktop portal
+    // itself hiccuping all surface as `getDesktopSources()` resolving with
+    // `success: false` (PRD 12 wrap-up). Without handling that, this modal
+    // would sit on "Loading sources…" forever with no way to know why.
+    const [, sourcesRes] = await Promise.all([
         api.platformSupportsAudioCapture().then((supported) => {
             audioCaptureSupported = supported;
         }),
         api.getDesktopSources(),
     ]);
     sourceShareGroups.innerHTML = "";
+
+    if (!sourcesRes.success || !sourcesRes.sources) {
+        const errorEl = document.createElement("div");
+        errorEl.className = "source-share-empty";
+        errorEl.textContent = sourcesRes.error
+            ? `Couldn't list screens/windows: ${sourcesRes.error}`
+            : "Couldn't list screens/windows to share.";
+        sourceShareGroups.appendChild(errorEl);
+        log(`Failed to open screen share picker: ${sourcesRes.error ?? "unknown error"}`, "error");
+        return;
+    }
+
+    const sources = sourcesRes.sources;
     const screens = sources.filter((s) => s.sourceType === "screen");
     const windows = sources.filter((s) => s.sourceType === "window");
 

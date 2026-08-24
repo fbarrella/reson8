@@ -892,15 +892,17 @@ const api = {
 
     // ── Screen Share source discovery (PRD 12.6) ─────────────────────────
 
-    async getDesktopSources(): Promise<
-        Array<{
+    async getDesktopSources(): Promise<{
+        success: boolean;
+        sources?: Array<{
             id: string;
             name: string;
             thumbnail: string;
             appIcon: string | null;
             sourceType: "screen" | "window";
-        }>
-    > {
+        }>;
+        error?: string;
+    }> {
         return ipcRenderer.invoke("get-desktop-sources");
     },
 

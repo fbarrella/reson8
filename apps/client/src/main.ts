@@ -528,19 +528,59 @@ app.whenReady().then(() => {
     // can appear/disappear as windows open/close, so this is deliberately
     // not cached across calls. Thumbnail size is small (240×135, 16:9)
     // since these are list-item previews, not the shared video itself.
+    //
+    // On Linux/Wayland this call itself drives the OS-level
+    // xdg-desktop-portal ScreenCast consent flow (KDE/GNOME show their own
+    // picker dialog here, before our in-app modal even has data to render —
+    // see PRD 12.10). That flow can fail outright — the user cancelling the
+    // OS picker, closing it, or a portal-side hiccup all surface as Chromium
+    // logging "screencast_portal.cc: Failed to start the screen cast
+    // session" / "ScreenCastPortal failed". The `try`/`catch` alone isn't
+    // enough for that case, though: confirmed against a real broken portal
+    // backend (xdg-desktop-portal-kde stopped) that `desktopCapturer
+    // .getSources()`'s promise can just hang forever — neither resolving
+    // nor rejecting — rather than rejecting, so nothing here would ever run
+    // without a timeout race. 20s comfortably covers a real person deciding
+    // in the OS dialog while still eventually recovering from a portal
+    // that's never going to answer, instead of leaving the Selection Modal
+    // stuck on "Loading sources…" forever with no way to know why.
     ipcMain.handle("get-desktop-sources", async () => {
-        const sources = await desktopCapturer.getSources({
-            types: ["screen", "window"],
-            thumbnailSize: { width: 240, height: 135 },
-            fetchWindowIcons: true,
-        });
-        return sources.map((source) => ({
-            id: source.id,
-            name: source.name,
-            thumbnail: source.thumbnail.toDataURL(),
-            appIcon: source.appIcon && !source.appIcon.isEmpty() ? source.appIcon.toDataURL() : null,
-            sourceType: (source.id.startsWith("screen:") ? "screen" : "window") as "screen" | "window",
-        }));
+        try {
+            const sources = await Promise.race([
+                desktopCapturer.getSources({
+                    types: ["screen", "window"],
+                    thumbnailSize: { width: 240, height: 135 },
+                    fetchWindowIcons: true,
+                }),
+                new Promise<never>((_resolve, reject) => {
+                    setTimeout(() => reject(new Error("Timed out waiting for screen/window sources")), 20_000);
+                }),
+            ]);
+            return {
+                success: true,
+                sources: sources.map((source) => ({
+                    id: source.id,
+                    name: source.name,
+                    thumbnail: source.thumbnail.toDataURL(),
+                    appIcon: source.appIcon && !source.appIcon.isEmpty() ? source.appIcon.toDataURL() : null,
+                    // `display_id` (non-empty only for real monitors, per
+                    // Electron's own docs on `DesktopCapturerSource`) is
+                    // checked ahead of the `id` prefix — on Linux/Wayland,
+                    // where every source comes back through the
+                    // xdg-desktop-portal picker rather than X11/Win32
+                    // enumeration, this prefix isn't a reliable signal on its
+                    // own (screen sharing gates the audio-share checkbox on
+                    // this, PRD 12.11/12.14 — the checkbox must never light
+                    // up for a full-monitor share, since native-audio only
+                    // captures per-process, not a desktop mix).
+                    sourceType: (source.display_id || source.id.toLowerCase().startsWith("screen:")
+                        ? "screen"
+                        : "window") as "screen" | "window",
+                })),
+            };
+        } catch (err: any) {
+            return { success: false, error: err?.message ?? "Failed to list screen/window sources" };
+        }
     });
 
     // ── Screen Share audio capture (PRD 12.7) ────────────────────────────
@@ -620,6 +660,27 @@ app.whenReady().then(() => {
             return { success: true };
         },
     );
+
+    // The Fullscreen button in the Viewer window (`preload-viewer.ts`)
+    // toggles this instead of calling the HTML5 `videoEl.requestFullscreen()`
+    // API directly — confirmed on this project's own dev machine (KDE
+    // Plasma/Wayland via XWayland) that the web-platform Fullscreen API's
+    // promise never even settles there (Chromium never gets far enough to
+    // fire Electron's own `enter-html-full-screen` webContents event, so
+    // handling that wouldn't have helped either). `BrowserWindow
+    // .setFullScreen()` talks directly to the native windowing system
+    // instead of going through Blink's fullscreen negotiation, and doubles
+    // as a reasonable UX for this window anyway — the video already fills
+    // nearly the whole window, so a native fullscreen window reads the same
+    // as "fullscreen video" while keeping the controls bar reachable.
+    // Registered once (not per-window) and resolves the target window from
+    // the invoking `event.sender`, so it works for any open Viewer window.
+    ipcMain.handle("viewer-toggle-fullscreen", (event) => {
+        const win = BrowserWindow.fromWebContents(event.sender);
+        if (!win) return false;
+        win.setFullScreen(!win.isFullScreen());
+        return win.isFullScreen();
+    });
 
     createTray();
     createWindow();

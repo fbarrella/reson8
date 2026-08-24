@@ -21,7 +21,7 @@
         setVolume(percent: number): void;
         toggleMute(): boolean;
         isMuted(): boolean;
-        toggleFullscreen(): void;
+        toggleFullscreen(): Promise<boolean>;
     }
 
     const api = (window as any).reson8ViewerApi as Reson8ViewerApi;
@@ -33,6 +33,7 @@
     const btnMute = document.getElementById("btn-mute") as HTMLButtonElement;
     const volumeSlider = document.getElementById("volume-slider") as HTMLInputElement;
     const btnFullscreen = document.getElementById("btn-fullscreen") as HTMLButtonElement;
+    const btnExitStream = document.getElementById("btn-exit-stream") as HTMLButtonElement;
 
     document.title = `Watching ${api.info.nickname}'s screen share`;
     nicknameLabel.textContent = api.info.nickname;
@@ -60,7 +61,12 @@
         api.setVolume(Number(volumeSlider.value));
     });
 
-    btnFullscreen.addEventListener("click", () => {
-        api.toggleFullscreen();
+    btnFullscreen.addEventListener("click", async () => {
+        const isFullscreen = await api.toggleFullscreen();
+        btnFullscreen.classList.toggle("active", isFullscreen);
+    });
+
+    btnExitStream.addEventListener("click", () => {
+        window.close();
     });
 })();

@@ -296,12 +296,12 @@ contextBridge.exposeInMainWorld("reson8ViewerApi", {
         return videoEl.muted;
     },
 
-    toggleFullscreen(): void {
-        if (document.fullscreenElement) {
-            document.exitFullscreen().catch(() => { });
-        } else {
-            videoEl.requestFullscreen().catch(() => { });
-        }
+    // Goes through the main process (`viewer-toggle-fullscreen`) rather
+    // than the HTML5 Fullscreen API — confirmed that API's promise can
+    // simply never settle on some Linux window managers, see the doc
+    // comment on that IPC handler in `main.ts`.
+    toggleFullscreen(): Promise<boolean> {
+        return ipcRenderer.invoke("viewer-toggle-fullscreen");
     },
 });
 
