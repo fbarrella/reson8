@@ -3040,6 +3040,18 @@
             <span class="toggle-slider"></span>
           </label>
         </div>
+        <div class="toggle-row">
+          <div class="toggle-row-info">
+            <div class="toggle-row-text">
+              <span class="toggle-row-title">💬 Max Message Length</span>
+              <span class="toggle-row-desc">Maximum characters allowed per chat message (channel messages and DMs) — protects server resources against oversized messages</span>
+            </div>
+          </div>
+          <div style="display:flex; gap:6px; align-items:center; flex-shrink:0;">
+            <input type="number" id="input-max-message-length" min="1" max="100000" step="1" style="width:90px; margin-bottom:0;">
+            <button class="btn btn-connect" id="btn-save-max-message-length">Save</button>
+          </div>
+        </div>
       </div>
 
       <!-- Emojis Tab (pending custom emoji review queue) -->

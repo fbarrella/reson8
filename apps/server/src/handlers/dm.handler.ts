@@ -18,6 +18,7 @@ import type {
 } from "@reson8/shared-types";
 import { PresenceService } from "../services/presence.service.js";
 import { deleteAttachment } from "../services/storage.service.js";
+import { DEFAULT_MAX_MESSAGE_LENGTH } from "../config/message.config.js";
 
 type TypedIO = SocketIOServer<
     ClientToServerEvents,
@@ -50,6 +51,19 @@ export function registerDMHandlers(
 
                 if ((!content || content.trim().length === 0) && !attachmentUrl) {
                     ack({ success: false, error: "Message content is empty" });
+                    return;
+                }
+
+                // Same resource-exhaustion guard as channel messages
+                // (Phase 12 sub-phase item 4) — DMs are just as capable of
+                // being abused.
+                const server = await app.prisma.server.findUnique({
+                    where: { id: socket.data.serverId },
+                    select: { maxMessageLength: true },
+                });
+                const maxLength = server?.maxMessageLength ?? DEFAULT_MAX_MESSAGE_LENGTH;
+                if (content && content.trim().length > maxLength) {
+                    ack({ success: false, error: `Message exceeds the ${maxLength}-character limit` });
                     return;
                 }
 

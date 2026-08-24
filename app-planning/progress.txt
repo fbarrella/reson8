@@ -1509,3 +1509,67 @@ Feature/Fix: Edit Message Button Now Hides Once Its Window Expires
   Next Step: continue through the remaining 8 items in this
   sub-phase.
 
+--- Entry: 24/08/2026 (6) ---
+
+Feature/Fix: Admin-Configurable Max Chat Message Length (Phase 12
+sub-phase, item 4/11)
+
+  Problem: Chat messages (channel messages, edits, and DMs alike)
+  had no length limit anywhere in the stack — no client-side
+  maxlength, no server-side check, no DB-level column bound
+  (Message.content was unbounded Postgres TEXT). A malicious or
+  careless client could send a pathologically large message,
+  costing real DB/bandwidth/broadcast-fanout resources for every
+  connected client on every send. Confirmed via investigation across
+  the client input, all three server handlers (SEND_MESSAGE,
+  EDIT_MESSAGE, SEND_DIRECT_MESSAGE), and the Prisma schema before
+  implementing, to make sure this wasn't just a missing UI nicety.
+
+  Solution: New `Server.maxMessageLength` column (default 4000,
+  admin-configurable, Prisma migration
+  `20260824214129_add_max_message_length`), enforced server-side —
+  the only enforcement that actually matters — in all three message
+  handlers, checked against trimmed content length. Bounds
+  (1–100,000) live in a new shared `apps/server/src/config/
+  message.config.ts` so the validation in
+  UPDATE_SERVER_SETTINGS and the enforcement in the three message
+  handlers can't drift apart. `GET_SERVER_SETTINGS`/
+  `UPDATE_SERVER_SETTINGS`/`SERVER_SETTINGS_UPDATED` extended to
+  carry the value, mirroring the existing nudgeEnabled/
+  screenShareEnabled pattern exactly. Client applies it as
+  `chatInput.maxLength` (soft UX limit only — the server enforcement
+  is what actually matters) and surfaces the server's rejection
+  message on send/edit instead of a generic failure (SEND_MESSAGE's
+  ack previously had no `error` field at all). New "Max Message
+  Length" row in Settings → Server tab (number input + explicit Save
+  button, not live-on-change like the two existing toggles, since a
+  numeric field mid-edit shouldn't fire on every keystroke).
+
+  Key Files Modified:
+    apps/server/prisma/schema.prisma — `Server.maxMessageLength`
+    apps/server/prisma/migrations/20260824214129_add_max_message_length/
+      (NEW)
+    apps/server/src/config/message.config.ts (NEW) — shared
+      DEFAULT/MIN/MAX constants
+    apps/server/src/handlers/nudge.handler.ts — GET/UPDATE_SERVER_SETTINGS
+    apps/server/src/handlers/message.handler.ts — SEND_MESSAGE/
+      EDIT_MESSAGE enforcement
+    apps/server/src/handlers/dm.handler.ts — SEND_DIRECT_MESSAGE
+      enforcement
+    packages/shared-types/src/socket-events.ts —
+      `maxMessageLength`/`error` fields across the relevant events
+    apps/client/src/preload.ts — return-type updates
+    apps/client/src/renderer/renderer.ts — `serverMaxMessageLength`
+      state, chatInput.maxLength wiring, Settings → Server tab UI,
+      send/edit error surfacing
+
+  Verification:
+    - npx tsc --noEmit / --build — clean, server and client
+    - npm run test (server, vitest) — 19/19 passing, no regressions
+    - NOT live-tested yet (sending an over-limit message, or an
+      admin changing the limit live) — queued for the user's manual
+      pass at the end of this sub-phase
+
+  Next Step: continue through the remaining 7 items in this
+  sub-phase.
+

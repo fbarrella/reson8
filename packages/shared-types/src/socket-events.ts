@@ -88,7 +88,7 @@ export interface ClientToServerEvents {
     /** Client sends a text message to their current channel. */
     SEND_MESSAGE: (
         payload: { channelId: string; content: string; attachmentUrl?: string; attachmentPublicId?: string },
-        ack: (response: { success: boolean; messageId?: string }) => void,
+        ack: (response: { success: boolean; messageId?: string; error?: string }) => void,
     ) => void;
 
     /**
@@ -437,6 +437,8 @@ export interface ClientToServerEvents {
             nudgeEnabled?: boolean;
             screenShareEnabled?: boolean;
             name?: string;
+            /** Admin-configurable cap on a single message's content length (channel messages and DMs alike). */
+            maxMessageLength?: number;
             error?: string;
         }) => void,
     ) => void;
@@ -448,7 +450,7 @@ export interface ClientToServerEvents {
      * payload (PRD 12.14).
      */
     UPDATE_SERVER_SETTINGS: (
-        payload: { nudgeEnabled?: boolean; screenShareEnabled?: boolean },
+        payload: { nudgeEnabled?: boolean; screenShareEnabled?: boolean; maxMessageLength?: number },
         ack: (response: { success: boolean; error?: string }) => void,
     ) => void;
 }
@@ -580,7 +582,7 @@ export interface ServerToClientEvents {
     NUDGE_RECEIVED: (payload: { fromUserId: string; fromNickname: string }) => void;
 
     /** Broadcasts a server settings change so every connected client updates live. */
-    SERVER_SETTINGS_UPDATED: (payload: { nudgeEnabled: boolean; screenShareEnabled: boolean }) => void;
+    SERVER_SETTINGS_UPDATED: (payload: { nudgeEnabled: boolean; screenShareEnabled: boolean; maxMessageLength: number }) => void;
 
     /**
      * Notifies a channel's occupants that their voice session was force-closed

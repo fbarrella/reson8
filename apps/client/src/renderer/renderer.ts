@@ -716,7 +716,7 @@ interface Reson8Api {
         orderedChannelIds: string[],
     ): Promise<{ success: boolean; error?: string }>;
     deleteChannel(channelId: string): Promise<{ success: boolean; error?: string }>;
-    sendMessage(channelId: string, content: string, attachmentUrl?: string, attachmentPublicId?: string): Promise<{ success: boolean; messageId?: string }>;
+    sendMessage(channelId: string, content: string, attachmentUrl?: string, attachmentPublicId?: string): Promise<{ success: boolean; messageId?: string; error?: string }>;
     deleteMessage(messageId: string): Promise<{ success: boolean; error?: string }>;
     editMessage(messageId: string, content: string): Promise<{ success: boolean; error?: string }>;
     fetchMessages(channelId: string, before?: string, limit?: number, aroundMessageId?: string): Promise<{ success: boolean; messages?: ChatMessage[]; pinnedMessage?: PinnedMessage | null; error?: string }>;
@@ -764,10 +764,11 @@ interface Reson8Api {
         nudgeEnabled?: boolean;
         screenShareEnabled?: boolean;
         name?: string;
+        maxMessageLength?: number;
         error?: string;
     }>;
     updateServerSettings(
-        settings: { nudgeEnabled?: boolean; screenShareEnabled?: boolean },
+        settings: { nudgeEnabled?: boolean; screenShareEnabled?: boolean; maxMessageLength?: number },
     ): Promise<{ success: boolean; error?: string }>;
     getDesktopSources(): Promise<{
         success: boolean;
@@ -893,6 +894,16 @@ const lastNudgeSentAt = new Map<string, number>();
 // anyone actually watch a share while the toggle is off.
 let serverScreenShareEnabled = true;
 let isSharingScreen = false;
+/**
+ * Admin-configurable cap on a single message's length (Phase 12 sub-phase
+ * item 4) — mirrors the `serverNudgeEnabled`/`serverScreenShareEnabled`
+ * pattern above: refreshed on (re)connect, kept live via
+ * SERVER_SETTINGS_UPDATED. Applied to `chatInput.maxLength` as a UX
+ * convenience only; the server independently enforces the real limit on
+ * SEND_MESSAGE/EDIT_MESSAGE/SEND_DIRECT_MESSAGE regardless of what this
+ * client sends.
+ */
+let serverMaxMessageLength = 4000;
 /** The currently-connected server's display name, once fetched via getServerSettings() — null until then / after disconnect. */
 let connectedServerName: string | null = null;
 
@@ -1048,6 +1059,8 @@ const emojiPendingList = document.getElementById("emoji-pending-list") as HTMLDi
 const settingsTabServer = document.getElementById("settings-tab-server") as HTMLButtonElement;
 const chkNudgeEnabled = document.getElementById("chk-nudge-enabled") as HTMLInputElement;
 const chkScreenShareEnabled = document.getElementById("chk-screen-share-enabled") as HTMLInputElement;
+const inputMaxMessageLength = document.getElementById("input-max-message-length") as HTMLInputElement;
+const btnSaveMaxMessageLength = document.getElementById("btn-save-max-message-length") as HTMLButtonElement;
 
 // About tab (PRD 10.1)
 const aboutVersion = document.getElementById("about-version") as HTMLDivElement;
@@ -2284,8 +2297,8 @@ api.on("connected", (data: { serverId: string; instanceId: string }) => {
         }
     });
 
-    // Load the server-wide Nudge / Screen Sharing toggles, plus the
-    // server's display name for the window title bar.
+    // Load the server-wide Nudge / Screen Sharing toggles, the message
+    // length cap, and the server's display name for the window title bar.
     api.getServerSettings().then((res) => {
         if (res.success && res.nudgeEnabled !== undefined) {
             serverNudgeEnabled = res.nudgeEnabled;
@@ -2297,6 +2310,10 @@ api.on("connected", (data: { serverId: string; instanceId: string }) => {
         if (res.success && res.name) {
             connectedServerName = res.name;
             updateWindowTitle();
+        }
+        if (res.success && res.maxMessageLength !== undefined) {
+            serverMaxMessageLength = res.maxMessageLength;
+            chatInput.maxLength = serverMaxMessageLength;
         }
     });
 });
@@ -3193,7 +3210,7 @@ async function sendChatMessage(): Promise<void> {
         const channelId = activeTabId;
         const result = await api.sendMessage(channelId, content, attachmentUrl ?? undefined, attachmentPublicId ?? undefined);
         if (!result.success) {
-            log("Failed to send message", "error");
+            log(`Failed to send message${result.error ? `: ${result.error}` : ""}`, "error");
         }
     }
 }
@@ -3659,6 +3676,7 @@ async function openSettingsPanel(): Promise<void> {
             if (settingsRes.success) {
                 chkNudgeEnabled.checked = settingsRes.nudgeEnabled ?? true;
                 chkScreenShareEnabled.checked = settingsRes.screenShareEnabled ?? true;
+                inputMaxMessageLength.value = String(settingsRes.maxMessageLength ?? serverMaxMessageLength);
             }
         }
     } else {
@@ -3745,6 +3763,24 @@ chkScreenShareEnabled.addEventListener("change", async () => {
         log(`Screen sharing ${desired ? "enabled" : "disabled"} for this server`, "success");
     } else {
         chkScreenShareEnabled.checked = !desired; // revert on failure
+        log(`Failed to update server settings: ${result.error}`, "error");
+        if (result.error && /permission|denied/i.test(result.error)) SoundAlert.play("insufficient_perms.mp3");
+    }
+});
+
+btnSaveMaxMessageLength.addEventListener("click", async () => {
+    const desired = Math.trunc(Number(inputMaxMessageLength.value));
+    if (!Number.isFinite(desired) || desired < 1 || desired > 100_000) {
+        log("Message length limit must be a whole number between 1 and 100,000", "error");
+        return;
+    }
+    const result = await api.updateServerSettings({ maxMessageLength: desired });
+    if (result.success) {
+        serverMaxMessageLength = desired;
+        chatInput.maxLength = desired;
+        log(`Message length limit set to ${desired} characters`, "success");
+    } else {
+        inputMaxMessageLength.value = String(serverMaxMessageLength); // revert on failure
         log(`Failed to update server settings: ${result.error}`, "error");
         if (result.error && /permission|denied/i.test(result.error)) SoundAlert.play("insufficient_perms.mp3");
     }
@@ -4847,7 +4883,7 @@ api.on("custom-emoji-approved", (data: { serverId: string; emoji: CustomEmoji })
 
 // ── Nudge (PRD 4.14) ─────────────────────────────────────────────────────
 
-api.on("server-settings-updated", (data: { nudgeEnabled: boolean; screenShareEnabled: boolean }) => {
+api.on("server-settings-updated", (data: { nudgeEnabled: boolean; screenShareEnabled: boolean; maxMessageLength: number }) => {
     serverNudgeEnabled = data.nudgeEnabled;
     // If the Online Users modal is open, re-render so Nudge buttons appear/disappear live.
     if (onlineUsersModal.classList.contains("visible")) {
@@ -4861,6 +4897,9 @@ api.on("server-settings-updated", (data: { nudgeEnabled: boolean; screenShareEna
     // already uses.
     serverScreenShareEnabled = data.screenShareEnabled;
     updateShareScreenButton();
+
+    serverMaxMessageLength = data.maxMessageLength;
+    chatInput.maxLength = serverMaxMessageLength;
 });
 
 api.on("nudge-received", async (data: { fromUserId: string; fromNickname: string }) => {

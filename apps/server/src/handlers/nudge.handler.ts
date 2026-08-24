@@ -22,6 +22,11 @@ import type {
 import { PermissionFlags } from "@reson8/shared-types";
 import { requirePermission } from "../middleware/permissions.middleware.js";
 import { PresenceService } from "../services/presence.service.js";
+import {
+    DEFAULT_MAX_MESSAGE_LENGTH,
+    MIN_MAX_MESSAGE_LENGTH,
+    MAX_MAX_MESSAGE_LENGTH,
+} from "../config/message.config.js";
 
 type TypedIO = SocketIOServer<
     ClientToServerEvents,
@@ -54,13 +59,19 @@ export function registerNudgeHandlers(
             try {
                 const server = await app.prisma.server.findUnique({
                     where: { id: socket.data.serverId },
-                    select: { name: true, nudgeEnabled: true, screenShareEnabled: true },
+                    select: {
+                        name: true,
+                        nudgeEnabled: true,
+                        screenShareEnabled: true,
+                        maxMessageLength: true,
+                    },
                 });
                 ack({
                     success: true,
                     nudgeEnabled: server?.nudgeEnabled ?? true,
                     screenShareEnabled: server?.screenShareEnabled ?? true,
                     name: server?.name,
+                    maxMessageLength: server?.maxMessageLength ?? DEFAULT_MAX_MESSAGE_LENGTH,
                 });
             } catch (err) {
                 app.log.error({ err }, "Error in GET_SERVER_SETTINGS");
@@ -84,15 +95,32 @@ export function registerNudgeHandlers(
                     return;
                 }
 
-                const { nudgeEnabled, screenShareEnabled } = payload;
-                const data: { nudgeEnabled?: boolean; screenShareEnabled?: boolean } = {};
+                const { nudgeEnabled, screenShareEnabled, maxMessageLength } = payload;
+                const data: { nudgeEnabled?: boolean; screenShareEnabled?: boolean; maxMessageLength?: number } = {};
                 if (nudgeEnabled !== undefined) data.nudgeEnabled = nudgeEnabled;
                 if (screenShareEnabled !== undefined) data.screenShareEnabled = screenShareEnabled;
+                if (maxMessageLength !== undefined) {
+                    // Bounded, not just "must be a positive integer" — an
+                    // admin fat-fingering an astronomically large value
+                    // would silently defeat the whole point of this setting.
+                    if (
+                        !Number.isInteger(maxMessageLength) ||
+                        maxMessageLength < MIN_MAX_MESSAGE_LENGTH ||
+                        maxMessageLength > MAX_MAX_MESSAGE_LENGTH
+                    ) {
+                        ack({
+                            success: false,
+                            error: `Message length limit must be between ${MIN_MAX_MESSAGE_LENGTH} and ${MAX_MAX_MESSAGE_LENGTH}`,
+                        });
+                        return;
+                    }
+                    data.maxMessageLength = maxMessageLength;
+                }
 
                 const updated = await app.prisma.server.update({
                     where: { id: socket.data.serverId },
                     data,
-                    select: { nudgeEnabled: true, screenShareEnabled: true },
+                    select: { nudgeEnabled: true, screenShareEnabled: true, maxMessageLength: true },
                 });
 
                 ack({ success: true });
@@ -100,6 +128,7 @@ export function registerNudgeHandlers(
                 io.to(`server:${socket.data.serverId}`).emit("SERVER_SETTINGS_UPDATED", {
                     nudgeEnabled: updated.nudgeEnabled,
                     screenShareEnabled: updated.screenShareEnabled,
+                    maxMessageLength: updated.maxMessageLength,
                 });
 
                 app.log.info(

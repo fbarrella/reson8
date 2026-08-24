@@ -624,7 +624,7 @@ const api = {
         content: string,
         attachmentUrl?: string,
         attachmentPublicId?: string,
-    ): Promise<{ success: boolean; messageId?: string }> {
+    ): Promise<{ success: boolean; messageId?: string; error?: string }> {
         return new Promise((resolve) => {
             if (!socket?.connected) {
                 resolve({ success: false });
@@ -1233,6 +1233,7 @@ const api = {
         nudgeEnabled?: boolean;
         screenShareEnabled?: boolean;
         name?: string;
+        maxMessageLength?: number;
         error?: string;
     }> {
         return new Promise((resolve) => {
@@ -1245,7 +1246,7 @@ const api = {
     },
 
     updateServerSettings(
-        settings: { nudgeEnabled?: boolean; screenShareEnabled?: boolean },
+        settings: { nudgeEnabled?: boolean; screenShareEnabled?: boolean; maxMessageLength?: number },
     ): Promise<{ success: boolean; error?: string }> {
         return new Promise((resolve) => {
             if (!socket?.connected) {
