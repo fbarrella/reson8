@@ -965,6 +965,19 @@ const api = {
         await api.stopAppAudioCapture();
     },
 
+    /** Starts capturing and producing the chosen source as SVC video (PRD 12.8/12.10). */
+    async startScreenShareVideo(chromeMediaSourceId: string): Promise<{ success: boolean; error?: string }> {
+        if (!voiceService) {
+            return { success: false, error: "Not connected to voice" };
+        }
+        try {
+            await voiceService.startScreenVideoProducing(chromeMediaSourceId);
+            return { success: true };
+        } catch (err: any) {
+            return { success: false, error: err?.message ?? "Failed to start screen video" };
+        }
+    },
+
     // ── Auto-Updater (PRD 10.1) ─────────────────────────────────────────────
 
     async checkForUpdates(): Promise<{ status: "available" | "not-available" | "error"; message?: string }> {

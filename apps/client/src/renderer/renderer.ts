@@ -774,6 +774,7 @@ interface Reson8Api {
     ): Promise<{ success: boolean; error?: string }>;
     stopAppAudioCapture(): Promise<void>;
     stopScreenShare(): Promise<void>;
+    startScreenShareVideo(chromeMediaSourceId: string): Promise<{ success: boolean; error?: string }>;
     on(event: string, callback: (...args: any[]) => void): void;
 }
 
@@ -1090,6 +1091,23 @@ let pendingNsfwChannel: TreeNode | null = null;
 const pinReplaceConfirmModal = document.getElementById("pin-replace-confirm-modal") as HTMLDivElement;
 const btnPinReplaceCancel = document.getElementById("btn-pin-replace-cancel") as HTMLButtonElement;
 const btnPinReplaceConfirm = document.getElementById("btn-pin-replace-confirm") as HTMLButtonElement;
+
+// ── Screen Share Selection Modal (PRD 12.10) ────────────────────────────────
+const screenShareModal = document.getElementById("screen-share-modal") as HTMLDivElement;
+const sourceShareGroups = document.getElementById("source-share-groups") as HTMLDivElement;
+const sourceShareAudioCheckbox = document.getElementById("source-share-audio-checkbox") as HTMLInputElement;
+const sourceShareAudioDesc = document.getElementById("source-share-audio-desc") as HTMLSpanElement;
+const btnScreenShareCancel = document.getElementById("btn-screen-share-cancel") as HTMLButtonElement;
+const btnScreenShareStart = document.getElementById("btn-screen-share-start") as HTMLButtonElement;
+
+type DesktopSource = {
+    id: string;
+    name: string;
+    thumbnail: string;
+    appIcon: string | null;
+    sourceType: "screen" | "window";
+};
+let selectedShareSource: DesktopSource | null = null;
 
 const newChannelNsfwRow = document.getElementById("new-channel-nsfw-row") as HTMLDivElement;
 const newChannelNsfw = document.getElementById("new-channel-nsfw") as HTMLInputElement;
@@ -1801,10 +1819,7 @@ btnShareScreen.addEventListener("click", async () => {
         updateShareScreenButton();
         return;
     }
-    // PRD 12.10 — Selection Modal not implemented yet; this becomes opening
-    // that modal once it lands. Nothing to tear down here since a share
-    // can't have started without it.
-    log("Screen sharing isn't available yet — coming in a later update.", "info");
+    await openScreenShareModal();
 });
 
 btnLeaveVoice.addEventListener("click", leaveVoiceAndNotify);
@@ -4239,6 +4254,143 @@ btnPinReplaceConfirm.addEventListener("click", async () => {
     const action = pendingPinReplaceAction;
     pendingPinReplaceAction = null;
     if (action) await action();
+});
+
+// ── Screen Share Selection Modal (PRD 12.10) ────────────────────────────────
+
+function renderSourceShareGroup(title: string, sources: DesktopSource[]): HTMLElement {
+    const wrapper = document.createElement("div");
+
+    const heading = document.createElement("div");
+    heading.className = "source-share-group-title";
+    heading.textContent = title;
+    wrapper.appendChild(heading);
+
+    const grid = document.createElement("div");
+    grid.className = "source-share-grid";
+    for (const source of sources) {
+        const card = document.createElement("button");
+        card.type = "button";
+        card.className = "source-share-card";
+
+        const thumb = document.createElement("img");
+        thumb.className = "source-share-card-thumb";
+        thumb.src = source.thumbnail;
+        thumb.alt = "";
+        card.appendChild(thumb);
+
+        const nameRow = document.createElement("div");
+        nameRow.className = "source-share-card-name";
+        if (source.appIcon) {
+            const icon = document.createElement("img");
+            icon.className = "source-share-card-icon";
+            icon.src = source.appIcon;
+            icon.alt = "";
+            nameRow.appendChild(icon);
+        }
+        const nameSpan = document.createElement("span");
+        nameSpan.textContent = source.name;
+        nameRow.appendChild(nameSpan);
+        card.appendChild(nameRow);
+
+        card.addEventListener("click", () => selectShareSource(source, card));
+        grid.appendChild(card);
+    }
+    wrapper.appendChild(grid);
+    return wrapper;
+}
+
+function selectShareSource(source: DesktopSource, cardEl: HTMLElement): void {
+    selectedShareSource = source;
+    sourceShareGroups.querySelectorAll(".source-share-card.selected").forEach((el) => {
+        el.classList.remove("selected");
+    });
+    cardEl.classList.add("selected");
+    btnScreenShareStart.disabled = false;
+
+    // Minimal placeholder gating — PRD 12.11 replaces this with the full
+    // window-vs-screen / macOS / native-audio-support business rules.
+    const canShareAudio = source.sourceType === "window";
+    sourceShareAudioCheckbox.disabled = !canShareAudio;
+    if (!canShareAudio) sourceShareAudioCheckbox.checked = false;
+    sourceShareAudioDesc.textContent = canShareAudio
+        ? "Share this window's audio too"
+        : "Audio sharing is only available for individual application windows";
+}
+
+async function openScreenShareModal(): Promise<void> {
+    selectedShareSource = null;
+    btnScreenShareStart.disabled = true;
+    sourceShareAudioCheckbox.disabled = true;
+    sourceShareAudioCheckbox.checked = false;
+    sourceShareAudioDesc.textContent = "Select a source first";
+
+    sourceShareGroups.innerHTML = "";
+    const loading = document.createElement("div");
+    loading.className = "source-share-empty";
+    loading.textContent = "Loading sources…";
+    sourceShareGroups.appendChild(loading);
+    screenShareModal.classList.add("visible");
+
+    // Re-fetched on every open — sources can appear/disappear as windows
+    // open/close, so a cached list would go stale.
+    const sources = await api.getDesktopSources();
+    sourceShareGroups.innerHTML = "";
+    const screens = sources.filter((s) => s.sourceType === "screen");
+    const windows = sources.filter((s) => s.sourceType === "window");
+
+    if (screens.length === 0 && windows.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "source-share-empty";
+        empty.textContent = "No screens or windows available to share.";
+        sourceShareGroups.appendChild(empty);
+        return;
+    }
+    if (screens.length > 0) {
+        sourceShareGroups.appendChild(renderSourceShareGroup("Screens", screens));
+    }
+    if (windows.length > 0) {
+        sourceShareGroups.appendChild(renderSourceShareGroup("Application Windows", windows));
+    }
+}
+
+function closeScreenShareModal(): void {
+    screenShareModal.classList.remove("visible");
+    selectedShareSource = null;
+}
+
+screenShareModal.addEventListener("click", (e) => {
+    if (e.target === screenShareModal) closeScreenShareModal();
+});
+
+btnScreenShareCancel.addEventListener("click", () => closeScreenShareModal());
+
+btnScreenShareStart.addEventListener("click", async () => {
+    const source = selectedShareSource;
+    if (!source) return;
+    btnScreenShareStart.disabled = true;
+
+    const videoRes = await api.startScreenShareVideo(source.id);
+    if (!videoRes.success) {
+        log(`Failed to start screen share: ${videoRes.error}`, "error");
+        btnScreenShareStart.disabled = false;
+        return;
+    }
+
+    if (sourceShareAudioCheckbox.checked && !sourceShareAudioCheckbox.disabled) {
+        const pid = await api.resolvePidForWindowSourceId(source.id);
+        const audioRes = await api.startAppAudioCapture(pid, source.name);
+        if (!audioRes.success) {
+            log(`Screen video is sharing, but audio couldn't start: ${audioRes.error}`, "error");
+        }
+    }
+
+    isSharingScreen = true;
+    updateShareScreenButton();
+    closeScreenShareModal();
+    // PRD 12.12 adds emitting SET_SCREEN_SHARE_STATE here so the sharing
+    // badge appears for other channel members — not implemented yet.
+    log(`Started sharing "${source.name}"`, "success");
 });
 
 api.on("channel-pin-updated", (data: { channelId: string; channelName: string; pinnedMessage: PinnedMessage | null; actedByNickname?: string }) => {

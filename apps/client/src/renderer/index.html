@@ -1265,7 +1265,8 @@
     #admin-modal,
     #update-modal,
     #whats-new-modal,
-    #pin-replace-confirm-modal {
+    #pin-replace-confirm-modal,
+    #screen-share-modal {
       display: none;
       position: fixed;
       top: 0;
@@ -1288,7 +1289,8 @@
     #admin-modal.visible,
     #update-modal.visible,
     #whats-new-modal.visible,
-    #pin-replace-confirm-modal.visible {
+    #pin-replace-confirm-modal.visible,
+    #screen-share-modal.visible {
       display: flex;
     }
 
@@ -1324,6 +1326,89 @@
       font-size: 12px;
       color: var(--text-secondary);
       margin-top: 8px;
+    }
+
+    /* ── Screen Share Selection Modal (PRD 12.10) ─────────────────────── */
+    .source-share-groups {
+      flex: 1;
+      overflow-y: auto;
+      margin: 10px 0;
+    }
+
+    .source-share-group-title {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--text-muted);
+      margin: 12px 0 6px;
+    }
+
+    .source-share-group-title:first-child {
+      margin-top: 0;
+    }
+
+    .source-share-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 8px;
+    }
+
+    .source-share-card {
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--bg-input);
+      cursor: pointer;
+      overflow: hidden;
+      text-align: left;
+      padding: 0;
+      transition: border-color 0.15s;
+    }
+
+    .source-share-card:hover {
+      border-color: var(--accent-dim);
+    }
+
+    .source-share-card.selected {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 1px var(--accent);
+    }
+
+    .source-share-card-thumb {
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      object-fit: cover;
+      display: block;
+      background: var(--bg-tertiary);
+    }
+
+    .source-share-card-name {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 8px;
+      font-size: 11px;
+      color: var(--text-secondary);
+    }
+
+    .source-share-card-name span {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .source-share-card-icon {
+      width: 14px;
+      height: 14px;
+      border-radius: 2px;
+      flex-shrink: 0;
+    }
+
+    .source-share-empty {
+      padding: 20px;
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 12px;
     }
 
     .nsfw-badge {
@@ -2669,6 +2754,30 @@
       <div class="modal-actions">
         <button class="btn btn-cancel" id="btn-pin-replace-cancel">Cancel</button>
         <button class="btn btn-disconnect" id="btn-pin-replace-confirm">Continue</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Screen Share Selection Modal (PRD 12.10) ─────────────────────────── -->
+  <div id="screen-share-modal">
+    <div class="modal-content wide">
+      <h3>🖥️ Share Screen</h3>
+      <div class="source-share-groups" id="source-share-groups">
+        <div class="source-share-empty" id="source-share-status">Loading sources…</div>
+      </div>
+      <div class="toggle-row">
+        <div>
+          <span class="toggle-row-title">Share Audio</span>
+          <!-- PRD 12.11 fills in the real enable/disable + tooltip logic
+               (window vs. screen, per-platform capability); for now this
+               stays a plain, always-present checkbox. -->
+          <span class="toggle-row-desc" id="source-share-audio-desc">Select a source first</span>
+        </div>
+        <input type="checkbox" id="source-share-audio-checkbox" disabled>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-cancel" id="btn-screen-share-cancel">Cancel</button>
+        <button class="btn btn-connect" id="btn-screen-share-start" disabled>Start Sharing</button>
       </div>
     </div>
   </div>
