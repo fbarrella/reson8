@@ -3178,6 +3178,14 @@ function renderChatMessage(tab: ChatTab, msg: ChatMessage): void {
     tab.messagesEl.appendChild(el);
     tab.messagesEl.scrollTop = tab.messagesEl.scrollHeight;
 
+    // Long-message truncation (Phase 12 sub-phase item 5) — must run after
+    // appendChild, since scrollHeight/clientHeight need the element to
+    // actually be laid out in the DOM.
+    if (msg.content) {
+        const textEl = el.querySelector(".msg-text") as HTMLElement | null;
+        if (textEl) attachMessageTruncation(el, textEl);
+    }
+
     // Async link preview injection
     if (msg.content) {
         const url = extractFirstUrl(msg.content);
@@ -3186,6 +3194,48 @@ function renderChatMessage(tab: ChatTab, msg: ChatMessage): void {
         }
     }
 }
+
+/**
+ * Clamps a long message to a few lines with a "See more"/"See less"
+ * toggle. Deliberately not persisted anywhere — expand state lives only in
+ * the DOM classes set here, so a message re-render (switching channels
+ * away and back, which rebuilds the tab's message list from scratch) or an
+ * app restart already resets it with no extra work. The one case that
+ * *wouldn't* reset on its own — the window staying alive and the DOM
+ * untouched while just minimized/hidden — is handled separately by
+ * `collapseAllExpandedMessages()` below, wired to the "window-minimized"
+ * push from main.ts.
+ */
+function attachMessageTruncation(el: HTMLDivElement, textEl: HTMLElement): void {
+    textEl.classList.add("msg-text-clamped");
+    if (textEl.scrollHeight <= textEl.clientHeight + 1) {
+        // Fits within the clamp already — no truncation actually happened,
+        // so there's nothing to offer "See more" for.
+        textEl.classList.remove("msg-text-clamped");
+        return;
+    }
+
+    const btnSeeMore = document.createElement("button");
+    btnSeeMore.className = "btn-see-more";
+    btnSeeMore.textContent = "See more";
+    btnSeeMore.addEventListener("click", () => {
+        const expanded = textEl.classList.toggle("msg-text-expanded");
+        textEl.classList.toggle("msg-text-clamped", !expanded);
+        btnSeeMore.textContent = expanded ? "See less" : "See more";
+    });
+    el.appendChild(btnSeeMore);
+}
+
+function collapseAllExpandedMessages(): void {
+    document.querySelectorAll<HTMLElement>(".msg-text-expanded").forEach((textEl) => {
+        textEl.classList.remove("msg-text-expanded");
+        textEl.classList.add("msg-text-clamped");
+        const btn = textEl.parentElement?.querySelector(".btn-see-more");
+        if (btn) btn.textContent = "See more";
+    });
+}
+
+api.on("window-minimized", collapseAllExpandedMessages);
 
 // ── Chat Input ────────────────────────────────────────────────────────────
 
@@ -4835,6 +4885,12 @@ function startMessageEdit(el: HTMLDivElement, msg: ChatMessage): void {
         if (!el.querySelector(".msg-edited")) {
             el.querySelector(".msg-time")?.insertAdjacentHTML("afterend", `<span class="msg-edited">(edited)</span>`);
         }
+        // Re-evaluate truncation against the new content — an edit can
+        // just as easily make a short message long as vice versa. Drop
+        // any stale "See more" button from before the edit first, since
+        // attachMessageTruncation() only ever adds a new one when needed.
+        el.querySelector(".btn-see-more")?.remove();
+        attachMessageTruncation(el, newTextEl);
     };
 
     const onKeydown = (e: KeyboardEvent) => {
@@ -4855,9 +4911,14 @@ function startMessageEdit(el: HTMLDivElement, msg: ChatMessage): void {
 /** Applies a MESSAGE_EDITED broadcast to every rendered copy of that message (a background tab stays in the DOM, just hidden). */
 function applyMessageEdit(msg: ChatMessage): void {
     document.querySelectorAll(`.chat-msg[data-msg-id="${CSS.escape(msg.id)}"]`).forEach((el) => {
-        const textEl = el.querySelector(".msg-text");
+        const textEl = el.querySelector(".msg-text") as HTMLElement | null;
         if (textEl) {
+            textEl.classList.remove("msg-text-clamped", "msg-text-expanded");
             textEl.innerHTML = linkifyContent(msg.content);
+            // Re-evaluate truncation for the other clients viewing this
+            // edit too, not just the editor's own optimistic path above.
+            el.querySelector(".btn-see-more")?.remove();
+            attachMessageTruncation(el as HTMLDivElement, textEl);
         }
         if (!el.querySelector(".msg-edited")) {
             el.querySelector(".msg-time")?.insertAdjacentHTML("afterend", `<span class="msg-edited">(edited)</span>`);

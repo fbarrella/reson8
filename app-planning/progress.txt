@@ -1573,3 +1573,69 @@ sub-phase, item 4/11)
   Next Step: continue through the remaining 7 items in this
   sub-phase.
 
+--- Entry: 24/08/2026 (7) ---
+
+Feature/Fix: Long Chat Message Truncation With "See More"/"See
+Less" (Phase 12 sub-phase, item 5/11)
+
+  Problem: Long channel messages rendered at full length with no
+  truncation at all — confirmed via investigation that this feature
+  (described in the request as an existing behavior with a
+  persistence bug) doesn't exist anywhere in the current codebase.
+  Built fresh per explicit user clarification: truncate to a few
+  lines with a "See more" expand toggle, and deliberately do NOT
+  persist the expanded state anywhere — it should reset to
+  truncated on a channel switch, an app restart, AND when the window
+  is minimized (to tray or a plain OS minimize), not just stay
+  expanded until manually re-collapsed.
+
+  Solution: `attachMessageTruncation()` applies a `-webkit-line-
+  clamp: 4` CSS class to a message's `.msg-text` span, measures
+  `scrollHeight` vs `clientHeight` to see if it's actually
+  overflowing, and only then appends a "See more" button (a short
+  message never gets the clamp class at all, so it keeps flowing
+  inline after the nickname exactly as before — no visual change for
+  the common case). Clicking toggles a `.msg-text-expanded` class
+  and the button's own label between "See more"/"See less". No
+  state is stored anywhere outside these DOM classes, so:
+    - Channel switch away and back already resets it for free —
+      `loadChannelMessages()` rebuilds the tab's message list (and
+      therefore every `.msg-text` element) from scratch.
+    - App restart already resets it for free — nothing survives
+      process exit.
+    - Window minimize needed explicit handling, since the renderer
+      keeps running and the DOM stays untouched while just hidden —
+      added a new `window-minimized` IPC push from main.ts's
+      existing "minimize" handler (fires for both minimize-to-tray
+      and a plain OS minimize) through to a new
+      `collapseAllExpandedMessages()` that finds and re-collapses
+      every currently-expanded message.
+    - Also wired into both places a message's `.msg-text` gets
+      rebuilt after this feature's own initial render: the editor's
+      own optimistic post-edit DOM update, and `applyMessageEdit()`
+      (the MESSAGE_EDITED broadcast other viewers receive) — an edit
+      can just as easily turn a short message long as the reverse,
+      so truncation is re-evaluated in both rather than only at
+      initial render.
+
+  Key Files Modified:
+    apps/client/src/main.ts — "minimize" handler now also pushes
+      `window-minimized`
+    apps/client/src/preload.ts — forwards it as the
+      "window-minimized" renderer event
+    apps/client/src/renderer/renderer.ts —
+      `attachMessageTruncation()`, `collapseAllExpandedMessages()`,
+      wired into `renderChatMessage()` and both edit-DOM-update paths
+    apps/client/src/renderer/index.html — `.msg-text-clamped`,
+      `.btn-see-more` CSS
+
+  Verification:
+    - npx tsc --noEmit / --build — clean
+    - NOT live-tested yet — queued for the user's manual pass at the
+      end of this sub-phase; the 4-line clamp threshold and the
+      minimize-triggered collapse are both worth a specific look
+      during that pass
+
+  Next Step: continue through the remaining 6 items in this
+  sub-phase.
+

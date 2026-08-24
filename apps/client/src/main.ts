@@ -346,6 +346,10 @@ function createWindow(): void {
         if (minimizeToTray) {
             mainWindow?.hide();
         }
+        // Fires for a plain OS minimize too, not just minimize-to-tray —
+        // renderer.ts uses this to re-collapse expanded long chat messages
+        // (Phase 12 sub-phase item 5's "reset on minimize" requirement).
+        mainWindow?.webContents.send("window-minimized");
     });
 
     // Explicitly clear any taskbar/dock attention flash on focus, rather

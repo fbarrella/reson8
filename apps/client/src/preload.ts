@@ -1264,6 +1264,11 @@ contextBridge.exposeInMainWorld("reson8Api", api);
 ipcRenderer.on("ptt-pressed", () => emit("ptt-pressed", null));
 ipcRenderer.on("ptt-released", () => emit("ptt-released", null));
 
+// Fired on any window minimize (tray or plain OS taskbar minimize) — see
+// main.ts's "minimize" handler. Used to re-collapse expanded long chat
+// messages (Phase 12 sub-phase item 5).
+ipcRenderer.on("window-minimized", () => emit("window-minimized", null));
+
 // ── Screen share captured audio from main process (PRD 12.7) ───────────────
 // Registered once, not per-`startAppAudioCapture` call, matching this
 // file's existing convention for main→renderer push channels — a no-op

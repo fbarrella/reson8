@@ -703,6 +703,33 @@
       color: var(--text-primary);
     }
 
+    /* Long-message truncation (Phase 12 sub-phase item 5) — only applied
+       (via JS, attachMessageTruncation()) to messages that actually
+       overflow this clamp; a short message never gets this class at all,
+       so it keeps flowing inline right after the nickname as before. */
+    .chat-msg .msg-text.msg-text-clamped {
+      display: -webkit-box;
+      -webkit-line-clamp: 4;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+
+    .btn-see-more {
+      display: block;
+      background: none;
+      border: none;
+      padding: 0;
+      margin-top: 2px;
+      color: var(--accent);
+      font-size: 11px;
+      font-family: var(--font);
+      cursor: pointer;
+    }
+
+    .btn-see-more:hover {
+      text-decoration: underline;
+    }
+
     .msg-edited {
       color: var(--text-muted);
       font-size: 10px;
