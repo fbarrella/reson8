@@ -144,11 +144,11 @@ function createSignaling(): VoiceSignaling {
                 );
             });
         },
-        produce(transportId, kind, rtpParameters) {
+        produce(transportId, kind, rtpParameters, appData) {
             return new Promise((resolve) => {
                 socket!.emit(
                     "PRODUCE",
-                    { transportId, kind, rtpParameters },
+                    { transportId, kind, rtpParameters, appData },
                     resolve,
                 );
             });
@@ -368,7 +368,13 @@ const api = {
         // Voice-specific events
         socket.on("NEW_PRODUCER", (payload) => {
             emit("new-producer", payload);
-            voiceService?.queueConsumeProducer(payload.producerId, payload.userId);
+            // Only the mic Producer (no `mediaType`) auto-consumes. A
+            // screen-share's video/audio (PRD 12.7/12.8) must NOT be pulled
+            // by every channel member automatically — only by an explicit
+            // viewer action (PRD 12.13's WATCH_SCREEN_SHARE).
+            if (!payload.mediaType) {
+                voiceService?.queueConsumeProducer(payload.producerId, payload.userId);
+            }
         });
 
         socket.on("PRODUCER_CLOSED", (payload) => {

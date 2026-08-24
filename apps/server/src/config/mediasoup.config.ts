@@ -2,7 +2,7 @@
  * mediasoup Configuration — Reson8
  *
  * Defines Worker, Router, and WebRtcTransport settings.
- * Audio-only Opus codec for voice channels.
+ * Opus for voice channels; VP9 (with SVC) for screen sharing (PRD 12.8).
  */
 
 import type { types as mediasoupTypes } from "mediasoup";
@@ -22,7 +22,16 @@ export const WORKER_SETTINGS: mediasoupTypes.WorkerSettings = {
 
 /**
  * Media codecs supported by the Router.
- * Audio-only: Opus at 48kHz, stereo, with DTX for bandwidth savings.
+ * - Opus at 48kHz, stereo, with DTX for bandwidth savings (voice + screen-
+ *   share audio — both are plain Opus Producers, just tagged apart via
+ *   `appData.mediaType`, see PRD 12.7/12.12).
+ * - VP9 for screen-share video (PRD 12.8), with `profile-id: 2` enabling
+ *   SVC (Scalable Video Coding): one encode, multiple spatial/temporal
+ *   layers, so each viewer's Consumer can independently request a lower
+ *   layer via `setPreferredLayers()` (PRD 12.13) without the sharer
+ *   re-encoding. VP9 over AV1 for now — mediasoup/libwebrtc's VP9 SVC
+ *   support is mature; AV1 SVC is newer and less consistently available
+ *   across Electron's bundled Chromium versions.
  */
 export const MEDIA_CODECS = [
     {
@@ -33,6 +42,14 @@ export const MEDIA_CODECS = [
         parameters: {
             "usedtx": 1,
             "useinbandfec": 1,
+        },
+    },
+    {
+        kind: "video" as const,
+        mimeType: "video/VP9",
+        clockRate: 90000,
+        parameters: {
+            "profile-id": 2,
         },
     },
 ];

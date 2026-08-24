@@ -24,6 +24,11 @@ export interface UserVoiceSession {
     sendTransport: mediasoupTypes.WebRtcTransport | null;
     recvTransport: mediasoupTypes.WebRtcTransport | null;
     producer: mediasoupTypes.Producer | null;
+    /** Screen-share Producers (PRD 12.7/12.8) — independent of `producer`
+     *  (the mic), not a replacement for it. A user can have all three
+     *  active at once: talking while sharing a window with its audio. */
+    screenVideoProducer: mediasoupTypes.Producer | null;
+    screenAudioProducer: mediasoupTypes.Producer | null;
     consumers: Map<string, mediasoupTypes.Consumer>; // keyed by consumerId
 }
 
@@ -265,6 +270,8 @@ export class MediasoupService extends EventEmitter {
                 sendTransport: null,
                 recvTransport: null,
                 producer: null,
+                screenVideoProducer: null,
+                screenAudioProducer: null,
                 consumers: new Map(),
             };
             channelSessions.set(userId, session);
@@ -311,6 +318,14 @@ export class MediasoupService extends EventEmitter {
         if (session.producer) {
             session.producer.close();
             session.producer = null;
+        }
+        if (session.screenVideoProducer) {
+            session.screenVideoProducer.close();
+            session.screenVideoProducer = null;
+        }
+        if (session.screenAudioProducer) {
+            session.screenAudioProducer.close();
+            session.screenAudioProducer = null;
         }
 
         if (session.sendTransport) {

@@ -237,12 +237,23 @@ export interface ClientToServerEvents {
         ack: (response: { success: boolean; error?: string }) => void,
     ) => void;
 
-    /** Start producing an audio track. */
+    /**
+     * Start producing a track — mic audio, or (PRD 12.7/12.8) a second,
+     * independent screen-share audio or video Producer on the same send
+     * Transport. `appData.mediaType` distinguishes which: absent for the
+     * mic, `"screen-audio"` / `"screen-video"` for a share. The server
+     * threads this through to mediasoup's own Producer `appData` and uses
+     * it to decide which per-session Producer slot to store the result in
+     * (see `UserVoiceSession` in `mediasoup.service.ts`) and whether to
+     * feed it into `AudioLevelObserver` (mic only — screen-share audio
+     * shouldn't trigger the active-speaker indicator).
+     */
     PRODUCE: (
         payload: {
             transportId: string;
-            kind: "audio";
+            kind: "audio" | "video";
             rtpParameters: any;
+            appData?: { mediaType?: "screen-audio" | "screen-video" };
         },
         ack: (response: {
             success: boolean;
@@ -417,10 +428,19 @@ export interface ServerToClientEvents {
     // ── WebRTC / Voice events ──────────────────────────────────────────────
 
     /** Notifies the channel that a new audio producer is available. */
+    /**
+     * `mediaType` absent means this is the ordinary mic Producer — clients
+     * auto-consume those, as before. When present (`"screen-audio"` /
+     * `"screen-video"`, PRD 12.7/12.8), clients must NOT auto-consume: a
+     * screen-share's video/audio is only ever pulled by an explicit viewer
+     * action (PRD 12.13's `WATCH_SCREEN_SHARE`), not by everyone in the
+     * channel just because a new Producer appeared.
+     */
     NEW_PRODUCER: (payload: {
         userId: string;
         nickname: string;
         producerId: string;
+        mediaType?: "screen-audio" | "screen-video";
     }) => void;
 
     /** Notifies the channel that a producer was closed. */

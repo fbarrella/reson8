@@ -40,8 +40,9 @@ export interface VoiceSignaling {
 
     produce(
         transportId: string,
-        kind: "audio",
+        kind: "audio" | "video",
         rtpParameters: any,
+        appData?: { mediaType?: "screen-audio" | "screen-video" },
     ): Promise<{ success: boolean; producerId?: string; error?: string }>;
 
     consume(
@@ -69,6 +70,8 @@ export class VoiceService {
     private recvTransport: msTypes.Transport | null = null;
     private producer: msTypes.Producer | null = null;
     private screenAudioProducer: msTypes.Producer | null = null;
+    private screenVideoProducer: msTypes.Producer | null = null;
+    private screenVideoStream: MediaStream | null = null;
     private consumers = new Map<string, msTypes.Consumer>();
     private audioElements = new Map<string, HTMLAudioElement>();
     private signaling: VoiceSignaling;
@@ -202,12 +205,18 @@ export class VoiceService {
 
         this.sendTransport.on(
             "produce",
-            async ({ kind, rtpParameters }, callback, errback) => {
+            // `appData` was previously dropped here — every `produce()` call
+            // (mic, screen-audio, screen-video) funnels through this single
+            // handler, and `appData.mediaType` is how the server (PRD 12.8)
+            // tells them apart, so it has to be forwarded, not just
+            // `kind`/`rtpParameters`.
+            async ({ kind, rtpParameters, appData }, callback, errback) => {
                 try {
                     const prodRes = await this.signaling.produce(
                         tp.id,
-                        kind as "audio",
+                        kind as "audio" | "video",
                         rtpParameters,
+                        appData as { mediaType?: "screen-audio" | "screen-video" } | undefined,
                     );
                     if (!prodRes.success || !prodRes.producerId) {
                         throw new Error(prodRes.error);
@@ -330,6 +339,58 @@ export class VoiceService {
         if (this.screenAudioProducer) {
             this.screenAudioProducer.close();
             this.screenAudioProducer = null;
+        }
+    }
+
+    // ── Screen share video (PRD 12.8) ───────────────────────────────────────
+
+    /**
+     * Captures the chosen screen/window via Electron's `chromeMediaSource`
+     * `getUserMedia` constraint and produces it with SVC (Scalable Video
+     * Coding): one encode, three spatial + three temporal layers
+     * (`L3T3_KEY`), so each viewer's Consumer can independently request a
+     * lower layer via `setPreferredLayers()` (PRD 12.13) without the
+     * sharer re-encoding. Unlike the audio pipeline (PRD 12.7), capture and
+     * produce are bundled in one method here, mirroring `startProducing()`
+     * — `getUserMedia` needs no IPC/native-module frame assembly, so there's
+     * no reason to split them across preload.ts and this class the way the
+     * native-audio-fed path had to.
+     */
+    async startScreenVideoProducing(chromeMediaSourceId: string): Promise<void> {
+        if (!this.sendTransport) throw new Error("Send transport not ready");
+
+        this.screenVideoStream = await navigator.mediaDevices.getUserMedia({
+            audio: false,
+            video: {
+                mandatory: {
+                    chromeMediaSource: "desktop",
+                    chromeMediaSourceId,
+                },
+            },
+            // Electron's desktop-capture constraint format predates the
+            // standard MediaTrackConstraints shape TypeScript's DOM lib
+            // types — this cast is the well-known workaround for it, not a
+            // real type mismatch.
+        } as unknown as MediaStreamConstraints);
+
+        const track = this.screenVideoStream.getVideoTracks()[0];
+        this.screenVideoProducer = await this.sendTransport.produce({
+            track,
+            encodings: [{ scalabilityMode: "L3T3_KEY", maxBitrate: 2_500_000 }],
+            codecOptions: { videoGoogleStartBitrate: 1000 },
+            appData: { mediaType: "screen-video" },
+        });
+    }
+
+    /** Stops screen-share video capture and closes its Producer. */
+    stopScreenVideoProducing(): void {
+        if (this.screenVideoProducer) {
+            this.screenVideoProducer.close();
+            this.screenVideoProducer = null;
+        }
+        if (this.screenVideoStream) {
+            for (const track of this.screenVideoStream.getTracks()) track.stop();
+            this.screenVideoStream = null;
         }
     }
 
@@ -801,6 +862,7 @@ export class VoiceService {
         }
 
         this.closeScreenAudioProducer();
+        this.stopScreenVideoProducing();
 
         for (const consumer of this.consumers.values()) {
             consumer.close();

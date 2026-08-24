@@ -181,7 +181,8 @@ export function registerVoiceHandlers(
         // ── 4. PRODUCE ──────────────────────────────────────────────────────
         socket.on("PRODUCE", async (payload, ack) => {
             try {
-                const { transportId, kind, rtpParameters } = payload;
+                const { transportId, kind, rtpParameters, appData } = payload;
+                const mediaType = appData?.mediaType; // undefined = mic (PRD 12.7/12.8)
                 const channelId = socket.data.currentChannelId;
                 if (!channelId) {
                     ack({ success: false, error: "Not in a channel" });
@@ -197,9 +198,19 @@ export function registerVoiceHandlers(
                 const producer = await session.sendTransport.produce({
                     kind,
                     rtpParameters,
+                    appData,
                 });
 
-                session.producer = producer;
+                // Mic, screen-video, and screen-audio are three independent
+                // Producers that can all be active at once — each gets its
+                // own session slot, not a single shared `producer` field
+                // that the second/third `PRODUCE` call would silently
+                // overwrite (PRD 12.8).
+                let sessionField: "producer" | "screenVideoProducer" | "screenAudioProducer";
+                if (mediaType === "screen-video") sessionField = "screenVideoProducer";
+                else if (mediaType === "screen-audio") sessionField = "screenAudioProducer";
+                else sessionField = "producer";
+                session[sessionField] = producer;
 
                 // Handle producer close — this fires for any transport-level
                 // close, not just the explicit CLOSE_PRODUCER/leave/kick
@@ -208,54 +219,61 @@ export function registerVoiceHandlers(
                 // peers must be notified here too or they're left holding a
                 // consumer for audio that no longer exists (PRD 11.1).
                 producer.on("transportclose", () => {
-                    session.producer = null;
+                    if (session[sessionField] === producer) session[sessionField] = null;
                     socket.to(`channel:${channelId}`).emit("PRODUCER_CLOSED", {
                         userId: socket.data.userId,
                         producerId: producer.id,
                     });
                 });
 
-                // Ensure AudioLevelObserver exists for this channel and add producer
-                try {
-                    await mediasoup.getOrCreateAudioLevelObserver(
-                        channelId,
-                        (volumes) => {
-                            // Map producerIds to userIds
-                            const speakers: string[] = [];
-                            for (const v of volumes) {
-                                const uid = mediasoup.getUserIdByProducerId(channelId, v.producerId);
-                                if (uid) speakers.push(uid);
-                            }
-                            io.to(`channel:${channelId}`).emit("ACTIVE_SPEAKERS", {
-                                channelId,
-                                speakers,
-                            });
-                        },
-                        () => {
-                            // Silence — no speakers
-                            io.to(`channel:${channelId}`).emit("ACTIVE_SPEAKERS", {
-                                channelId,
-                                speakers: [],
-                            });
-                        },
-                    );
-                    await mediasoup.addProducerToObserver(channelId, producer);
-                } catch (observerErr) {
-                    app.log.warn({ err: observerErr }, "Failed to setup AudioLevelObserver");
+                // AudioLevelObserver drives the active-speaker indicator —
+                // mic only. Screen-share audio (someone's video/music) must
+                // never trigger "speaking", and video obviously never can.
+                if (mediaType === undefined && kind === "audio") {
+                    try {
+                        await mediasoup.getOrCreateAudioLevelObserver(
+                            channelId,
+                            (volumes) => {
+                                // Map producerIds to userIds
+                                const speakers: string[] = [];
+                                for (const v of volumes) {
+                                    const uid = mediasoup.getUserIdByProducerId(channelId, v.producerId);
+                                    if (uid) speakers.push(uid);
+                                }
+                                io.to(`channel:${channelId}`).emit("ACTIVE_SPEAKERS", {
+                                    channelId,
+                                    speakers,
+                                });
+                            },
+                            () => {
+                                // Silence — no speakers
+                                io.to(`channel:${channelId}`).emit("ACTIVE_SPEAKERS", {
+                                    channelId,
+                                    speakers: [],
+                                });
+                            },
+                        );
+                        await mediasoup.addProducerToObserver(channelId, producer);
+                    } catch (observerErr) {
+                        app.log.warn({ err: observerErr }, "Failed to setup AudioLevelObserver");
+                    }
                 }
 
-                // Notify other users in the channel about the new producer
+                // Notify other users in the channel about the new producer.
+                // `mediaType` tells clients whether to auto-consume (mic) or
+                // leave it for an explicit viewer action (screen share).
                 socket.to(`channel:${channelId}`).emit("NEW_PRODUCER", {
                     userId: socket.data.userId,
                     nickname: socket.data.nickname,
                     producerId: producer.id,
+                    mediaType,
                 });
 
                 ack({ success: true, producerId: producer.id });
 
                 app.log.info(
-                    { socketId: socket.id, channelId, producerId: producer.id },
-                    "User started producing audio",
+                    { socketId: socket.id, channelId, producerId: producer.id, kind, mediaType },
+                    "User started producing",
                 );
             } catch (err) {
                 app.log.error({ err }, "Error in PRODUCE");
