@@ -241,6 +241,12 @@ async function attemptVoiceRejoin(channelId: string): Promise<void> {
 }
 
 const api = {
+    // A static fact known at preload-load-time (PRD 12.11 needs it to tell
+    // macOS's audio-capture warning apart from the generic "unsupported"
+    // one) — a plain property, not a method, since it never changes and an
+    // async round-trip would be pointless for it.
+    platform: process.platform,
+
     // ── Identity ─────────────────────────────────────────────────────────────
 
     getInstanceId(): string {
@@ -894,6 +900,14 @@ const api = {
     },
 
     // ── Screen Share audio pipeline (PRD 12.7) ────────────────────────────
+
+    /**
+     * Machine-wide check (PRD 12.11), not per-target — meant to be called
+     * once when the Selection Modal opens, not per source selection.
+     */
+    async platformSupportsAudioCapture(): Promise<boolean> {
+        return ipcRenderer.invoke("platform-supports-audio-capture");
+    },
 
     /** Windows-only — resolves `undefined` on other platforms (see PRD 12.2). */
     async resolvePidForWindowSourceId(sourceId: string): Promise<number | undefined> {

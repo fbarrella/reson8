@@ -677,6 +677,7 @@ const EMOJI_DATA: EmojiEntry[] = [
 ];
 
 interface Reson8Api {
+    readonly platform: string;
     getInstanceId(): string;
     isExistingInstall(): Promise<boolean>;
     connect(host: string, port: number | undefined, nickname: string, password?: string): Promise<void>;
@@ -768,6 +769,7 @@ interface Reson8Api {
         }>
     >;
     resolvePidForWindowSourceId(sourceId: string): Promise<number | undefined>;
+    platformSupportsAudioCapture(): Promise<boolean>;
     startAppAudioCapture(
         pid: number | undefined,
         processName: string | undefined,
@@ -4300,6 +4302,46 @@ function renderSourceShareGroup(title: string, sources: DesktopSource[]): HTMLEl
     return wrapper;
 }
 
+// Fetched once per modal open (PRD 12.11), not per selection — a
+// machine-wide fact, not something that varies per source.
+let audioCaptureSupported = false;
+
+/**
+ * Full Share-Audio checkbox gating (PRD 12.11's business-rule table).
+ * macOS is checked ahead of the generic `audioCaptureSupported` flag so it
+ * gets its own Apple-specific explanation rather than the generic one —
+ * both cases report `platformSupportsAudioCapture() === false` at the
+ * native layer, so platform is the only way to tell them apart client-side.
+ * There's no separate per-target "would capture actually work for this
+ * specific window" check: native-audio's `platformSupportsCapture()`
+ * already determines pre-19041 Windows / ALSA-only Linux machine-wide, not
+ * per-window (see main.ts's `platform-supports-audio-capture` handler) —
+ * a real per-target failure only surfaces when `startCapture()` is
+ * actually attempted, handled separately at "Start Sharing" time.
+ */
+function updateShareAudioCheckboxState(source: DesktopSource): void {
+    let enabled: boolean;
+    let desc: string;
+
+    if (api.platform === "darwin") {
+        enabled = false;
+        desc = "macOS does not support per-application audio capture — only video will be shared.";
+    } else if (source.sourceType !== "window") {
+        enabled = false;
+        desc = "Audio sharing is only available for individual application windows.";
+    } else if (!audioCaptureSupported) {
+        enabled = false;
+        desc = "Audio capture isn't available for this window on your system.";
+    } else {
+        enabled = true;
+        desc = "Share this window's audio too";
+    }
+
+    sourceShareAudioCheckbox.disabled = !enabled;
+    if (!enabled) sourceShareAudioCheckbox.checked = false;
+    sourceShareAudioDesc.textContent = desc;
+}
+
 function selectShareSource(source: DesktopSource, cardEl: HTMLElement): void {
     selectedShareSource = source;
     sourceShareGroups.querySelectorAll(".source-share-card.selected").forEach((el) => {
@@ -4307,15 +4349,7 @@ function selectShareSource(source: DesktopSource, cardEl: HTMLElement): void {
     });
     cardEl.classList.add("selected");
     btnScreenShareStart.disabled = false;
-
-    // Minimal placeholder gating — PRD 12.11 replaces this with the full
-    // window-vs-screen / macOS / native-audio-support business rules.
-    const canShareAudio = source.sourceType === "window";
-    sourceShareAudioCheckbox.disabled = !canShareAudio;
-    if (!canShareAudio) sourceShareAudioCheckbox.checked = false;
-    sourceShareAudioDesc.textContent = canShareAudio
-        ? "Share this window's audio too"
-        : "Audio sharing is only available for individual application windows";
+    updateShareAudioCheckboxState(source);
 }
 
 async function openScreenShareModal(): Promise<void> {
@@ -4333,8 +4367,17 @@ async function openScreenShareModal(): Promise<void> {
     screenShareModal.classList.add("visible");
 
     // Re-fetched on every open — sources can appear/disappear as windows
-    // open/close, so a cached list would go stale.
-    const sources = await api.getDesktopSources();
+    // open/close, so a cached list would go stale. Run alongside the
+    // audio-capability check rather than after it — `getDesktopSources()`
+    // can be slow (on Linux/Wayland it may wait on an OS-level consent
+    // dialog, see PRD 12.10), and there's no reason the fast native check
+    // should wait behind that.
+    const [, sources] = await Promise.all([
+        api.platformSupportsAudioCapture().then((supported) => {
+            audioCaptureSupported = supported;
+        }),
+        api.getDesktopSources(),
+    ]);
     sourceShareGroups.innerHTML = "";
     const screens = sources.filter((s) => s.sourceType === "screen");
     const windows = sources.filter((s) => s.sourceType === "window");

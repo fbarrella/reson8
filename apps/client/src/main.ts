@@ -9,7 +9,7 @@ import { app, BrowserWindow, session, ipcMain, globalShortcut, Menu, Tray, nativ
 import path from "node:path";
 import { getInstanceId, hasExistingInstanceId } from "./instance-id.js";
 import { autoUpdater } from "electron-updater";
-import { startCapture, resolvePidForWindowSourceId } from "@reson8/native-audio";
+import { startCapture, resolvePidForWindowSourceId, platformSupportsCapture } from "@reson8/native-audio";
 import type { CaptureHandle } from "@reson8/native-audio";
 
 // ── Link Preview (metascraper) ───────────────────────────────────────────
@@ -544,6 +544,13 @@ app.whenReady().then(() => {
     });
 
     // ── Screen Share audio capture (PRD 12.7) ────────────────────────────
+
+    // Platform-wide check (PRD 12.11) — not per-target. native-audio's
+    // `platformSupportsCapture()` already folds in every "can't capture at
+    // all" case this needs to gate on (pre-19041 Windows, ALSA-only Linux,
+    // macOS always), determined once for the whole machine rather than per
+    // window — there's no separate per-target capability query to make.
+    ipcMain.handle("platform-supports-audio-capture", () => platformSupportsCapture());
 
     // Windows-only export — `resolvePidForWindowSourceId` doesn't exist in
     // the compiled native-audio addon on Linux/macOS (see windows.rs), so
