@@ -758,6 +758,15 @@ interface Reson8Api {
     nudgeUser(targetUserId: string): Promise<{ success: boolean; error?: string }>;
     getServerSettings(): Promise<{ success: boolean; nudgeEnabled?: boolean; error?: string }>;
     updateServerSettings(nudgeEnabled: boolean): Promise<{ success: boolean; error?: string }>;
+    getDesktopSources(): Promise<
+        Array<{
+            id: string;
+            name: string;
+            thumbnail: string;
+            appIcon: string | null;
+            sourceType: "screen" | "window";
+        }>
+    >;
     on(event: string, callback: (...args: any[]) => void): void;
 }
 

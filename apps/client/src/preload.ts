@@ -852,6 +852,20 @@ const api = {
         ipcRenderer.send("flash-window");
     },
 
+    // ── Screen Share source discovery (PRD 12.6) ─────────────────────────
+
+    async getDesktopSources(): Promise<
+        Array<{
+            id: string;
+            name: string;
+            thumbnail: string;
+            appIcon: string | null;
+            sourceType: "screen" | "window";
+        }>
+    > {
+        return ipcRenderer.invoke("get-desktop-sources");
+    },
+
     // ── Auto-Updater (PRD 10.1) ─────────────────────────────────────────────
 
     async checkForUpdates(): Promise<{ status: "available" | "not-available" | "error"; message?: string }> {

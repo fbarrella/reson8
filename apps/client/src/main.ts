@@ -5,7 +5,7 @@
  * This is the entry point for the Electron desktop client.
  */
 
-import { app, BrowserWindow, session, ipcMain, globalShortcut, Menu, Tray, nativeImage, shell } from "electron";
+import { app, BrowserWindow, session, ipcMain, globalShortcut, Menu, Tray, nativeImage, shell, desktopCapturer } from "electron";
 import path from "node:path";
 import { getInstanceId, hasExistingInstanceId } from "./instance-id.js";
 import { autoUpdater } from "electron-updater";
@@ -516,6 +516,26 @@ app.whenReady().then(() => {
         if (mainWindow && !mainWindow.isFocused()) {
             mainWindow.flashFrame(true);
         }
+    });
+
+    // ── Screen Share source discovery (PRD 12.6) ─────────────────────────
+    // Re-fetched every time the Selection Modal (PRD 12.10) opens — sources
+    // can appear/disappear as windows open/close, so this is deliberately
+    // not cached across calls. Thumbnail size is small (240×135, 16:9)
+    // since these are list-item previews, not the shared video itself.
+    ipcMain.handle("get-desktop-sources", async () => {
+        const sources = await desktopCapturer.getSources({
+            types: ["screen", "window"],
+            thumbnailSize: { width: 240, height: 135 },
+            fetchWindowIcons: true,
+        });
+        return sources.map((source) => ({
+            id: source.id,
+            name: source.name,
+            thumbnail: source.thumbnail.toDataURL(),
+            appIcon: source.appIcon && !source.appIcon.isEmpty() ? source.appIcon.toDataURL() : null,
+            sourceType: (source.id.startsWith("screen:") ? "screen" : "window") as "screen" | "window",
+        }));
     });
 
     createTray();
