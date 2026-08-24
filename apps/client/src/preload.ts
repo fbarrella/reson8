@@ -1232,6 +1232,7 @@ const api = {
         success: boolean;
         nudgeEnabled?: boolean;
         screenShareEnabled?: boolean;
+        name?: string;
         error?: string;
     }> {
         return new Promise((resolve) => {

@@ -423,12 +423,20 @@ export interface ClientToServerEvents {
         ack: (response: { success: boolean; error?: string }) => void,
     ) => void;
 
-    /** Fetches the current server's admin-configurable settings (nudgeEnabled, screenShareEnabled). */
+    /**
+     * Fetches the current server's admin-configurable settings
+     * (nudgeEnabled, screenShareEnabled) plus its display name — `name` is
+     * not admin-configurable via this channel (it's set once via
+     * `SERVER_NAME` at server bootstrap, see apps/server/src/index.ts),
+     * bundled here since this is already the "fetch server-wide info once
+     * connected" round trip the client makes.
+     */
     GET_SERVER_SETTINGS: (
         ack: (response: {
             success: boolean;
             nudgeEnabled?: boolean;
             screenShareEnabled?: boolean;
+            name?: string;
             error?: string;
         }) => void,
     ) => void;

@@ -54,12 +54,13 @@ export function registerNudgeHandlers(
             try {
                 const server = await app.prisma.server.findUnique({
                     where: { id: socket.data.serverId },
-                    select: { nudgeEnabled: true, screenShareEnabled: true },
+                    select: { name: true, nudgeEnabled: true, screenShareEnabled: true },
                 });
                 ack({
                     success: true,
                     nudgeEnabled: server?.nudgeEnabled ?? true,
                     screenShareEnabled: server?.screenShareEnabled ?? true,
+                    name: server?.name,
                 });
             } catch (err) {
                 app.log.error({ err }, "Error in GET_SERVER_SETTINGS");

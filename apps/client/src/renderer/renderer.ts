@@ -763,6 +763,7 @@ interface Reson8Api {
         success: boolean;
         nudgeEnabled?: boolean;
         screenShareEnabled?: boolean;
+        name?: string;
         error?: string;
     }>;
     updateServerSettings(
@@ -892,6 +893,21 @@ const lastNudgeSentAt = new Map<string, number>();
 // anyone actually watch a share while the toggle is off.
 let serverScreenShareEnabled = true;
 let isSharingScreen = false;
+/** The currently-connected server's display name, once fetched via getServerSettings() — null until then / after disconnect. */
+let connectedServerName: string | null = null;
+
+/**
+ * Composes the OS window title bar text — "Reson8" (or "Reson8 -
+ * [ServerName]" once known) with a 🔴 prefix while actively screen
+ * sharing. The two concerns (server name, live-sharing indicator) update
+ * independently and at different times, so this is the single place that
+ * combines them rather than each call site clobbering the other's part of
+ * the string.
+ */
+function updateWindowTitle(): void {
+    const base = connectedServerName ? `Reson8 - ${connectedServerName}` : "Reson8";
+    document.title = isSharingScreen ? `🔴 ${base}` : base;
+}
 
 function formatDuration(ms: number): string {
     // Defense in depth against residual clock skew (the offset applied by
@@ -1817,7 +1833,7 @@ function updateShareScreenButton(): void {
     // bigger stop button (`btnStopShareAlert`, wired below) and a
     // title-bar marker are the redundant, harder-to-miss cues instead.
     screenShareAlertBanner.classList.toggle("visible", isSharingScreen);
-    document.title = isSharingScreen ? "🔴 Reson8" : "Reson8";
+    updateWindowTitle();
     if (api.platform === "darwin") {
         btnShareScreen.title = "Screen sharing isn't available on macOS yet";
         btnShareScreen.disabled = true;
@@ -2268,7 +2284,8 @@ api.on("connected", (data: { serverId: string; instanceId: string }) => {
         }
     });
 
-    // Load the server-wide Nudge / Screen Sharing toggles
+    // Load the server-wide Nudge / Screen Sharing toggles, plus the
+    // server's display name for the window title bar.
     api.getServerSettings().then((res) => {
         if (res.success && res.nudgeEnabled !== undefined) {
             serverNudgeEnabled = res.nudgeEnabled;
@@ -2276,6 +2293,10 @@ api.on("connected", (data: { serverId: string; instanceId: string }) => {
         if (res.success && res.screenShareEnabled !== undefined) {
             serverScreenShareEnabled = res.screenShareEnabled;
             updateShareScreenButton();
+        }
+        if (res.success && res.name) {
+            connectedServerName = res.name;
+            updateWindowTitle();
         }
     });
 });
@@ -2290,6 +2311,8 @@ api.on("disconnected", () => {
     currentTree = [];
     customEmojis = [];
     previousOccupantIds = new Set();
+    connectedServerName = null;
+    updateWindowTitle();
     activeSpeakers.clear();
     for (const timer of speakerHoldTimers.values()) clearTimeout(timer);
     speakerHoldTimers.clear();
