@@ -767,6 +767,12 @@ interface Reson8Api {
             sourceType: "screen" | "window";
         }>
     >;
+    resolvePidForWindowSourceId(sourceId: string): Promise<number | undefined>;
+    startAppAudioCapture(
+        pid: number | undefined,
+        processName: string | undefined,
+    ): Promise<{ success: boolean; error?: string }>;
+    stopAppAudioCapture(): Promise<void>;
     on(event: string, callback: (...args: any[]) => void): void;
 }
 

@@ -68,6 +68,7 @@ export class VoiceService {
     private sendTransport: msTypes.Transport | null = null;
     private recvTransport: msTypes.Transport | null = null;
     private producer: msTypes.Producer | null = null;
+    private screenAudioProducer: msTypes.Producer | null = null;
     private consumers = new Map<string, msTypes.Consumer>();
     private audioElements = new Map<string, HTMLAudioElement>();
     private signaling: VoiceSignaling;
@@ -302,6 +303,34 @@ export class VoiceService {
     /** Set the preferred audio input device ID. */
     setAudioDeviceId(deviceId: string | null): void {
         this._audioDeviceId = deviceId;
+    }
+
+    // ── Screen share audio (PRD 12.7) ───────────────────────────────────────
+
+    /**
+     * Produces a screen-share audio track on the same send Transport already
+     * open for the mic — a second, independent mediasoup Producer, not a mix
+     * of the two. The track itself is assembled by the caller (preload.ts)
+     * from native-audio PCM frames via a `MediaStreamTrackGenerator`; this
+     * method only owns the mediasoup side, mirroring `startProducing()`.
+     * `appData.mediaType` lets the server (PRD 12.8) and other clients
+     * (PRD 12.12's sharing badge) tell this apart from the mic Producer and
+     * from the screen-video Producer.
+     */
+    async produceScreenAudio(track: MediaStreamTrack): Promise<void> {
+        if (!this.sendTransport) throw new Error("Send transport not ready");
+        this.screenAudioProducer = await this.sendTransport.produce({
+            track,
+            appData: { mediaType: "screen-audio" },
+        });
+    }
+
+    /** Stops and closes the screen-share audio Producer, if one is active. */
+    closeScreenAudioProducer(): void {
+        if (this.screenAudioProducer) {
+            this.screenAudioProducer.close();
+            this.screenAudioProducer = null;
+        }
     }
 
     /** Request mic access and start producing audio. */
@@ -770,6 +799,8 @@ export class VoiceService {
             this.producer.close();
             this.producer = null;
         }
+
+        this.closeScreenAudioProducer();
 
         for (const consumer of this.consumers.values()) {
             consumer.close();

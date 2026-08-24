@@ -23,6 +23,19 @@ type TypedSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 let socket: TypedSocket | null = null;
 let instanceId: string = "";
 let voiceService: VoiceService | null = null;
+
+// ── Screen share audio pipeline state (PRD 12.7) ────────────────────────
+// Owned here, not inside VoiceService, because assembling a MediaStreamTrack
+// from native-audio PCM frames requires ipcRenderer — VoiceService is kept
+// free of direct Electron/IPC coupling (it takes a `VoiceSignaling`
+// interface via constructor injection instead), and this preload script is
+// the layer that already owns that coupling for everything else.
+let screenAudioGenerator: MediaStreamTrackGenerator<AudioData> | null = null;
+let screenAudioWriter: WritableStreamDefaultWriter<AudioData> | null = null;
+/** Running sample count, used to derive monotonically increasing AudioData
+ *  timestamps from the sample rate rather than wall-clock time — avoids
+ *  drift/gaps if IPC delivery is jittery. */
+let screenAudioSamplesWritten = 0;
 let serverBaseUrl: string = "";
 let joinServerInFlight = false;
 let latencyMs: number = -1;
@@ -437,6 +450,14 @@ const api = {
             if (channelId) {
                 socket.emit("USER_LEAVE_CHANNEL", { channelId });
             }
+        }
+        // `voiceService.cleanup()` below closes the screen-audio mediasoup
+        // Producer, but not the native capture session or the
+        // MediaStreamTrackGenerator feeding it — those aren't owned by
+        // VoiceService at all (PRD 12.7), so they need their own teardown
+        // here rather than being implicitly covered by it.
+        if (screenAudioGenerator) {
+            void api.stopAppAudioCapture();
         }
         voiceService?.cleanup();
         // Reinitialize voice service for next join
@@ -866,6 +887,67 @@ const api = {
         return ipcRenderer.invoke("get-desktop-sources");
     },
 
+    // ── Screen Share audio pipeline (PRD 12.7) ────────────────────────────
+
+    /** Windows-only — resolves `undefined` on other platforms (see PRD 12.2). */
+    async resolvePidForWindowSourceId(sourceId: string): Promise<number | undefined> {
+        return ipcRenderer.invoke("resolve-pid-for-window-source-id", sourceId);
+    },
+
+    /**
+     * Starts native per-application loopback capture for the given target
+     * and, on success, produces it as a second mediasoup audio Producer on
+     * the current voice channel's send Transport (alongside, not mixed
+     * with, the mic Producer). Requires an active voice connection — the
+     * caller (PRD 12.9's Share Screen button) only reaches this while
+     * already connected, so `voiceService` being unset here is treated as a
+     * caller error, not a recoverable state.
+     */
+    async startAppAudioCapture(
+        pid: number | undefined,
+        processName: string | undefined,
+    ): Promise<{ success: boolean; error?: string }> {
+        if (!voiceService) {
+            return { success: false, error: "Not connected to voice" };
+        }
+
+        const result: { status: string } = await ipcRenderer.invoke("start-app-audio-capture", {
+            pid,
+            processName,
+        });
+        if (result.status !== "capturing") {
+            return { success: false, error: `Audio capture unavailable (${result.status})` };
+        }
+
+        screenAudioGenerator = new MediaStreamTrackGenerator({ kind: "audio" });
+        screenAudioWriter = screenAudioGenerator.writable.getWriter();
+        screenAudioSamplesWritten = 0;
+
+        try {
+            await voiceService.produceScreenAudio(screenAudioGenerator);
+            return { success: true };
+        } catch (err: any) {
+            // Native capture started but the mediasoup side failed — don't
+            // leave the capture (and, on the PulseAudio backend, its system
+            // audio reroute) running with nothing consuming its frames. Reuse
+            // the same teardown as a normal stop, rather than a shorter
+            // hand-rolled version, so this path doesn't skip the writer
+            // `.close()` call that path does.
+            await api.stopAppAudioCapture();
+            return { success: false, error: err?.message ?? "Failed to produce screen audio" };
+        }
+    },
+
+    async stopAppAudioCapture(): Promise<void> {
+        await ipcRenderer.invoke("stop-app-audio-capture");
+        voiceService?.closeScreenAudioProducer();
+        if (screenAudioWriter) {
+            screenAudioWriter.close().catch(() => {});
+            screenAudioWriter = null;
+        }
+        screenAudioGenerator = null;
+    },
+
     // ── Auto-Updater (PRD 10.1) ─────────────────────────────────────────────
 
     async checkForUpdates(): Promise<{ status: "available" | "not-available" | "error"; message?: string }> {
@@ -1038,6 +1120,39 @@ contextBridge.exposeInMainWorld("reson8Api", api);
 // ── PTT IPC from main process ─────────────────────────────────────────────
 ipcRenderer.on("ptt-pressed", () => emit("ptt-pressed", null));
 ipcRenderer.on("ptt-released", () => emit("ptt-released", null));
+
+// ── Screen share captured audio from main process (PRD 12.7) ───────────────
+// Registered once, not per-`startAppAudioCapture` call, matching this
+// file's existing convention for main→renderer push channels — a no-op
+// whenever `screenAudioWriter` isn't set (i.e. no share in progress).
+ipcRenderer.on(
+    "app-audio-frame",
+    (_event, frame: { pcm: Uint8Array; sampleRate: number; channels: number }) => {
+        if (!screenAudioWriter) return;
+        const { pcm, sampleRate, channels } = frame;
+        const numberOfFrames = Math.floor(pcm.byteLength / 2 / channels); // 16-bit PCM
+        if (numberOfFrames <= 0) return;
+        const timestamp = Math.round((screenAudioSamplesWritten / sampleRate) * 1_000_000);
+        try {
+            const audioData = new AudioData({
+                format: "s16",
+                sampleRate,
+                numberOfFrames,
+                numberOfChannels: channels,
+                timestamp,
+                // IPC-deserialized data is always a regular ArrayBuffer-backed
+                // view in practice, never SharedArrayBuffer-backed — this cast
+                // is just working around TS 5.7's stricter generic Uint8Array
+                // typing, not papering over a real runtime concern.
+                data: pcm as BufferSource,
+            });
+            screenAudioWriter.write(audioData);
+            screenAudioSamplesWritten += numberOfFrames;
+        } catch (err) {
+            console.error("[screen-share] Failed to write captured audio frame:", err);
+        }
+    },
+);
 
 // ── Auto-Updater IPC from main process (PRD 10.1) ──────────────────────────
 ipcRenderer.on("update-available", (_event, data: { version: string }) => emit("update-available", data));

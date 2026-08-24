@@ -9,6 +9,8 @@ import { app, BrowserWindow, session, ipcMain, globalShortcut, Menu, Tray, nativ
 import path from "node:path";
 import { getInstanceId, hasExistingInstanceId } from "./instance-id.js";
 import { autoUpdater } from "electron-updater";
+import { startCapture, resolvePidForWindowSourceId } from "@reson8/native-audio";
+import type { CaptureHandle } from "@reson8/native-audio";
 
 // ── Link Preview (metascraper) ───────────────────────────────────────────
 // @ts-ignore — metascraper packages lack type declarations
@@ -366,6 +368,9 @@ autoUpdater.autoDownload = false;
 // would spam an error event).
 let isDownloadingUpdate = false;
 
+/** Active native-audio capture session for a screen share, if any (PRD 12.7). */
+let screenAudioCapture: CaptureHandle | null = null;
+
 /** Single metadata-fetch attempt, resolved/rejected by whichever of
  *  update-available / update-not-available / error fires first. */
 function checkForUpdatesOnce(): Promise<"available" | "not-available"> {
@@ -538,6 +543,38 @@ app.whenReady().then(() => {
         }));
     });
 
+    // ── Screen Share audio capture (PRD 12.7) ────────────────────────────
+
+    // Windows-only export — `resolvePidForWindowSourceId` doesn't exist in
+    // the compiled native-audio addon on Linux/macOS (see windows.rs), so
+    // `require`d here it's simply `undefined` on those platforms.
+    ipcMain.handle("resolve-pid-for-window-source-id", (_event, sourceId: string) => {
+        return typeof resolvePidForWindowSourceId === "function"
+            ? resolvePidForWindowSourceId(sourceId)
+            : undefined;
+    });
+
+    ipcMain.handle(
+        "start-app-audio-capture",
+        (_event, target: { pid?: number; processName?: string }) => {
+            // A leftover session from a share that ended uncleanly (renderer
+            // crash, etc.) must not silently leak — always stop the previous
+            // one before starting a new one.
+            screenAudioCapture?.stop();
+
+            const handle = startCapture(target, (pcm, sampleRate, channels) => {
+                mainWindow?.webContents.send("app-audio-frame", { pcm, sampleRate, channels });
+            });
+            screenAudioCapture = handle;
+            return { status: handle.status };
+        },
+    );
+
+    ipcMain.handle("stop-app-audio-capture", () => {
+        screenAudioCapture?.stop();
+        screenAudioCapture = null;
+    });
+
     createTray();
     createWindow();
 });
@@ -545,6 +582,12 @@ app.whenReady().then(() => {
 // Ensure native quit signals (Cmd+Q, Alt+F4) bypass close-to-tray
 app.on("before-quit", () => {
     isQuitting = true;
+    // Don't leave a native-audio capture session running past app exit —
+    // on the PulseAudio backend in particular (PRD 12.3), that session has
+    // real system side effects (a rerouted null-sink) that won't clean
+    // themselves up on their own.
+    screenAudioCapture?.stop();
+    screenAudioCapture = null;
 });
 
 app.on("window-all-closed", () => {
