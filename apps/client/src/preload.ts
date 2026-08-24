@@ -954,6 +954,17 @@ const api = {
         screenAudioGenerator = null;
     },
 
+    /**
+     * Stops an active screen share entirely — video (PRD 12.8) and, if it
+     * was enabled, audio (PRD 12.7). Safe to call even if only video (or
+     * neither) was active: `stopAppAudioCapture`'s IPC/producer teardown is
+     * a no-op when there's nothing capturing.
+     */
+    async stopScreenShare(): Promise<void> {
+        voiceService?.stopScreenVideoProducing();
+        await api.stopAppAudioCapture();
+    },
+
     // ── Auto-Updater (PRD 10.1) ─────────────────────────────────────────────
 
     async checkForUpdates(): Promise<{ status: "available" | "not-available" | "error"; message?: string }> {

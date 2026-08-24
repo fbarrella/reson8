@@ -411,20 +411,25 @@
       }
     }
 
+    /* 2×2 grid (PRD 12.9) — Mute/Deafen on top, Share Screen/Leave below,
+       following DOM order (grid auto-placement fills left-to-right,
+       top-to-bottom, so no explicit grid-area assignment is needed). */
     #voice-controls {
-      display: flex;
-      gap: 4px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      grid-template-rows: 1fr 1fr;
+      gap: 6px;
     }
 
     .voice-btn {
-      flex: 1;
-      padding: 5px 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 6px 0;
       border: 1px solid var(--border);
       background: var(--bg-input);
       color: var(--text-secondary);
       border-radius: var(--radius);
-      font-size: 11px;
-      font-family: var(--font);
       cursor: pointer;
       transition: all 0.15s;
     }
@@ -448,6 +453,16 @@
     .voice-btn.leave:hover {
       background: var(--danger);
       color: #fff;
+    }
+
+    .voice-btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    .voice-btn:disabled:hover {
+      border-color: var(--border);
+      color: var(--text-secondary);
     }
 
     /* ── Right Pane (Tabbed Log / Chat) ──────────────────────────────── */
@@ -2501,9 +2516,31 @@
           </div>
         </div>
         <div id="voice-controls">
-          <button class="voice-btn" id="btn-mute" title="Mute">🎤 Mute</button>
-          <button class="voice-btn" id="btn-deafen" title="Deafen">🔊 Deafen</button>
-          <button class="voice-btn leave" id="btn-leave-voice" title="Leave Voice">✕</button>
+          <button class="voice-btn" id="btn-mute" title="Mute"><svg width="14" height="14" viewBox="0 0 24 24"
+              fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+              <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+              <line x1="12" y1="19" x2="12" y2="23" />
+              <line x1="8" y1="23" x2="16" y2="23" />
+            </svg></button>
+          <button class="voice-btn" id="btn-deafen" title="Deafen"><svg width="14" height="14" viewBox="0 0 24 24"
+              fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+              <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07" />
+            </svg></button>
+          <button class="voice-btn" id="btn-share-screen" title="Share Screen"><svg width="14" height="14"
+              viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+              stroke-linejoin="round">
+              <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+              <line x1="8" y1="21" x2="16" y2="21" />
+              <line x1="12" y1="17" x2="12" y2="21" />
+            </svg></button>
+          <button class="voice-btn leave" id="btn-leave-voice" title="Leave Voice"><svg width="14" height="14"
+              viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+              stroke-linejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg></button>
         </div>
       </div>
     </div>

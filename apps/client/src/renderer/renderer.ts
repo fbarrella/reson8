@@ -773,6 +773,7 @@ interface Reson8Api {
         processName: string | undefined,
     ): Promise<{ success: boolean; error?: string }>;
     stopAppAudioCapture(): Promise<void>;
+    stopScreenShare(): Promise<void>;
     on(event: string, callback: (...args: any[]) => void): void;
 }
 
@@ -858,6 +859,14 @@ let serverNudgeEnabled = true;
 const NUDGE_COOLDOWN_MS = 30 * 1000;
 const lastNudgeSentAt = new Map<string, number>();
 
+// Screen Share (PRD 12.9). `serverScreenShareEnabled` mirrors the
+// `serverNudgeEnabled` pattern above — PRD 12.14 will wire it to a real
+// GET_SERVER_SETTINGS field / SERVER_SETTINGS_UPDATED push the same way;
+// until then it stays permanently `true` (the admin toggle doesn't exist
+// yet, so there's nothing to disable it).
+let serverScreenShareEnabled = true;
+let isSharingScreen = false;
+
 function formatDuration(ms: number): string {
     // Defense in depth against residual clock skew (the offset applied by
     // callers is a single round-trip estimate, not a full NTP sync) — a
@@ -917,6 +926,7 @@ const voicePanel = document.getElementById("voice-panel") as HTMLDivElement;
 const voiceChannelName = document.getElementById("voice-channel-name") as HTMLSpanElement;
 const btnMute = document.getElementById("btn-mute") as HTMLButtonElement;
 const btnDeafen = document.getElementById("btn-deafen") as HTMLButtonElement;
+const btnShareScreen = document.getElementById("btn-share-screen") as HTMLButtonElement;
 const btnLeaveVoice = document.getElementById("btn-leave-voice") as HTMLButtonElement;
 
 const statusDot = document.getElementById("status-dot") as HTMLSpanElement;
@@ -1700,13 +1710,28 @@ function updateVoiceUI(channelName?: string): void {
         if (channelName) {
             voiceChannelName.textContent = `Voice: ${channelName}`;
         }
-        btnMute.textContent = isMuted ? "🔇 Unmute" : "🎤 Mute";
+        // Icon-only buttons (PRD 12.9) — state is conveyed by the `.active`
+        // (red) styling plus the tooltip, not by swapping label text.
+        btnMute.title = isMuted ? "Unmute" : "Mute";
         btnMute.classList.toggle("active", isMuted);
-        btnDeafen.textContent = isDeafened ? "🔇 Undeafen" : "🔊 Deafen";
+        btnDeafen.title = isDeafened ? "Undeafen" : "Deafen";
         btnDeafen.classList.toggle("active", isDeafened);
+        updateShareScreenButton();
     } else {
         voicePanel.classList.remove("visible");
+        isSharingScreen = false;
     }
+}
+
+/** Reflects sharing/enabled state on the Share Screen button (PRD 12.9). */
+function updateShareScreenButton(): void {
+    btnShareScreen.classList.toggle("active", isSharingScreen);
+    btnShareScreen.title = isSharingScreen
+        ? "Stop Sharing"
+        : serverScreenShareEnabled
+          ? "Share Screen"
+          : "Screen sharing is disabled on this server";
+    btnShareScreen.disabled = !serverScreenShareEnabled;
 }
 
 // Shared mute/deafen/disconnect logic — used by both the button click handlers
@@ -1768,6 +1793,19 @@ function leaveVoiceAndNotify(): void {
 btnMute.addEventListener("click", toggleMuteAndNotify);
 
 btnDeafen.addEventListener("click", toggleDeafenAndNotify);
+
+btnShareScreen.addEventListener("click", async () => {
+    if (isSharingScreen) {
+        await api.stopScreenShare();
+        isSharingScreen = false;
+        updateShareScreenButton();
+        return;
+    }
+    // PRD 12.10 — Selection Modal not implemented yet; this becomes opening
+    // that modal once it lands. Nothing to tear down here since a share
+    // can't have started without it.
+    log("Screen sharing isn't available yet — coming in a later update.", "info");
+});
 
 btnLeaveVoice.addEventListener("click", leaveVoiceAndNotify);
 
