@@ -4351,6 +4351,13 @@ function attachEditButton(bar: HTMLDivElement, msg: ChatMessage, el: HTMLDivElem
     const myId = api.getInstanceId();
     if (msg.userId !== myId || msg.attachmentUrl) return;
 
+    // Previously always rendered the button and only checked the window on
+    // click, surfacing the server's own rejection as an error log — the
+    // button should simply not be there once editing is no longer
+    // actually possible, not invite a click that's guaranteed to fail.
+    const remainingMs = EDIT_WINDOW_MS - (Date.now() - new Date(msg.createdAt).getTime());
+    if (remainingMs <= 0) return;
+
     const btnEdit = document.createElement("button");
     btnEdit.className = "btn-edit-msg";
     btnEdit.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>`;
@@ -4360,11 +4367,18 @@ function attachEditButton(bar: HTMLDivElement, msg: ChatMessage, el: HTMLDivElem
         const ageMs = Date.now() - new Date(msg.createdAt).getTime();
         if (ageMs > EDIT_WINDOW_MS) {
             log("Edit window has expired (2 minutes)", "error");
+            btnEdit.remove();
             return;
         }
         startMessageEdit(el, msg);
     });
     bar.appendChild(btnEdit);
+
+    // A message rendered well inside its edit window can still go stale
+    // while the channel stays open (e.g. rendered at 30s old, the channel
+    // sits open past the 2-minute mark) — remove the button exactly when
+    // that happens instead of only gating it at initial render.
+    setTimeout(() => btnEdit.remove(), remainingMs);
 }
 
 // ── Pinned Messages (PRD 11.5) ──────────────────────────────────────────────

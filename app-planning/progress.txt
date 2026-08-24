@@ -1474,3 +1474,38 @@ Scrollbar Discoverability (Phase 12 sub-phase, item 2/11)
   Next Step: continue through the remaining 9 items in this
   sub-phase.
 
+--- Entry: 24/08/2026 (5) ---
+
+Feature/Fix: Edit Message Button Now Hides Once Its Window Expires
+(Phase 12 sub-phase, item 3/11)
+
+  Problem: The pencil edit button on a user's own message stayed
+  visible forever, even long after the server's 2-minute edit window
+  (PRD 4.11) had passed. Clicking it after expiry just surfaced the
+  server's rejection as an error log — `attachEditButton()` only
+  ever checked message age inside the click handler, never at
+  render time.
+
+  Solution: `attachEditButton()` now computes the remaining time
+  before rendering anything and returns early (no button at all) if
+  the window has already lapsed. For a message still within its
+  window at render time, a `setTimeout` is scheduled for the exact
+  remaining duration to remove the button — covers a message going
+  stale *while visible* in a channel that stays open past the
+  2-minute mark, not just the initial-render case. The click
+  handler's own re-check (defense in depth against the timer being
+  wrong/delayed) now also removes the button on a late click instead
+  of just logging an error.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts — `attachEditButton()`
+
+  Verification:
+    - npx tsc --noEmit / --build — clean
+    - NOT live-tested yet (would need waiting out a real 2-minute
+      window) — queued for the user's manual pass at the end of this
+      sub-phase
+
+  Next Step: continue through the remaining 8 items in this
+  sub-phase.
+
