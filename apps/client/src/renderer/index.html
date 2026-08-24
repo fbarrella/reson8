@@ -2344,15 +2344,36 @@
     .emoji-category-tabs {
       display: flex;
       gap: 0;
-      padding: 2px 6px;
+      padding: 2px 6px 6px;
       flex: 1 1 auto;
       min-width: 0;
       overflow-x: auto;
-      scrollbar-width: none;
+      /* Was fully hidden (scrollbar-width: none / -webkit-scrollbar
+         display: none) — with the custom-emoji tab pinned outside this
+         row in its own fixed slot, there was no visible cue at all that
+         more category tabs exist off-screen. A thin, always-present
+         (not hover-only) scrollbar fixes discoverability without
+         reverting to the OS's full-size default, which would look out of
+         place in this custom dark UI. */
+      scrollbar-width: thin;
+      scrollbar-color: var(--border) transparent;
     }
 
     .emoji-category-tabs::-webkit-scrollbar {
-      display: none;
+      height: 5px;
+    }
+
+    .emoji-category-tabs::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    .emoji-category-tabs::-webkit-scrollbar-thumb {
+      background: var(--border);
+      border-radius: 3px;
+    }
+
+    .emoji-category-tabs::-webkit-scrollbar-thumb:hover {
+      background: var(--text-muted);
     }
 
     .emoji-custom-tab-slot {
@@ -2369,6 +2390,13 @@
       background: none;
       border: none;
       border-bottom: 2px solid transparent;
+      /* Category tabs render as emoji glyphs (which ignore `color`), but
+         the custom-emoji tab renders an SVG using `stroke`/`fill:
+         currentColor` — without this, `color` falls through to the
+         browser's initial black with nothing else in the ancestor chain
+         setting it, making that one icon nearly invisible on a dark
+         background. */
+      color: var(--text-primary);
       padding: 4px 6px;
       font-size: 16px;
       cursor: pointer;

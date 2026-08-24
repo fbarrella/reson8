@@ -1419,3 +1419,58 @@ sub-phase, item 1/11)
   Next Step: continue through the remaining 10 items in this
   sub-phase.
 
+--- Entry: 24/08/2026 (4) ---
+
+Feature/Fix: Emoji Picker Custom-Emoji Icon Visibility and Category
+Scrollbar Discoverability (Phase 12 sub-phase, item 2/11)
+
+  Problem: The custom-emoji quick-jump icon (a plain circle-plus SVG)
+  was nearly invisible — `.emoji-cat-tab` never sets a `color`, so
+  the SVG's `stroke="currentColor"` fell through to the browser's
+  initial black with nothing else in the ancestor chain overriding
+  it (every sibling category tab renders an emoji glyph instead,
+  which ignores `color`, so this was the only tab actually affected
+  — easy to miss without checking specifically). Separately, the
+  horizontal category-tabs row had its scrollbar fully hidden
+  (`scrollbar-width: none` / `-webkit-scrollbar { display: none }`),
+  giving no visual cue that more categories exist off-screen behind
+  the fixed custom-emoji slot.
+
+  Solution:
+    - Added `color: var(--text-primary)` to `.emoji-cat-tab`, fixing
+      the root cause directly (harmless for emoji-glyph tabs, fixes
+      any current/future SVG-based one).
+    - Replaced the icon itself with a filled sticker+plus design
+      (adapted from the user-provided reference,
+      app-planning/custom_emoji_icon.svg — an
+      ic_fluent_sticker_add_24_filled icon — recolored to
+      `fill="currentColor"` and resized to fit the existing 12x12
+      slot; path data reused as-is rather than hand-crafted, to
+      avoid introducing a worse bezier curve than a professionally
+      designed one) — reads as "custom emoji" rather than a generic
+      "add" circle.
+    - Replaced the hidden scrollbar with a thin (5px), always-visible
+      (not hover-only) styled one — `scrollbar-width: thin` +
+      `scrollbar-color` for Firefox, `::-webkit-scrollbar{-track,
+      -thumb}` for Chromium/Electron — matching the app's dark theme
+      rather than falling back to the OS's full-size default
+      scrollbar, which would look out of place here. Added a touch
+      of bottom padding to the row so the new scrollbar doesn't
+      visually crowd the tab icons above it.
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html — `.emoji-cat-tab` color
+      fix, `.emoji-category-tabs` scrollbar styling
+    apps/client/src/renderer/renderer.ts — custom-emoji tab icon SVG
+
+  Verification:
+    - npx tsc --noEmit / --build — clean
+    - NOT live-tested yet — queued for the user's manual pass at the
+      end of this sub-phase; the new scrollbar's exact visual weight
+      and the custom-tab-slot's vertical alignment against the
+      slightly-taller category row are both worth a look during that
+      pass
+
+  Next Step: continue through the remaining 9 items in this
+  sub-phase.
+
