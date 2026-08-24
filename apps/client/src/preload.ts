@@ -1168,7 +1168,12 @@ const api = {
         });
     },
 
-    getServerSettings(): Promise<{ success: boolean; nudgeEnabled?: boolean; error?: string }> {
+    getServerSettings(): Promise<{
+        success: boolean;
+        nudgeEnabled?: boolean;
+        screenShareEnabled?: boolean;
+        error?: string;
+    }> {
         return new Promise((resolve) => {
             if (!socket?.connected) {
                 resolve({ success: false, error: "Not connected" });
@@ -1178,13 +1183,15 @@ const api = {
         });
     },
 
-    updateServerSettings(nudgeEnabled: boolean): Promise<{ success: boolean; error?: string }> {
+    updateServerSettings(
+        settings: { nudgeEnabled?: boolean; screenShareEnabled?: boolean },
+    ): Promise<{ success: boolean; error?: string }> {
         return new Promise((resolve) => {
             if (!socket?.connected) {
                 resolve({ success: false, error: "Not connected" });
                 return;
             }
-            socket.emit("UPDATE_SERVER_SETTINGS", { nudgeEnabled }, resolve);
+            socket.emit("UPDATE_SERVER_SETTINGS", settings, resolve);
         });
     },
 };

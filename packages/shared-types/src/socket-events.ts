@@ -412,14 +412,24 @@ export interface ClientToServerEvents {
         ack: (response: { success: boolean; error?: string }) => void,
     ) => void;
 
-    /** Fetches the current server's admin-configurable settings (currently just nudgeEnabled). */
+    /** Fetches the current server's admin-configurable settings (nudgeEnabled, screenShareEnabled). */
     GET_SERVER_SETTINGS: (
-        ack: (response: { success: boolean; nudgeEnabled?: boolean; error?: string }) => void,
+        ack: (response: {
+            success: boolean;
+            nudgeEnabled?: boolean;
+            screenShareEnabled?: boolean;
+            error?: string;
+        }) => void,
     ) => void;
 
-    /** Updates server-wide settings. Requires ADMIN. */
+    /**
+     * Updates server-wide settings. Requires ADMIN. Each field is optional so
+     * a single toggle (e.g. just Nudge) can be updated without touching the
+     * other — the handler only writes whichever fields are present in the
+     * payload (PRD 12.14).
+     */
     UPDATE_SERVER_SETTINGS: (
-        payload: { nudgeEnabled: boolean },
+        payload: { nudgeEnabled?: boolean; screenShareEnabled?: boolean },
         ack: (response: { success: boolean; error?: string }) => void,
     ) => void;
 }
@@ -551,7 +561,7 @@ export interface ServerToClientEvents {
     NUDGE_RECEIVED: (payload: { fromUserId: string; fromNickname: string }) => void;
 
     /** Broadcasts a server settings change so every connected client updates live. */
-    SERVER_SETTINGS_UPDATED: (payload: { nudgeEnabled: boolean }) => void;
+    SERVER_SETTINGS_UPDATED: (payload: { nudgeEnabled: boolean; screenShareEnabled: boolean }) => void;
 
     /**
      * Notifies a channel's occupants that their voice session was force-closed

@@ -16,13 +16,14 @@ datasource db {
 // ---------------------------------------------------------------------------
 
 model Server {
-  id           String   @id @default(uuid())
-  name         String
-  address      String
-  maxClients   Int      @default(32)
-  nudgeEnabled Boolean  @default(true)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id                 String   @id @default(uuid())
+  name               String
+  address            String
+  maxClients         Int      @default(32)
+  nudgeEnabled       Boolean  @default(true)
+  screenShareEnabled Boolean  @default(true)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 
   channels     Channel[]
   roles        Role[]

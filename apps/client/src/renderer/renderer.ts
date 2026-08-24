@@ -758,8 +758,15 @@ interface Reson8Api {
     getPendingEmojis(): Promise<{ success: boolean; emojis?: CustomEmoji[]; error?: string }>;
     reviewCustomEmoji(emojiId: string, decision: "APPROVED" | "REJECTED"): Promise<{ success: boolean; error?: string }>;
     nudgeUser(targetUserId: string): Promise<{ success: boolean; error?: string }>;
-    getServerSettings(): Promise<{ success: boolean; nudgeEnabled?: boolean; error?: string }>;
-    updateServerSettings(nudgeEnabled: boolean): Promise<{ success: boolean; error?: string }>;
+    getServerSettings(): Promise<{
+        success: boolean;
+        nudgeEnabled?: boolean;
+        screenShareEnabled?: boolean;
+        error?: string;
+    }>;
+    updateServerSettings(
+        settings: { nudgeEnabled?: boolean; screenShareEnabled?: boolean },
+    ): Promise<{ success: boolean; error?: string }>;
     getDesktopSources(): Promise<
         Array<{
             id: string;
@@ -869,10 +876,10 @@ const NUDGE_COOLDOWN_MS = 30 * 1000;
 const lastNudgeSentAt = new Map<string, number>();
 
 // Screen Share (PRD 12.9). `serverScreenShareEnabled` mirrors the
-// `serverNudgeEnabled` pattern above — PRD 12.14 will wire it to a real
-// GET_SERVER_SETTINGS field / SERVER_SETTINGS_UPDATED push the same way;
-// until then it stays permanently `true` (the admin toggle doesn't exist
-// yet, so there's nothing to disable it).
+// `serverNudgeEnabled` pattern above — refreshed on (re)connect and kept
+// live via SERVER_SETTINGS_UPDATED (PRD 12.14). This is a UX convenience
+// only (disables the button); the server independently refuses to let
+// anyone actually watch a share while the toggle is off.
 let serverScreenShareEnabled = true;
 let isSharingScreen = false;
 
@@ -1012,6 +1019,7 @@ const settingsTabEmojis = document.getElementById("settings-tab-emojis") as HTML
 const emojiPendingList = document.getElementById("emoji-pending-list") as HTMLDivElement;
 const settingsTabServer = document.getElementById("settings-tab-server") as HTMLButtonElement;
 const chkNudgeEnabled = document.getElementById("chk-nudge-enabled") as HTMLInputElement;
+const chkScreenShareEnabled = document.getElementById("chk-screen-share-enabled") as HTMLInputElement;
 
 // About tab (PRD 10.1)
 const aboutVersion = document.getElementById("about-version") as HTMLDivElement;
@@ -2100,10 +2108,14 @@ api.on("connected", (data: { serverId: string; instanceId: string }) => {
         }
     });
 
-    // Load the server-wide Nudge toggle
+    // Load the server-wide Nudge / Screen Sharing toggles
     api.getServerSettings().then((res) => {
         if (res.success && res.nudgeEnabled !== undefined) {
             serverNudgeEnabled = res.nudgeEnabled;
+        }
+        if (res.success && res.screenShareEnabled !== undefined) {
+            serverScreenShareEnabled = res.screenShareEnabled;
+            updateShareScreenButton();
         }
     });
 });
@@ -3463,6 +3475,7 @@ async function openSettingsPanel(): Promise<void> {
             const settingsRes = await api.getServerSettings();
             if (settingsRes.success) {
                 chkNudgeEnabled.checked = settingsRes.nudgeEnabled ?? true;
+                chkScreenShareEnabled.checked = settingsRes.screenShareEnabled ?? true;
             }
         }
     } else {
@@ -3529,12 +3542,26 @@ btnServerSettings.addEventListener("click", () => {
 
 chkNudgeEnabled.addEventListener("change", async () => {
     const desired = chkNudgeEnabled.checked;
-    const result = await api.updateServerSettings(desired);
+    const result = await api.updateServerSettings({ nudgeEnabled: desired });
     if (result.success) {
         serverNudgeEnabled = desired;
         log(`Nudge ${desired ? "enabled" : "disabled"} for this server`, "success");
     } else {
         chkNudgeEnabled.checked = !desired; // revert on failure
+        log(`Failed to update server settings: ${result.error}`, "error");
+        if (result.error && /permission|denied/i.test(result.error)) SoundAlert.play("insufficient_perms.mp3");
+    }
+});
+
+chkScreenShareEnabled.addEventListener("change", async () => {
+    const desired = chkScreenShareEnabled.checked;
+    const result = await api.updateServerSettings({ screenShareEnabled: desired });
+    if (result.success) {
+        serverScreenShareEnabled = desired;
+        updateShareScreenButton();
+        log(`Screen sharing ${desired ? "enabled" : "disabled"} for this server`, "success");
+    } else {
+        chkScreenShareEnabled.checked = !desired; // revert on failure
         log(`Failed to update server settings: ${result.error}`, "error");
         if (result.error && /permission|denied/i.test(result.error)) SoundAlert.play("insufficient_perms.mp3");
     }
@@ -4598,7 +4625,7 @@ api.on("custom-emoji-approved", (data: { serverId: string; emoji: CustomEmoji })
 
 // ── Nudge (PRD 4.14) ─────────────────────────────────────────────────────
 
-api.on("server-settings-updated", (data: { nudgeEnabled: boolean }) => {
+api.on("server-settings-updated", (data: { nudgeEnabled: boolean; screenShareEnabled: boolean }) => {
     serverNudgeEnabled = data.nudgeEnabled;
     // If the Online Users modal is open, re-render so Nudge buttons appear/disappear live.
     if (onlineUsersModal.classList.contains("visible")) {
@@ -4606,6 +4633,12 @@ api.on("server-settings-updated", (data: { nudgeEnabled: boolean }) => {
             if (res.success && res.users) renderOnlineUsers(res.users);
         });
     }
+
+    // PRD 12.14 — live-disable the Share Screen button for everyone the
+    // moment an admin flips the server-wide toggle, same push path Nudge
+    // already uses.
+    serverScreenShareEnabled = data.screenShareEnabled;
+    updateShareScreenButton();
 });
 
 api.on("nudge-received", async (data: { fromUserId: string; fromNickname: string }) => {

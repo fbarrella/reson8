@@ -444,22 +444,30 @@ export function registerVoiceHandlers(
         // ── SET_SCREEN_SHARE_STATE (PRD 12.12) ──────────────────────────────
         socket.on("SET_SCREEN_SHARE_STATE", async (payload, ack) => {
             try {
-                const { isSharingScreen } = payload;
+                let { isSharingScreen } = payload;
                 const userId = socket.data.userId;
                 const channelId = socket.data.currentChannelId;
 
                 // Defense in depth (never trust client-only gating) — same
                 // pattern as nudge.handler.ts checking `nudgeEnabled`
-                // server-side even though the client already hides the
-                // button when disabled. PRD 12.14 adds the real
-                // `screenShareEnabled` server column/toggle; until that
-                // lands there's nothing to check here yet, so `true` is
-                // always honored. This is the marker for where that check
-                // plugs in once it exists (will need `isSharingScreen`
-                // changed from `const` to `let` at that point):
-                //   if (isSharingScreen && !(await getServerScreenShareEnabled(serverId))) {
-                //       isSharingScreen = false;
-                //   }
+                // server-side even though the client already hides/disables
+                // the button when disabled (PRD 12.14). This call is
+                // fire-and-forget from the client (`preload.ts`'s
+                // `setScreenShareState` ignores its ack), so there's nothing
+                // useful to reject with an error — coercing to `false`
+                // instead just means the presence flag (and therefore the
+                // sharing badge) never turns on, and `WATCH_SCREEN_SHARE`
+                // below independently refuses to let anyone actually consume
+                // the stream either way.
+                if (isSharingScreen) {
+                    const server = await app.prisma.server.findUnique({
+                        where: { id: socket.data.serverId },
+                        select: { screenShareEnabled: true },
+                    });
+                    if (!server?.screenShareEnabled) {
+                        isSharingScreen = false;
+                    }
+                }
 
                 await presence.setScreenShareState(userId, isSharingScreen);
 
@@ -493,6 +501,21 @@ export function registerVoiceHandlers(
         socket.on("WATCH_SCREEN_SHARE", async (payload, ack) => {
             try {
                 const { targetUserId, channelId } = payload;
+
+                // Defense in depth (PRD 12.14) — even if a producer somehow
+                // exists (e.g. a modified client bypassed its disabled Share
+                // Screen button), nobody can actually consume it once the
+                // server-wide toggle is off. This is the real enforcement
+                // point: `SET_SCREEN_SHARE_STATE` above only gates the
+                // presence flag/badge, not producing itself.
+                const server = await app.prisma.server.findUnique({
+                    where: { id: socket.data.serverId },
+                    select: { screenShareEnabled: true },
+                });
+                if (!server?.screenShareEnabled) {
+                    ack({ success: false, error: "Screen sharing is disabled on this server" });
+                    return;
+                }
 
                 // Caller must currently be an occupant of this channel —
                 // this is the actual access control for screen sharing

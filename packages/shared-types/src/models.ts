@@ -45,6 +45,7 @@ export interface IServer {
     address: string;
     maxClients: number;
     nudgeEnabled: boolean;
+    screenShareEnabled: boolean;
     createdAt: string; // ISO-8601
 }
 

@@ -54,9 +54,13 @@ export function registerNudgeHandlers(
             try {
                 const server = await app.prisma.server.findUnique({
                     where: { id: socket.data.serverId },
-                    select: { nudgeEnabled: true },
+                    select: { nudgeEnabled: true, screenShareEnabled: true },
                 });
-                ack({ success: true, nudgeEnabled: server?.nudgeEnabled ?? true });
+                ack({
+                    success: true,
+                    nudgeEnabled: server?.nudgeEnabled ?? true,
+                    screenShareEnabled: server?.screenShareEnabled ?? true,
+                });
             } catch (err) {
                 app.log.error({ err }, "Error in GET_SERVER_SETTINGS");
                 ack({ success: false });
@@ -64,6 +68,11 @@ export function registerNudgeHandlers(
         });
 
         // ── UPDATE_SERVER_SETTINGS ──────────────────────────────────────────
+        // Each field in the payload is optional (PRD 12.14) — a toggle only
+        // sends the one setting it changed, so `data` below is built from
+        // whichever fields are actually present rather than always writing
+        // both (which would silently reset the other to whatever the caller
+        // happened to have loaded, on a stale client).
         socket.on("UPDATE_SERVER_SETTINGS", async (payload, ack) => {
             try {
                 const allowed = await requirePermission(
@@ -74,20 +83,26 @@ export function registerNudgeHandlers(
                     return;
                 }
 
-                const { nudgeEnabled } = payload;
-                await app.prisma.server.update({
+                const { nudgeEnabled, screenShareEnabled } = payload;
+                const data: { nudgeEnabled?: boolean; screenShareEnabled?: boolean } = {};
+                if (nudgeEnabled !== undefined) data.nudgeEnabled = nudgeEnabled;
+                if (screenShareEnabled !== undefined) data.screenShareEnabled = screenShareEnabled;
+
+                const updated = await app.prisma.server.update({
                     where: { id: socket.data.serverId },
-                    data: { nudgeEnabled },
+                    data,
+                    select: { nudgeEnabled: true, screenShareEnabled: true },
                 });
 
                 ack({ success: true });
 
                 io.to(`server:${socket.data.serverId}`).emit("SERVER_SETTINGS_UPDATED", {
-                    nudgeEnabled,
+                    nudgeEnabled: updated.nudgeEnabled,
+                    screenShareEnabled: updated.screenShareEnabled,
                 });
 
                 app.log.info(
-                    { socketId: socket.id, nudgeEnabled },
+                    { socketId: socket.id, ...data },
                     "Server settings updated",
                 );
             } catch (err) {
