@@ -583,10 +583,7 @@ export class VoiceService {
         const ctx = this.getPlaybackAudioContext();
         const source = ctx.createMediaStreamSource(stream);
         const gainNode = ctx.createGain();
-        const override = this.remoteUserOverrides.get(userId);
-        gainNode.gain.value = override
-            ? (override.muted ? 0 : (override.volumePercent / 100) * this.globalVoiceVolume)
-            : this.globalVoiceVolume;
+        gainNode.gain.value = this.computeGainForUser(userId);
         source.connect(gainNode).connect(ctx.destination);
         this.remoteMediaSources.set(consumer.id, source);
         this.remoteGainNodes.set(consumer.id, gainNode);
@@ -635,14 +632,27 @@ export class VoiceService {
         return this.playbackAudioContext;
     }
 
-    private applyOverrideForUser(userId: string, override: { volumePercent: number; muted: boolean }): void {
+    private applyOverrideForUser(userId: string): void {
         for (const [consumerId, uid] of this.consumerIdToUserId) {
             if (uid !== userId) continue;
             const gain = this.remoteGainNodes.get(consumerId);
             if (gain) {
-                gain.gain.value = override.muted ? 0 : (override.volumePercent / 100) * this.globalVoiceVolume;
+                gain.gain.value = this.computeGainForUser(userId);
             }
         }
+    }
+
+    /** Computes the actual GainNode value for a remote participant, factoring
+     *  in their per-user override, the master volume attenuator, and local
+     *  deafen. Deafen wins outright — 0 regardless of any other setting —
+     *  since it must silence everyone, including participants consumed
+     *  *after* deafen was toggled on (PRD 10.4 follow-up). */
+    private computeGainForUser(userId: string): number {
+        if (this._isDeafened) return 0;
+        const override = this.remoteUserOverrides.get(userId);
+        return override
+            ? (override.muted ? 0 : (override.volumePercent / 100) * this.globalVoiceVolume)
+            : this.globalVoiceVolume;
     }
 
     /** Set the master voice-chat volume attenuator (0-100%, PRD 10.2). Applied
@@ -653,10 +663,7 @@ export class VoiceService {
         for (const [consumerId, userId] of this.consumerIdToUserId) {
             const gain = this.remoteGainNodes.get(consumerId);
             if (!gain) continue;
-            const override = this.remoteUserOverrides.get(userId);
-            gain.gain.value = override
-                ? (override.muted ? 0 : (override.volumePercent / 100) * this.globalVoiceVolume)
-                : this.globalVoiceVolume;
+            gain.gain.value = this.computeGainForUser(userId);
         }
     }
 
@@ -666,7 +673,7 @@ export class VoiceService {
         const existing = this.remoteUserOverrides.get(userId) ?? { volumePercent: 100, muted: false };
         existing.volumePercent = clamped;
         this.remoteUserOverrides.set(userId, existing);
-        this.applyOverrideForUser(userId, existing);
+        this.applyOverrideForUser(userId);
     }
 
     /** Mute/unmute a remote participant locally, preserving their configured volume. Client-local only. */
@@ -674,7 +681,7 @@ export class VoiceService {
         const existing = this.remoteUserOverrides.get(userId) ?? { volumePercent: 100, muted: false };
         existing.muted = muted;
         this.remoteUserOverrides.set(userId, existing);
-        this.applyOverrideForUser(userId, existing);
+        this.applyOverrideForUser(userId);
     }
 
     getLocalUserVolume(userId: string): number {
@@ -727,20 +734,24 @@ export class VoiceService {
                 this.producer.pause();
                 this._isManuallyMuted = true;
             }
-            for (const audio of this.audioElements.values()) {
-                audio.muted = true;
-            }
             this._isDeafened = true;
         } else {
-            for (const audio of this.audioElements.values()) {
-                audio.muted = false;
-            }
             this._isDeafened = false;
             if (this._deafenAutoMuted && this.producer) {
                 this.producer.resume();
                 this._isManuallyMuted = false;
             }
             this._deafenAutoMuted = false;
+        }
+        // Re-derive every currently-consumed participant's GainNode from
+        // computeGainForUser(), which itself checks `_isDeafened` first —
+        // this also fixes a participant who is *consumed after* deafen was
+        // toggled on: consumeProducer() calls the same helper, so a newly
+        // joined speaker starts silenced too, rather than only whoever was
+        // already in the channel at toggle time (the original bug here).
+        for (const [consumerId, userId] of this.consumerIdToUserId) {
+            const gain = this.remoteGainNodes.get(consumerId);
+            if (gain) gain.gain.value = this.computeGainForUser(userId);
         }
         return { isMuted: this.producer?.paused ?? false, isDeafened: this._isDeafened };
     }

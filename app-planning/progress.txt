@@ -1883,3 +1883,59 @@ After Long Sessions (Phase 12 sub-phase, item 9/11)
   Next Step: continue through the remaining 2 items in this
   sub-phase (10, 11).
 
+--- Entry: 25/08/2026 (12) ---
+
+Feature/Fix: Fixed Deafen Not Applying to Participants Consumed After
+Toggle-On (Phase 12 sub-phase, item 10/11)
+
+  Problem: a user joining a voice channel *after* local deafen was
+  already activated could still sometimes be heard — deafen only
+  reliably silenced participants who were already being consumed at
+  the moment it was toggled on.
+
+  Root cause: `toggleDeafen()` silenced sound by setting
+  `audio.muted = true/false` directly on each currently-tracked
+  `<audio>` element — a one-shot pass over whoever existed in
+  `audioElements` at that instant. `consumeProducer()`, which runs
+  for every participant consumed *afterward*, never checked
+  `_isDeafened` at all, so a newly-consumed participant's element
+  always started unmuted regardless of the current deafen state.
+
+  This bug was about to get considerably worse as a side effect of
+  entry (10) above: that fix made every remote `<audio>` element
+  permanently `muted = true` (audible output now flows solely through
+  the per-user GainNode graph via `createMediaStreamSource`), which
+  would have made `toggleDeafen()`'s `audio.muted` toggling
+  completely inert for everyone, not just late joiners — caught and
+  fixed here before it shipped.
+
+  Solution: introduced a single `computeGainForUser(userId)` helper
+  that derives a participant's GainNode value from three inputs —
+  their per-user volume/mute override, the master volume attenuator,
+  and `_isDeafened` (deafen wins outright, forcing 0 regardless of
+  anything else) — and wired every gain-setting site through it:
+  `consumeProducer()`'s initial gain, `applyOverrideForUser()`
+  (per-user slider/mute), and `setGlobalVoiceVolume()` (master
+  slider), all previously duplicating the override-only formula
+  inline. `toggleDeafen()` no longer touches `<audio>.muted` at all;
+  it flips `_isDeafened` and then re-derives every currently-tracked
+  consumer's gain via the same helper. Because `consumeProducer()`
+  now consults `_isDeafened` through that same helper, a participant
+  consumed after deafen was toggled on starts correctly silenced —
+  fixing both the original bug and the regression entry (10) would
+  otherwise have introduced.
+
+  Key Files Modified:
+    apps/client/src/services/voice.service.ts — new
+      `computeGainForUser()`; `consumeProducer()`,
+      `applyOverrideForUser()`, `setGlobalVoiceVolume()`, and
+      `toggleDeafen()` all updated to use it
+
+  Verification:
+    - npx tsc --noEmit — clean
+    - Not yet live-tested by the user (deafen-then-late-join is a
+      two-client, precisely-timed scenario) — flag if deafen still
+      leaks audio for a late joiner after this ships
+
+  Next Step: continue through the last item in this sub-phase (11).
+
