@@ -1347,6 +1347,7 @@
     #admin-modal,
     #update-modal,
     #whats-new-modal,
+    #version-mismatch-modal,
     #pin-replace-confirm-modal,
     #screen-share-modal,
     #watch-share-confirm-modal,
@@ -1373,6 +1374,7 @@
     #admin-modal.visible,
     #update-modal.visible,
     #whats-new-modal.visible,
+    #version-mismatch-modal.visible,
     #pin-replace-confirm-modal.visible,
     #screen-share-modal.visible,
     #watch-share-confirm-modal.visible,
@@ -2977,6 +2979,18 @@
       <div class="modal-actions">
         <button class="btn btn-cancel" id="btn-update-later">Not Now</button>
         <button class="btn btn-create" id="btn-update-now">Update Now</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Client/Server Version Mismatch Modal (Phase 12 sub-phase, item 11) ─ -->
+  <div id="version-mismatch-modal">
+    <div class="modal-content">
+      <h3 id="version-mismatch-title">⚠️ Version Mismatch</h3>
+      <p id="version-mismatch-message"></p>
+      <div class="modal-actions">
+        <button class="btn btn-cancel" id="btn-version-mismatch-dismiss">Dismiss</button>
+        <button class="btn btn-create" id="btn-version-mismatch-releases" style="display:none;">View Releases</button>
       </div>
     </div>
   </div>

@@ -1939,3 +1939,68 @@ Toggle-On (Phase 12 sub-phase, item 10/11)
 
   Next Step: continue through the last item in this sub-phase (11).
 
+--- Entry: 25/08/2026 (13) ---
+
+Feature/Fix: Client/Server Version Mismatch Warning (Phase 12
+sub-phase, item 11/11 — final item)
+
+  Problem: no warning existed if a client's version didn't match the
+  server it connected to, in either direction — a stale client
+  against an upgraded server (or vice versa) could silently hit
+  protocol/behavior differences with no indication why.
+
+  Solution: the server's own running build version (read once from
+  apps/server/package.json at import time, not admin-configurable —
+  distinct from the DB-backed `Server.name`) is now bundled into the
+  existing GET_SERVER_SETTINGS ack, alongside `name`/
+  `maxMessageLength` already added earlier this sub-phase — no new
+  socket event needed, reusing the "fetch server-wide info once
+  connected" round trip. On every connection, the client compares
+  this against its own `getAppVersion()` (already used for the About
+  tab / What's New modal) with a small major.minor.patch comparator.
+  Any difference at all (per explicit requirement — warn in either
+  direction, not just "server is newer") shows a modal with both
+  actual version numbers. A "View Releases" button (linking to the
+  project's GitHub releases page) appears only when the server is
+  newer — the client's fix is to update itself; a newer client
+  against an older server has no client-side action to offer, so
+  only the plain warning shows. Not persisted/dismissed-forever like
+  the What's New modal — a mismatch is a per-connection fact (the
+  next server connected to might not have one), so it re-warns on
+  every connection where it's still true, and dismissal only closes
+  it for that instance.
+
+  Key Files Modified:
+    packages/shared-types/src/socket-events.ts — GET_SERVER_SETTINGS
+      ack gains `version?: string`
+    apps/server/src/config/version.config.ts (NEW) — reads
+      `SERVER_VERSION` from package.json once at import time
+    apps/server/src/handlers/nudge.handler.ts — GET_SERVER_SETTINGS
+      now returns `version: SERVER_VERSION`
+    apps/client/src/preload.ts — `getServerSettings()` return type
+      gains `version?: string`
+    apps/client/src/renderer/renderer.ts — matching interface update;
+      new `compareVersions()` and `checkVersionMismatch()`, wired
+      into the connect-time GET_SERVER_SETTINGS callback; new modal
+      DOM refs and button handlers
+    apps/client/src/renderer/index.html — new
+      `#version-mismatch-modal` (styled like the existing
+      auto-updater modal), added to the shared modal
+      display/visibility CSS selector lists
+
+  Verification:
+    - npx tsc --build (shared-types) — clean
+    - npx tsc --noEmit (server) — clean
+    - npm run test (server) — 19/19 passing, unchanged
+    - npx tsc --noEmit (client) — clean
+    - Not yet live-tested (requires connecting a client to a server
+      running a genuinely different version)
+
+  Next Step: this was the last item in the Phase 12 sub-phase
+  (11/11). All items now implemented and committed. Per the user's
+  process instructions: wait for their explicit confirmation that
+  everything has been tested (they're doing manual testing for what
+  couldn't be automated here) before running /bump-version and
+  writing one consolidated release description spanning all of
+  Phase 12 (the original 14-item PRD) plus this entire sub-phase.
+

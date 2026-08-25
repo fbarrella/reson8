@@ -765,6 +765,7 @@ interface Reson8Api {
         screenShareEnabled?: boolean;
         name?: string;
         maxMessageLength?: number;
+        version?: string;
         error?: string;
     }>;
     updateServerSettings(
@@ -1082,6 +1083,11 @@ const whatsNewTitle = document.getElementById("whats-new-title") as HTMLHeadingE
 const whatsNewBody = document.getElementById("whats-new-body") as HTMLDivElement;
 const btnWhatsNewGithub = document.getElementById("btn-whats-new-github") as HTMLButtonElement;
 const btnWhatsNewDismiss = document.getElementById("btn-whats-new-dismiss") as HTMLButtonElement;
+
+const versionMismatchModal = document.getElementById("version-mismatch-modal") as HTMLDivElement;
+const versionMismatchMessage = document.getElementById("version-mismatch-message") as HTMLParagraphElement;
+const btnVersionMismatchDismiss = document.getElementById("btn-version-mismatch-dismiss") as HTMLButtonElement;
+const btnVersionMismatchReleases = document.getElementById("btn-version-mismatch-releases") as HTMLButtonElement;
 
 // Audio device selects (inside settings modal voice tab)
 const audioInputSelect = document.getElementById("audio-input-select") as HTMLSelectElement;
@@ -2322,6 +2328,9 @@ api.on("connected", (data: { serverId: string; instanceId: string }) => {
         if (res.success && res.maxMessageLength !== undefined) {
             serverMaxMessageLength = res.maxMessageLength;
             chatInput.maxLength = serverMaxMessageLength;
+        }
+        if (res.success && res.version) {
+            checkVersionMismatch(res.version);
         }
     });
 });
@@ -5601,6 +5610,48 @@ whatsNewModal.addEventListener("click", (e) => {
         whatsNewModal.classList.remove("visible");
         // Not marked as seen — an accidental backdrop click shouldn't
         // permanently suppress the notification.
+    }
+});
+
+// ── Client/Server Version Mismatch Warning (Phase 12 sub-phase, item 11) ───
+// Warns on ANY difference between the connected server's version and this
+// client's own version, in either direction, showing both numbers. Not
+// persisted/dismissed-forever like "What's New" above — a mismatch is a
+// per-connection fact (you might connect to a different, up-to-date server
+// next), so it's re-shown on every connection where it's still true.
+function compareVersions(a: string, b: string): number {
+    const pa = a.split(".").map(Number);
+    const pb = b.split(".").map(Number);
+    for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+        const diff = (pa[i] ?? 0) - (pb[i] ?? 0);
+        if (diff !== 0) return diff;
+    }
+    return 0;
+}
+
+async function checkVersionMismatch(serverVersion: string): Promise<void> {
+    const clientVersion = await api.getAppVersion();
+    if (clientVersion === serverVersion) return;
+
+    const serverIsNewer = compareVersions(serverVersion, clientVersion) > 0;
+    versionMismatchMessage.textContent = serverIsNewer
+        ? `This server is running v${serverVersion}, but your client is v${clientVersion}. Some features might not work correctly until you update.`
+        : `Your client is v${clientVersion}, but this server is running v${serverVersion}. Some features might not work correctly until the server is updated.`;
+    btnVersionMismatchReleases.style.display = serverIsNewer ? "" : "none";
+    versionMismatchModal.classList.add("visible");
+}
+
+btnVersionMismatchDismiss.addEventListener("click", () => {
+    versionMismatchModal.classList.remove("visible");
+});
+
+btnVersionMismatchReleases.addEventListener("click", () => {
+    window.open("https://github.com/fbarrella/reson8/releases", "_blank");
+});
+
+versionMismatchModal.addEventListener("click", (e) => {
+    if (e.target === versionMismatchModal) {
+        versionMismatchModal.classList.remove("visible");
     }
 });
 

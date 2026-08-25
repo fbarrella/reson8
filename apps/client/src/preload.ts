@@ -1234,6 +1234,7 @@ const api = {
         screenShareEnabled?: boolean;
         name?: string;
         maxMessageLength?: number;
+        version?: string;
         error?: string;
     }> {
         return new Promise((resolve) => {

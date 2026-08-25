@@ -439,6 +439,8 @@ export interface ClientToServerEvents {
             name?: string;
             /** Admin-configurable cap on a single message's content length (channel messages and DMs alike). */
             maxMessageLength?: number;
+            /** The running server build's version (from apps/server/package.json), for client/server version-mismatch warnings. */
+            version?: string;
             error?: string;
         }) => void,
     ) => void;

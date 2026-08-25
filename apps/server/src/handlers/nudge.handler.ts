@@ -27,6 +27,7 @@ import {
     MIN_MAX_MESSAGE_LENGTH,
     MAX_MAX_MESSAGE_LENGTH,
 } from "../config/message.config.js";
+import { SERVER_VERSION } from "../config/version.config.js";
 
 type TypedIO = SocketIOServer<
     ClientToServerEvents,
@@ -72,6 +73,7 @@ export function registerNudgeHandlers(
                     screenShareEnabled: server?.screenShareEnabled ?? true,
                     name: server?.name,
                     maxMessageLength: server?.maxMessageLength ?? DEFAULT_MAX_MESSAGE_LENGTH,
+                    version: SERVER_VERSION,
                 });
             } catch (err) {
                 app.log.error({ err }, "Error in GET_SERVER_SETTINGS");
