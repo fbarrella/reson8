@@ -1559,6 +1559,12 @@ const OCC_MUTED_ICON =
     `<svg class="occ-voice-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" title="Muted"><line x1="1" y1="1" x2="23" y2="23"/><path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"/><path d="M17 16.95A7 7 0 0 1 5 12v-2M19 10v2a7 7 0 0 1-.11 1.23"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>`;
 const OCC_DEAFENED_ICON =
     `<svg class="occ-voice-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" title="Deafened"><line x1="1" y1="1" x2="23" y2="23"/><path d="M3 18v-6a9 9 0 0 1 15.34-6.36M21 12v2.5"/><path d="M21 16v2a2 2 0 0 1-2 2h-1"/><path d="M3 18v2a2 2 0 0 0 2 2h1v-4H4a1 1 0 0 0-1 1z"/></svg>`;
+// Same mic-slash shape as OCC_MUTED_ICON but in the app's accent light-blue —
+// shown only to this client when they've locally muted the occupant (PRD
+// 4.1/4.2's "Mute Locally"), distinct from the red server-broadcast mute icon
+// since only the local viewer sees this one.
+const OCC_LOCALLY_MUTED_ICON =
+    `<svg class="occ-voice-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" title="Muted for you only"><line x1="1" y1="1" x2="23" y2="23"/><path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"/><path d="M17 16.95A7 7 0 0 1 5 12v-2M19 10v2a7 7 0 0 1-.11 1.23"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>`;
 
 // Client-local (never sent to the server) per-remote-user volume/mute overrides —
 // see PRD 4.1/4.2. Persisted per target userId so a preference sticks across
@@ -1591,8 +1597,9 @@ function renderOccupants(container: HTMLElement, node: TreeNode): void {
             el.classList.add("speaking");
         }
         el.setAttribute("data-user-id", occ.userId);
+        const isLocallyMuted = occ.userId !== myId && getSavedLocalMute(occ.userId);
         const voiceStateIcons =
-            `${occ.isMuted ? OCC_MUTED_ICON : ""}${occ.isDeafened ? OCC_DEAFENED_ICON : ""}`;
+            `${occ.isMuted ? OCC_MUTED_ICON : ""}${occ.isDeafened ? OCC_DEAFENED_ICON : ""}${isLocallyMuted ? OCC_LOCALLY_MUTED_ICON : ""}`;
         const sharingBadge = occ.isSharingScreen ? `<span class="sharing-badge">LIVE</span>` : "";
         el.innerHTML = `<span class="occ-dot"></span>${escapeHtml(occ.nickname)}${voiceStateIcons}${sharingBadge}`;
 
@@ -1659,6 +1666,7 @@ function renderOccupants(container: HTMLElement, node: TreeNode): void {
                 setSavedLocalMute(targetId, nowMuted);
                 muteBtn.classList.toggle("active", nowMuted);
                 muteBtn.textContent = nowMuted ? "🔇 Unmute Locally" : "🔊 Mute Locally";
+                if (currentTree.length > 0) renderTree(currentTree);
             });
 
             const kickBtn = menu.querySelector(".ctx-kick-btn") as HTMLButtonElement | null;

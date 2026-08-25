@@ -1741,3 +1741,90 @@ Investigation (Phase 12 sub-phase, item 7/11)
   Next Step: continue through the remaining 4 items in this
   sub-phase.
 
+--- Entry: 25/08/2026 (10) ---
+
+Feature/Fix: Fixed Per-User Local Volume/Mute Having No Audible Effect,
+Added "Muted for You" Indicator (Phase 12 sub-phase, item 8/11)
+
+  Problem: the per-participant local volume slider and "Mute Locally"
+  button (right-click an occupant in a voice channel) appeared to do
+  nothing — audio played at full, unchanged volume regardless of the
+  slider position or mute state.
+
+  Investigation: every layer of the feature — the preload/interface
+  wiring, context-menu construction and event handlers, CSS, and the
+  Web Audio GainNode graph in voice.service.ts — read as structurally
+  correct with no bug findable by static analysis (confirmed
+  independently by both a fork's investigation and a direct re-read).
+  Live diagnostics (temporary console logging, added and later
+  removed) were needed to actually find it: `applyOverrideForUser()`
+  was confirmed to correctly locate the live GainNode for the target
+  user and drive `gain.gain.value` all the way to `0.000`, yet audio
+  stayed fully audible — and a DOM dump confirmed there was no
+  phantom/duplicate `<audio>` element or untracked consumer either.
+  A kill-test (fully quitting the remote client mid-conversation,
+  which immediately silenced the audio) confirmed the sound really
+  was coming from Reson8's own WebRTC pipeline, not another source.
+
+  Root cause: `consumeProducer()` fed the per-participant GainNode
+  graph via `ctx.createMediaElementSource(audioElement)`, on the
+  assumption (standard Web Audio behavior, and the design already in
+  place per PRD 4.1/4.2 — "GainNode-per-participant Web Audio graph")
+  that capturing an `<audio>` element for a Web Audio graph redirects
+  the element's own native output exclusively into that graph. That
+  redirection turned out to be unreliable in this Electron/Chromium
+  build specifically for `srcObject`/live-MediaStream-backed elements
+  (as opposed to `src="file"` elements, where the redirection is
+  solid): with the element left unmuted, the GainNode's value had
+  zero audible effect since the element's own native playback path
+  was still the thing actually producing sound, entirely bypassing
+  the graph. (A first fix attempt — muting the element outright while
+  still sourcing the graph from it via `createMediaElementSource`
+  — produced total silence for both participants instead, which
+  proved the graph was never the real audible output path at all.)
+
+  Solution: switched the graph's source node from
+  `ctx.createMediaElementSource(audioElement)` to
+  `ctx.createMediaStreamSource(stream)`, tapping the same
+  `MediaStream` directly and independently of the `<audio>` element.
+  The `<audio>` element is still created, appended to `document.body`,
+  and played (per root CLAUDE.md's "detached audio element" gotcha,
+  to keep the MediaStreamTrack actively flowing/decoded) but is now
+  explicitly `muted = true`, since the GainNode graph — sourced
+  independently via `createMediaStreamSource` — is the sole intended
+  audible route. This makes the per-user GainNode unambiguously
+  authoritative regardless of any element-capture quirks.
+
+  Also added, since the underlying mechanism was already being
+  touched: a light-blue "muted for you" mic-slash icon next to an
+  occupant's name in the voice-channel tree (`OCC_LOCALLY_MUTED_ICON`
+  in renderer.ts, reusing `OCC_MUTED_ICON`'s shape with `var(--accent)`
+  instead of `var(--danger)`), shown only to the client who locally
+  muted that occupant — distinct from the existing red icon, which
+  reflects the occupant's own server-broadcast self-mute and is
+  visible to everyone. Wired to re-render immediately on toggling
+  "Mute Locally" (`renderTree(currentTree)`) rather than waiting for
+  an incidental tree update to pick up the new localStorage state.
+
+  Key Files Modified:
+    apps/client/src/services/voice.service.ts — `remoteMediaSources`
+      retyped to `MediaStreamAudioSourceNode`; `consumeProducer()`
+      now mutes the `<audio>` element and sources the GainNode graph
+      via `createMediaStreamSource(stream)` instead of
+      `createMediaElementSource(audio)`
+    apps/client/src/renderer/renderer.ts — new
+      `OCC_LOCALLY_MUTED_ICON` constant; `renderOccupants()` shows it
+      when `getSavedLocalMute(occ.userId)` is true for a non-self
+      occupant; the context menu's mute-button handler now triggers
+      an immediate `renderTree(currentTree)` re-render
+
+  Verification:
+    - npx tsc --noEmit — clean
+    - Live-tested by the user across two real clients in the same
+      voice channel: confirmed both the volume slider (down to 0%)
+      and "Mute Locally" now genuinely silence the target
+      participant, where they previously had no effect at all
+
+  Next Step: continue through the remaining 3 items in this
+  sub-phase (9, 10, 11).
+

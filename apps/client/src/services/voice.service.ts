@@ -108,7 +108,7 @@ export class VoiceService {
     // ── Per-remote-user local volume/mute (client-local only, PRD 4.1/4.2) ──
     private playbackAudioContext: AudioContext | null = null;
     private remoteGainNodes = new Map<string, GainNode>(); // keyed by consumerId
-    private remoteMediaSources = new Map<string, MediaElementAudioSourceNode>(); // keyed by consumerId
+    private remoteMediaSources = new Map<string, MediaStreamAudioSourceNode>(); // keyed by consumerId
     private consumerIdToUserId = new Map<string, string>();
     private remoteUserOverrides = new Map<string, { volumePercent: number; muted: boolean }>(); // keyed by userId
     /** Master attenuator (0-1) applied on top of every per-user gain (PRD 10.2). */
@@ -548,11 +548,30 @@ export class VoiceService {
         this.consumers.set(consumer.id, consumer);
         this.consumerIdToUserId.set(consumer.id, userId);
 
-        // Create an <audio> element, append to DOM, and play
+        // Create an <audio> element, append to DOM, and play. This keeps the
+        // MediaStreamTrack actively flowing/decoded (see root CLAUDE.md's
+        // "detached audio element" gotcha) but is muted — actual audible
+        // output is routed exclusively through the GainNode graph below, via
+        // an independent createMediaStreamSource() tap on the same stream.
+        //
+        // Originally this used createMediaElementSource(audio) instead, on
+        // the assumption that capturing an element for a Web Audio graph
+        // redirects its native output there. That redirection turned out to
+        // be unreliable in this Electron/Chromium build for srcObject/live-
+        // MediaStream elements: with the element unmuted, the GainNode's
+        // value had zero audible effect (confirmed live via logging — gain
+        // reliably reached 0 while the remote participant stayed fully
+        // audible); muting the element then produced total silence from
+        // both participants, proving the graph was never the real output
+        // path — the element's own native playback was. createMediaStreamSource
+        // taps the stream directly, decoupled from the element entirely, so
+        // the GainNode is unambiguously the sole audible route.
+        const stream = new MediaStream([consumer.track]);
         const audio = document.createElement("audio") as HTMLAudioElement;
-        audio.srcObject = new MediaStream([consumer.track]);
+        audio.srcObject = stream;
         audio.autoplay = true;
         audio.volume = 1.0;
+        audio.muted = true;
         document.body.appendChild(audio);
         audio.play().catch(() => { });
 
@@ -562,7 +581,7 @@ export class VoiceService {
         // (client-local only — never sent to the server, see PRD 4.1/4.2) can go
         // above 100% and be toggled independently of the element's own volume.
         const ctx = this.getPlaybackAudioContext();
-        const source = ctx.createMediaElementSource(audio);
+        const source = ctx.createMediaStreamSource(stream);
         const gainNode = ctx.createGain();
         const override = this.remoteUserOverrides.get(userId);
         gainNode.gain.value = override
