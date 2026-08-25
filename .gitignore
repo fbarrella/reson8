@@ -28,6 +28,11 @@ apps/client/out/
 apps/client/release/
 apps/client/.release-vendor/
 
+# Code signing (never commit certificates/keys)
+apps/client/certs/
+*.pfx
+*.p12
+
 # Logs
 *.log
 npm-debug.log*
