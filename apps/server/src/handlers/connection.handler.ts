@@ -158,8 +158,20 @@ export function registerConnectionHandlers(
 
         // ── PING_LATENCY — instant ack for client-side RTT + clock-offset
         // measurement (the server timestamp lets the client correct for
-        // clock skew, see PRD 11.2) ────────────────────────────────────────
-        socket.on("PING_LATENCY", (ack) => { ack(Date.now()); });
+        // clock skew, see PRD 11.2). Also doubles as a presence heartbeat:
+        // it already fires every ~3s for any connected client, which is far
+        // more often than needed to keep the Redis presence hash's 1-hour
+        // TTL refreshed — piggybacking here avoids a second periodic event
+        // just for that. Without this, a session outliving the TTL (3+
+        // hours) has its presence hash expire mid-session, which is what
+        // caused nicknames to fall back to "Unknown" in the Online Users
+        // modal. Fire-and-forget: never block the latency ack on it. ──────
+        socket.on("PING_LATENCY", (ack) => {
+            ack(Date.now());
+            if (socket.data.userId) {
+                presence.heartbeat(socket.data.userId).catch(() => {});
+            }
+        });
 
         // ── USER_JOIN_SERVER ────────────────────────────────────────────────
         socket.on("USER_JOIN_SERVER", async (payload, ack) => {

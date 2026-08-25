@@ -1828,3 +1828,58 @@ Added "Muted for You" Indicator (Phase 12 sub-phase, item 8/11)
   Next Step: continue through the remaining 3 items in this
   sub-phase (9, 10, 11).
 
+--- Entry: 25/08/2026 (11) ---
+
+Feature/Fix: Fixed Nicknames Showing "Unknown" in Online Users Modal
+After Long Sessions (Phase 12 sub-phase, item 9/11)
+
+  Problem: a user connected for 3+ hours could show up as "Unknown"
+  in the Online Users modal, despite their nickname displaying
+  correctly everywhere else (e.g. inside the voice channel itself).
+
+  Root cause: Redis presence hashes carry a 1-hour TTL (`USER_TTL`
+  in presence.service.ts), refreshed on activity — but nothing
+  refreshed it on pure *inactivity*/idle presence. A
+  `PresenceService.heartbeat(userId)` method already existed
+  specifically to refresh this TTL, but had zero callers anywhere in
+  the codebase — no client→server event ever invoked it. Any session
+  idle (voice-inactive, no channel/message activity) for longer than
+  the 1-hour TTL had its presence hash silently expire out of Redis;
+  `getUserPresence()`'s fallback (`nickname: data.nickname ??
+  "Unknown"`) then kicked in for that user in the Online Users
+  modal specifically, since that's the one place presence is looked
+  up in bulk for users who may no longer have a live hash. Other UI
+  (e.g. inside a voice channel) resolves nicknames via a different,
+  already-camera-locked-on-the-occupant path that doesn't hit this
+  same fallback.
+
+  Solution: rather than adding a brand new periodic client→server
+  event solely for this, wired the heartbeat into the existing
+  `PING_LATENCY` handshake — already emitted by every connected
+  client every ~3 seconds for RTT/clock-offset measurement (PRD
+  11.2), far more often than the 1-hour TTL needs. The server's
+  `PING_LATENCY` handler now also calls
+  `presence.heartbeat(socket.data.userId)` (fire-and-forget, never
+  blocking the latency ack) alongside its existing instant ack. Zero
+  added client-side code and zero added network traffic — reuses a
+  signal that was already firing continuously for the entire
+  lifetime of any connected session.
+
+  Key Files Modified:
+    apps/server/src/handlers/connection.handler.ts — `PING_LATENCY`
+      handler now also refreshes the caller's presence TTL
+
+  Verification:
+    - npx tsc --noEmit (server) — clean
+    - npm run test (server) — 19/19 passing, unchanged
+    - Not independently reproducible in this session (requires a
+      3+ hour idle session to trigger the original TTL expiry) —
+      root cause and fix mechanism are confirmed by direct reading
+      of presence.service.ts's TTL/heartbeat code; flag if "Unknown"
+      is still observed after this ships, which would mean the
+      heartbeat isn't reaching the right users (e.g. a client not
+      running the PING_LATENCY interval while idle)
+
+  Next Step: continue through the remaining 2 items in this
+  sub-phase (10, 11).
+
