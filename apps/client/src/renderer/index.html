@@ -383,6 +383,46 @@
       animation: pulse 0.8s infinite;
     }
 
+    /* Deliberately much louder than the LIVE badge/red share-screen-button
+       icon alone — those are easy to miss while actually paying attention
+       to whatever's on the shared screen, and this is a "you might be
+       showing something private" situation, not an ordinary status
+       indicator. */
+    #screen-share-alert-banner {
+      display: none;
+      flex-direction: column;
+      gap: 6px;
+      background: var(--danger);
+      border-radius: var(--radius);
+      padding: 8px 10px;
+    }
+
+    #screen-share-alert-banner.visible {
+      display: flex;
+    }
+
+    #screen-share-alert-banner .screen-share-alert-text {
+      color: #fff;
+      font-weight: 700;
+      font-size: 12px;
+      text-align: center;
+    }
+
+    #screen-share-alert-banner button {
+      background: #fff;
+      color: var(--danger);
+      border: none;
+      border-radius: var(--radius);
+      padding: 7px 0;
+      font-weight: 700;
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    #screen-share-alert-banner button:hover {
+      background: rgba(255, 255, 255, 0.85);
+    }
+
     #voice-panel .voice-info {
       font-size: 11px;
       color: var(--success);
@@ -411,20 +451,25 @@
       }
     }
 
+    /* 2×2 grid (PRD 12.9) — Mute/Deafen on top, Share Screen/Leave below,
+       following DOM order (grid auto-placement fills left-to-right,
+       top-to-bottom, so no explicit grid-area assignment is needed). */
     #voice-controls {
-      display: flex;
-      gap: 4px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      grid-template-rows: 1fr 1fr;
+      gap: 6px;
     }
 
     .voice-btn {
-      flex: 1;
-      padding: 5px 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 6px 0;
       border: 1px solid var(--border);
       background: var(--bg-input);
       color: var(--text-secondary);
       border-radius: var(--radius);
-      font-size: 11px;
-      font-family: var(--font);
       cursor: pointer;
       transition: all 0.15s;
     }
@@ -440,6 +485,21 @@
       color: #fff;
     }
 
+    /* Share-screen button: "stop sharing" (crossed-out monitor) icon only
+       shows while actively sharing (PRD 12.10's `.active` state), swapped
+       with the normal monitor icon otherwise. */
+    #btn-share-screen .icon-share-stop {
+      display: none;
+    }
+
+    #btn-share-screen.active .icon-share-start {
+      display: none;
+    }
+
+    #btn-share-screen.active .icon-share-stop {
+      display: block;
+    }
+
     .voice-btn.leave {
       border-color: var(--danger);
       color: var(--danger);
@@ -448,6 +508,16 @@
     .voice-btn.leave:hover {
       background: var(--danger);
       color: #fff;
+    }
+
+    .voice-btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    .voice-btn:disabled:hover {
+      border-color: var(--border);
+      color: var(--text-secondary);
     }
 
     /* ── Right Pane (Tabbed Log / Chat) ──────────────────────────────── */
@@ -631,6 +701,33 @@
 
     .chat-msg .msg-text {
       color: var(--text-primary);
+    }
+
+    /* Long-message truncation (Phase 12 sub-phase item 5) — only applied
+       (via JS, attachMessageTruncation()) to messages that actually
+       overflow this clamp; a short message never gets this class at all,
+       so it keeps flowing inline right after the nickname as before. */
+    .chat-msg .msg-text.msg-text-clamped {
+      display: -webkit-box;
+      -webkit-line-clamp: 4;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+
+    .btn-see-more {
+      display: block;
+      background: none;
+      border: none;
+      padding: 0;
+      margin-top: 2px;
+      color: var(--accent);
+      font-size: 11px;
+      font-family: var(--font);
+      cursor: pointer;
+    }
+
+    .btn-see-more:hover {
+      text-decoration: underline;
     }
 
     .msg-edited {
@@ -1250,7 +1347,11 @@
     #admin-modal,
     #update-modal,
     #whats-new-modal,
-    #pin-replace-confirm-modal {
+    #version-mismatch-modal,
+    #pin-replace-confirm-modal,
+    #screen-share-modal,
+    #watch-share-confirm-modal,
+    #stream-name-modal {
       display: none;
       position: fixed;
       top: 0;
@@ -1273,7 +1374,11 @@
     #admin-modal.visible,
     #update-modal.visible,
     #whats-new-modal.visible,
-    #pin-replace-confirm-modal.visible {
+    #version-mismatch-modal.visible,
+    #pin-replace-confirm-modal.visible,
+    #screen-share-modal.visible,
+    #watch-share-confirm-modal.visible,
+    #stream-name-modal.visible {
       display: flex;
     }
 
@@ -1311,6 +1416,89 @@
       margin-top: 8px;
     }
 
+    /* ── Screen Share Selection Modal (PRD 12.10) ─────────────────────── */
+    .source-share-groups {
+      flex: 1;
+      overflow-y: auto;
+      margin: 10px 0;
+    }
+
+    .source-share-group-title {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--text-muted);
+      margin: 12px 0 6px;
+    }
+
+    .source-share-group-title:first-child {
+      margin-top: 0;
+    }
+
+    .source-share-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 8px;
+    }
+
+    .source-share-card {
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--bg-input);
+      cursor: pointer;
+      overflow: hidden;
+      text-align: left;
+      padding: 0;
+      transition: border-color 0.15s;
+    }
+
+    .source-share-card:hover {
+      border-color: var(--accent-dim);
+    }
+
+    .source-share-card.selected {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 1px var(--accent);
+    }
+
+    .source-share-card-thumb {
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      object-fit: cover;
+      display: block;
+      background: var(--bg-tertiary);
+    }
+
+    .source-share-card-name {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 8px;
+      font-size: 11px;
+      color: var(--text-secondary);
+    }
+
+    .source-share-card-name span {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .source-share-card-icon {
+      width: 14px;
+      height: 14px;
+      border-radius: 2px;
+      flex-shrink: 0;
+    }
+
+    .source-share-empty {
+      padding: 20px;
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 12px;
+    }
+
     .nsfw-badge {
       display: inline-flex;
       align-items: center;
@@ -1322,6 +1510,25 @@
       padding: 0 4px;
       margin-left: 4px;
       letter-spacing: 0.3px;
+    }
+
+    /* Screen-share indicator next to a user's name in the channel tree
+       (PRD 12.12) — same sizing/shape as .nsfw-badge but filled solid red
+       rather than outlined, reading as an active "LIVE" state rather than
+       a static content-warning label. Clickable by anyone, including the
+       streamer themself, to open a Viewer window (PRD 12.13). */
+    .sharing-badge {
+      display: inline-flex;
+      align-items: center;
+      font-size: 9px;
+      font-weight: 700;
+      color: #fff;
+      background: var(--danger);
+      border-radius: 3px;
+      padding: 0 4px;
+      margin-left: 4px;
+      letter-spacing: 0.3px;
+      cursor: pointer;
     }
 
     .channel-ctx-menu-item {
@@ -1800,9 +2007,23 @@
       padding: 6px 12px;
       border-radius: var(--radius);
       cursor: pointer;
-      transition: all 0.15s;
+      /* Was `transition: all`, which — combined with no fixed width below
+         — animated the button's own width every time its label switched
+         between "👋 Nudge" and a short countdown like "5s", misaligning
+         Online Users rows where other buttons still show the full label.
+         Scoped to color/border only now that width is fixed, so nothing
+         layout-affecting can ever animate here again even if the label
+         changes shape in the future. This is also the most likely actual
+         cause of the reported "blinks back to normal for a second" on
+         modal reopen — not a JS timing bug (the cooldown state is applied
+         synchronously before the button is even appended, confirmed via
+         both static reading and a fork investigation), but this width
+         animation visually reading as one. */
+      transition: color 0.15s, border-color 0.15s;
       flex-shrink: 0;
       font-weight: 500;
+      min-width: 84px;
+      text-align: center;
     }
 
     .btn-nudge:hover {
@@ -2166,15 +2387,36 @@
     .emoji-category-tabs {
       display: flex;
       gap: 0;
-      padding: 2px 6px;
+      padding: 2px 6px 6px;
       flex: 1 1 auto;
       min-width: 0;
       overflow-x: auto;
-      scrollbar-width: none;
+      /* Was fully hidden (scrollbar-width: none / -webkit-scrollbar
+         display: none) — with the custom-emoji tab pinned outside this
+         row in its own fixed slot, there was no visible cue at all that
+         more category tabs exist off-screen. A thin, always-present
+         (not hover-only) scrollbar fixes discoverability without
+         reverting to the OS's full-size default, which would look out of
+         place in this custom dark UI. */
+      scrollbar-width: thin;
+      scrollbar-color: var(--border) transparent;
     }
 
     .emoji-category-tabs::-webkit-scrollbar {
-      display: none;
+      height: 5px;
+    }
+
+    .emoji-category-tabs::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    .emoji-category-tabs::-webkit-scrollbar-thumb {
+      background: var(--border);
+      border-radius: 3px;
+    }
+
+    .emoji-category-tabs::-webkit-scrollbar-thumb:hover {
+      background: var(--text-muted);
     }
 
     .emoji-custom-tab-slot {
@@ -2191,6 +2433,13 @@
       background: none;
       border: none;
       border-bottom: 2px solid transparent;
+      /* Category tabs render as emoji glyphs (which ignore `color`), but
+         the custom-emoji tab renders an SVG using `stroke`/`fill:
+         currentColor` — without this, `color` falls through to the
+         browser's initial black with nothing else in the ancestor chain
+         setting it, making that one icon nearly invisible on a dark
+         background. */
+      color: var(--text-primary);
       padding: 4px 6px;
       font-size: 16px;
       cursor: pointer;
@@ -2493,6 +2742,10 @@
         </div>
       </div>
       <div id="voice-panel">
+        <div id="screen-share-alert-banner">
+          <span class="screen-share-alert-text">You are sharing your screen</span>
+          <button id="btn-stop-share-alert">Stop Sharing</button>
+        </div>
         <div class="voice-info">
           <span class="dot"></span>
           <div style="display:flex; flex-direction:column;">
@@ -2501,9 +2754,37 @@
           </div>
         </div>
         <div id="voice-controls">
-          <button class="voice-btn" id="btn-mute" title="Mute">🎤 Mute</button>
-          <button class="voice-btn" id="btn-deafen" title="Deafen">🔊 Deafen</button>
-          <button class="voice-btn leave" id="btn-leave-voice" title="Leave Voice">✕</button>
+          <button class="voice-btn" id="btn-mute" title="Mute"><svg width="14" height="14" viewBox="0 0 24 24"
+              fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+              <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+              <line x1="12" y1="19" x2="12" y2="23" />
+              <line x1="8" y1="23" x2="16" y2="23" />
+            </svg></button>
+          <button class="voice-btn" id="btn-deafen" title="Deafen"><svg width="14" height="14" viewBox="0 0 24 24"
+              fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+              <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07" />
+            </svg></button>
+          <button class="voice-btn" id="btn-share-screen" title="Share Screen"><svg class="icon-share-start"
+              width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+              stroke-linecap="round" stroke-linejoin="round">
+              <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+              <line x1="8" y1="21" x2="16" y2="21" />
+              <line x1="12" y1="17" x2="12" y2="21" />
+            </svg><svg class="icon-share-stop" width="14" height="14" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+              <line x1="8" y1="21" x2="16" y2="21" />
+              <line x1="12" y1="17" x2="12" y2="21" />
+              <line x1="3" y1="21" x2="21" y2="3" />
+            </svg></button>
+          <button class="voice-btn leave" id="btn-leave-voice" title="Leave Voice"><svg width="14" height="14"
+              viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+              stroke-linejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg></button>
         </div>
       </div>
     </div>
@@ -2636,6 +2917,56 @@
     </div>
   </div>
 
+  <!-- ── Screen Share Selection Modal (PRD 12.10) ─────────────────────────── -->
+  <div id="screen-share-modal">
+    <div class="modal-content wide">
+      <h3>🖥️ Share Screen</h3>
+      <div class="source-share-groups" id="source-share-groups">
+        <div class="source-share-empty" id="source-share-status">Loading sources…</div>
+      </div>
+      <div class="toggle-row">
+        <div>
+          <span class="toggle-row-title">Share Audio</span>
+          <span class="toggle-row-desc" id="source-share-audio-desc">Select a source first</span>
+        </div>
+        <input type="checkbox" id="source-share-audio-checkbox" disabled>
+      </div>
+      <label for="source-share-name-input">Custom Stream Name (optional)</label>
+      <input type="text" id="source-share-name-input" placeholder="Leave blank to use the source's own name" maxlength="64">
+      <div class="modal-actions">
+        <button class="btn btn-cancel" id="btn-screen-share-cancel">Cancel</button>
+        <button class="btn btn-connect" id="btn-screen-share-start" disabled>Start Sharing</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Screen Share Custom Name Modal (Linux/Wayland bypass — no in-app
+       source picker to attach this field to, since that step is entirely
+       the OS's own) ──────────────────────────────────────────────────── -->
+  <div id="stream-name-modal">
+    <div class="modal-content">
+      <h3>Name Your Stream</h3>
+      <label for="stream-name-input">Custom Stream Name (optional)</label>
+      <input type="text" id="stream-name-input" placeholder="Leave blank to use the default" maxlength="64">
+      <div class="modal-actions">
+        <button class="btn btn-cancel" id="btn-stream-name-skip">Skip</button>
+        <button class="btn btn-connect" id="btn-stream-name-confirm">Start Sharing</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Watch Screen Share Confirmation Modal (PRD 12.13) ────────────────── -->
+  <div id="watch-share-confirm-modal">
+    <div class="modal-content">
+      <h3>🖥️ Watch Screen Share</h3>
+      <p>Do you want to watch <strong id="watch-share-confirm-nickname"></strong>'s stream?</p>
+      <div class="modal-actions">
+        <button class="btn btn-cancel" id="btn-watch-share-cancel">Cancel</button>
+        <button class="btn btn-connect" id="btn-watch-share-confirm">Watch</button>
+      </div>
+    </div>
+  </div>
+
   <!-- ── Auto-Updater Modal (PRD 10.1) ───────────────────────────────────── -->
   <div id="update-modal">
     <div class="modal-content">
@@ -2648,6 +2979,18 @@
       <div class="modal-actions">
         <button class="btn btn-cancel" id="btn-update-later">Not Now</button>
         <button class="btn btn-create" id="btn-update-now">Update Now</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Client/Server Version Mismatch Modal (Phase 12 sub-phase, item 11) ─ -->
+  <div id="version-mismatch-modal">
+    <div class="modal-content">
+      <h3 id="version-mismatch-title">⚠️ Version Mismatch</h3>
+      <p id="version-mismatch-message"></p>
+      <div class="modal-actions">
+        <button class="btn btn-cancel" id="btn-version-mismatch-dismiss">Dismiss</button>
+        <button class="btn btn-create" id="btn-version-mismatch-releases" style="display:none;">View Releases</button>
       </div>
     </div>
   </div>
@@ -2739,6 +3082,30 @@
             <input type="checkbox" id="chk-nudge-enabled" checked>
             <span class="toggle-slider"></span>
           </label>
+        </div>
+        <div class="toggle-row">
+          <div class="toggle-row-info">
+            <div class="toggle-row-text">
+              <span class="toggle-row-title">🖥️ Screen Sharing</span>
+              <span class="toggle-row-desc">Lets members share their screen in voice channels</span>
+            </div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="chk-screen-share-enabled" checked>
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+        <div class="toggle-row">
+          <div class="toggle-row-info">
+            <div class="toggle-row-text">
+              <span class="toggle-row-title">💬 Max Message Length</span>
+              <span class="toggle-row-desc">Maximum characters allowed per chat message (channel messages and DMs) — protects server resources against oversized messages</span>
+            </div>
+          </div>
+          <div style="display:flex; gap:6px; align-items:center; flex-shrink:0;">
+            <input type="number" id="input-max-message-length" min="1" max="100000" step="1" style="width:90px; margin-bottom:0;">
+            <button class="btn btn-connect" id="btn-save-max-message-length">Save</button>
+          </div>
         </div>
       </div>
 

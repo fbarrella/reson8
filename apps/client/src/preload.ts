@@ -23,6 +23,19 @@ type TypedSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 let socket: TypedSocket | null = null;
 let instanceId: string = "";
 let voiceService: VoiceService | null = null;
+
+// ── Screen share audio pipeline state (PRD 12.7) ────────────────────────
+// Owned here, not inside VoiceService, because assembling a MediaStreamTrack
+// from native-audio PCM frames requires ipcRenderer — VoiceService is kept
+// free of direct Electron/IPC coupling (it takes a `VoiceSignaling`
+// interface via constructor injection instead), and this preload script is
+// the layer that already owns that coupling for everything else.
+let screenAudioGenerator: MediaStreamTrackGenerator<AudioData> | null = null;
+let screenAudioWriter: WritableStreamDefaultWriter<AudioData> | null = null;
+/** Running sample count, used to derive monotonically increasing AudioData
+ *  timestamps from the sample rate rather than wall-clock time — avoids
+ *  drift/gaps if IPC delivery is jittery. */
+let screenAudioSamplesWritten = 0;
 let serverBaseUrl: string = "";
 let joinServerInFlight = false;
 let latencyMs: number = -1;
@@ -131,11 +144,11 @@ function createSignaling(): VoiceSignaling {
                 );
             });
         },
-        produce(transportId, kind, rtpParameters) {
+        produce(transportId, kind, rtpParameters, appData) {
             return new Promise((resolve) => {
                 socket!.emit(
                     "PRODUCE",
-                    { transportId, kind, rtpParameters },
+                    { transportId, kind, rtpParameters, appData },
                     resolve,
                 );
             });
@@ -149,6 +162,9 @@ function createSignaling(): VoiceSignaling {
             return new Promise((resolve) => {
                 socket!.emit("RESUME_CONSUMER", { consumerId }, resolve);
             });
+        },
+        closeProducer(producerId) {
+            socket?.emit("CLOSE_PRODUCER", { producerId });
         },
     };
 }
@@ -228,6 +244,23 @@ async function attemptVoiceRejoin(channelId: string): Promise<void> {
 }
 
 const api = {
+    // A static fact known at preload-load-time (PRD 12.11 needs it to tell
+    // macOS's audio-capture warning apart from the generic "unsupported"
+    // one) — a plain property, not a method, since it never changes and an
+    // async round-trip would be pointless for it.
+    platform: process.platform,
+
+    // Linux/Wayland sessions route `desktopCapturer.getSources()` itself
+    // through the xdg-desktop-portal ScreenCast picker (KDE/GNOME show
+    // their own OS-level dialog before we ever get data back) — our own
+    // Selection Modal would just be a second, redundant picker stacked on
+    // top of that one. `XDG_SESSION_TYPE`/`WAYLAND_DISPLAY` are the
+    // standard way to detect this; X11 sessions (where `getSources()`
+    // silently enumerates with no OS dialog) keep the existing modal.
+    isLinuxWayland:
+        process.platform === "linux" &&
+        (process.env.XDG_SESSION_TYPE === "wayland" || !!process.env.WAYLAND_DISPLAY),
+
     // ── Identity ─────────────────────────────────────────────────────────────
 
     getInstanceId(): string {
@@ -355,7 +388,13 @@ const api = {
         // Voice-specific events
         socket.on("NEW_PRODUCER", (payload) => {
             emit("new-producer", payload);
-            voiceService?.queueConsumeProducer(payload.producerId, payload.userId);
+            // Only the mic Producer (no `mediaType`) auto-consumes. A
+            // screen-share's video/audio (PRD 12.7/12.8) must NOT be pulled
+            // by every channel member automatically — only by an explicit
+            // viewer action (PRD 12.13's WATCH_SCREEN_SHARE).
+            if (!payload.mediaType) {
+                voiceService?.queueConsumeProducer(payload.producerId, payload.userId);
+            }
         });
 
         socket.on("PRODUCER_CLOSED", (payload) => {
@@ -438,6 +477,14 @@ const api = {
                 socket.emit("USER_LEAVE_CHANNEL", { channelId });
             }
         }
+        // `voiceService.cleanup()` below closes the screen-audio mediasoup
+        // Producer, but not the native capture session or the
+        // MediaStreamTrackGenerator feeding it — those aren't owned by
+        // VoiceService at all (PRD 12.7), so they need their own teardown
+        // here rather than being implicitly covered by it.
+        if (screenAudioGenerator) {
+            void api.stopAppAudioCapture();
+        }
         voiceService?.cleanup();
         // Reinitialize voice service for next join
         if (socket?.connected) {
@@ -460,6 +507,17 @@ const api = {
 
     setVoiceState(isMuted: boolean, isDeafened: boolean): void {
         socket?.emit("SET_VOICE_STATE", { isMuted, isDeafened }, () => { });
+    },
+
+    /**
+     * Tells other occupants whether this user currently has an active
+     * screen share (PRD 12.12). `streamName`, when sharing, should be the
+     * caller's own already-resolved display name (custom name if set,
+     * else the real source name, else the generic fallback) — see
+     * `SET_SCREEN_SHARE_STATE`'s doc comment in socket-events.ts.
+     */
+    setScreenShareState(isSharingScreen: boolean, streamName?: string): void {
+        socket?.emit("SET_SCREEN_SHARE_STATE", { isSharingScreen, streamName }, () => { });
     },
 
     setLocalUserVolume(userId: string, percent: number): void {
@@ -566,7 +624,7 @@ const api = {
         content: string,
         attachmentUrl?: string,
         attachmentPublicId?: string,
-    ): Promise<{ success: boolean; messageId?: string }> {
+    ): Promise<{ success: boolean; messageId?: string; error?: string }> {
         return new Promise((resolve) => {
             if (!socket?.connected) {
                 resolve({ success: false });
@@ -852,6 +910,177 @@ const api = {
         ipcRenderer.send("flash-window");
     },
 
+    // ── Screen Share source discovery (PRD 12.6) ─────────────────────────
+
+    async getDesktopSources(): Promise<{
+        success: boolean;
+        sources?: Array<{
+            id: string;
+            name: string;
+            thumbnail: string;
+            appIcon: string | null;
+            sourceType: "screen" | "window";
+        }>;
+        error?: string;
+    }> {
+        return ipcRenderer.invoke("get-desktop-sources");
+    },
+
+    // ── Screen Share audio pipeline (PRD 12.7) ────────────────────────────
+
+    /**
+     * Machine-wide check (PRD 12.11), not per-target — meant to be called
+     * once when the Selection Modal opens, not per source selection.
+     */
+    async platformSupportsAudioCapture(): Promise<boolean> {
+        return ipcRenderer.invoke("platform-supports-audio-capture");
+    },
+
+    /** Windows-only — resolves `undefined` on other platforms (see PRD 12.2). */
+    async resolvePidForWindowSourceId(sourceId: string): Promise<number | undefined> {
+        return ipcRenderer.invoke("resolve-pid-for-window-source-id", sourceId);
+    },
+
+    /**
+     * Starts native per-application loopback capture for the given target
+     * and, on success, produces it as a second mediasoup audio Producer on
+     * the current voice channel's send Transport (alongside, not mixed
+     * with, the mic Producer). Requires an active voice connection — the
+     * caller (PRD 12.9's Share Screen button) only reaches this while
+     * already connected, so `voiceService` being unset here is treated as a
+     * caller error, not a recoverable state.
+     */
+    async startAppAudioCapture(
+        pid: number | undefined,
+        processName: string | undefined,
+    ): Promise<{ success: boolean; error?: string }> {
+        if (!voiceService) {
+            return { success: false, error: "Not connected to voice" };
+        }
+
+        const result: { status: string } = await ipcRenderer.invoke("start-app-audio-capture", {
+            pid,
+            processName,
+        });
+        if (result.status !== "capturing") {
+            return { success: false, error: `Audio capture unavailable (${result.status})` };
+        }
+
+        screenAudioGenerator = new MediaStreamTrackGenerator({ kind: "audio" });
+        screenAudioWriter = screenAudioGenerator.writable.getWriter();
+        screenAudioSamplesWritten = 0;
+
+        try {
+            await voiceService.produceScreenAudio(screenAudioGenerator);
+            return { success: true };
+        } catch (err: any) {
+            // Native capture started but the mediasoup side failed — don't
+            // leave the capture (and, on the PulseAudio backend, its system
+            // audio reroute) running with nothing consuming its frames. Reuse
+            // the same teardown as a normal stop, rather than a shorter
+            // hand-rolled version, so this path doesn't skip the writer
+            // `.close()` call that path does.
+            await api.stopAppAudioCapture();
+            return { success: false, error: err?.message ?? "Failed to produce screen audio" };
+        }
+    },
+
+    async stopAppAudioCapture(): Promise<void> {
+        await ipcRenderer.invoke("stop-app-audio-capture");
+        voiceService?.closeScreenAudioProducer();
+        if (screenAudioWriter) {
+            screenAudioWriter.close().catch(() => {});
+            screenAudioWriter = null;
+        }
+        screenAudioGenerator = null;
+    },
+
+    /**
+     * Stops an active screen share entirely — video (PRD 12.8) and, if it
+     * was enabled, audio (PRD 12.7). Safe to call even if only video (or
+     * neither) was active: `stopAppAudioCapture`'s IPC/producer teardown is
+     * a no-op when there's nothing capturing.
+     */
+    async stopScreenShare(): Promise<void> {
+        voiceService?.stopScreenVideoProducing();
+        await api.stopAppAudioCapture();
+    },
+
+    /** Starts capturing and producing the chosen source as SVC video (PRD 12.8/12.10). */
+    async startScreenShareVideo(chromeMediaSourceId: string): Promise<{ success: boolean; error?: string }> {
+        if (!voiceService) {
+            return { success: false, error: "Not connected to voice" };
+        }
+        try {
+            await voiceService.startScreenVideoProducing(chromeMediaSourceId);
+            return { success: true };
+        } catch (err: any) {
+            return { success: false, error: err?.message ?? "Failed to start screen video" };
+        }
+    },
+
+    /** Linux/Wayland bypass path — see `voiceService.startScreenVideoProducingViaSystemPicker`. */
+    async startScreenShareViaSystemPicker(): Promise<{
+        success: boolean;
+        label?: string;
+        sourceType?: "screen" | "window";
+        error?: string;
+    }> {
+        if (!voiceService) {
+            return { success: false, error: "Not connected to voice" };
+        }
+        try {
+            const { label } = await voiceService.startScreenVideoProducingViaSystemPicker();
+            // The real picked-source name (and screen-vs-window type)
+            // main.ts's `setDisplayMediaRequestHandler` saw — preferred
+            // over `label` (the MediaStreamTrack's own `.label`, which
+            // comes back empty for portal-based captures).
+            const source: { name: string; sourceType: "screen" | "window" } | null = await ipcRenderer.invoke(
+                "get-last-screen-share-source",
+            );
+            return { success: true, label: source?.name || label, sourceType: source?.sourceType };
+        } catch (err: any) {
+            return { success: false, error: err?.message ?? "Failed to start screen video" };
+        }
+    },
+
+    /**
+     * Linux/Wayland bypass path — native prompt letting the user pick which
+     * currently-audio-producing app (if any) to also share, since the
+     * picked video source carries no name/PID to auto-match against on
+     * this platform. Resolves the exact app name to pass straight to
+     * `startAppAudioCapture`, or `null` if there's nothing to offer (no app
+     * producing audio right now) or the user chose "Video Only".
+     */
+    async pickAudioAppToShare(): Promise<string | null> {
+        return ipcRenderer.invoke("pick-audio-app-to-share");
+    },
+
+    // ── Screen Share Viewer window (PRD 12.13) ───────────────────────────
+
+    /**
+     * Opens a Viewer window watching `targetUserId`'s screen share in
+     * `channelId`. `serverBaseUrl` is included here (from this connection's
+     * own in-scope state) rather than asked of the renderer, since the
+     * renderer has no other way to know it — it's set once, during
+     * `connect()`, and never exposed as its own getter.
+     */
+    async openScreenShareViewer(
+        targetUserId: string,
+        nickname: string,
+        channelId: string,
+    ): Promise<{ success: boolean; error?: string }> {
+        if (!serverBaseUrl) {
+            return { success: false, error: "Not connected to a server" };
+        }
+        return ipcRenderer.invoke("open-screen-share-viewer", {
+            targetUserId,
+            nickname,
+            channelId,
+            serverBaseUrl,
+        });
+    },
+
     // ── Auto-Updater (PRD 10.1) ─────────────────────────────────────────────
 
     async checkForUpdates(): Promise<{ status: "available" | "not-available" | "error"; message?: string }> {
@@ -899,6 +1128,7 @@ const api = {
                 produce: () => Promise.resolve({ success: false }),
                 consume: () => Promise.resolve({ success: false }),
                 resumeConsumer: () => Promise.resolve({ success: false }),
+                closeProducer: () => {},
             };
             voiceService = new VoiceService(dummySignaling);
         }
@@ -998,7 +1228,15 @@ const api = {
         });
     },
 
-    getServerSettings(): Promise<{ success: boolean; nudgeEnabled?: boolean; error?: string }> {
+    getServerSettings(): Promise<{
+        success: boolean;
+        nudgeEnabled?: boolean;
+        screenShareEnabled?: boolean;
+        name?: string;
+        maxMessageLength?: number;
+        version?: string;
+        error?: string;
+    }> {
         return new Promise((resolve) => {
             if (!socket?.connected) {
                 resolve({ success: false, error: "Not connected" });
@@ -1008,13 +1246,15 @@ const api = {
         });
     },
 
-    updateServerSettings(nudgeEnabled: boolean): Promise<{ success: boolean; error?: string }> {
+    updateServerSettings(
+        settings: { nudgeEnabled?: boolean; screenShareEnabled?: boolean; maxMessageLength?: number },
+    ): Promise<{ success: boolean; error?: string }> {
         return new Promise((resolve) => {
             if (!socket?.connected) {
                 resolve({ success: false, error: "Not connected" });
                 return;
             }
-            socket.emit("UPDATE_SERVER_SETTINGS", { nudgeEnabled }, resolve);
+            socket.emit("UPDATE_SERVER_SETTINGS", settings, resolve);
         });
     },
 };
@@ -1024,6 +1264,44 @@ contextBridge.exposeInMainWorld("reson8Api", api);
 // ── PTT IPC from main process ─────────────────────────────────────────────
 ipcRenderer.on("ptt-pressed", () => emit("ptt-pressed", null));
 ipcRenderer.on("ptt-released", () => emit("ptt-released", null));
+
+// Fired on any window minimize (tray or plain OS taskbar minimize) — see
+// main.ts's "minimize" handler. Used to re-collapse expanded long chat
+// messages (Phase 12 sub-phase item 5).
+ipcRenderer.on("window-minimized", () => emit("window-minimized", null));
+
+// ── Screen share captured audio from main process (PRD 12.7) ───────────────
+// Registered once, not per-`startAppAudioCapture` call, matching this
+// file's existing convention for main→renderer push channels — a no-op
+// whenever `screenAudioWriter` isn't set (i.e. no share in progress).
+ipcRenderer.on(
+    "app-audio-frame",
+    (_event, frame: { pcm: Uint8Array; sampleRate: number; channels: number }) => {
+        if (!screenAudioWriter) return;
+        const { pcm, sampleRate, channels } = frame;
+        const numberOfFrames = Math.floor(pcm.byteLength / 2 / channels); // 16-bit PCM
+        if (numberOfFrames <= 0) return;
+        const timestamp = Math.round((screenAudioSamplesWritten / sampleRate) * 1_000_000);
+        try {
+            const audioData = new AudioData({
+                format: "s16",
+                sampleRate,
+                numberOfFrames,
+                numberOfChannels: channels,
+                timestamp,
+                // IPC-deserialized data is always a regular ArrayBuffer-backed
+                // view in practice, never SharedArrayBuffer-backed — this cast
+                // is just working around TS 5.7's stricter generic Uint8Array
+                // typing, not papering over a real runtime concern.
+                data: pcm as BufferSource,
+            });
+            screenAudioWriter.write(audioData);
+            screenAudioSamplesWritten += numberOfFrames;
+        } catch (err) {
+            console.error("[screen-share] Failed to write captured audio frame:", err);
+        }
+    },
+);
 
 // ── Auto-Updater IPC from main process (PRD 10.1) ──────────────────────────
 ipcRenderer.on("update-available", (_event, data: { version: string }) => emit("update-available", data));

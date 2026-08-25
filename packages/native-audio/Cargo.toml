@@ -1,0 +1,71 @@
+[package]
+name = "native-audio"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+napi = { version = "2", default-features = false, features = ["napi4"] }
+napi-derive = "2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# PRD 12.3 — PipeWire native capture, PulseAudio fallback. Both crates wrap
+# system C libraries via their `-sys` crates, which need `pkg-config` plus
+# the matching dev headers present on the BUILD machine (not just the end
+# user's machine) to compile at all:
+#   Debian/Ubuntu: libpipewire-0.3-dev libpulse-dev pkg-config
+#   Fedora:        pipewire-devel pulseaudio-libs-devel pkgconf-pkg-config
+#   Arch/CachyOS:  libpipewire libpulse pkgconf
+# This is a new build-time system dependency beyond anything PRD 12.1/12.2
+# needed — worth folding into PRD 12.5's release-script assumptions and
+# into whatever dev-setup docs exist, not just noted here.
+# `v1_2_0` enables the `TARGET_OBJECT`/`STREAM_CAPTURE_SINK` key constants
+# used by `linux.rs`'s process-loopback stream (gated behind `v0_3_44`+ in
+# this crate; `v1_2_0` cascades down through every earlier version feature).
+# Confirmed via a real `cargo check` against system libpipewire-0.3 1.6.8
+# (2026-08-23) — without this, `pw::keys::TARGET_OBJECT` doesn't compile at
+# all, which was the first error a real build surfaced.
+pipewire = { version = "0.10", features = ["v1_2_0"] }
+libpulse-binding = "2"
+libpulse-simple-binding = "2"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# PRD 12.2 — WASAPI process-loopback capture via ActivateAudioInterfaceAsync.
+# Real MSVC cross-compile via `cargo-xwin` (2026-08-23, see src/windows.rs's
+# module doc comment for the full story) got past dependency resolution and
+# napi-build's linking setup (MSVC doesn't need the `libnode.dll` GNU needs)
+# and reached real type errors in this crate's own code, all now fixed:
+#   - `implement` feature is required for both the `_Impl` trait pattern
+#     (`IActivateAudioInterfaceCompletionHandler_Impl`) and the
+#     `#[windows::core::implement(...)]` macro to exist at all.
+#   - `windows-core` must be a *direct* Cargo.toml dependency, not just
+#     reachable via the `windows::core` re-export — the `implement` macro
+#     expands to absolute `windows_core::...` paths.
+#   - `Media_Multimedia` feature needed for `WAVE_FORMAT_IEEE_FLOAT` (it's
+#     not in `Media_Audio`, despite the name suggesting otherwise).
+#   - `Win32_System_Com_StructuredStorage` was never actually needed —
+#     `PROPVARIANT` in 0.58 lives in `windows_core`, not that module.
+#     Left removed below rather than kept as dead weight.
+# End result: `npm run build -- --target x86_64-pc-windows-msvc` (from
+# packages/native-audio) produces a real, valid PE32+ DLL — confirmed via
+# `file` on the output. Full success, not just dependency resolution.
+windows = { version = "0.58", features = [
+    "implement",
+    "Win32_Foundation",
+    "Win32_Media_Audio",
+    "Win32_Media_Multimedia",
+    "Win32_System_Com",
+    "Win32_System_Variant",
+    "Win32_UI_WindowsAndMessaging",
+] }
+windows-core = "0.58"
+
+[build-dependencies]
+napi-build = "2"
+
+[profile.release]
+lto = true
+strip = "symbols"

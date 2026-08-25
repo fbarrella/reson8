@@ -1,0 +1,29 @@
+{
+    "name": "@reson8/native-audio",
+    "version": "0.1.0",
+    "private": true,
+    "main": "index.js",
+    "types": "index.d.ts",
+    "files": [
+        "index.js",
+        "index.d.ts",
+        "prebuilds/**/*.node"
+    ],
+    "napi": {
+        "name": "native-audio",
+        "targets": [
+            "x86_64-pc-windows-msvc",
+            "x86_64-pc-windows-gnu",
+            "x86_64-unknown-linux-gnu",
+            "x86_64-apple-darwin",
+            "aarch64-apple-darwin"
+        ]
+    },
+    "scripts": {
+        "build": "napi build --platform --release prebuilds",
+        "build:debug": "napi build --platform prebuilds"
+    },
+    "devDependencies": {
+        "@napi-rs/cli": "^2.18.4"
+    }
+}

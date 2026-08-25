@@ -677,6 +677,8 @@ const EMOJI_DATA: EmojiEntry[] = [
 ];
 
 interface Reson8Api {
+    readonly platform: string;
+    readonly isLinuxWayland: boolean;
     getInstanceId(): string;
     isExistingInstall(): Promise<boolean>;
     connect(host: string, port: number | undefined, nickname: string, password?: string): Promise<void>;
@@ -687,6 +689,7 @@ interface Reson8Api {
     toggleDeafen(): { isMuted: boolean; isDeafened: boolean };
     setMuted(muted: boolean): void;
     setVoiceState(isMuted: boolean, isDeafened: boolean): void;
+    setScreenShareState(isSharingScreen: boolean, streamName?: string): void;
     setLocalUserVolume(userId: string, percent: number): void;
     setLocalUserMute(userId: string, muted: boolean): void;
     getLocalUserVolume(userId: string): number;
@@ -713,7 +716,7 @@ interface Reson8Api {
         orderedChannelIds: string[],
     ): Promise<{ success: boolean; error?: string }>;
     deleteChannel(channelId: string): Promise<{ success: boolean; error?: string }>;
-    sendMessage(channelId: string, content: string, attachmentUrl?: string, attachmentPublicId?: string): Promise<{ success: boolean; messageId?: string }>;
+    sendMessage(channelId: string, content: string, attachmentUrl?: string, attachmentPublicId?: string): Promise<{ success: boolean; messageId?: string; error?: string }>;
     deleteMessage(messageId: string): Promise<{ success: boolean; error?: string }>;
     editMessage(messageId: string, content: string): Promise<{ success: boolean; error?: string }>;
     fetchMessages(channelId: string, before?: string, limit?: number, aroundMessageId?: string): Promise<{ success: boolean; messages?: ChatMessage[]; pinnedMessage?: PinnedMessage | null; error?: string }>;
@@ -756,8 +759,50 @@ interface Reson8Api {
     getPendingEmojis(): Promise<{ success: boolean; emojis?: CustomEmoji[]; error?: string }>;
     reviewCustomEmoji(emojiId: string, decision: "APPROVED" | "REJECTED"): Promise<{ success: boolean; error?: string }>;
     nudgeUser(targetUserId: string): Promise<{ success: boolean; error?: string }>;
-    getServerSettings(): Promise<{ success: boolean; nudgeEnabled?: boolean; error?: string }>;
-    updateServerSettings(nudgeEnabled: boolean): Promise<{ success: boolean; error?: string }>;
+    getServerSettings(): Promise<{
+        success: boolean;
+        nudgeEnabled?: boolean;
+        screenShareEnabled?: boolean;
+        name?: string;
+        maxMessageLength?: number;
+        version?: string;
+        error?: string;
+    }>;
+    updateServerSettings(
+        settings: { nudgeEnabled?: boolean; screenShareEnabled?: boolean; maxMessageLength?: number },
+    ): Promise<{ success: boolean; error?: string }>;
+    getDesktopSources(): Promise<{
+        success: boolean;
+        sources?: Array<{
+            id: string;
+            name: string;
+            thumbnail: string;
+            appIcon: string | null;
+            sourceType: "screen" | "window";
+        }>;
+        error?: string;
+    }>;
+    resolvePidForWindowSourceId(sourceId: string): Promise<number | undefined>;
+    platformSupportsAudioCapture(): Promise<boolean>;
+    startAppAudioCapture(
+        pid: number | undefined,
+        processName: string | undefined,
+    ): Promise<{ success: boolean; error?: string }>;
+    stopAppAudioCapture(): Promise<void>;
+    stopScreenShare(): Promise<void>;
+    startScreenShareVideo(chromeMediaSourceId: string): Promise<{ success: boolean; error?: string }>;
+    startScreenShareViaSystemPicker(): Promise<{
+        success: boolean;
+        label?: string;
+        sourceType?: "screen" | "window";
+        error?: string;
+    }>;
+    pickAudioAppToShare(): Promise<string | null>;
+    openScreenShareViewer(
+        targetUserId: string,
+        nickname: string,
+        channelId: string,
+    ): Promise<{ success: boolean; error?: string }>;
     on(event: string, callback: (...args: any[]) => void): void;
 }
 
@@ -843,6 +888,39 @@ let serverNudgeEnabled = true;
 const NUDGE_COOLDOWN_MS = 30 * 1000;
 const lastNudgeSentAt = new Map<string, number>();
 
+// Screen Share (PRD 12.9). `serverScreenShareEnabled` mirrors the
+// `serverNudgeEnabled` pattern above — refreshed on (re)connect and kept
+// live via SERVER_SETTINGS_UPDATED (PRD 12.14). This is a UX convenience
+// only (disables the button); the server independently refuses to let
+// anyone actually watch a share while the toggle is off.
+let serverScreenShareEnabled = true;
+let isSharingScreen = false;
+/**
+ * Admin-configurable cap on a single message's length (Phase 12 sub-phase
+ * item 4) — mirrors the `serverNudgeEnabled`/`serverScreenShareEnabled`
+ * pattern above: refreshed on (re)connect, kept live via
+ * SERVER_SETTINGS_UPDATED. Applied to `chatInput.maxLength` as a UX
+ * convenience only; the server independently enforces the real limit on
+ * SEND_MESSAGE/EDIT_MESSAGE/SEND_DIRECT_MESSAGE regardless of what this
+ * client sends.
+ */
+let serverMaxMessageLength = 4000;
+/** The currently-connected server's display name, once fetched via getServerSettings() — null until then / after disconnect. */
+let connectedServerName: string | null = null;
+
+/**
+ * Composes the OS window title bar text — "Reson8" (or "Reson8 -
+ * [ServerName]" once known) with a 🔴 prefix while actively screen
+ * sharing. The two concerns (server name, live-sharing indicator) update
+ * independently and at different times, so this is the single place that
+ * combines them rather than each call site clobbering the other's part of
+ * the string.
+ */
+function updateWindowTitle(): void {
+    const base = connectedServerName ? `Reson8 - ${connectedServerName}` : "Reson8";
+    document.title = isSharingScreen ? `🔴 ${base}` : base;
+}
+
 function formatDuration(ms: number): string {
     // Defense in depth against residual clock skew (the offset applied by
     // callers is a single round-trip estimate, not a full NTP sync) — a
@@ -902,7 +980,10 @@ const voicePanel = document.getElementById("voice-panel") as HTMLDivElement;
 const voiceChannelName = document.getElementById("voice-channel-name") as HTMLSpanElement;
 const btnMute = document.getElementById("btn-mute") as HTMLButtonElement;
 const btnDeafen = document.getElementById("btn-deafen") as HTMLButtonElement;
+const btnShareScreen = document.getElementById("btn-share-screen") as HTMLButtonElement;
 const btnLeaveVoice = document.getElementById("btn-leave-voice") as HTMLButtonElement;
+const screenShareAlertBanner = document.getElementById("screen-share-alert-banner") as HTMLDivElement;
+const btnStopShareAlert = document.getElementById("btn-stop-share-alert") as HTMLButtonElement;
 
 const statusDot = document.getElementById("status-dot") as HTMLSpanElement;
 const statusText = document.getElementById("status-text") as HTMLSpanElement;
@@ -978,6 +1059,9 @@ const settingsTabEmojis = document.getElementById("settings-tab-emojis") as HTML
 const emojiPendingList = document.getElementById("emoji-pending-list") as HTMLDivElement;
 const settingsTabServer = document.getElementById("settings-tab-server") as HTMLButtonElement;
 const chkNudgeEnabled = document.getElementById("chk-nudge-enabled") as HTMLInputElement;
+const chkScreenShareEnabled = document.getElementById("chk-screen-share-enabled") as HTMLInputElement;
+const inputMaxMessageLength = document.getElementById("input-max-message-length") as HTMLInputElement;
+const btnSaveMaxMessageLength = document.getElementById("btn-save-max-message-length") as HTMLButtonElement;
 
 // About tab (PRD 10.1)
 const aboutVersion = document.getElementById("about-version") as HTMLDivElement;
@@ -999,6 +1083,11 @@ const whatsNewTitle = document.getElementById("whats-new-title") as HTMLHeadingE
 const whatsNewBody = document.getElementById("whats-new-body") as HTMLDivElement;
 const btnWhatsNewGithub = document.getElementById("btn-whats-new-github") as HTMLButtonElement;
 const btnWhatsNewDismiss = document.getElementById("btn-whats-new-dismiss") as HTMLButtonElement;
+
+const versionMismatchModal = document.getElementById("version-mismatch-modal") as HTMLDivElement;
+const versionMismatchMessage = document.getElementById("version-mismatch-message") as HTMLParagraphElement;
+const btnVersionMismatchDismiss = document.getElementById("btn-version-mismatch-dismiss") as HTMLButtonElement;
+const btnVersionMismatchReleases = document.getElementById("btn-version-mismatch-releases") as HTMLButtonElement;
 
 // Audio device selects (inside settings modal voice tab)
 const audioInputSelect = document.getElementById("audio-input-select") as HTMLSelectElement;
@@ -1065,6 +1154,37 @@ let pendingNsfwChannel: TreeNode | null = null;
 const pinReplaceConfirmModal = document.getElementById("pin-replace-confirm-modal") as HTMLDivElement;
 const btnPinReplaceCancel = document.getElementById("btn-pin-replace-cancel") as HTMLButtonElement;
 const btnPinReplaceConfirm = document.getElementById("btn-pin-replace-confirm") as HTMLButtonElement;
+
+// ── Screen Share Selection Modal (PRD 12.10) ────────────────────────────────
+const screenShareModal = document.getElementById("screen-share-modal") as HTMLDivElement;
+const sourceShareGroups = document.getElementById("source-share-groups") as HTMLDivElement;
+const sourceShareAudioCheckbox = document.getElementById("source-share-audio-checkbox") as HTMLInputElement;
+const sourceShareAudioDesc = document.getElementById("source-share-audio-desc") as HTMLSpanElement;
+const btnScreenShareCancel = document.getElementById("btn-screen-share-cancel") as HTMLButtonElement;
+const btnScreenShareStart = document.getElementById("btn-screen-share-start") as HTMLButtonElement;
+const sourceShareNameInput = document.getElementById("source-share-name-input") as HTMLInputElement;
+
+// ── Screen Share Custom Name Modal (Linux/Wayland bypass) ───────────────────
+const streamNameModal = document.getElementById("stream-name-modal") as HTMLDivElement;
+const streamNameInput = document.getElementById("stream-name-input") as HTMLInputElement;
+const btnStreamNameSkip = document.getElementById("btn-stream-name-skip") as HTMLButtonElement;
+const btnStreamNameConfirm = document.getElementById("btn-stream-name-confirm") as HTMLButtonElement;
+
+type DesktopSource = {
+    id: string;
+    name: string;
+    thumbnail: string;
+    appIcon: string | null;
+    sourceType: "screen" | "window";
+};
+let selectedShareSource: DesktopSource | null = null;
+
+// ── Watch Screen Share Confirmation Modal (PRD 12.13) ───────────────────────
+const watchShareConfirmModal = document.getElementById("watch-share-confirm-modal") as HTMLDivElement;
+const watchShareConfirmNickname = document.getElementById("watch-share-confirm-nickname") as HTMLElement;
+const btnWatchShareCancel = document.getElementById("btn-watch-share-cancel") as HTMLButtonElement;
+const btnWatchShareConfirm = document.getElementById("btn-watch-share-confirm") as HTMLButtonElement;
+let pendingWatchShare: { userId: string; nickname: string; channelId: string } | null = null;
 
 const newChannelNsfwRow = document.getElementById("new-channel-nsfw-row") as HTMLDivElement;
 const newChannelNsfw = document.getElementById("new-channel-nsfw") as HTMLInputElement;
@@ -1205,7 +1325,7 @@ interface TreeNode {
     isNsfw?: boolean;
     hasUnread?: boolean;
     children: TreeNode[];
-    occupants: { userId: string; nickname: string; isMuted?: boolean; isDeafened?: boolean }[];
+    occupants: { userId: string; nickname: string; isMuted?: boolean; isDeafened?: boolean; isSharingScreen?: boolean }[];
 }
 
 function findChannelNodeById(nodes: TreeNode[], id: string): TreeNode | null {
@@ -1445,6 +1565,12 @@ const OCC_MUTED_ICON =
     `<svg class="occ-voice-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" title="Muted"><line x1="1" y1="1" x2="23" y2="23"/><path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"/><path d="M17 16.95A7 7 0 0 1 5 12v-2M19 10v2a7 7 0 0 1-.11 1.23"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>`;
 const OCC_DEAFENED_ICON =
     `<svg class="occ-voice-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" title="Deafened"><line x1="1" y1="1" x2="23" y2="23"/><path d="M3 18v-6a9 9 0 0 1 15.34-6.36M21 12v2.5"/><path d="M21 16v2a2 2 0 0 1-2 2h-1"/><path d="M3 18v2a2 2 0 0 0 2 2h1v-4H4a1 1 0 0 0-1 1z"/></svg>`;
+// Same mic-slash shape as OCC_MUTED_ICON but in the app's accent light-blue —
+// shown only to this client when they've locally muted the occupant (PRD
+// 4.1/4.2's "Mute Locally"), distinct from the red server-broadcast mute icon
+// since only the local viewer sees this one.
+const OCC_LOCALLY_MUTED_ICON =
+    `<svg class="occ-voice-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" title="Muted for you only"><line x1="1" y1="1" x2="23" y2="23"/><path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"/><path d="M17 16.95A7 7 0 0 1 5 12v-2M19 10v2a7 7 0 0 1-.11 1.23"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>`;
 
 // Client-local (never sent to the server) per-remote-user volume/mute overrides —
 // see PRD 4.1/4.2. Persisted per target userId so a preference sticks across
@@ -1477,9 +1603,21 @@ function renderOccupants(container: HTMLElement, node: TreeNode): void {
             el.classList.add("speaking");
         }
         el.setAttribute("data-user-id", occ.userId);
+        const isLocallyMuted = occ.userId !== myId && getSavedLocalMute(occ.userId);
         const voiceStateIcons =
-            `${occ.isMuted ? OCC_MUTED_ICON : ""}${occ.isDeafened ? OCC_DEAFENED_ICON : ""}`;
-        el.innerHTML = `<span class="occ-dot"></span>${escapeHtml(occ.nickname)}${voiceStateIcons}`;
+            `${occ.isMuted ? OCC_MUTED_ICON : ""}${occ.isDeafened ? OCC_DEAFENED_ICON : ""}${isLocallyMuted ? OCC_LOCALLY_MUTED_ICON : ""}`;
+        const sharingBadge = occ.isSharingScreen ? `<span class="sharing-badge">LIVE</span>` : "";
+        el.innerHTML = `<span class="occ-dot"></span>${escapeHtml(occ.nickname)}${voiceStateIcons}${sharingBadge}`;
+
+        // Clickable by anyone in the room, including the streamer
+        // themself (PRD 12.13) — the badge only exists in the DOM when
+        // `occ.isSharingScreen` is true, so no extra guard needed here.
+        el.querySelector(".sharing-badge")?.addEventListener("click", (e) => {
+            e.stopPropagation();
+            pendingWatchShare = { userId: occ.userId, nickname: occ.nickname, channelId: node.id };
+            watchShareConfirmNickname.textContent = occ.nickname;
+            watchShareConfirmModal.classList.add("visible");
+        });
 
         // Re-apply any saved local volume/mute for this participant. Cheap and
         // idempotent — voice.service.ts only touches the audio graph when a
@@ -1534,6 +1672,7 @@ function renderOccupants(container: HTMLElement, node: TreeNode): void {
                 setSavedLocalMute(targetId, nowMuted);
                 muteBtn.classList.toggle("active", nowMuted);
                 muteBtn.textContent = nowMuted ? "🔇 Unmute Locally" : "🔊 Mute Locally";
+                if (currentTree.length > 0) renderTree(currentTree);
             });
 
             const kickBtn = menu.querySelector(".ctx-kick-btn") as HTMLButtonElement | null;
@@ -1685,13 +1824,54 @@ function updateVoiceUI(channelName?: string): void {
         if (channelName) {
             voiceChannelName.textContent = `Voice: ${channelName}`;
         }
-        btnMute.textContent = isMuted ? "🔇 Unmute" : "🎤 Mute";
+        // Icon-only buttons (PRD 12.9) — state is conveyed by the `.active`
+        // (red) styling plus the tooltip, not by swapping label text.
+        btnMute.title = isMuted ? "Unmute" : "Mute";
         btnMute.classList.toggle("active", isMuted);
-        btnDeafen.textContent = isDeafened ? "🔇 Undeafen" : "🔊 Deafen";
+        btnDeafen.title = isDeafened ? "Undeafen" : "Deafen";
         btnDeafen.classList.toggle("active", isDeafened);
+        updateShareScreenButton();
     } else {
         voicePanel.classList.remove("visible");
+        isSharingScreen = false;
+        // Leaving voice while sharing (Leave Voice, a kick, a disconnect)
+        // skips the explicit stop-sharing path — without this, the title
+        // bar's 🔴 marker and (harmlessly, since #voice-panel itself is
+        // now hidden) the alert banner's `.visible` class would stay
+        // stuck set.
+        updateShareScreenButton();
     }
+}
+
+/** Reflects sharing/enabled state on the Share Screen button (PRD 12.9). */
+/**
+ * Screen sharing is disabled outright on macOS builds — the packaging
+ * pipeline (see `apps/client/package.json`'s `build.mac`) has never been
+ * run on real macOS hardware, so this ships with the feature turned off
+ * rather than an untested code path reaching users. Checked ahead of the
+ * server-side `serverScreenShareEnabled` toggle so the tooltip explains
+ * the more specific reason.
+ */
+function updateShareScreenButton(): void {
+    btnShareScreen.classList.toggle("active", isSharingScreen);
+    // The LIVE badge (visible to others) and this button's own red/icon
+    // state are easy to miss while actually paying attention to whatever's
+    // on the shared screen — a loud, impossible-to-miss banner + a second,
+    // bigger stop button (`btnStopShareAlert`, wired below) and a
+    // title-bar marker are the redundant, harder-to-miss cues instead.
+    screenShareAlertBanner.classList.toggle("visible", isSharingScreen);
+    updateWindowTitle();
+    if (api.platform === "darwin") {
+        btnShareScreen.title = "Screen sharing isn't available on macOS yet";
+        btnShareScreen.disabled = true;
+        return;
+    }
+    btnShareScreen.title = isSharingScreen
+        ? "Stop Sharing"
+        : serverScreenShareEnabled
+          ? "Share Screen"
+          : "Screen sharing is disabled on this server";
+    btnShareScreen.disabled = !serverScreenShareEnabled;
 }
 
 // Shared mute/deafen/disconnect logic — used by both the button click handlers
@@ -1753,6 +1933,133 @@ function leaveVoiceAndNotify(): void {
 btnMute.addEventListener("click", toggleMuteAndNotify);
 
 btnDeafen.addEventListener("click", toggleDeafenAndNotify);
+
+/** Shared by the Share Screen button's own stop path and the redundant, harder-to-miss `btnStopShareAlert`. */
+async function stopSharingScreen(): Promise<void> {
+    await api.stopScreenShare();
+    isSharingScreen = false;
+    updateShareScreenButton();
+    // Lets other occupants' sharing badge disappear (PRD 12.12).
+    api.setScreenShareState(false);
+}
+
+btnShareScreen.addEventListener("click", async () => {
+    if (isSharingScreen) {
+        await stopSharingScreen();
+        return;
+    }
+    if (api.isLinuxWayland) {
+        await startScreenShareViaSystemPicker();
+        return;
+    }
+    await openScreenShareModal();
+});
+
+btnStopShareAlert.addEventListener("click", stopSharingScreen);
+
+/**
+ * Linux/Wayland-only path: uses `getDisplayMedia()` (via
+ * `startScreenShareViaSystemPicker`'s underlying voice-service call), not
+ * `getDesktopSources()` + `startScreenShareVideo()` — that two-step API
+ * showed the OS portal picker a *second* time inside the video-capture
+ * step even after our own `getDesktopSources()` call had already shown it
+ * once, with the resulting feed not reliably tied to what was actually
+ * granted (observed as a black feed on the viewer side). `getDisplayMedia`
+ * is Electron's single-round-trip native path for the Wayland portal
+ * picker instead of a redundant second one on top of it.
+ *
+ * There's no in-app modal step left to surface the "share this window's
+ * audio too" checkbox on this path (the whole point here is trusting the
+ * OS picker instead of our own UI for video) — the OS picker itself has no
+ * concept of it either, since it only ever asks about video. PRD 12.11's
+ * business rule (audio only for an individual window, never a full-monitor
+ * share) still has to be respected, so this asks via a native dialog
+ * instead — but not "share <picked source>'s audio too?": confirmed live
+ * that `videoRes.label` here is never a real per-window name on this
+ * platform (the Wayland portal doesn't expose one to the requesting app at
+ * all), so there'd be nothing meaningful to ask about or match against.
+ * `pickAudioAppToShare()` instead offers a direct choice from whichever
+ * apps are *actually* producing audio right now (queried via PipeWire/
+ * PulseAudio introspection, which isn't privacy-gated the way window
+ * capture is), and returns the exact name to hand to
+ * `startAppAudioCapture` — no name-matching heuristic involved.
+ *
+ * Confirmed live (via a temporary diagnostic, since removed) that the
+ * portal's source id (`"window:1:0"`) is just a sequential handle scoped
+ * to the one grant in this request, not a real identifier of any kind —
+ * there's no PID or name to recover from it by any means, not just an
+ * unreliable one, so `videoRes.label` here always ends up the generic
+ * "your screen" fallback for a window share. `promptForStreamName()`
+ * lets the user set their own display name instead, purely a local/UI
+ * concern (never sent to the OS picker or portal) — a new modal because
+ * there's no existing in-app step on this path to attach a field to,
+ * unlike the Selection Modal's own name input on other platforms.
+ */
+async function startScreenShareViaSystemPicker(): Promise<void> {
+    const videoRes = await api.startScreenShareViaSystemPicker();
+    if (!videoRes.success) {
+        log(`Failed to start screen share: ${videoRes.error}`, "error");
+        return;
+    }
+
+    isSharingScreen = true;
+    updateShareScreenButton();
+
+    const customName = await promptForStreamName();
+    const resolvedName = customName || videoRes.label || "your screen";
+    // Sent only once the resolved name is known, so viewers' Viewer window
+    // (which reads this back via WATCH_SCREEN_SHARE) shows the exact same
+    // name this client's own "Started sharing" log does, not a stale
+    // pre-naming placeholder.
+    api.setScreenShareState(true, resolvedName);
+    log(`Started sharing "${resolvedName}"`, "success");
+
+    if (videoRes.sourceType === "window" && (await api.platformSupportsAudioCapture())) {
+        const chosenApp = await api.pickAudioAppToShare();
+        if (chosenApp) {
+            const audioRes = await api.startAppAudioCapture(undefined, chosenApp);
+            if (!audioRes.success) {
+                log(`Screen video is sharing, but audio couldn't start: ${audioRes.error}`, "error");
+            }
+        }
+    }
+}
+
+/**
+ * Shows `#stream-name-modal` and resolves with the trimmed name the user
+ * entered, or `""` if they clicked Skip / clicked outside the modal —
+ * callers treat an empty string as "use the default name" (see call site).
+ */
+function promptForStreamName(): Promise<string> {
+    return new Promise((resolve) => {
+        streamNameInput.value = "";
+        streamNameModal.classList.add("visible");
+        streamNameInput.focus();
+
+        const cleanup = (): void => {
+            streamNameModal.classList.remove("visible");
+            btnStreamNameConfirm.removeEventListener("click", onConfirm);
+            btnStreamNameSkip.removeEventListener("click", onSkip);
+            streamNameModal.removeEventListener("click", onBackdropClick);
+        };
+        const onConfirm = (): void => {
+            const value = streamNameInput.value.trim();
+            cleanup();
+            resolve(value);
+        };
+        const onSkip = (): void => {
+            cleanup();
+            resolve("");
+        };
+        const onBackdropClick = (e: MouseEvent): void => {
+            if (e.target === streamNameModal) onSkip();
+        };
+
+        btnStreamNameConfirm.addEventListener("click", onConfirm);
+        btnStreamNameSkip.addEventListener("click", onSkip);
+        streamNameModal.addEventListener("click", onBackdropClick);
+    });
+}
 
 btnLeaveVoice.addEventListener("click", leaveVoiceAndNotify);
 
@@ -2004,10 +2311,26 @@ api.on("connected", (data: { serverId: string; instanceId: string }) => {
         }
     });
 
-    // Load the server-wide Nudge toggle
+    // Load the server-wide Nudge / Screen Sharing toggles, the message
+    // length cap, and the server's display name for the window title bar.
     api.getServerSettings().then((res) => {
         if (res.success && res.nudgeEnabled !== undefined) {
             serverNudgeEnabled = res.nudgeEnabled;
+        }
+        if (res.success && res.screenShareEnabled !== undefined) {
+            serverScreenShareEnabled = res.screenShareEnabled;
+            updateShareScreenButton();
+        }
+        if (res.success && res.name) {
+            connectedServerName = res.name;
+            updateWindowTitle();
+        }
+        if (res.success && res.maxMessageLength !== undefined) {
+            serverMaxMessageLength = res.maxMessageLength;
+            chatInput.maxLength = serverMaxMessageLength;
+        }
+        if (res.success && res.version) {
+            checkVersionMismatch(res.version);
         }
     });
 });
@@ -2022,6 +2345,8 @@ api.on("disconnected", () => {
     currentTree = [];
     customEmojis = [];
     previousOccupantIds = new Set();
+    connectedServerName = null;
+    updateWindowTitle();
     activeSpeakers.clear();
     for (const timer of speakerHoldTimers.values()) clearTimeout(timer);
     speakerHoldTimers.clear();
@@ -2312,6 +2637,7 @@ function updateOccupants(channelId: string, occupants: any[]): void {
                     nickname: o.nickname,
                     isMuted: o.isMuted,
                     isDeafened: o.isDeafened,
+                    isSharingScreen: o.isSharingScreen,
                 }));
                 return true;
             }
@@ -2869,6 +3195,14 @@ function renderChatMessage(tab: ChatTab, msg: ChatMessage): void {
     tab.messagesEl.appendChild(el);
     tab.messagesEl.scrollTop = tab.messagesEl.scrollHeight;
 
+    // Long-message truncation (Phase 12 sub-phase item 5) — must run after
+    // appendChild, since scrollHeight/clientHeight need the element to
+    // actually be laid out in the DOM.
+    if (msg.content) {
+        const textEl = el.querySelector(".msg-text") as HTMLElement | null;
+        if (textEl) attachMessageTruncation(el, textEl);
+    }
+
     // Async link preview injection
     if (msg.content) {
         const url = extractFirstUrl(msg.content);
@@ -2877,6 +3211,48 @@ function renderChatMessage(tab: ChatTab, msg: ChatMessage): void {
         }
     }
 }
+
+/**
+ * Clamps a long message to a few lines with a "See more"/"See less"
+ * toggle. Deliberately not persisted anywhere — expand state lives only in
+ * the DOM classes set here, so a message re-render (switching channels
+ * away and back, which rebuilds the tab's message list from scratch) or an
+ * app restart already resets it with no extra work. The one case that
+ * *wouldn't* reset on its own — the window staying alive and the DOM
+ * untouched while just minimized/hidden — is handled separately by
+ * `collapseAllExpandedMessages()` below, wired to the "window-minimized"
+ * push from main.ts.
+ */
+function attachMessageTruncation(el: HTMLDivElement, textEl: HTMLElement): void {
+    textEl.classList.add("msg-text-clamped");
+    if (textEl.scrollHeight <= textEl.clientHeight + 1) {
+        // Fits within the clamp already — no truncation actually happened,
+        // so there's nothing to offer "See more" for.
+        textEl.classList.remove("msg-text-clamped");
+        return;
+    }
+
+    const btnSeeMore = document.createElement("button");
+    btnSeeMore.className = "btn-see-more";
+    btnSeeMore.textContent = "See more";
+    btnSeeMore.addEventListener("click", () => {
+        const expanded = textEl.classList.toggle("msg-text-expanded");
+        textEl.classList.toggle("msg-text-clamped", !expanded);
+        btnSeeMore.textContent = expanded ? "See less" : "See more";
+    });
+    el.appendChild(btnSeeMore);
+}
+
+function collapseAllExpandedMessages(): void {
+    document.querySelectorAll<HTMLElement>(".msg-text-expanded").forEach((textEl) => {
+        textEl.classList.remove("msg-text-expanded");
+        textEl.classList.add("msg-text-clamped");
+        const btn = textEl.parentElement?.querySelector(".btn-see-more");
+        if (btn) btn.textContent = "See more";
+    });
+}
+
+api.on("window-minimized", collapseAllExpandedMessages);
 
 // ── Chat Input ────────────────────────────────────────────────────────────
 
@@ -2901,7 +3277,7 @@ async function sendChatMessage(): Promise<void> {
         const channelId = activeTabId;
         const result = await api.sendMessage(channelId, content, attachmentUrl ?? undefined, attachmentPublicId ?? undefined);
         if (!result.success) {
-            log("Failed to send message", "error");
+            log(`Failed to send message${result.error ? `: ${result.error}` : ""}`, "error");
         }
     }
 }
@@ -3366,6 +3742,8 @@ async function openSettingsPanel(): Promise<void> {
             const settingsRes = await api.getServerSettings();
             if (settingsRes.success) {
                 chkNudgeEnabled.checked = settingsRes.nudgeEnabled ?? true;
+                chkScreenShareEnabled.checked = settingsRes.screenShareEnabled ?? true;
+                inputMaxMessageLength.value = String(settingsRes.maxMessageLength ?? serverMaxMessageLength);
             }
         }
     } else {
@@ -3432,12 +3810,44 @@ btnServerSettings.addEventListener("click", () => {
 
 chkNudgeEnabled.addEventListener("change", async () => {
     const desired = chkNudgeEnabled.checked;
-    const result = await api.updateServerSettings(desired);
+    const result = await api.updateServerSettings({ nudgeEnabled: desired });
     if (result.success) {
         serverNudgeEnabled = desired;
         log(`Nudge ${desired ? "enabled" : "disabled"} for this server`, "success");
     } else {
         chkNudgeEnabled.checked = !desired; // revert on failure
+        log(`Failed to update server settings: ${result.error}`, "error");
+        if (result.error && /permission|denied/i.test(result.error)) SoundAlert.play("insufficient_perms.mp3");
+    }
+});
+
+chkScreenShareEnabled.addEventListener("change", async () => {
+    const desired = chkScreenShareEnabled.checked;
+    const result = await api.updateServerSettings({ screenShareEnabled: desired });
+    if (result.success) {
+        serverScreenShareEnabled = desired;
+        updateShareScreenButton();
+        log(`Screen sharing ${desired ? "enabled" : "disabled"} for this server`, "success");
+    } else {
+        chkScreenShareEnabled.checked = !desired; // revert on failure
+        log(`Failed to update server settings: ${result.error}`, "error");
+        if (result.error && /permission|denied/i.test(result.error)) SoundAlert.play("insufficient_perms.mp3");
+    }
+});
+
+btnSaveMaxMessageLength.addEventListener("click", async () => {
+    const desired = Math.trunc(Number(inputMaxMessageLength.value));
+    if (!Number.isFinite(desired) || desired < 1 || desired > 100_000) {
+        log("Message length limit must be a whole number between 1 and 100,000", "error");
+        return;
+    }
+    const result = await api.updateServerSettings({ maxMessageLength: desired });
+    if (result.success) {
+        serverMaxMessageLength = desired;
+        chatInput.maxLength = desired;
+        log(`Message length limit set to ${desired} characters`, "success");
+    } else {
+        inputMaxMessageLength.value = String(serverMaxMessageLength); // revert on failure
         log(`Failed to update server settings: ${result.error}`, "error");
         if (result.error && /permission|denied/i.test(result.error)) SoundAlert.play("insufficient_perms.mp3");
     }
@@ -4044,6 +4454,13 @@ function attachEditButton(bar: HTMLDivElement, msg: ChatMessage, el: HTMLDivElem
     const myId = api.getInstanceId();
     if (msg.userId !== myId || msg.attachmentUrl) return;
 
+    // Previously always rendered the button and only checked the window on
+    // click, surfacing the server's own rejection as an error log — the
+    // button should simply not be there once editing is no longer
+    // actually possible, not invite a click that's guaranteed to fail.
+    const remainingMs = EDIT_WINDOW_MS - (Date.now() - new Date(msg.createdAt).getTime());
+    if (remainingMs <= 0) return;
+
     const btnEdit = document.createElement("button");
     btnEdit.className = "btn-edit-msg";
     btnEdit.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>`;
@@ -4053,11 +4470,18 @@ function attachEditButton(bar: HTMLDivElement, msg: ChatMessage, el: HTMLDivElem
         const ageMs = Date.now() - new Date(msg.createdAt).getTime();
         if (ageMs > EDIT_WINDOW_MS) {
             log("Edit window has expired (2 minutes)", "error");
+            btnEdit.remove();
             return;
         }
         startMessageEdit(el, msg);
     });
     bar.appendChild(btnEdit);
+
+    // A message rendered well inside its edit window can still go stale
+    // while the channel stays open (e.g. rendered at 30s old, the channel
+    // sits open past the 2-minute mark) — remove the button exactly when
+    // that happens instead of only gating it at initial render.
+    setTimeout(() => btnEdit.remove(), remainingMs);
 }
 
 // ── Pinned Messages (PRD 11.5) ──────────────────────────────────────────────
@@ -4188,6 +4612,235 @@ btnPinReplaceConfirm.addEventListener("click", async () => {
     if (action) await action();
 });
 
+// ── Watch Screen Share Confirmation Modal (PRD 12.13) ───────────────────────
+
+watchShareConfirmModal.addEventListener("click", (e) => {
+    if (e.target === watchShareConfirmModal) {
+        watchShareConfirmModal.classList.remove("visible");
+        pendingWatchShare = null;
+    }
+});
+
+btnWatchShareCancel.addEventListener("click", () => {
+    watchShareConfirmModal.classList.remove("visible");
+    pendingWatchShare = null;
+});
+
+btnWatchShareConfirm.addEventListener("click", async () => {
+    watchShareConfirmModal.classList.remove("visible");
+    const target = pendingWatchShare;
+    pendingWatchShare = null;
+    if (!target) return;
+
+    const res = await api.openScreenShareViewer(target.userId, target.nickname, target.channelId);
+    if (!res.success) {
+        log(`Failed to open viewer: ${res.error}`, "error");
+    }
+});
+
+// ── Screen Share Selection Modal (PRD 12.10) ────────────────────────────────
+
+function renderSourceShareGroup(title: string, sources: DesktopSource[]): HTMLElement {
+    const wrapper = document.createElement("div");
+
+    const heading = document.createElement("div");
+    heading.className = "source-share-group-title";
+    heading.textContent = title;
+    wrapper.appendChild(heading);
+
+    const grid = document.createElement("div");
+    grid.className = "source-share-grid";
+    for (const source of sources) {
+        const card = document.createElement("button");
+        card.type = "button";
+        card.className = "source-share-card";
+
+        const thumb = document.createElement("img");
+        thumb.className = "source-share-card-thumb";
+        thumb.src = source.thumbnail;
+        thumb.alt = "";
+        card.appendChild(thumb);
+
+        const nameRow = document.createElement("div");
+        nameRow.className = "source-share-card-name";
+        if (source.appIcon) {
+            const icon = document.createElement("img");
+            icon.className = "source-share-card-icon";
+            icon.src = source.appIcon;
+            icon.alt = "";
+            nameRow.appendChild(icon);
+        }
+        const nameSpan = document.createElement("span");
+        nameSpan.textContent = source.name;
+        nameRow.appendChild(nameSpan);
+        card.appendChild(nameRow);
+
+        card.addEventListener("click", () => selectShareSource(source, card));
+        grid.appendChild(card);
+    }
+    wrapper.appendChild(grid);
+    return wrapper;
+}
+
+// Fetched once per modal open (PRD 12.11), not per selection — a
+// machine-wide fact, not something that varies per source.
+let audioCaptureSupported = false;
+
+/**
+ * Full Share-Audio checkbox gating (PRD 12.11's business-rule table).
+ * macOS is checked ahead of the generic `audioCaptureSupported` flag so it
+ * gets its own Apple-specific explanation rather than the generic one —
+ * both cases report `platformSupportsAudioCapture() === false` at the
+ * native layer, so platform is the only way to tell them apart client-side.
+ * There's no separate per-target "would capture actually work for this
+ * specific window" check: native-audio's `platformSupportsCapture()`
+ * already determines pre-19041 Windows / ALSA-only Linux machine-wide, not
+ * per-window (see main.ts's `platform-supports-audio-capture` handler) —
+ * a real per-target failure only surfaces when `startCapture()` is
+ * actually attempted, handled separately at "Start Sharing" time.
+ */
+function updateShareAudioCheckboxState(source: DesktopSource): void {
+    let enabled: boolean;
+    let desc: string;
+
+    if (api.platform === "darwin") {
+        enabled = false;
+        desc = "macOS does not support per-application audio capture — only video will be shared.";
+    } else if (source.sourceType !== "window") {
+        enabled = false;
+        desc = "Audio sharing is only available for individual application windows.";
+    } else if (!audioCaptureSupported) {
+        enabled = false;
+        desc = "Audio capture isn't available for this window on your system.";
+    } else {
+        enabled = true;
+        desc = "Share this window's audio too";
+    }
+
+    sourceShareAudioCheckbox.disabled = !enabled;
+    if (!enabled) sourceShareAudioCheckbox.checked = false;
+    sourceShareAudioDesc.textContent = desc;
+}
+
+function selectShareSource(source: DesktopSource, cardEl: HTMLElement): void {
+    selectedShareSource = source;
+    sourceShareGroups.querySelectorAll(".source-share-card.selected").forEach((el) => {
+        el.classList.remove("selected");
+    });
+    cardEl.classList.add("selected");
+    btnScreenShareStart.disabled = false;
+    updateShareAudioCheckboxState(source);
+}
+
+async function openScreenShareModal(): Promise<void> {
+    selectedShareSource = null;
+    btnScreenShareStart.disabled = true;
+    sourceShareAudioCheckbox.disabled = true;
+    sourceShareAudioCheckbox.checked = false;
+    sourceShareAudioDesc.textContent = "Select a source first";
+    sourceShareNameInput.value = "";
+
+    sourceShareGroups.innerHTML = "";
+    const loading = document.createElement("div");
+    loading.className = "source-share-empty";
+    loading.textContent = "Loading sources…";
+    sourceShareGroups.appendChild(loading);
+    screenShareModal.classList.add("visible");
+
+    // Re-fetched on every open — sources can appear/disappear as windows
+    // open/close, so a cached list would go stale. Run alongside the
+    // audio-capability check rather than after it — `getDesktopSources()`
+    // can be slow (on Linux/Wayland it may wait on an OS-level consent
+    // dialog, see PRD 12.10), and there's no reason the fast native check
+    // should wait behind that.
+    //
+    // That OS-level consent dialog is also the one place this call can fail
+    // outright rather than just come back empty — the user cancelling it,
+    // closing it, or (on some Linux/Wayland setups) the desktop portal
+    // itself hiccuping all surface as `getDesktopSources()` resolving with
+    // `success: false` (PRD 12 wrap-up). Without handling that, this modal
+    // would sit on "Loading sources…" forever with no way to know why.
+    const [, sourcesRes] = await Promise.all([
+        api.platformSupportsAudioCapture().then((supported) => {
+            audioCaptureSupported = supported;
+        }),
+        api.getDesktopSources(),
+    ]);
+    sourceShareGroups.innerHTML = "";
+
+    if (!sourcesRes.success || !sourcesRes.sources) {
+        const errorEl = document.createElement("div");
+        errorEl.className = "source-share-empty";
+        errorEl.textContent = sourcesRes.error
+            ? `Couldn't list screens/windows: ${sourcesRes.error}`
+            : "Couldn't list screens/windows to share.";
+        sourceShareGroups.appendChild(errorEl);
+        log(`Failed to open screen share picker: ${sourcesRes.error ?? "unknown error"}`, "error");
+        return;
+    }
+
+    const sources = sourcesRes.sources;
+    const screens = sources.filter((s) => s.sourceType === "screen");
+    const windows = sources.filter((s) => s.sourceType === "window");
+
+    if (screens.length === 0 && windows.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "source-share-empty";
+        empty.textContent = "No screens or windows available to share.";
+        sourceShareGroups.appendChild(empty);
+        return;
+    }
+    if (screens.length > 0) {
+        sourceShareGroups.appendChild(renderSourceShareGroup("Screens", screens));
+    }
+    if (windows.length > 0) {
+        sourceShareGroups.appendChild(renderSourceShareGroup("Application Windows", windows));
+    }
+}
+
+function closeScreenShareModal(): void {
+    screenShareModal.classList.remove("visible");
+    selectedShareSource = null;
+}
+
+screenShareModal.addEventListener("click", (e) => {
+    if (e.target === screenShareModal) closeScreenShareModal();
+});
+
+btnScreenShareCancel.addEventListener("click", () => closeScreenShareModal());
+
+btnScreenShareStart.addEventListener("click", async () => {
+    const source = selectedShareSource;
+    if (!source) return;
+    btnScreenShareStart.disabled = true;
+
+    const videoRes = await api.startScreenShareVideo(source.id);
+    if (!videoRes.success) {
+        log(`Failed to start screen share: ${videoRes.error}`, "error");
+        btnScreenShareStart.disabled = false;
+        return;
+    }
+
+    if (sourceShareAudioCheckbox.checked && !sourceShareAudioCheckbox.disabled) {
+        const pid = await api.resolvePidForWindowSourceId(source.id);
+        const audioRes = await api.startAppAudioCapture(pid, source.name);
+        if (!audioRes.success) {
+            log(`Screen video is sharing, but audio couldn't start: ${audioRes.error}`, "error");
+        }
+    }
+
+    isSharingScreen = true;
+    updateShareScreenButton();
+    closeScreenShareModal();
+    const customName = sourceShareNameInput.value.trim();
+    const resolvedName = customName || source.name || "your screen";
+    // Makes the sharing badge (PRD 12.12) appear for other occupants, and
+    // — via `streamName` — lets a viewer's Viewer window show this same
+    // resolved name.
+    api.setScreenShareState(true, resolvedName);
+    log(`Started sharing "${resolvedName}"`, "success");
+});
+
 api.on("channel-pin-updated", (data: { channelId: string; channelName: string; pinnedMessage: PinnedMessage | null; actedByNickname?: string }) => {
     const tab = chatTabs.get(data.channelId);
     if (tab) updatePinBarUI(tab, data.pinnedMessage);
@@ -4249,6 +4902,12 @@ function startMessageEdit(el: HTMLDivElement, msg: ChatMessage): void {
         if (!el.querySelector(".msg-edited")) {
             el.querySelector(".msg-time")?.insertAdjacentHTML("afterend", `<span class="msg-edited">(edited)</span>`);
         }
+        // Re-evaluate truncation against the new content — an edit can
+        // just as easily make a short message long as vice versa. Drop
+        // any stale "See more" button from before the edit first, since
+        // attachMessageTruncation() only ever adds a new one when needed.
+        el.querySelector(".btn-see-more")?.remove();
+        attachMessageTruncation(el, newTextEl);
     };
 
     const onKeydown = (e: KeyboardEvent) => {
@@ -4269,9 +4928,14 @@ function startMessageEdit(el: HTMLDivElement, msg: ChatMessage): void {
 /** Applies a MESSAGE_EDITED broadcast to every rendered copy of that message (a background tab stays in the DOM, just hidden). */
 function applyMessageEdit(msg: ChatMessage): void {
     document.querySelectorAll(`.chat-msg[data-msg-id="${CSS.escape(msg.id)}"]`).forEach((el) => {
-        const textEl = el.querySelector(".msg-text");
+        const textEl = el.querySelector(".msg-text") as HTMLElement | null;
         if (textEl) {
+            textEl.classList.remove("msg-text-clamped", "msg-text-expanded");
             textEl.innerHTML = linkifyContent(msg.content);
+            // Re-evaluate truncation for the other clients viewing this
+            // edit too, not just the editor's own optimistic path above.
+            el.querySelector(".btn-see-more")?.remove();
+            attachMessageTruncation(el as HTMLDivElement, textEl);
         }
         if (!el.querySelector(".msg-edited")) {
             el.querySelector(".msg-time")?.insertAdjacentHTML("afterend", `<span class="msg-edited">(edited)</span>`);
@@ -4297,7 +4961,7 @@ api.on("custom-emoji-approved", (data: { serverId: string; emoji: CustomEmoji })
 
 // ── Nudge (PRD 4.14) ─────────────────────────────────────────────────────
 
-api.on("server-settings-updated", (data: { nudgeEnabled: boolean }) => {
+api.on("server-settings-updated", (data: { nudgeEnabled: boolean; screenShareEnabled: boolean; maxMessageLength: number }) => {
     serverNudgeEnabled = data.nudgeEnabled;
     // If the Online Users modal is open, re-render so Nudge buttons appear/disappear live.
     if (onlineUsersModal.classList.contains("visible")) {
@@ -4305,6 +4969,15 @@ api.on("server-settings-updated", (data: { nudgeEnabled: boolean }) => {
             if (res.success && res.users) renderOnlineUsers(res.users);
         });
     }
+
+    // PRD 12.14 — live-disable the Share Screen button for everyone the
+    // moment an admin flips the server-wide toggle, same push path Nudge
+    // already uses.
+    serverScreenShareEnabled = data.screenShareEnabled;
+    updateShareScreenButton();
+
+    serverMaxMessageLength = data.maxMessageLength;
+    chatInput.maxLength = serverMaxMessageLength;
 });
 
 api.on("nudge-received", async (data: { fromUserId: string; fromNickname: string }) => {
@@ -4382,14 +5055,17 @@ function buildEmojiCategoryTabs(): void {
     }
 
     // Custom server emoji (approved ones) + the upload entry point — a
-    // small "plus" icon in the same stroke style as the main emoji button,
-    // sized down to fit the tab, replacing the previous "➕" character
-    // (inconsistent size/weight across platforms and easy to miss at low
-    // opacity).
+    // sticker-with-a-plus icon (filled, currentColor — see app-planning/
+    // custom_emoji_icon.svg for the reference this path is adapted from,
+    // an ic_fluent_sticker_add_24_filled icon), replacing a plain circle
+    // "+" that read as generic "add" rather than "custom emoji" and, via
+    // `.emoji-cat-tab` not setting `color`, rendered as near-invisible
+    // black-on-black (fixed alongside this, see that rule's own comment).
     const customBtn = document.createElement("button");
     customBtn.className = "emoji-cat-tab";
     customBtn.title = "Custom Emojis";
-    customBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>`;
+    customBtn.innerHTML =
+        '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M17.5,12 C20.5375661,12 23,14.4624339 23,17.5 C23,20.5375661 20.5375661,23 17.5,23 C14.4624339,23 12,20.5375661 12,17.5 C12,14.4624339 14.4624339,12 17.5,12 Z M17.5,13.9992349 L17.4101244,14.0072906 C17.2060313,14.0443345 17.0450996,14.2052662 17.0080557,14.4093593 L17,14.4992349 L16.9996498,16.9992349 L14.4976498,17 L14.4077742,17.0080557 C14.2036811,17.0450996 14.0427494,17.2060313 14.0057055,17.4101244 L13.9976498,17.5 L14.0057055,17.5898756 C14.0427494,17.7939687 14.2036811,17.9549004 14.4077742,17.9919443 L14.4976498,18 L17.0006498,17.9992349 L17.0011076,20.5034847 L17.0091633,20.5933603 C17.0462073,20.7974534 17.207139,20.9583851 17.411232,20.995429 L17.5011076,21.0034847 L17.5909833,20.995429 C17.7950763,20.9583851 17.956008,20.7974534 17.993052,20.5933603 L18.0011076,20.5034847 L18.0006498,17.9992349 L20.5045655,18 L20.5944411,17.9919443 C20.7985342,17.9549004 20.9594659,17.7939687 20.9965098,17.5898756 L21.0045655,17.5 L20.9965098,17.4101244 C20.9594659,17.2060313 20.7985342,17.0450996 20.5944411,17.0080557 L20.5045655,17 L17.9996498,16.9992349 L18,14.4992349 L17.9919443,14.4093593 C17.9549004,14.2052662 17.7939687,14.0443345 17.5898756,14.0072906 L17.5,13.9992349 Z M17.75,3 C19.5449254,3 21,4.45507456 21,6.25 L21.0012092,12.0225923 C19.9906579,11.3752958 18.7891565,11 17.5,11 C14.8016531,11 12.4873327,12.6442127 11.5042701,14.9854066 C10.6572014,14.9085256 9.88524157,14.6257765 9.1765361,14.1355923 C8.83586995,13.8999666 8.36869314,13.9851187 8.13306748,14.3257849 C7.89744183,14.666451 7.98259397,15.1336279 8.32326012,15.3692535 C9.16645713,15.9524604 10.0900975,16.3129767 11.0850385,16.4484275 C11.0289661,16.7904675 11,17.1418511 11,17.5 C11,18.7891565 11.3752958,19.9906579 12.0225923,21.0012092 L6.25,21 C4.45507456,21 3,19.5449254 3,17.75 L3,6.25 C3,4.45507456 4.45507456,3 6.25,3 L17.75,3 Z M9.00044779,7.75115873 C8.3104845,7.75115873 7.75115873,8.3104845 7.75115873,9.00044779 C7.75115873,9.69041108 8.3104845,10.2497368 9.00044779,10.2497368 C9.69041108,10.2497368 10.2497368,9.69041108 10.2497368,9.00044779 C10.2497368,8.3104845 9.69041108,7.75115873 9.00044779,7.75115873 Z M15.0004478,7.75115873 C14.3104845,7.75115873 13.7511587,8.3104845 13.7511587,9.00044779 C13.7511587,9.69041108 14.3104845,10.2497368 15.0004478,10.2497368 C15.6904111,10.2497368 16.2497368,9.69041108 16.2497368,9.00044779 C16.2497368,8.3104845 15.6904111,7.75115873 15.0004478,7.75115873 Z"/></svg>';
     customBtn.addEventListener("click", () => {
         emojiSearch.value = "";
         renderEmojiGrid();
@@ -4934,6 +5610,48 @@ whatsNewModal.addEventListener("click", (e) => {
         whatsNewModal.classList.remove("visible");
         // Not marked as seen — an accidental backdrop click shouldn't
         // permanently suppress the notification.
+    }
+});
+
+// ── Client/Server Version Mismatch Warning (Phase 12 sub-phase, item 11) ───
+// Warns on ANY difference between the connected server's version and this
+// client's own version, in either direction, showing both numbers. Not
+// persisted/dismissed-forever like "What's New" above — a mismatch is a
+// per-connection fact (you might connect to a different, up-to-date server
+// next), so it's re-shown on every connection where it's still true.
+function compareVersions(a: string, b: string): number {
+    const pa = a.split(".").map(Number);
+    const pb = b.split(".").map(Number);
+    for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+        const diff = (pa[i] ?? 0) - (pb[i] ?? 0);
+        if (diff !== 0) return diff;
+    }
+    return 0;
+}
+
+async function checkVersionMismatch(serverVersion: string): Promise<void> {
+    const clientVersion = await api.getAppVersion();
+    if (clientVersion === serverVersion) return;
+
+    const serverIsNewer = compareVersions(serverVersion, clientVersion) > 0;
+    versionMismatchMessage.textContent = serverIsNewer
+        ? `This server is running v${serverVersion}, but your client is v${clientVersion}. Some features might not work correctly until you update.`
+        : `Your client is v${clientVersion}, but this server is running v${serverVersion}. Some features might not work correctly until the server is updated.`;
+    btnVersionMismatchReleases.style.display = serverIsNewer ? "" : "none";
+    versionMismatchModal.classList.add("visible");
+}
+
+btnVersionMismatchDismiss.addEventListener("click", () => {
+    versionMismatchModal.classList.remove("visible");
+});
+
+btnVersionMismatchReleases.addEventListener("click", () => {
+    window.open("https://github.com/fbarrella/reson8/releases", "_blank");
+});
+
+versionMismatchModal.addEventListener("click", (e) => {
+    if (e.target === versionMismatchModal) {
+        versionMismatchModal.classList.remove("visible");
     }
 });
 

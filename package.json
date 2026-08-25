@@ -1,6 +1,6 @@
 {
   "name": "reson8",
-  "version": "1.4.1",
+  "version": "2.0.0",
   "author": "Felipe B. Netto",
   "email": "f.netto01@gmail.com",
   "homepage": "https://github.com/fbarrella/reson8",
@@ -14,6 +14,7 @@
     "build": "tsc --build --force",
     "dev:server": "npm run dev -w apps/server",
     "dev:client": "npm run dev -w apps/client",
+    "release:all": "node scripts/release-all.mjs",
     "lint": "eslint . --ext .ts,.tsx",
     "format": "prettier --write \"**/*.{ts,tsx,json,md}\""
   },

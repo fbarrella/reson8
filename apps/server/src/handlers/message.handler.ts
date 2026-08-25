@@ -19,6 +19,7 @@ import type {
 import { PermissionFlags } from "@reson8/shared-types";
 import { requirePermission } from "../middleware/permissions.middleware.js";
 import { deleteAttachment } from "../services/storage.service.js";
+import { DEFAULT_MAX_MESSAGE_LENGTH } from "../config/message.config.js";
 
 type TypedIO = SocketIOServer<
     ClientToServerEvents,
@@ -91,6 +92,20 @@ export function registerMessageHandlers(
 
                 if ((!content || content.trim().length === 0) && !attachmentUrl) {
                     ack({ success: false });
+                    return;
+                }
+
+                // Server-configurable resource-exhaustion guard (Phase 12
+                // sub-phase item 4) — checked against the trimmed content,
+                // matching the empty-check above and what actually gets
+                // persisted.
+                const server = await app.prisma.server.findUnique({
+                    where: { id: socket.data.serverId },
+                    select: { maxMessageLength: true },
+                });
+                const maxLength = server?.maxMessageLength ?? DEFAULT_MAX_MESSAGE_LENGTH;
+                if (content && content.trim().length > maxLength) {
+                    ack({ success: false, error: `Message exceeds the ${maxLength}-character limit` });
                     return;
                 }
 
@@ -344,6 +359,18 @@ export function registerMessageHandlers(
                 const trimmed = content?.trim() ?? "";
                 if (!trimmed) {
                     ack({ success: false, error: "Message content cannot be empty" });
+                    return;
+                }
+
+                // Same resource-exhaustion guard as SEND_MESSAGE — an edit
+                // is just as capable of growing a message unboundedly.
+                const server = await app.prisma.server.findUnique({
+                    where: { id: socket.data.serverId },
+                    select: { maxMessageLength: true },
+                });
+                const maxLength = server?.maxMessageLength ?? DEFAULT_MAX_MESSAGE_LENGTH;
+                if (trimmed.length > maxLength) {
+                    ack({ success: false, error: `Message exceeds the ${maxLength}-character limit` });
                     return;
                 }
 

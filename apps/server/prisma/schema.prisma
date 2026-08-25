@@ -16,13 +16,21 @@ datasource db {
 // ---------------------------------------------------------------------------
 
 model Server {
-  id           String   @id @default(uuid())
-  name         String
-  address      String
-  maxClients   Int      @default(32)
-  nudgeEnabled Boolean  @default(true)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id                 String   @id @default(uuid())
+  name               String
+  address            String
+  maxClients         Int      @default(32)
+  nudgeEnabled       Boolean  @default(true)
+  screenShareEnabled Boolean  @default(true)
+  // Admin-configurable cap on a single chat message's content length
+  // (channel messages and DMs alike) — defends against a malicious/
+  // careless client sending a pathologically large message that costs
+  // real DB/bandwidth/broadcast-fanout resources for every connected
+  // client. 4000 by default: generous for legitimate long messages
+  // (code snippets, detailed explanations) while making abuse impractical.
+  maxMessageLength   Int      @default(4000)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 
   channels     Channel[]
   roles        Role[]

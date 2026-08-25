@@ -1,1 +1,1 @@
-{"root":["./src/instance-id.ts","./src/main.ts","./src/preload.ts","./src/renderer/renderer.ts","./src/services/voice.service.ts"],"version":"5.9.3"}
+{"root":["./src/instance-id.ts","./src/main.ts","./src/preload-viewer.ts","./src/preload.ts","./src/renderer/renderer.ts","./src/renderer/viewer.ts","./src/services/voice.service.ts","./src/types/webcodecs-extra.d.ts"],"version":"5.9.3"}

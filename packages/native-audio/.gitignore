@@ -1,0 +1,8 @@
+# Rust build scratch directory — the compiled prebuilds/*.node files below
+# are what actually gets committed (see PRD 12.1: "why prebuilt binaries
+# committed to the repo"), not this.
+/target
+
+# Cargo.lock is intentionally NOT ignored here — same reproducibility
+# argument as committing package-lock.json at the repo root. It's simply
+# not present yet since no `cargo build` has run in this environment.

@@ -26,6 +26,7 @@ apps/server/uploads/
 # Electron
 apps/client/out/
 apps/client/release/
+apps/client/.release-vendor/
 
 # Logs
 *.log

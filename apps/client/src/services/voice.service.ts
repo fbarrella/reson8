@@ -40,8 +40,9 @@ export interface VoiceSignaling {
 
     produce(
         transportId: string,
-        kind: "audio",
+        kind: "audio" | "video",
         rtpParameters: any,
+        appData?: { mediaType?: "screen-audio" | "screen-video" },
     ): Promise<{ success: boolean; producerId?: string; error?: string }>;
 
     consume(
@@ -61,6 +62,19 @@ export interface VoiceSignaling {
     resumeConsumer(
         consumerId: string,
     ): Promise<{ success: boolean; error?: string }>;
+
+    /**
+     * Fire-and-forget — tells the server to close this Producer *now*,
+     * rather than leaving viewers to find out only when the whole
+     * Transport eventually closes (full voice disconnect). Confirmed live
+     * this was the actual cause of viewers waiting a long time (in
+     * practice, until the sharer fully left voice) to learn a screen
+     * share had ended: closing a mediasoup-client Producer locally
+     * (`producer.close()`) does NOT itself notify the server — the
+     * server-side Producer stayed open indefinitely until something else
+     * (a full disconnect) closed the Transport it belonged to.
+     */
+    closeProducer(producerId: string): void;
 }
 
 export class VoiceService {
@@ -68,6 +82,9 @@ export class VoiceService {
     private sendTransport: msTypes.Transport | null = null;
     private recvTransport: msTypes.Transport | null = null;
     private producer: msTypes.Producer | null = null;
+    private screenAudioProducer: msTypes.Producer | null = null;
+    private screenVideoProducer: msTypes.Producer | null = null;
+    private screenVideoStream: MediaStream | null = null;
     private consumers = new Map<string, msTypes.Consumer>();
     private audioElements = new Map<string, HTMLAudioElement>();
     private signaling: VoiceSignaling;
@@ -91,7 +108,7 @@ export class VoiceService {
     // ── Per-remote-user local volume/mute (client-local only, PRD 4.1/4.2) ──
     private playbackAudioContext: AudioContext | null = null;
     private remoteGainNodes = new Map<string, GainNode>(); // keyed by consumerId
-    private remoteMediaSources = new Map<string, MediaElementAudioSourceNode>(); // keyed by consumerId
+    private remoteMediaSources = new Map<string, MediaStreamAudioSourceNode>(); // keyed by consumerId
     private consumerIdToUserId = new Map<string, string>();
     private remoteUserOverrides = new Map<string, { volumePercent: number; muted: boolean }>(); // keyed by userId
     /** Master attenuator (0-1) applied on top of every per-user gain (PRD 10.2). */
@@ -201,12 +218,18 @@ export class VoiceService {
 
         this.sendTransport.on(
             "produce",
-            async ({ kind, rtpParameters }, callback, errback) => {
+            // `appData` was previously dropped here — every `produce()` call
+            // (mic, screen-audio, screen-video) funnels through this single
+            // handler, and `appData.mediaType` is how the server (PRD 12.8)
+            // tells them apart, so it has to be forwarded, not just
+            // `kind`/`rtpParameters`.
+            async ({ kind, rtpParameters, appData }, callback, errback) => {
                 try {
                     const prodRes = await this.signaling.produce(
                         tp.id,
-                        kind as "audio",
+                        kind as "audio" | "video",
                         rtpParameters,
+                        appData as { mediaType?: "screen-audio" | "screen-video" } | undefined,
                     );
                     if (!prodRes.success || !prodRes.producerId) {
                         throw new Error(prodRes.error);
@@ -304,6 +327,143 @@ export class VoiceService {
         this._audioDeviceId = deviceId;
     }
 
+    // ── Screen share audio (PRD 12.7) ───────────────────────────────────────
+
+    /**
+     * Produces a screen-share audio track on the same send Transport already
+     * open for the mic — a second, independent mediasoup Producer, not a mix
+     * of the two. The track itself is assembled by the caller (preload.ts)
+     * from native-audio PCM frames via a `MediaStreamTrackGenerator`; this
+     * method only owns the mediasoup side, mirroring `startProducing()`.
+     * `appData.mediaType` lets the server (PRD 12.8) and other clients
+     * (PRD 12.12's sharing badge) tell this apart from the mic Producer and
+     * from the screen-video Producer.
+     */
+    async produceScreenAudio(track: MediaStreamTrack): Promise<void> {
+        if (!this.sendTransport) throw new Error("Send transport not ready");
+        this.screenAudioProducer = await this.sendTransport.produce({
+            track,
+            appData: { mediaType: "screen-audio" },
+        });
+    }
+
+    /** Stops and closes the screen-share audio Producer, if one is active. */
+    closeScreenAudioProducer(): void {
+        if (this.screenAudioProducer) {
+            this.signaling.closeProducer(this.screenAudioProducer.id);
+            this.screenAudioProducer.close();
+            this.screenAudioProducer = null;
+        }
+    }
+
+    // ── Screen share video (PRD 12.8) ───────────────────────────────────────
+
+    /**
+     * Captures the chosen screen/window via Electron's `chromeMediaSource`
+     * `getUserMedia` constraint and produces it with SVC (Scalable Video
+     * Coding) temporal layering (`L1T3`: one spatial layer, three temporal),
+     * so a viewer's Consumer can independently drop to a lower framerate via
+     * `setPreferredLayers()` (PRD 12.13) without the sharer re-encoding.
+     * Unlike the audio pipeline (PRD 12.7), capture and produce are bundled
+     * in one method here, mirroring `startProducing()` — `getUserMedia`
+     * needs no IPC/native-module frame assembly, so there's no reason to
+     * split them across preload.ts and this class the way the
+     * native-audio-fed path had to.
+     *
+     * Originally `L3T3_KEY` (3 spatial + 3 temporal layers, K-SVC), matching
+     * PRD 12.8's intent of also letting viewers drop to a lower
+     * *resolution*. Confirmed live that this silently produced a black feed
+     * for every real (non-synthetic) screen capture, on every platform, not
+     * just Wayland: Chromium's VP9 encoder rejects multi-spatial-layer
+     * K-SVC specifically for screen-content-flagged tracks —
+     * `libvpx_vp9_encoder.cc: "Flexible mode is required for screenshare
+     * with several spatial layers"`, then `simulcast_encoder_adapter.cc:
+     * InitEncode failed with WEBRTC_VIDEO_CODEC_ERR_PARAMETER`, then
+     * `video_stream_encoder.cc: Failed to initialize the encoder... Error:
+     * -4` — meaning the Producer's track was never actually encoded, hence
+     * black on every viewer. A synthetic (canvas-sourced) test track isn't
+     * flagged as screen content, so it never hit this and looked fine,
+     * masking the bug. `L1T3` sidesteps it entirely by only ever using one
+     * spatial layer. Revisit multi-resolution SVC only with a scalability
+     * mode Chromium's screen-content path actually accepts (a flexible-mode
+     * one, not K-SVC), verified against a *real* screen capture before
+     * trusting it again.
+     */
+    async startScreenVideoProducing(chromeMediaSourceId: string): Promise<void> {
+        if (!this.sendTransport) throw new Error("Send transport not ready");
+
+        this.screenVideoStream = await navigator.mediaDevices.getUserMedia({
+            audio: false,
+            video: {
+                mandatory: {
+                    chromeMediaSource: "desktop",
+                    chromeMediaSourceId,
+                },
+            },
+            // Electron's desktop-capture constraint format predates the
+            // standard MediaTrackConstraints shape TypeScript's DOM lib
+            // types — this cast is the well-known workaround for it, not a
+            // real type mismatch.
+        } as unknown as MediaStreamConstraints);
+
+        await this.produceScreenVideoStream();
+    }
+
+    /**
+     * Linux/Wayland-only path (renderer.ts's `isLinuxWayland` bypass):
+     * `getDisplayMedia()` — not `desktopCapturer.getSources()` +
+     * `getUserMedia({chromeMediaSourceId})` — because on Wayland only
+     * `getDisplayMedia()` is a single round trip through the xdg-desktop-
+     * portal ScreenCast picker (Electron hands off to Chromium's native
+     * portal integration for it directly when no
+     * `session.setDisplayMediaRequestHandler` is registered, which this app
+     * doesn't do). The two-step `getSources()`/`getUserMedia()` API was
+     * never designed around the portal's session-based consent model, and
+     * confirmed live: it shows the OS picker a *second* time inside
+     * `getUserMedia` even after `getSources()` already showed it once, with
+     * the stream it eventually resolves not reliably wired to what was
+     * actually granted (observed as a black feed on the viewer side) — and
+     * `getSources()`'s placeholder source has no real name yet at that
+     * point, which is also why that path logged `Started sharing ""`.
+     * `track.label` here is the real post-grant label instead.
+     */
+    async startScreenVideoProducingViaSystemPicker(): Promise<{ label: string }> {
+        if (!this.sendTransport) throw new Error("Send transport not ready");
+
+        this.screenVideoStream = await navigator.mediaDevices.getDisplayMedia({
+            video: true,
+            audio: false,
+        });
+
+        await this.produceScreenVideoStream();
+        return { label: this.screenVideoStream.getVideoTracks()[0]?.label || "your screen" };
+    }
+
+    private async produceScreenVideoStream(): Promise<void> {
+        if (!this.sendTransport || !this.screenVideoStream) throw new Error("Send transport not ready");
+
+        const track = this.screenVideoStream.getVideoTracks()[0];
+        this.screenVideoProducer = await this.sendTransport.produce({
+            track,
+            encodings: [{ scalabilityMode: "L1T3", maxBitrate: 2_500_000 }],
+            codecOptions: { videoGoogleStartBitrate: 1000 },
+            appData: { mediaType: "screen-video" },
+        });
+    }
+
+    /** Stops screen-share video capture and closes its Producer. */
+    stopScreenVideoProducing(): void {
+        if (this.screenVideoProducer) {
+            this.signaling.closeProducer(this.screenVideoProducer.id);
+            this.screenVideoProducer.close();
+            this.screenVideoProducer = null;
+        }
+        if (this.screenVideoStream) {
+            for (const track of this.screenVideoStream.getTracks()) track.stop();
+            this.screenVideoStream = null;
+        }
+    }
+
     /** Request mic access and start producing audio. */
     async startProducing(): Promise<void> {
         if (!this.sendTransport) throw new Error("Send transport not ready");
@@ -311,7 +471,19 @@ export class VoiceService {
         const audioConstraints: MediaTrackConstraints = {
             echoCancellation: true,
             noiseSuppression: true,
-            autoGainControl: true,
+            // Deliberately false (Phase 12 sub-phase item 7) — Chromium's
+            // AGC implementation has a documented history of driving the
+            // OS-level input volume itself as a side effect on Windows,
+            // not just adjusting gain purely in software the way the W3C
+            // spec describes it. Investigated after a report of Windows
+            // mic input volume changing unexpectedly with no other code
+            // anywhere in this app (main.ts, preload.ts, native-audio)
+            // touching system/input volume at all — this constraint was
+            // the only plausible mechanism found. Reson8 already has its
+            // own client-side noise gate/threshold (see the mic
+            // sensitivity settings), which covers most of what AGC would
+            // otherwise be doing, so disabling it costs little.
+            autoGainControl: false,
         };
 
         if (this._audioDeviceId) {
@@ -376,11 +548,30 @@ export class VoiceService {
         this.consumers.set(consumer.id, consumer);
         this.consumerIdToUserId.set(consumer.id, userId);
 
-        // Create an <audio> element, append to DOM, and play
+        // Create an <audio> element, append to DOM, and play. This keeps the
+        // MediaStreamTrack actively flowing/decoded (see root CLAUDE.md's
+        // "detached audio element" gotcha) but is muted — actual audible
+        // output is routed exclusively through the GainNode graph below, via
+        // an independent createMediaStreamSource() tap on the same stream.
+        //
+        // Originally this used createMediaElementSource(audio) instead, on
+        // the assumption that capturing an element for a Web Audio graph
+        // redirects its native output there. That redirection turned out to
+        // be unreliable in this Electron/Chromium build for srcObject/live-
+        // MediaStream elements: with the element unmuted, the GainNode's
+        // value had zero audible effect (confirmed live via logging — gain
+        // reliably reached 0 while the remote participant stayed fully
+        // audible); muting the element then produced total silence from
+        // both participants, proving the graph was never the real output
+        // path — the element's own native playback was. createMediaStreamSource
+        // taps the stream directly, decoupled from the element entirely, so
+        // the GainNode is unambiguously the sole audible route.
+        const stream = new MediaStream([consumer.track]);
         const audio = document.createElement("audio") as HTMLAudioElement;
-        audio.srcObject = new MediaStream([consumer.track]);
+        audio.srcObject = stream;
         audio.autoplay = true;
         audio.volume = 1.0;
+        audio.muted = true;
         document.body.appendChild(audio);
         audio.play().catch(() => { });
 
@@ -390,12 +581,9 @@ export class VoiceService {
         // (client-local only — never sent to the server, see PRD 4.1/4.2) can go
         // above 100% and be toggled independently of the element's own volume.
         const ctx = this.getPlaybackAudioContext();
-        const source = ctx.createMediaElementSource(audio);
+        const source = ctx.createMediaStreamSource(stream);
         const gainNode = ctx.createGain();
-        const override = this.remoteUserOverrides.get(userId);
-        gainNode.gain.value = override
-            ? (override.muted ? 0 : (override.volumePercent / 100) * this.globalVoiceVolume)
-            : this.globalVoiceVolume;
+        gainNode.gain.value = this.computeGainForUser(userId);
         source.connect(gainNode).connect(ctx.destination);
         this.remoteMediaSources.set(consumer.id, source);
         this.remoteGainNodes.set(consumer.id, gainNode);
@@ -444,14 +632,27 @@ export class VoiceService {
         return this.playbackAudioContext;
     }
 
-    private applyOverrideForUser(userId: string, override: { volumePercent: number; muted: boolean }): void {
+    private applyOverrideForUser(userId: string): void {
         for (const [consumerId, uid] of this.consumerIdToUserId) {
             if (uid !== userId) continue;
             const gain = this.remoteGainNodes.get(consumerId);
             if (gain) {
-                gain.gain.value = override.muted ? 0 : (override.volumePercent / 100) * this.globalVoiceVolume;
+                gain.gain.value = this.computeGainForUser(userId);
             }
         }
+    }
+
+    /** Computes the actual GainNode value for a remote participant, factoring
+     *  in their per-user override, the master volume attenuator, and local
+     *  deafen. Deafen wins outright — 0 regardless of any other setting —
+     *  since it must silence everyone, including participants consumed
+     *  *after* deafen was toggled on (PRD 10.4 follow-up). */
+    private computeGainForUser(userId: string): number {
+        if (this._isDeafened) return 0;
+        const override = this.remoteUserOverrides.get(userId);
+        return override
+            ? (override.muted ? 0 : (override.volumePercent / 100) * this.globalVoiceVolume)
+            : this.globalVoiceVolume;
     }
 
     /** Set the master voice-chat volume attenuator (0-100%, PRD 10.2). Applied
@@ -462,10 +663,7 @@ export class VoiceService {
         for (const [consumerId, userId] of this.consumerIdToUserId) {
             const gain = this.remoteGainNodes.get(consumerId);
             if (!gain) continue;
-            const override = this.remoteUserOverrides.get(userId);
-            gain.gain.value = override
-                ? (override.muted ? 0 : (override.volumePercent / 100) * this.globalVoiceVolume)
-                : this.globalVoiceVolume;
+            gain.gain.value = this.computeGainForUser(userId);
         }
     }
 
@@ -475,7 +673,7 @@ export class VoiceService {
         const existing = this.remoteUserOverrides.get(userId) ?? { volumePercent: 100, muted: false };
         existing.volumePercent = clamped;
         this.remoteUserOverrides.set(userId, existing);
-        this.applyOverrideForUser(userId, existing);
+        this.applyOverrideForUser(userId);
     }
 
     /** Mute/unmute a remote participant locally, preserving their configured volume. Client-local only. */
@@ -483,7 +681,7 @@ export class VoiceService {
         const existing = this.remoteUserOverrides.get(userId) ?? { volumePercent: 100, muted: false };
         existing.muted = muted;
         this.remoteUserOverrides.set(userId, existing);
-        this.applyOverrideForUser(userId, existing);
+        this.applyOverrideForUser(userId);
     }
 
     getLocalUserVolume(userId: string): number {
@@ -536,20 +734,24 @@ export class VoiceService {
                 this.producer.pause();
                 this._isManuallyMuted = true;
             }
-            for (const audio of this.audioElements.values()) {
-                audio.muted = true;
-            }
             this._isDeafened = true;
         } else {
-            for (const audio of this.audioElements.values()) {
-                audio.muted = false;
-            }
             this._isDeafened = false;
             if (this._deafenAutoMuted && this.producer) {
                 this.producer.resume();
                 this._isManuallyMuted = false;
             }
             this._deafenAutoMuted = false;
+        }
+        // Re-derive every currently-consumed participant's GainNode from
+        // computeGainForUser(), which itself checks `_isDeafened` first —
+        // this also fixes a participant who is *consumed after* deafen was
+        // toggled on: consumeProducer() calls the same helper, so a newly
+        // joined speaker starts silenced too, rather than only whoever was
+        // already in the channel at toggle time (the original bug here).
+        for (const [consumerId, userId] of this.consumerIdToUserId) {
+            const gain = this.remoteGainNodes.get(consumerId);
+            if (gain) gain.gain.value = this.computeGainForUser(userId);
         }
         return { isMuted: this.producer?.paused ?? false, isDeafened: this._isDeafened };
     }
@@ -690,7 +892,19 @@ export class VoiceService {
         const audioConstraints: MediaTrackConstraints = {
             echoCancellation: true,
             noiseSuppression: true,
-            autoGainControl: true,
+            // Deliberately false (Phase 12 sub-phase item 7) — Chromium's
+            // AGC implementation has a documented history of driving the
+            // OS-level input volume itself as a side effect on Windows,
+            // not just adjusting gain purely in software the way the W3C
+            // spec describes it. Investigated after a report of Windows
+            // mic input volume changing unexpectedly with no other code
+            // anywhere in this app (main.ts, preload.ts, native-audio)
+            // touching system/input volume at all — this constraint was
+            // the only plausible mechanism found. Reson8 already has its
+            // own client-side noise gate/threshold (see the mic
+            // sensitivity settings), which covers most of what AGC would
+            // otherwise be doing, so disabling it costs little.
+            autoGainControl: false,
         };
         if (this._audioDeviceId) {
             audioConstraints.deviceId = { exact: this._audioDeviceId };
@@ -770,6 +984,9 @@ export class VoiceService {
             this.producer.close();
             this.producer = null;
         }
+
+        this.closeScreenAudioProducer();
+        this.stopScreenVideoProducing();
 
         for (const consumer of this.consumers.values()) {
             consumer.close();

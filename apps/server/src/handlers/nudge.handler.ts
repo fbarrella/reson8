@@ -22,6 +22,12 @@ import type {
 import { PermissionFlags } from "@reson8/shared-types";
 import { requirePermission } from "../middleware/permissions.middleware.js";
 import { PresenceService } from "../services/presence.service.js";
+import {
+    DEFAULT_MAX_MESSAGE_LENGTH,
+    MIN_MAX_MESSAGE_LENGTH,
+    MAX_MAX_MESSAGE_LENGTH,
+} from "../config/message.config.js";
+import { SERVER_VERSION } from "../config/version.config.js";
 
 type TypedIO = SocketIOServer<
     ClientToServerEvents,
@@ -54,9 +60,21 @@ export function registerNudgeHandlers(
             try {
                 const server = await app.prisma.server.findUnique({
                     where: { id: socket.data.serverId },
-                    select: { nudgeEnabled: true },
+                    select: {
+                        name: true,
+                        nudgeEnabled: true,
+                        screenShareEnabled: true,
+                        maxMessageLength: true,
+                    },
                 });
-                ack({ success: true, nudgeEnabled: server?.nudgeEnabled ?? true });
+                ack({
+                    success: true,
+                    nudgeEnabled: server?.nudgeEnabled ?? true,
+                    screenShareEnabled: server?.screenShareEnabled ?? true,
+                    name: server?.name,
+                    maxMessageLength: server?.maxMessageLength ?? DEFAULT_MAX_MESSAGE_LENGTH,
+                    version: SERVER_VERSION,
+                });
             } catch (err) {
                 app.log.error({ err }, "Error in GET_SERVER_SETTINGS");
                 ack({ success: false });
@@ -64,6 +82,11 @@ export function registerNudgeHandlers(
         });
 
         // ── UPDATE_SERVER_SETTINGS ──────────────────────────────────────────
+        // Each field in the payload is optional (PRD 12.14) — a toggle only
+        // sends the one setting it changed, so `data` below is built from
+        // whichever fields are actually present rather than always writing
+        // both (which would silently reset the other to whatever the caller
+        // happened to have loaded, on a stale client).
         socket.on("UPDATE_SERVER_SETTINGS", async (payload, ack) => {
             try {
                 const allowed = await requirePermission(
@@ -74,20 +97,44 @@ export function registerNudgeHandlers(
                     return;
                 }
 
-                const { nudgeEnabled } = payload;
-                await app.prisma.server.update({
+                const { nudgeEnabled, screenShareEnabled, maxMessageLength } = payload;
+                const data: { nudgeEnabled?: boolean; screenShareEnabled?: boolean; maxMessageLength?: number } = {};
+                if (nudgeEnabled !== undefined) data.nudgeEnabled = nudgeEnabled;
+                if (screenShareEnabled !== undefined) data.screenShareEnabled = screenShareEnabled;
+                if (maxMessageLength !== undefined) {
+                    // Bounded, not just "must be a positive integer" — an
+                    // admin fat-fingering an astronomically large value
+                    // would silently defeat the whole point of this setting.
+                    if (
+                        !Number.isInteger(maxMessageLength) ||
+                        maxMessageLength < MIN_MAX_MESSAGE_LENGTH ||
+                        maxMessageLength > MAX_MAX_MESSAGE_LENGTH
+                    ) {
+                        ack({
+                            success: false,
+                            error: `Message length limit must be between ${MIN_MAX_MESSAGE_LENGTH} and ${MAX_MAX_MESSAGE_LENGTH}`,
+                        });
+                        return;
+                    }
+                    data.maxMessageLength = maxMessageLength;
+                }
+
+                const updated = await app.prisma.server.update({
                     where: { id: socket.data.serverId },
-                    data: { nudgeEnabled },
+                    data,
+                    select: { nudgeEnabled: true, screenShareEnabled: true, maxMessageLength: true },
                 });
 
                 ack({ success: true });
 
                 io.to(`server:${socket.data.serverId}`).emit("SERVER_SETTINGS_UPDATED", {
-                    nudgeEnabled,
+                    nudgeEnabled: updated.nudgeEnabled,
+                    screenShareEnabled: updated.screenShareEnabled,
+                    maxMessageLength: updated.maxMessageLength,
                 });
 
                 app.log.info(
-                    { socketId: socket.id, nudgeEnabled },
+                    { socketId: socket.id, ...data },
                     "Server settings updated",
                 );
             } catch (err) {

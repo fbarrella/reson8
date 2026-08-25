@@ -88,7 +88,7 @@ export interface ClientToServerEvents {
     /** Client sends a text message to their current channel. */
     SEND_MESSAGE: (
         payload: { channelId: string; content: string; attachmentUrl?: string; attachmentPublicId?: string },
-        ack: (response: { success: boolean; messageId?: string }) => void,
+        ack: (response: { success: boolean; messageId?: string; error?: string }) => void,
     ) => void;
 
     /**
@@ -237,12 +237,23 @@ export interface ClientToServerEvents {
         ack: (response: { success: boolean; error?: string }) => void,
     ) => void;
 
-    /** Start producing an audio track. */
+    /**
+     * Start producing a track — mic audio, or (PRD 12.7/12.8) a second,
+     * independent screen-share audio or video Producer on the same send
+     * Transport. `appData.mediaType` distinguishes which: absent for the
+     * mic, `"screen-audio"` / `"screen-video"` for a share. The server
+     * threads this through to mediasoup's own Producer `appData` and uses
+     * it to decide which per-session Producer slot to store the result in
+     * (see `UserVoiceSession` in `mediasoup.service.ts`) and whether to
+     * feed it into `AudioLevelObserver` (mic only — screen-share audio
+     * shouldn't trigger the active-speaker indicator).
+     */
     PRODUCE: (
         payload: {
             transportId: string;
-            kind: "audio";
+            kind: "audio" | "video";
             rtpParameters: any;
+            appData?: { mediaType?: "screen-audio" | "screen-video" };
         },
         ack: (response: {
             success: boolean;
@@ -319,6 +330,74 @@ export interface ClientToServerEvents {
         ack: (response: { success: boolean }) => void,
     ) => void;
 
+    /**
+     * Reports the caller's own screen-share state (PRD 12.12) so other
+     * occupants can display the sharing badge — handled identically to
+     * `SET_VOICE_STATE`. The server re-checks the server-wide screen-share
+     * toggle before honoring `true` (PRD 12.14; until that toggle exists,
+     * this is always honored — see the handler for the current caveat).
+     *
+     * `streamName`, when `isSharingScreen` is true, is the *already fully
+     * resolved* display name the sharer's own client computed (custom
+     * name if the user set one, else the real source name where
+     * available, else the generic "your screen" fallback) — not a raw
+     * user-entered string the server needs to fall back on itself.
+     * Surfaced back to viewers via `WATCH_SCREEN_SHARE`'s ack so the
+     * Viewer window's title bar shows the same name the sharer's own
+     * "Started sharing" log did.
+     */
+    SET_SCREEN_SHARE_STATE: (
+        payload: { isSharingScreen: boolean; streamName?: string },
+        ack: (response: { success: boolean; error?: string }) => void,
+    ) => void;
+
+    // ── Screen Share Viewing (PRD 12.13) ──────────────────────────────────
+    // Emitted only by a Viewer window's own second ("viewer"-role) socket —
+    // see `SocketData.role`'s doc comment for the full dual-socket design.
+
+    /**
+     * Resolves this viewer socket's `userId` from the same persisted
+     * instance ID the primary connection uses, WITHOUT touching presence,
+     * rooms, or anything `USER_JOIN_SERVER` would (that's the whole point —
+     * this socket must stay invisible to everyone else).
+     */
+    VIEWER_AUTHENTICATE: (
+        payload: { instanceId: string },
+        ack: (response: { success: boolean; error?: string }) => void,
+    ) => void;
+
+    /**
+     * Requests to watch `targetUserId`'s screen share in `channelId`. The
+     * server validates the caller is currently an occupant of that channel
+     * and that the target currently has an active screen-video Producer
+     * there — rejects otherwise (handles the race where a share ends
+     * between the badge rendering and this call). On success, bundles the
+     * Router's `rtpCapabilities` directly in the ack (skipping a separate
+     * `GET_ROUTER_CAPABILITIES` round trip, since the handler already has
+     * to look up the Router to check the target's Producers) and also
+     * scopes this socket to `channelId` so the existing
+     * `CREATE_WEBRTC_TRANSPORT`/`CONNECT_TRANSPORT`/`CONSUME`/
+     * `RESUME_CONSUMER` handlers work unmodified from here.
+     */
+    WATCH_SCREEN_SHARE: (
+        payload: { targetUserId: string; channelId: string },
+        ack: (response: {
+            success: boolean;
+            rtpCapabilities?: any;
+            screenVideoProducerId?: string;
+            screenAudioProducerId?: string;
+            /** The sharer's own resolved stream name — see `SET_SCREEN_SHARE_STATE`'s doc comment. */
+            streamName?: string;
+            error?: string;
+        }) => void,
+    ) => void;
+
+    /** Leave-Stream / window-close cleanup — closes this viewer socket's own recv Transport/Consumers only. */
+    STOP_WATCHING_SCREEN_SHARE: (
+        payload: { channelId: string },
+        ack: (response: { success: boolean }) => void,
+    ) => void;
+
     // ── Pinned Messages ──────────────────────────────────────────────────
 
     /**
@@ -344,14 +423,36 @@ export interface ClientToServerEvents {
         ack: (response: { success: boolean; error?: string }) => void,
     ) => void;
 
-    /** Fetches the current server's admin-configurable settings (currently just nudgeEnabled). */
+    /**
+     * Fetches the current server's admin-configurable settings
+     * (nudgeEnabled, screenShareEnabled) plus its display name — `name` is
+     * not admin-configurable via this channel (it's set once via
+     * `SERVER_NAME` at server bootstrap, see apps/server/src/index.ts),
+     * bundled here since this is already the "fetch server-wide info once
+     * connected" round trip the client makes.
+     */
     GET_SERVER_SETTINGS: (
-        ack: (response: { success: boolean; nudgeEnabled?: boolean; error?: string }) => void,
+        ack: (response: {
+            success: boolean;
+            nudgeEnabled?: boolean;
+            screenShareEnabled?: boolean;
+            name?: string;
+            /** Admin-configurable cap on a single message's content length (channel messages and DMs alike). */
+            maxMessageLength?: number;
+            /** The running server build's version (from apps/server/package.json), for client/server version-mismatch warnings. */
+            version?: string;
+            error?: string;
+        }) => void,
     ) => void;
 
-    /** Updates server-wide settings. Requires ADMIN. */
+    /**
+     * Updates server-wide settings. Requires ADMIN. Each field is optional so
+     * a single toggle (e.g. just Nudge) can be updated without touching the
+     * other — the handler only writes whichever fields are present in the
+     * payload (PRD 12.14).
+     */
     UPDATE_SERVER_SETTINGS: (
-        payload: { nudgeEnabled: boolean },
+        payload: { nudgeEnabled?: boolean; screenShareEnabled?: boolean; maxMessageLength?: number },
         ack: (response: { success: boolean; error?: string }) => void,
     ) => void;
 }
@@ -417,10 +518,19 @@ export interface ServerToClientEvents {
     // ── WebRTC / Voice events ──────────────────────────────────────────────
 
     /** Notifies the channel that a new audio producer is available. */
+    /**
+     * `mediaType` absent means this is the ordinary mic Producer — clients
+     * auto-consume those, as before. When present (`"screen-audio"` /
+     * `"screen-video"`, PRD 12.7/12.8), clients must NOT auto-consume: a
+     * screen-share's video/audio is only ever pulled by an explicit viewer
+     * action (PRD 12.13's `WATCH_SCREEN_SHARE`), not by everyone in the
+     * channel just because a new Producer appeared.
+     */
     NEW_PRODUCER: (payload: {
         userId: string;
         nickname: string;
         producerId: string;
+        mediaType?: "screen-audio" | "screen-video";
     }) => void;
 
     /** Notifies the channel that a producer was closed. */
@@ -474,7 +584,7 @@ export interface ServerToClientEvents {
     NUDGE_RECEIVED: (payload: { fromUserId: string; fromNickname: string }) => void;
 
     /** Broadcasts a server settings change so every connected client updates live. */
-    SERVER_SETTINGS_UPDATED: (payload: { nudgeEnabled: boolean }) => void;
+    SERVER_SETTINGS_UPDATED: (payload: { nudgeEnabled: boolean; screenShareEnabled: boolean; maxMessageLength: number }) => void;
 
     /**
      * Notifies a channel's occupants that their voice session was force-closed
@@ -518,4 +628,16 @@ export interface SocketData {
     serverId: string;
     /** The channel the user is currently in (if any). */
     currentChannelId: string | null;
+    /**
+     * `"primary"` (default) is the normal one-socket-per-user connection —
+     * everything before PRD 12.13 assumed this implicitly. `"viewer"` is a
+     * second, independent socket a Viewer window (PRD 12.13) opens to
+     * consume one specific screen share; it authenticates via
+     * `VIEWER_AUTHENTICATE` (not `USER_JOIN_SERVER`), never joins presence
+     * or the `server:{id}` room, and its disconnect only tears down its own
+     * recv-only mediasoup session — never presence, never broadcasts. Set
+     * once, in `index.ts`'s `io.use()` middleware, from the connection
+     * query string, before any handler can run.
+     */
+    role: "primary" | "viewer";
 }
