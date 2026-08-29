@@ -696,6 +696,7 @@ interface Reson8Api {
     getLocalUserMute(userId: string): boolean;
     setGlobalVoiceVolume(percent: number): void;
     setMicVolume(percent: number): void;
+    setNoiseCancelEnabled(enabled: boolean): Promise<void>;
     checkForUpdates(): Promise<{ status: "available" | "not-available" | "error"; message?: string }>;
     downloadUpdate(): Promise<void>;
     quitAndInstall(): void;
@@ -1120,6 +1121,9 @@ let voiceVolume = Number(localStorage.getItem("reson8-voice-volume") ?? "100");
 // (not local playback), lives in the Voice & Shortcuts tab alongside the
 // noise gate rather than the Audio tab's other volume sliders.
 let micVolume = Number(localStorage.getItem("reson8-mic-volume") ?? "100");
+// AI noise cancelling (PRD 13.1) — off by default (a real CPU/latency cost),
+// persisted like the noise gate's own enabled flag.
+let noiseCancelEnabled = localStorage.getItem("reson8-noise-cancel-enabled") === "true";
 const audioNudgeVolumeSlider = document.getElementById("audio-nudge-volume-slider") as HTMLInputElement;
 const audioNudgeVolumeValue = document.getElementById("audio-nudge-volume-value") as HTMLSpanElement;
 const audioAlertVolumeSlider = document.getElementById("audio-alert-volume-slider") as HTMLInputElement;
@@ -1139,6 +1143,7 @@ const micLevelBar = document.getElementById("mic-level-bar") as HTMLDivElement;
 const micSensitivitySection = document.getElementById("mic-sensitivity-section") as HTMLDivElement;
 const micVolumeSlider = document.getElementById("mic-volume-slider") as HTMLInputElement;
 const micVolumeValue = document.getElementById("mic-volume-value") as HTMLSpanElement;
+const chkNoiseCancel = document.getElementById("chk-noise-cancel") as HTMLInputElement;
 
 // Apply the saved mic volume before the user ever joins a channel (mirrors
 // setGlobalVoiceVolume above — a no-op until a VoiceService instance
@@ -1766,10 +1771,12 @@ async function handleChannelClick(node: TreeNode): Promise<void> {
                 isDeafened = false;
 
                 // joinVoiceChannel() constructs a fresh VoiceService instance
-                // per session — reapply the saved global voice volume and mic
-                // volume so neither silently resets to 100% on every join.
+                // per session — reapply the saved global voice volume, mic
+                // volume, and noise cancelling setting so none silently reset
+                // on every join.
                 api.setGlobalVoiceVolume(voiceVolume);
                 api.setMicVolume(micVolume);
+                api.setNoiseCancelEnabled(noiseCancelEnabled);
 
                 // Initialize previous occupants for join/leave sound detection
                 previousOccupantIds = new Set(node.occupants.map((o: any) => o.userId));
@@ -2421,9 +2428,11 @@ api.on("voice-reconnected", (data: { channelId: string }) => {
     updateVoiceUI(node?.name);
     // Reapply local voice settings the same way a fresh manual join does —
     // a new VoiceService instance was constructed for the rejoin, so any
-    // per-session state (global volume, mic volume) needs to be re-sent.
+    // per-session state (global volume, mic volume, noise cancelling) needs
+    // to be re-sent.
     api.setGlobalVoiceVolume(voiceVolume);
     api.setMicVolume(micVolume);
+    api.setNoiseCancelEnabled(noiseCancelEnabled);
     api.setVoiceState(isMuted, isDeafened);
     previousOccupantIds = new Set((node?.occupants ?? []).map((o) => o.userId));
 
@@ -5772,4 +5781,20 @@ micVolumeSlider?.addEventListener("input", () => {
     micVolumeValue.textContent = `${micVolume}%`;
     localStorage.setItem("reson8-mic-volume", String(micVolume));
     api.setMicVolume(micVolume);
+});
+
+// ── Noise Cancelling (PRD 13.1) ──────────────────────────────────────────────
+
+if (chkNoiseCancel) chkNoiseCancel.checked = noiseCancelEnabled;
+
+chkNoiseCancel?.addEventListener("change", () => {
+    noiseCancelEnabled = chkNoiseCancel.checked;
+    if (noiseCancelEnabled) {
+        localStorage.setItem("reson8-noise-cancel-enabled", "true");
+    } else {
+        localStorage.removeItem("reson8-noise-cancel-enabled");
+    }
+    // The very first enable this session fetches/compiles the vendored WASM
+    // engine — no UI blocking needed, it applies whenever it resolves.
+    api.setNoiseCancelEnabled(noiseCancelEnabled);
 });

@@ -555,6 +555,10 @@ const api = {
         voiceService?.setMicVolume(percent);
     },
 
+    async setNoiseCancelEnabled(enabled: boolean): Promise<void> {
+        await voiceService?.setNoiseCancelEnabled(enabled);
+    },
+
     // ── Audio Settings ──────────────────────────────────────────────────────
 
     async enumerateAudioDevices(): Promise<{ inputs: { deviceId: string; label: string }[]; outputs: { deviceId: string; label: string }[] }> {

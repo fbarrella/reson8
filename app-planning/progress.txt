@@ -2255,3 +2255,116 @@ Feature/Fix: Phase 13.2 (PRD 13.3) — Microphone Volume Slider (0-200%)
   first stage of this same graph (before gateGainNode), plus re-routes the
   meter's analyser tap. Full Phase 13 plan:
   app-planning/Reson8_Phase13_PRD.md.
+
+--- Entry: 29/08/2026 ---
+
+Feature/Fix: Phase 13.3 (PRD 13.1) — AI Microphone Noise Cancelling (DeepFilterNet3, WASM/AudioWorklet)
+
+  Problem: No way to suppress background noise (keyboard clicks, fan noise)
+  beyond the existing hard-threshold noise gate, which cuts audio rather
+  than cleaning it. The source request specifically asked for a real
+  AI-based denoiser (DeepFilterNet) running client-side via WASM in an
+  AudioWorklet, toggleable without ever tearing down the voice connection.
+
+  Solution: Evaluated available options for a browser-usable DeepFilterNet3
+  WASM build (no official one exists) and settled on the npm package
+  `deepfilternet3-noise-filter` (pinned at 1.3.0), specifically its
+  LiveKit-agnostic `DeepFilterNet3Core` export — inspected its actual
+  compiled output (not just its README) to confirm real behavior: it embeds
+  the entire AudioWorkletProcessor as a self-contained code string (blob-URL
+  loaded, no separate worklet file to ship), fetches a ~16.4MB df_bg.wasm +
+  ~8MB DeepFilterNet3_onnx.tar.gz model, `WebAssembly.compile()`s the wasm
+  on the calling thread, and passes the compiled module + raw model bytes
+  into the worklet at construction — with an already-built `SET_BYPASS`
+  message the worklet honors by copying input straight to output, which is
+  exactly the "toggle without tearing down the graph" behavior this feature
+  needed.
+
+  Asset sourcing (confirmed with user): the package's default behavior
+  fetches both files from a third-party CDN (cdn.mezon.ai) at runtime,
+  which conflicts with this project's self-hosted/no-third-party-servers
+  design and would make every install depend on an external host staying
+  up indefinitely. Downloaded both files once and vendored them into
+  `apps/client/assets/deepfilternet/v3/{pkg/df_bg.wasm,models/
+  DeepFilterNet3_onnx.tar.gz}` (~24MB added to the repo), and pointed the
+  package's `assetConfig.cdnUrl` at that local path (relative to
+  dist/renderer/index.html, `../../assets/deepfilternet` — the exact same
+  relative-path convention already used for sound-alert assets) instead of
+  the default CDN. No electron-builder config changes were needed for the
+  assets themselves (`assets/**/*` was already in `files`); confirmed via
+  `mediasoup-client`'s identical hoisting that regular npm deps hoisted to
+  the monorepo root `node_modules` already package correctly today.
+
+  Dependency hygiene: `deepfilternet3-noise-filter` has a `livekit-client`
+  peerDependency needed only for `tsc` to resolve its .d.ts (the actual
+  compiled JS never references livekit-client at runtime — confirmed by
+  grepping the compiled output) — installing it pulled in ~14MB+5.5MB of
+  LiveKit/protobuf code we never use. Excluded `node_modules/livekit-client`
+  and `node_modules/@livekit/**` from the packaged build via new `!`
+  entries in `apps/client/package.json`'s `files` array, leaving them
+  present for typechecking but absent from installers.
+
+  Graph integration: extended the send-side mic processing graph (PRD 13.2/
+  13.3, this same phase) with the AudioWorkletNode as the *first* stage:
+    micSourceNode → [noiseCancelNode] → gateGainNode → volumeGainNode → destination → produce()
+  and re-routed the meter/gate `analyser` to tap *after* noiseCancelNode
+  (or after micSourceNode directly if noise cancelling isn't wired in),
+  exactly as specified — so gate decisions and the settings meter reflect
+  denoised signal, not raw input. `buildMicProcessingGraph()` is now async
+  (awaits the worklet's setup) to accommodate this.
+
+  Because a fresh VoiceService instance is constructed on every join (and
+  the renderer only reapplies the persisted noise-cancel setting *after*
+  join success resolves, mirroring the existing mic-volume/global-volume
+  pattern), `buildMicProcessingGraph()`'s "already enabled at build time"
+  branch is correct but not the one actually exercised in practice today —
+  the real path taken is `setNoiseCancelEnabled()`'s "splice the
+  AudioWorkletNode into an already-running graph" branch, which
+  disconnects/reconnects `micSourceNode` around the new node (a one-time,
+  per-join event). Every toggle after that first enable, for the rest of
+  that join, is instant — a `SET_BYPASS` port message only, never touching
+  the graph again. The shared `DeepFilterNet3Core` instance (module-level,
+  not per-VoiceService) means the WASM fetch + compile only happens once
+  per whole app session, not once per join.
+
+  UI: added a "Noise Cancelling" toggle to the Voice & Shortcuts tab (per
+  this phase's confirmed decision), below the new Mic Volume slider,
+  styled as a `.toggle-row` matching the existing Noise Gate toggle.
+  Persisted to `localStorage` under `reson8-noise-cancel-enabled`.
+
+  Key Files Modified:
+    apps/client/src/services/voice.service.ts — module-level
+      `noiseCancelCore`/`ensureNoiseCancelInitialized()`, `noiseCancelNode`/
+      `noiseCancelEnabled` fields, `buildMicProcessingGraph()` made async
+      with the worklet spliced in as the first stage and 48kHz-pinned
+      AudioContext, `createNoiseCancelNode()`, `setNoiseCancelEnabled()`,
+      `teardownMicProcessingGraph()` now also disconnects the worklet node
+    apps/client/src/preload.ts — `setNoiseCancelEnabled()` bridging to
+      `voiceService?.setNoiseCancelEnabled()`
+    apps/client/src/renderer/renderer.ts — `noiseCancelEnabled` persisted
+      var, `Reson8Api.setNoiseCancelEnabled` interface declaration, toggle
+      DOM ref/init/listener, reapplication in the manual-join and
+      voice-reconnected handlers
+    apps/client/src/renderer/index.html — new noise-cancel toggle-row
+      markup in the Voice & Shortcuts tab
+    apps/client/package.json — new `deepfilternet3-noise-filter`
+      dependency (pinned 1.3.0), `livekit-client`/`@livekit/*` excluded
+      from packaged `files`
+    apps/client/assets/deepfilternet/v3/pkg/df_bg.wasm (NEW, vendored)
+    apps/client/assets/deepfilternet/v3/models/DeepFilterNet3_onnx.tar.gz
+      (NEW, vendored)
+
+  Verification:
+    - npx tsc --noEmit (client) — clean
+    - npx tsc --build (client) — clean
+    - Manual in-call verification (background noise audibly suppressed,
+      speech stays clear, toggling mid-call causes no audio dropout or
+      mediasoup reconnect, a packaged — not just dev — build still finds
+      the vendored assets) is pending the user's own hands-on test, per
+      this phase's established workflow. This is the highest-complexity
+      item in the phase — worth extra attention on first live test.
+
+  Next Step: PRD 13.1-13.3 (the three audio-graph items) are now complete.
+  Remaining Phase 13 items are independent UI/feature work — see
+  app-planning/Reson8_Phase13_PRD.md for the full remaining list and
+  recommended order.

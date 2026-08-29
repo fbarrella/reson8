@@ -11,6 +11,33 @@
  */
 
 import { Device, types as msTypes } from "mediasoup-client";
+import { DeepFilterNet3Core } from "deepfilternet3-noise-filter";
+
+// ── Noise cancelling (PRD 13.1) — shared module-level engine ────────────────
+// One DeepFilterNet3Core instance for the whole app session, not per join:
+// `initialize()` fetches + WebAssembly.compile()s the vendored ~24MB WASM +
+// ONNX model (apps/client/assets/deepfilternet/, NOT the package's default
+// third-party CDN — see PRD 13.1's asset-sourcing decision) exactly once and
+// caches the compiled module/bytes internally; every subsequent join reuses
+// that cache via createAudioWorkletNode(), which only spins up a fresh node
+// bound to that join's own AudioContext. `cdnUrl` is relative to
+// dist/renderer/index.html, mirroring the existing sound-alert asset path
+// convention (`../../assets/...`) already used elsewhere in this codebase.
+const noiseCancelCore = new DeepFilterNet3Core({
+    sampleRate: 48000,
+    noiseReductionLevel: 100,
+    assetConfig: { cdnUrl: "../../assets/deepfilternet" },
+});
+let noiseCancelInitPromise: Promise<void> | null = null;
+function ensureNoiseCancelInitialized(): Promise<void> {
+    if (!noiseCancelInitPromise) {
+        noiseCancelInitPromise = noiseCancelCore.initialize().catch((err) => {
+            noiseCancelInitPromise = null; // allow a retry on the next enable attempt
+            throw err;
+        });
+    }
+    return noiseCancelInitPromise;
+}
 
 /** Signaling callbacks — the preload wires these to the Socket.io connection. */
 export interface VoiceSignaling {
@@ -128,12 +155,13 @@ export class VoiceService {
     // Built once per join in startProducing() — `localStream`'s raw track is
     // never produced directly. Every effect that needs to touch the outgoing
     // mic signal taps or extends this same chain instead of building its own
-    // AudioContext (the noise gate and mic volume below are the first two;
-    // PRD 13.1's noise-cancelling worklet extends it further):
-    //   micSourceNode → gateGainNode → volumeGainNode → micDestinationNode → produce()
-    // `analyser` taps `micSourceNode` in parallel (pre-gate, pre-volume) so
-    // gate decisions and the settings meter always read the true input
-    // level, never the already-processed output.
+    // AudioContext:
+    //   micSourceNode → [noiseCancelNode] → gateGainNode → volumeGainNode → micDestinationNode → produce()
+    // `analyser` taps strictly *after* `noiseCancelNode` (or after
+    // `micSourceNode` directly if noise cancelling isn't wired in) so gate
+    // decisions and the settings meter read the denoised signal per PRD
+    // 13.1, while still being pre-gate/pre-volume so they reflect true input
+    // level rather than the already-gated/scaled output.
     private audioContext: AudioContext | null = null;
     private micSourceNode: MediaStreamAudioSourceNode | null = null;
     private analyser: AnalyserNode | null = null;
@@ -144,6 +172,13 @@ export class VoiceService {
      *  kept even without a live graph so a volume set before joining a
      *  channel is applied the instant the graph is built (PRD 13.3). */
     private micVolume: number = 1.0;
+
+    // ── Noise cancelling (PRD 13.1) ──────────────────────────────────────────
+    private noiseCancelNode: AudioWorkletNode | null = null;
+    /** Kept even without a live graph, mirroring `sensitivityEnabled`, so a
+     *  setting persisted from a previous session can be honored the moment
+     *  a graph is next built. */
+    private noiseCancelEnabled: boolean = false;
 
     // ── Mic sensitivity / noise gate ──────────────────────────────────────
     private _previewStream: MediaStream | null = null;
@@ -560,7 +595,7 @@ export class VoiceService {
             audio: audioConstraints,
         });
 
-        const processedTrack = this.buildMicProcessingGraph();
+        const processedTrack = await this.buildMicProcessingGraph();
         this.producer = await this.sendTransport.produce({ track: processedTrack });
 
         // If the noise gate setting was already on before this join, start
@@ -831,24 +866,46 @@ export class VoiceService {
      * join, from `startProducing()` — the noise gate's GainNode lives here
      * unconditionally (defaulting to fully open) so enabling/disabling the
      * gate mid-call never needs to tear down or re-produce; it only starts
-     * or stops the envelope loop below.
+     * or stops the envelope loop below. Constructed at a fixed 48kHz — the
+     * noise-cancelling model (PRD 13.1) assumes 48kHz frames; Web Audio
+     * resamples the actual mic hardware's rate into the context transparently,
+     * so this is safe regardless of the input device's native rate.
+     *
+     * If noise cancelling is already enabled when this runs, the
+     * AudioWorkletNode is wired in as the very first stage; if not, it's
+     * inserted later (dynamically, mid-call, no teardown) by
+     * `setNoiseCancelEnabled()` if the user turns it on during this session.
      */
-    private buildMicProcessingGraph(): MediaStreamTrack {
+    private async buildMicProcessingGraph(): Promise<MediaStreamTrack> {
         this.teardownMicProcessingGraph();
         if (!this.localStream) throw new Error("No local stream to build mic graph from");
 
-        this.audioContext = new AudioContext();
+        this.audioContext = new AudioContext({ sampleRate: 48000 });
         this.micSourceNode = this.audioContext.createMediaStreamSource(this.localStream);
 
-        // Pre-gate tap — always reflects the true input level, whether or
-        // not the gate is currently enabled.
+        let tapSource: AudioNode = this.micSourceNode;
+        if (this.noiseCancelEnabled) {
+            try {
+                this.noiseCancelNode = await this.createNoiseCancelNode();
+                this.micSourceNode.connect(this.noiseCancelNode);
+                tapSource = this.noiseCancelNode;
+            } catch (err) {
+                console.error("[voice] Noise cancelling failed to initialize, continuing without it:", err);
+                this.noiseCancelNode = null;
+                this.onError?.("Noise cancelling couldn't start — continuing without it.");
+            }
+        }
+
+        // Post-noise-cancel (or pre-gate, if noise cancelling isn't wired
+        // in) tap — always reflects the true input level, whether or not
+        // the gate is currently enabled.
         this.analyser = this.audioContext.createAnalyser();
         this.analyser.fftSize = 2048;
-        this.micSourceNode.connect(this.analyser);
+        tapSource.connect(this.analyser);
 
         this.gateGainNode = this.audioContext.createGain();
         this.gateGainNode.gain.value = 1.0;
-        this.micSourceNode.connect(this.gateGainNode);
+        tapSource.connect(this.gateGainNode);
 
         this.volumeGainNode = this.audioContext.createGain();
         this.volumeGainNode.gain.value = this.micVolume;
@@ -861,9 +918,13 @@ export class VoiceService {
     }
 
     /** Tears down the send-side graph entirely — only ever on full cleanup or
-     *  before rebuilding it, never on a mere gate toggle. */
+     *  before rebuilding it, never on a mere gate/noise-cancel toggle. */
     private teardownMicProcessingGraph(): void {
         this.stopGateLoop(false);
+        if (this.noiseCancelNode) {
+            this.noiseCancelNode.disconnect();
+            this.noiseCancelNode = null;
+        }
         if (this.gateGainNode) {
             this.gateGainNode.disconnect();
             this.gateGainNode = null;
@@ -999,6 +1060,68 @@ export class VoiceService {
         this.micVolume = clamped / 100;
         if (this.volumeGainNode) {
             this.volumeGainNode.gain.value = this.micVolume;
+        }
+    }
+
+    // ── Noise Cancelling (PRD 13.1) ──────────────────────────────────────────
+
+    /** Waits for the shared engine to be ready, then spins up a fresh
+     *  AudioWorkletNode bound to this join's own AudioContext. The WASM
+     *  fetch + compile only actually happens the first time this is called
+     *  across the whole app session (cached on `noiseCancelCore` after). */
+    private async createNoiseCancelNode(): Promise<AudioWorkletNode> {
+        await ensureNoiseCancelInitialized();
+        if (!this.audioContext) throw new Error("No audio context to attach noise cancelling to");
+        return noiseCancelCore.createAudioWorkletNode(this.audioContext);
+    }
+
+    /**
+     * Enable/disable AI noise cancelling. Mirrors `enableSensitivity()`'s
+     * "safe to call before a graph exists" contract, but is async: the very
+     * first enable *this session* fetches + compiles the vendored WASM
+     * engine (a few hundred ms), and the very first enable *this join* has
+     * to splice the AudioWorkletNode into an already-running graph (a brief
+     * reconnect). Every toggle after that — for the rest of this join — is
+     * instant: it only sends a passthrough/bypass message to the
+     * already-created node, never tearing down or rebuilding the graph or
+     * the mediasoup connection, per the feature's own requirement.
+     */
+    async setNoiseCancelEnabled(enabled: boolean): Promise<void> {
+        this.noiseCancelEnabled = enabled;
+
+        // No live graph yet (not in a call) — startProducing() will honor
+        // the flag itself once it next builds one.
+        if (!this.micSourceNode || !this.audioContext || !this.gateGainNode || !this.analyser) {
+            return;
+        }
+
+        if (this.noiseCancelNode) {
+            // Already spliced into the graph — just flip its mode. The
+            // worklet's own message handler is the (unexported) internal
+            // API of the vendored package — this mirrors its literal source.
+            this.noiseCancelNode.port.postMessage({ type: "SET_BYPASS", value: !enabled });
+            return;
+        }
+
+        if (!enabled) return; // never created, nothing to disable
+
+        try {
+            const node = await this.createNoiseCancelNode();
+            // A disable or a full cleanup() could have raced this await.
+            if (!this.noiseCancelEnabled || !this.micSourceNode || !this.audioContext || !this.gateGainNode || !this.analyser) {
+                node.disconnect();
+                return;
+            }
+            this.micSourceNode.disconnect(this.analyser);
+            this.micSourceNode.disconnect(this.gateGainNode);
+            this.micSourceNode.connect(node);
+            node.connect(this.analyser);
+            node.connect(this.gateGainNode);
+            this.noiseCancelNode = node;
+        } catch (err) {
+            console.error("[voice] Failed to enable noise cancelling:", err);
+            this.noiseCancelEnabled = false;
+            this.onError?.("Couldn't enable noise cancelling.");
         }
     }
 
