@@ -2545,3 +2545,82 @@ Feature/Fix: Phase 13.5 (PRD 13.13) — Animated Custom Emoji (GIF Upload)
 
   Next Step: PRD 13.14 (bigger rendering for solo-emoji messages) — the
   next item per app-planning/Reson8_Phase13_PRD.md's recommended order.
+
+--- Entry: 29/08/2026 ---
+
+Feature/Fix: Phase 13.6 — Fix Preload Script Crash From Noise-Cancelling Dependency (regression in PRD 13.1)
+
+  Problem: After PRD 13.1 (noise cancelling), the entire client broke on
+  launch — clicking "Connect" did nothing, and the bottom status bar never
+  showed an instance ID. Both symptoms traced to a single root cause: the
+  preload script itself was crashing at load time, so none of its API
+  (including the Connect flow and the "connected" event that populates the
+  instance ID display) was ever exposed to the renderer.
+
+  Root Cause (confirmed by actually launching the app with
+  `ELECTRON_ENABLE_LOGGING=1`, not just re-reading the diff): the vendored
+  `deepfilternet3-noise-filter` package declares `"type": "module"` in its
+  own package.json. `voice.service.ts`'s static
+  `import { DeepFilterNet3Core } from "deepfilternet3-noise-filter"`
+  compiles (this project's tsconfig targets CommonJS) to a top-level
+  `require("deepfilternet3-noise-filter")`, executed unconditionally the
+  moment preload.js loads (since preload.ts constructs a VoiceService at
+  module scope). Node resolves the package's "require" export condition to
+  `dist/index.js`, but because the package's own `"type": "module"` marks
+  all its plain `.js` files as ESM regardless of which export condition
+  pointed at them, that file gets parsed as an ES module — which has no
+  `exports` global — while its actual body still assumes one (a Rollup
+  CJS-shaped build), producing `ReferenceError: exports is not defined`,
+  crashing preload.js entirely. This is a dual-package-hazard bug in the
+  dependency's own publish output, not something fixable by changing our
+  import style alone in the naive way.
+
+  First attempted fix — a plain `await import(...)` inside the already-
+  lazy `ensureNoiseCancelInitialized()` — was insufficient on its own:
+  confirmed in the compiled output that TypeScript rewrites dynamic
+  `import()` to `Promise.resolve().then(() => require(...))` when the
+  compiler's own module target is CommonJS, hitting the identical crash,
+  just deferred to first use instead of app startup (better, but the
+  feature itself would still be completely broken).
+
+  Actual Fix: an indirect-eval dynamic import —
+  `new Function("specifier", "return import(specifier)")` — invoked as
+  `dynamicImport("deepfilternet3-noise-filter")`. Because the literal
+  `import(...)` keyword lives inside a string passed to the `Function`
+  constructor rather than in real parsed source, TypeScript's compiler
+  can't see or rewrite it; at runtime it's a genuine dynamic import
+  resolved through Node's real ESM loader (the package's "import"
+  condition, `dist/index.esm.js`), sidestepping the CJS/ESM mismatch
+  entirely. Verified empirically with a standalone `node -e` script
+  before wiring it in, then confirmed against the compiled
+  `voice.service.js` output that no `require()` call remains for this
+  package. The class's *type* (for `noiseCancelCore`'s field type and the
+  helper's return type) is still available via a type-only
+  `import("deepfilternet3-noise-filter").DeepFilterNet3Core` query, which
+  is fully erased at compile time and emits no require/import of its own.
+
+  Key Files Modified:
+    apps/client/src/services/voice.service.ts — replaced the static
+      top-level import with the indirect-eval `dynamicImport` helper;
+      `noiseCancelCore` and `createNoiseCancelNode()` updated for the
+      resulting nullable-until-loaded type
+
+  Verification:
+    - npx tsc --noEmit and --build (client) — clean
+    - Confirmed the compiled dist/services/voice.service.js contains no
+      `require("deepfilternet3-noise-filter")` call
+    - Actually launched the packaged dev build
+      (`ELECTRON_ENABLE_LOGGING=1 NODE_ENV=development npx electron .`,
+      ~10s each run) before and after the fix: before, the preload-crash
+      and cascading "Cannot read properties of undefined" errors were
+      reproduced exactly as reported; after, the app launches cleanly
+      with no console errors beyond harmless DevTools Autofill protocol
+      noise.
+    - Not yet re-tested by the user for the actual Connect flow / instance
+      ID display, or for the noise-cancelling feature itself now
+      succeeding when toggled on (this fix only proves the crash is
+      gone, not that the feature's happy path works end-to-end).
+
+  Next Step: user to retest connecting normally, then re-verify PRD 13.1
+  (noise cancelling itself) and PRD 13.13 (animated emoji) now that the
+  app actually launches. Then continue with PRD 13.14.

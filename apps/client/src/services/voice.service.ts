@@ -11,7 +11,12 @@
  */
 
 import { Device, types as msTypes } from "mediasoup-client";
-import { DeepFilterNet3Core } from "deepfilternet3-noise-filter";
+
+// Type-only — a genuine `import("...")` type query, erased entirely at
+// compile time (no require()/import() emitted). See the dynamicImport
+// comment below for why this can't be a normal `import type {...} from`
+// statement's value-shaped counterpart.
+type DeepFilterNet3CoreInstance = import("deepfilternet3-noise-filter").DeepFilterNet3Core;
 
 // ── Noise cancelling (PRD 13.1) — shared module-level engine ────────────────
 // One DeepFilterNet3Core instance for the whole app session, not per join:
@@ -23,16 +28,55 @@ import { DeepFilterNet3Core } from "deepfilternet3-noise-filter";
 // bound to that join's own AudioContext. `cdnUrl` is relative to
 // dist/renderer/index.html, mirroring the existing sound-alert asset path
 // convention (`../../assets/...`) already used elsewhere in this codebase.
-const noiseCancelCore = new DeepFilterNet3Core({
-    sampleRate: 48000,
-    noiseReductionLevel: 100,
-    assetConfig: { cdnUrl: "../../assets/deepfilternet" },
-});
+//
+// The package is loaded via a genuine dynamic import() rather than a static
+// one — confirmed live that a static import (compiling to a top-level
+// require(), since this project's tsconfig targets CommonJS) crashes the
+// entire preload script at startup with "ReferenceError: exports is not
+// defined": the package's own package.json declares `"type": "module"`, so
+// Node treats its plain `.js` files as ESM regardless of the "require"
+// condition in its "exports" map pointing at one — a dual-package-hazard
+// bug in the dependency itself, not fixable from this side except by never
+// require()-ing it.
+//
+// A literal `await import(...)` isn't enough on its own: TypeScript still
+// rewrites dynamic import() to a deferred require() when the compiler's own
+// module target is CommonJS (confirmed in the compiled output —
+// `Promise.resolve().then(() => require(...))`), hitting the exact same
+// crash, just lazily. The indirect-eval `Function("specifier", "return
+// import(specifier)")` trick below is opaque to TypeScript's static
+// analysis (the `import` keyword is inside a string, not real source), so
+// nothing rewrites it — at runtime it's a genuine dynamic import(),
+// resolving the package's "import" condition (dist/index.esm.js) through
+// the real ESM loader instead of require(). As a side benefit, this also
+// keeps the ~24MB dependency out of the preload script's synchronous
+// startup path entirely for the (likely common) case of a user who never
+// touches this feature.
+const dynamicImport = new Function("specifier", "return import(specifier)") as (
+    specifier: string,
+) => Promise<{
+    DeepFilterNet3Core: new (config?: {
+        sampleRate?: number;
+        noiseReductionLevel?: number;
+        assetConfig?: { cdnUrl?: string };
+    }) => DeepFilterNet3CoreInstance;
+}>;
+
+let noiseCancelCore: DeepFilterNet3CoreInstance | null = null;
 let noiseCancelInitPromise: Promise<void> | null = null;
 function ensureNoiseCancelInitialized(): Promise<void> {
     if (!noiseCancelInitPromise) {
-        noiseCancelInitPromise = noiseCancelCore.initialize().catch((err) => {
+        noiseCancelInitPromise = (async () => {
+            const { DeepFilterNet3Core } = await dynamicImport("deepfilternet3-noise-filter");
+            noiseCancelCore = new DeepFilterNet3Core({
+                sampleRate: 48000,
+                noiseReductionLevel: 100,
+                assetConfig: { cdnUrl: "../../assets/deepfilternet" },
+            });
+            await noiseCancelCore.initialize();
+        })().catch((err) => {
             noiseCancelInitPromise = null; // allow a retry on the next enable attempt
+            noiseCancelCore = null;
             throw err;
         });
     }
@@ -1072,6 +1116,7 @@ export class VoiceService {
     private async createNoiseCancelNode(): Promise<AudioWorkletNode> {
         await ensureNoiseCancelInitialized();
         if (!this.audioContext) throw new Error("No audio context to attach noise cancelling to");
+        if (!noiseCancelCore) throw new Error("Noise cancelling engine failed to initialize");
         return noiseCancelCore.createAudioWorkletNode(this.audioContext);
     }
 
