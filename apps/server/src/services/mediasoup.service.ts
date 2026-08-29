@@ -286,6 +286,33 @@ export class MediasoupService extends EventEmitter {
     }
 
     /**
+     * Restarts ICE on one of a session's transports (send or recv),
+     * returning fresh `iceParameters` for the client to apply. Used to
+     * recover a transport whose connection degraded (e.g. a transient
+     * network drop) without closing its producers/consumers — the
+     * alternative to letting `icestatechange`'s grace period time out and
+     * close the transport outright.
+     */
+    async restartTransportIce(
+        channelId: string,
+        userId: string,
+        transportId: string,
+    ): Promise<mediasoupTypes.IceParameters | null> {
+        const session = this.getSession(channelId, userId);
+        if (!session) return null;
+
+        const transport =
+            session.sendTransport?.id === transportId
+                ? session.sendTransport
+                : session.recvTransport?.id === transportId
+                    ? session.recvTransport
+                    : null;
+        if (!transport || transport.closed) return null;
+
+        return transport.restartIce();
+    }
+
+    /**
      * Returns all active producers in a channel (excluding a specific user).
      * Used to notify a joining user of existing audio streams.
      */

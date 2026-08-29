@@ -2004,3 +2004,121 @@ sub-phase, item 11/11 — final item)
   writing one consolidated release description spanning all of
   Phase 12 (the original 14-item PRD) plus this entire sub-phase.
 
+--- Entry: 29/08/2026 ---
+
+Feature/Fix: Connection Resilience for Weak/Flaky Networks
+
+  Problem: user-supplied server logs from a live session (a client on
+  a weak signal) showed repeated Socket.io `ping timeout`/`transport
+  close` disconnects over ~15 minutes. Investigation of
+  connection.handler.ts found the `disconnect` handler had zero grace
+  period: the instant a socket dropped, it immediately wiped the
+  user's Redis presence and broadcast USER_LEFT/PRESENCE_UPDATE to
+  the whole server. The client's existing reconnection logic
+  (Socket.io auto-reconnect + `attemptVoiceRejoin` in preload.ts)
+  would then reconnect within a second or two and rejoin — but from
+  every *other* client's perspective this was indistinguishable from
+  a real leave+rejoin: renderer.ts plays
+  `user_disconnected_from_channel.mp3` then
+  `user_joined_channel.mp3` for the whole channel, and the occupant
+  list flickers, every time the flaky user blips. Separately, the
+  existing ICE-disconnected grace timers (client 4s / server 10s,
+  from PRD 11.1) only ever waited-then-killed a degraded WebRTC
+  transport — mediasoup supports `restartIce()` to recover a live
+  transport without destroying its producer/consumers, and nothing in
+  the codebase called it, so even a pure media-path hiccup (socket
+  fine, only the UDP path degraded) escalated to a full voice-channel
+  rejoin instead of a silent in-place recovery.
+
+  Solution: four independent fixes, chosen with the user after
+  presenting the diagnosis via AskUserQuestion (all four selected):
+
+  1. Disconnect grace period (server): `connection.handler.ts`'s
+     `disconnect` handler no longer immediately calls
+     `presence.leaveChannel`/`presence.leaveServer` or broadcasts
+     USER_LEFT/PRESENCE_UPDATE. Mediasoup cleanup (PRODUCER_CLOSED +
+     `mediasoup.cleanupUserSession`) still happens immediately — that
+     transport is tied to the dead socket either way, and the client
+     rebuilds a fresh one on rejoin regardless. The presence
+     removal + broadcast is now deferred via a `setTimeout`
+     (`DISCONNECT_GRACE_MS = 10_000`) keyed by `userId` in a new
+     `pendingDisconnects` map, run through a new `finalizeDisconnect()`
+     helper. `USER_JOIN_SERVER` checks this map first and clears the
+     timer if the same `instanceId` reconnects within the window, so
+     a brief blip never triggers the leave broadcast (and therefore
+     never triggers the leave/join sound pair or occupant-list
+     flicker) at all.
+  2. ICE restart on transient transport drops (shared-types + server
+     + client): new `RESTART_ICE` Socket.io event
+     (`{transportId} -> {success, iceParameters?}`). Server:
+     `MediasoupService.restartTransportIce()` finds the send/recv
+     transport by ID in the user's session and calls mediasoup's
+     `transport.restartIce()`; a new handler in `voice.handler.ts`
+     wires this up. Client: `voice.service.ts`'s
+     `handleTransportConnectionStateChange` now takes the transport
+     instance too, and on `"disconnected"` immediately fires a new
+     `attemptIceRestart()` (guarded by an `iceRestartInFlight` Set
+     keyed by transport ID) which calls the new
+     `signaling.restartIce()` and applies the result via
+     mediasoup-client's `transport.restartIce({iceParameters})`. The
+     existing grace timer (bumped 4s -> 6000ms to give the restart
+     round-trip room) still runs in parallel as a fallback —if the
+     restart doesn't recover the connection (or signaling is down
+     too), `reportConnectionLost()` still fires and the existing full
+     `attemptVoiceRejoin()` path in preload.ts is unchanged as the
+     safety net.
+  3. Unlimited Socket.io reconnection attempts (client): preload.ts's
+     `io()` call had `reconnectionAttempts: 5` (~17s of backoff before
+     giving up entirely, per Socket.io's default delay/cap), which
+     could strand a user on a connection bad enough to need more than
+     a few retries — requiring a manual reconnect even though the new
+     server-side grace period is happy to wait far longer. Changed to
+     `reconnectionAttempts: Infinity` (delay/backoff unchanged).
+  4. Log noise (server): `permissions.middleware.ts`'s
+     `requirePermission()` logged every denial at `warn` level,
+     including routine capability probes (MANAGE_ROLES/MANAGE_EMOJIS
+     checks that fire on every join for every non-admin user to
+     decide whether to show admin UI) — not a bug (the client already
+     silently ignores `PERMISSION_DENIED`, per
+     `renderer.ts:2437`), but this was drowning out genuine signal
+     while reading server logs during this investigation. Downgraded
+     to `debug`.
+
+  Key Files Modified:
+    packages/shared-types/src/socket-events.ts — new RESTART_ICE
+      event on ClientToServerEvents
+    apps/server/src/services/mediasoup.service.ts — new
+      `restartTransportIce()`
+    apps/server/src/handlers/voice.handler.ts — new RESTART_ICE
+      handler
+    apps/server/src/handlers/connection.handler.ts — disconnect
+      grace period (`pendingDisconnects` map, `finalizeDisconnect()`,
+      cancellation in USER_JOIN_SERVER)
+    apps/server/src/middleware/permissions.middleware.ts — denial log
+      downgraded warn -> debug
+    apps/client/src/services/voice.service.ts — `VoiceSignaling.
+      restartIce()`, `attemptIceRestart()`, `iceRestartInFlight` Set,
+      `handleTransportConnectionStateChange()` now takes the
+      transport and triggers a restart attempt on "disconnected"
+    apps/client/src/preload.ts — `createSignaling()`'s
+      `restartIce()` implementation, the mic-preview dummy
+      `VoiceSignaling` stub updated to match the interface,
+      `reconnectionAttempts: Infinity`
+
+  Verification:
+    - npx tsc --build (shared-types) — clean
+    - npx tsc --noEmit (server) — clean
+    - npm run test (server) — 19/19 passing, unchanged
+    - npx tsc --noEmit (client) — clean
+    - Not yet live-tested against a real weak/flaky connection — the
+      user's original repro was an actual weak WiFi session, which
+      isn't reproducible on demand; ask the user to watch for
+      recurrence (or its absence) on their next session on a poor
+      connection.
+
+  Next Step: none of the four fixes are session-blocking, but the ICE
+  restart path (#2) is the most architecturally novel — worth extra
+  attention on the next live weak-connection test to confirm the
+  restart actually recovers audio without a full rejoin, versus just
+  silently falling through to the existing fallback every time.
+

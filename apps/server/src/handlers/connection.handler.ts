@@ -153,6 +153,51 @@ export function registerConnectionHandlers(
 ): void {
     const presence = new PresenceService(app.redis);
 
+    // ── Disconnect grace period ─────────────────────────────────────────────
+    // A weak connection's Socket.io session can drop (ping timeout, transport
+    // close) and reconnect again within seconds, well before the user
+    // actually meant to leave. Without a grace period, every one of those
+    // blips immediately wiped this user's presence and broadcast USER_LEFT/
+    // PRESENCE_UPDATE to the whole server — which the client then undid
+    // moments later by reconnecting and rejoining, so everyone else saw the
+    // occupant list flicker and heard the leave+join sound pair for a
+    // connection issue that was never really a "leave" at all. Deferring the
+    // broadcast (not the mediasoup cleanup — that transport is dead either
+    // way) and cancelling it if the same instanceId reconnects in time fixes
+    // that without touching the reconnect/rejoin logic itself.
+    const DISCONNECT_GRACE_MS = 10_000;
+    const pendingDisconnects = new Map<string, ReturnType<typeof setTimeout>>();
+
+    /** Actually removes presence and broadcasts the leave — run once the
+     *  grace period has elapsed with no reconnect. */
+    async function finalizeDisconnect(
+        userId: string,
+        serverId: string,
+        currentChannelId: string | null,
+    ): Promise<void> {
+        if (currentChannelId) {
+            await presence.leaveChannel(userId, currentChannelId);
+
+            const occupantIds = await presence.getChannelOccupants(currentChannelId);
+            if (occupantIds.length === 0) {
+                voiceSessionStartedAt.delete(currentChannelId);
+            }
+            const occupants: IUserPresence[] = await Promise.all(
+                occupantIds.map((uid) => buildOccupant(uid, presence, app.prisma)),
+            );
+
+            io.to(`server:${serverId}`).emit("PRESENCE_UPDATE", {
+                channelId: currentChannelId,
+                occupants,
+                sessionStartedAt: voiceSessionStartedAt.get(currentChannelId)?.toISOString(),
+            });
+        }
+
+        await presence.leaveServer(userId, serverId);
+
+        io.to(`server:${serverId}`).emit("USER_LEFT", { userId, serverId });
+    }
+
     io.on("connection", (socket: TypedSocket) => {
         app.log.info({ socketId: socket.id }, "Client connected");
 
@@ -240,6 +285,15 @@ export function registerConnectionHandlers(
                             roleId: roleId,
                         },
                     });
+                }
+
+                // Cancel any pending deferred-leave from a recent disconnect —
+                // this instance reconnected within the grace period, so it
+                // never really left (see the `disconnect` handler below).
+                const pendingDisconnect = pendingDisconnects.get(instanceId);
+                if (pendingDisconnect) {
+                    clearTimeout(pendingDisconnect);
+                    pendingDisconnects.delete(instanceId);
                 }
 
                 // Join the Socket.io room for this server
@@ -543,9 +597,10 @@ export function registerConnectionHandlers(
                 const { serverId, currentChannelId, nickname, userId } = socket.data;
 
                 if (serverId) {
-                    // Clean up channel presence
+                    // Clean up the mediasoup voice session immediately — this
+                    // transport is tied to the now-dead socket either way,
+                    // and the client rebuilds a fresh one on rejoin.
                     if (currentChannelId) {
-                        // Clean up mediasoup voice session
                         const producerId = mediasoup.getSession(currentChannelId, userId)?.producer?.id;
                         if (producerId) {
                             socket.to(`channel:${currentChannelId}`).emit("PRODUCER_CLOSED", {
@@ -554,38 +609,27 @@ export function registerConnectionHandlers(
                             });
                         }
                         mediasoup.cleanupUserSession(currentChannelId, userId);
-
-                        await presence.leaveChannel(userId, currentChannelId);
-
-                        // Broadcast updated occupants for the channel they were in
-                        const occupantIds =
-                            await presence.getChannelOccupants(currentChannelId);
-                        if (occupantIds.length === 0) {
-                            voiceSessionStartedAt.delete(currentChannelId);
-                        }
-                        const occupants: IUserPresence[] = await Promise.all(
-                            occupantIds.map((uid) => buildOccupant(uid, presence, app.prisma)),
-                        );
-
-                        io.to(`server:${serverId}`).emit("PRESENCE_UPDATE", {
-                            channelId: currentChannelId,
-                            occupants,
-                            sessionStartedAt: voiceSessionStartedAt.get(currentChannelId)?.toISOString(),
-                        });
                     }
 
-                    // Clean up server presence
-                    await presence.leaveServer(userId, serverId);
-
-                    io.to(`server:${serverId}`).emit("USER_LEFT", {
-                        userId,
-                        serverId,
-                    });
+                    // Defer presence removal + the USER_LEFT/PRESENCE_UPDATE
+                    // broadcast (see the grace-period comment above) — a
+                    // reconnect within DISCONNECT_GRACE_MS cancels this via
+                    // USER_JOIN_SERVER, so a brief drop never appears as a
+                    // leave to anyone else.
+                    const existing = pendingDisconnects.get(userId);
+                    if (existing) clearTimeout(existing);
+                    const timer = setTimeout(() => {
+                        pendingDisconnects.delete(userId);
+                        finalizeDisconnect(userId, serverId, currentChannelId).catch((err) => {
+                            app.log.error({ err }, "Error during deferred disconnect cleanup");
+                        });
+                    }, DISCONNECT_GRACE_MS);
+                    pendingDisconnects.set(userId, timer);
                 }
 
                 app.log.info(
                     { socketId: socket.id, nickname, reason },
-                    "Client disconnected",
+                    "Client disconnected (grace period started)",
                 );
             } catch (err) {
                 app.log.error({ err }, "Error during disconnect cleanup");
