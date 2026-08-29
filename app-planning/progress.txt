@@ -2624,3 +2624,71 @@ Feature/Fix: Phase 13.6 — Fix Preload Script Crash From Noise-Cancelling Depen
   Next Step: user to retest connecting normally, then re-verify PRD 13.1
   (noise cancelling itself) and PRD 13.13 (animated emoji) now that the
   app actually launches. Then continue with PRD 13.14.
+
+--- Entry: 29/08/2026 ---
+
+Feature/Fix: Phase 13.7 (PRD 13.14) — Bigger Rendering for Solo-Emoji Messages
+
+  Problem: A message containing nothing but a single emoji rendered at the
+  same size as normal text — no visual emphasis for the common "just send
+  an emoji" case.
+
+  Solution: Added `isSoloEmojiMessage(text)` — trims the message and
+  checks whether it's exactly one emoji, in either form:
+    - a single recognized `:custom_name:` custom-emoji token, or
+    - a single Unicode emoji *grapheme cluster*, correctly counting
+      multi-codepoint sequences (flags, ZWJ family/profession combos, skin-
+      tone modifiers) as one character via `Intl.Segmenter`
+      (`granularity: "grapheme"`) rather than naively counting code points
+      or UTF-16 units, which would misclassify those as "multiple emoji."
+  A message with any additional text alongside an emoji is left completely
+  untouched.
+
+  When true, both `renderChatMessage()` and `renderDmMessage()` add a
+  `.msg-text-solo-emoji` modifier class to the message's `<span
+  class="msg-text">`, which sets `font-size: 4em` — since the existing
+  `.custom-emoji-inline` `<img>` is already sized in `em` units (`1.3em`,
+  relative to its inherited font-size), this one CSS rule automatically
+  scales *both* plain Unicode emoji text and a custom-emoji image
+  proportionally, with no separate image-sizing logic needed. Also wired
+  into both message-edit paths (the editor's own optimistic update and
+  `applyMessageEdit()`'s broadcast-driven update for other clients) so
+  editing a message in or out of "solo emoji" status re-evaluates the
+  class live, matching the existing pattern already used there for
+  re-evaluating truncation.
+
+  Edge case found and fixed during testing: initially used only
+  `\p{Extended_Pictographic}` as a quick pre-filter before segmenting —
+  standalone testing (outside the app, via `node -e`) surfaced that flag
+  emoji (e.g. 🇧🇷, a pair of Regional Indicator codepoints) aren't
+  classified as `Extended_Pictographic` in Unicode and were being missed
+  entirely. Added `\p{Regional_Indicator}` to the test regex to cover
+  flags too. (A rarer remaining gap: digit-keycap emoji like 3️⃣ still
+  aren't detected, since neither Unicode property covers the bare digit
+  codepoint they're built from — accepted as a minor, very-low-frequency
+  miss rather than chasing full coverage across Unicode's ~20 overlapping
+  emoji-related properties.)
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts — `isSoloEmojiMessage()`,
+      `EMOJI_TEST_REGEX`, `graphemeSegmenter`; wired into
+      `renderChatMessage()`, `renderDmMessage()`, and both message-edit
+      paths
+    apps/client/src/renderer/index.html — `.msg-text-solo-emoji` CSS
+
+  Verification:
+    - npx tsc --noEmit and --build (client) — clean
+    - Standalone `node -e` tests of the grapheme-segmentation logic
+      against single emoji, multiple emoji, flags, ZWJ sequences, plain
+      text, and digit/# edge cases — confirmed correct after the
+      Regional_Indicator fix
+    - Actually launched the dev build (ELECTRON_ENABLE_LOGGING=1) after
+      this change specifically to confirm no regression of the preload
+      crash from the previous entry — clean, no console errors
+    - Manual in-app verification (an actual solo emoji message rendering
+      ~4x, a custom emoji alone doing the same, and a message with text
+      alongside an emoji staying normal-sized) is pending the user's own
+      hands-on test.
+
+  Next Step: PRD 13.15 (voice-connected-but-offline presence bug) — the
+  next item per app-planning/Reson8_Phase13_PRD.md's recommended order.

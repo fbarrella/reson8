@@ -704,6 +704,16 @@
       color: var(--text-primary);
     }
 
+    /* A message that's nothing but a single emoji renders ~4x size (PRD
+       13.14) — the custom-emoji <img> is sized in `em` units (see
+       .custom-emoji-inline below) so it scales along with plain text. */
+    .chat-msg .msg-text.msg-text-solo-emoji {
+      display: inline-block;
+      font-size: 4em;
+      line-height: 1.1;
+      vertical-align: middle;
+    }
+
     /* Long-message truncation (Phase 12 sub-phase item 5) — only applied
        (via JS, attachMessageTruncation()) to messages that actually
        overflow this clamp; a short message never gets this class at all,

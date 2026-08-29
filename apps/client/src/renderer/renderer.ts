@@ -2727,6 +2727,36 @@ function renderEmojiToken(token: string): string {
     return escapeHtml(token);
 }
 
+// Extended_Pictographic covers most emoji; Regional_Indicator is needed
+// separately for flags (a pair of regional-indicator codepoints, e.g. 🇧🇷 —
+// not itself classified as Extended_Pictographic).
+const EMOJI_TEST_REGEX = /\p{Extended_Pictographic}|\p{Regional_Indicator}/u;
+const graphemeSegmenter = typeof Intl !== "undefined" && "Segmenter" in Intl
+    ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
+    : null;
+
+/**
+ * True when a message consists of nothing but a single emoji — either one
+ * Unicode emoji grapheme cluster (correctly counting multi-codepoint
+ * sequences like flags, skin-tone modifiers, or ZWJ combos as *one*
+ * character) or one recognized `:custom_name:` token — with no other
+ * text. Used to render such messages at ~4x size (PRD 13.14).
+ */
+function isSoloEmojiMessage(text: string): boolean {
+    const trimmed = text.trim();
+    if (!trimmed) return false;
+
+    const customMatch = trimmed.match(/^:([a-zA-Z0-9_]{2,32}):$/);
+    if (customMatch) {
+        return customEmojis.some((e) => e.name === customMatch[1]);
+    }
+
+    if (!EMOJI_TEST_REGEX.test(trimmed)) return false;
+    return graphemeSegmenter
+        ? [...graphemeSegmenter.segment(trimmed)].length === 1
+        : [...trimmed].length === 1;
+}
+
 /** Build HTML for message text with clickable URL links and inline custom
  * emoji. Operates on raw (unescaped) text so the regexes work correctly,
  * then escapes/transforms each segment independently. */
@@ -3262,7 +3292,8 @@ function renderChatMessage(tab: ChatTab, msg: ChatMessage): void {
     let html = `<span class="msg-time">${time}</span>${editedLabel}<span class="msg-nick">${escapeHtml(msg.nickname)}</span>`;
 
     if (msg.content) {
-        html += `<span class="msg-text">${linkifyContent(msg.content)}</span>`;
+        const soloEmojiClass = isSoloEmojiMessage(msg.content) ? " msg-text-solo-emoji" : "";
+        html += `<span class="msg-text${soloEmojiClass}">${linkifyContent(msg.content)}</span>`;
     }
 
     el.innerHTML = html;
@@ -3485,7 +3516,8 @@ function renderDmMessage(tab: ChatTab, msg: DirectMessage): void {
     let html = `<span class="msg-time">${time}</span><span class="msg-nick">${escapeHtml(msg.senderNickname)}</span>`;
 
     if (msg.content) {
-        html += `<span class="msg-text">${linkifyContent(msg.content)}</span>`;
+        const soloEmojiClass = isSoloEmojiMessage(msg.content) ? " msg-text-solo-emoji" : "";
+        html += `<span class="msg-text${soloEmojiClass}">${linkifyContent(msg.content)}</span>`;
     }
 
     el.innerHTML = html;
@@ -5022,7 +5054,7 @@ function startMessageEdit(el: HTMLDivElement, msg: ChatMessage): void {
         // client) and just harmlessly re-applies the same content.
         msg.content = newContent;
         const newTextEl = document.createElement("span");
-        newTextEl.className = "msg-text";
+        newTextEl.className = isSoloEmojiMessage(newContent) ? "msg-text msg-text-solo-emoji" : "msg-text";
         newTextEl.innerHTML = linkifyContent(newContent);
         input.replaceWith(newTextEl);
         if (!el.querySelector(".msg-edited")) {
@@ -5057,6 +5089,7 @@ function applyMessageEdit(msg: ChatMessage): void {
         const textEl = el.querySelector(".msg-text") as HTMLElement | null;
         if (textEl) {
             textEl.classList.remove("msg-text-clamped", "msg-text-expanded");
+            textEl.classList.toggle("msg-text-solo-emoji", isSoloEmojiMessage(msg.content));
             textEl.innerHTML = linkifyContent(msg.content);
             // Re-evaluate truncation for the other clients viewing this
             // edit too, not just the editor's own optimistic path above.
