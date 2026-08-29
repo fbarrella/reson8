@@ -56,7 +56,12 @@ export async function requirePermission(
             code: "PERMISSION_DENIED",
             message: "You do not have permission to perform this action.",
         });
-        app.log.warn(
+        // debug, not warn — most calls here are routine capability probes
+        // (e.g. checking MANAGE_ROLES/MANAGE_EMOJIS to decide whether to
+        // show admin UI) that fire on every join for every non-admin user,
+        // not actual misuse. At warn level these drowned out real signal in
+        // server logs during connection-issue investigations.
+        app.log.debug(
             { userId, serverId, requiredPermission: permission.toString() },
             "Permission denied",
         );

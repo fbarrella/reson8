@@ -64,6 +64,15 @@ export interface VoiceSignaling {
     ): Promise<{ success: boolean; error?: string }>;
 
     /**
+     * Asks the server to restart ICE on an existing transport whose
+     * connection has degraded, returning fresh `iceParameters` to apply
+     * locally via mediasoup-client's `transport.restartIce()`.
+     */
+    restartIce(
+        transportId: string,
+    ): Promise<{ success: boolean; iceParameters?: any; error?: string }>;
+
+    /**
      * Fire-and-forget — tells the server to close this Producer *now*,
      * rather than leaving viewers to find out only when the whole
      * Transport eventually closes (full voice disconnect). Confirmed live
@@ -104,6 +113,7 @@ export class VoiceService {
     onError: ((message: string) => void) | null = null;
     private iceGraceTimer: ReturnType<typeof setTimeout> | null = null;
     private connectionLossReported = false;
+    private iceRestartInFlight = new Set<string>(); // transport IDs
 
     // ── Per-remote-user local volume/mute (client-local only, PRD 4.1/4.2) ──
     private playbackAudioContext: AudioContext | null = null;
@@ -197,7 +207,7 @@ export class VoiceService {
         });
 
         this.sendTransport.on("connectionstatechange", (state) => {
-            this.handleTransportConnectionStateChange(state);
+            this.handleTransportConnectionStateChange(state, this.sendTransport!);
         });
 
         this.sendTransport.on(
@@ -260,7 +270,7 @@ export class VoiceService {
         });
 
         this.recvTransport.on("connectionstatechange", (state) => {
-            this.handleTransportConnectionStateChange(state);
+            this.handleTransportConnectionStateChange(state, this.recvTransport!);
         });
 
         this.recvTransport.on(
@@ -282,12 +292,16 @@ export class VoiceService {
 
     /**
      * Handles WebRTC-level connection-state changes on either transport.
-     * "disconnected" gets a grace period (ICE frequently self-recovers from
-     * it, e.g. a brief NAT rebind) before being treated as a real failure;
-     * "failed" is terminal immediately. Only reports once per join — the
-     * caller is expected to tear the whole session down in response.
+     * "disconnected" triggers an immediate ICE restart attempt — mediasoup
+     * can usually recover a transient drop (brief WiFi hiccup, NAT rebind)
+     * in place, with no audible interruption and no producer/consumer
+     * teardown. A grace timer runs in parallel as a fallback: if the state
+     * hasn't recovered by the time it fires (restart failed, or signaling
+     * itself is down), it's treated as a real failure. "failed" is terminal
+     * immediately. Only reports once per join — the caller is expected to
+     * tear the whole session down in response.
      */
-    private handleTransportConnectionStateChange(state: string): void {
+    private handleTransportConnectionStateChange(state: string, transport: msTypes.Transport): void {
         if (state === "connected" || state === "completed") {
             if (this.iceGraceTimer !== null) {
                 clearTimeout(this.iceGraceTimer);
@@ -306,11 +320,34 @@ export class VoiceService {
         }
 
         if (state === "disconnected") {
+            void this.attemptIceRestart(transport);
             if (this.iceGraceTimer !== null) return; // already waiting
             this.iceGraceTimer = setTimeout(() => {
                 this.iceGraceTimer = null;
                 this.reportConnectionLost();
-            }, 4000);
+            }, 6000);
+        }
+    }
+
+    /**
+     * Asks the server to restart ICE on `transport` and applies the fresh
+     * parameters locally. Best-effort: if signaling is also down (e.g. the
+     * Socket.io connection itself dropped), this simply fails silently and
+     * the grace timer in `handleTransportConnectionStateChange` falls back
+     * to the full rejoin path once it expires.
+     */
+    private async attemptIceRestart(transport: msTypes.Transport): Promise<void> {
+        if (transport.closed || this.iceRestartInFlight.has(transport.id)) return;
+        this.iceRestartInFlight.add(transport.id);
+        try {
+            const res = await this.signaling.restartIce(transport.id);
+            if (res.success && res.iceParameters && !transport.closed) {
+                await transport.restartIce({ iceParameters: res.iceParameters });
+            }
+        } catch (err) {
+            console.error("[voice] ICE restart failed:", err);
+        } finally {
+            this.iceRestartInFlight.delete(transport.id);
         }
     }
 

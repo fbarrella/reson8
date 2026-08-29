@@ -163,6 +163,11 @@ function createSignaling(): VoiceSignaling {
                 socket!.emit("RESUME_CONSUMER", { consumerId }, resolve);
             });
         },
+        restartIce(transportId) {
+            return new Promise((resolve) => {
+                socket!.emit("RESTART_ICE", { transportId }, resolve);
+            });
+        },
         closeProducer(producerId) {
             socket?.emit("CLOSE_PRODUCER", { producerId });
         },
@@ -288,7 +293,13 @@ const api = {
         socket = io(serverUrl, {
             transports: ["websocket"],
             reconnection: true,
-            reconnectionAttempts: 5,
+            // Unlimited attempts (delay backs off up to Socket.io's 5s
+            // default cap) — a weak connection that's still recovering
+            // after the old 5-attempt/~17s ceiling would otherwise strand
+            // the user in a disconnected state requiring a manual
+            // reconnect, even though the server-side grace period
+            // (connection.handler.ts) is happy to keep waiting far longer.
+            reconnectionAttempts: Infinity,
             reconnectionDelay: 1000,
         }) as TypedSocket;
 
@@ -1128,6 +1139,7 @@ const api = {
                 produce: () => Promise.resolve({ success: false }),
                 consume: () => Promise.resolve({ success: false }),
                 resumeConsumer: () => Promise.resolve({ success: false }),
+                restartIce: () => Promise.resolve({ success: false }),
                 closeProducer: () => {},
             };
             voiceService = new VoiceService(dummySignaling);

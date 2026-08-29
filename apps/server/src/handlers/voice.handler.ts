@@ -182,6 +182,38 @@ export function registerVoiceHandlers(
             }
         });
 
+        // ── RESTART_ICE — recover a degraded transport in place ─────────────
+        // Fired by the client when a transport's connection state drops to
+        // "disconnected" (e.g. a brief WiFi hiccup), as a faster, quieter
+        // alternative to waiting out the grace period and doing a full
+        // channel rejoin (see `voice.service.ts`'s `attemptIceRestart`).
+        socket.on("RESTART_ICE", async (payload, ack) => {
+            try {
+                const { transportId } = payload;
+                const channelId = socket.data.currentChannelId;
+                if (!channelId) {
+                    ack({ success: false, error: "Not in a channel" });
+                    return;
+                }
+
+                const iceParameters = await mediasoup.restartTransportIce(
+                    channelId,
+                    getMediasoupSessionKey(socket),
+                    transportId,
+                );
+                if (!iceParameters) {
+                    ack({ success: false, error: "Transport not found" });
+                    return;
+                }
+
+                ack({ success: true, iceParameters });
+                app.log.info({ socketId: socket.id, transportId }, "ICE restarted");
+            } catch (err) {
+                app.log.error({ err }, "Error in RESTART_ICE");
+                ack({ success: false, error: "Failed to restart ICE" });
+            }
+        });
+
         // ── 4. PRODUCE ──────────────────────────────────────────────────────
         socket.on("PRODUCE", async (payload, ack) => {
             try {

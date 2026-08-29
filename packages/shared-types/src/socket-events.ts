@@ -238,6 +238,17 @@ export interface ClientToServerEvents {
     ) => void;
 
     /**
+     * Ask the server to restart ICE on an existing transport whose
+     * connection state has degraded (e.g. a brief WiFi drop or NAT rebind)
+     * without tearing down its producers/consumers. The client applies the
+     * returned `iceParameters` via mediasoup-client's `transport.restartIce()`.
+     */
+    RESTART_ICE: (
+        payload: { transportId: string },
+        ack: (response: { success: boolean; iceParameters?: any; error?: string }) => void,
+    ) => void;
+
+    /**
      * Start producing a track — mic audio, or (PRD 12.7/12.8) a second,
      * independent screen-share audio or video Producer on the same send
      * Transport. `appData.mediaType` distinguishes which: absent for the
