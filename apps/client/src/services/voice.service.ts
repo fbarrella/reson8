@@ -124,15 +124,39 @@ export class VoiceService {
     /** Master attenuator (0-1) applied on top of every per-user gain (PRD 10.2). */
     private globalVoiceVolume = 1.0;
 
-    // ── Mic sensitivity / noise gate ──────────────────────────────────────
-    private analyser: AnalyserNode | null = null;
+    // ── Send-side mic processing graph ─────────────────────────────────────
+    // Built once per join in startProducing() — `localStream`'s raw track is
+    // never produced directly. Every effect that needs to touch the outgoing
+    // mic signal taps or extends this same chain instead of building its own
+    // AudioContext (the noise gate below is the first; PRD 13.3's mic volume
+    // and PRD 13.1's noise-cancelling worklet extend it further):
+    //   micSourceNode → gateGainNode → micDestinationNode → produce()
+    // `analyser` taps `micSourceNode` in parallel (pre-gate) so gate
+    // decisions and the settings meter always read the true input level,
+    // never the already-gated output.
     private audioContext: AudioContext | null = null;
-    private _analysisTrack: MediaStreamTrack | null = null;
+    private micSourceNode: MediaStreamAudioSourceNode | null = null;
+    private analyser: AnalyserNode | null = null;
+    private gateGainNode: GainNode | null = null;
+    private micDestinationNode: MediaStreamAudioDestinationNode | null = null;
+
+    // ── Mic sensitivity / noise gate ──────────────────────────────────────
     private _previewStream: MediaStream | null = null;
     private silenceCheckInterval: number | null = null;
     private sensitivityThreshold: number = -40; // dB
     private sensitivityEnabled: boolean = false;
     private _isManuallyMuted: boolean = false;
+    /** Attack/hold/release envelope constants (PRD 13.2) — chosen to feel
+     *  instant on open while surviving natural mid-sentence pauses without
+     *  cutting: fast attack, a hold window before release even starts, then
+     *  a short fade rather than an instant cut. */
+    private static readonly GATE_ATTACK_SEC = 0.015;
+    private static readonly GATE_HOLD_SEC = 0.35;
+    private static readonly GATE_RELEASE_SEC = 0.2;
+    private gateState: "open" | "closed" = "open";
+    /** audioContext.currentTime when the signal first dropped below
+     *  threshold since the gate was last open; null while above threshold. */
+    private gateBelowThresholdSince: number | null = null;
     /** True only when deafening had to pause the producer itself (i.e. the
      *  mic wasn't already paused going in) — so undeafening knows whether to
      *  resume it, rather than clobbering a mute that predates the deafen. */
@@ -531,12 +555,13 @@ export class VoiceService {
             audio: audioConstraints,
         });
 
-        const track = this.localStream.getAudioTracks()[0];
-        this.producer = await this.sendTransport.produce({ track });
+        const processedTrack = this.buildMicProcessingGraph();
+        this.producer = await this.sendTransport.produce({ track: processedTrack });
 
-        // If sensitivity was already enabled, reconnect analyser to the new stream
-        if (this.sensitivityEnabled && this.localStream) {
-            this.hookAnalyser();
+        // If the noise gate setting was already on before this join, start
+        // its envelope loop now that the graph it needs exists.
+        if (this.sensitivityEnabled) {
+            this.startGateLoop();
         }
     }
 
@@ -793,114 +818,123 @@ export class VoiceService {
         return { isMuted: this.producer?.paused ?? false, isDeafened: this._isDeafened };
     }
 
-    // ── Mic Sensitivity / Noise Gate ────────────────────────────────────────
+    // ── Send-side mic processing graph (PRD 13.2/13.3/13.1) ─────────────────
 
-    /** Hook the AnalyserNode to the current localStream. */
-    private hookAnalyser(): void {
-        // Stop preview mode if it was running
-        this.stopPreview();
+    /**
+     * Builds the always-on send-side Web Audio graph for the current
+     * `localStream` and returns the track to actually produce. Runs once per
+     * join, from `startProducing()` — the noise gate's GainNode lives here
+     * unconditionally (defaulting to fully open) so enabling/disabling the
+     * gate mid-call never needs to tear down or re-produce; it only starts
+     * or stops the envelope loop below.
+     */
+    private buildMicProcessingGraph(): MediaStreamTrack {
+        this.teardownMicProcessingGraph();
+        if (!this.localStream) throw new Error("No local stream to build mic graph from");
 
-        // Tear down any previous analyser
-        if (this.silenceCheckInterval !== null) {
-            clearInterval(this.silenceCheckInterval);
-            this.silenceCheckInterval = null;
+        this.audioContext = new AudioContext();
+        this.micSourceNode = this.audioContext.createMediaStreamSource(this.localStream);
+
+        // Pre-gate tap — always reflects the true input level, whether or
+        // not the gate is currently enabled.
+        this.analyser = this.audioContext.createAnalyser();
+        this.analyser.fftSize = 2048;
+        this.micSourceNode.connect(this.analyser);
+
+        this.gateGainNode = this.audioContext.createGain();
+        this.gateGainNode.gain.value = 1.0;
+        this.micSourceNode.connect(this.gateGainNode);
+
+        this.micDestinationNode = this.audioContext.createMediaStreamDestination();
+        this.gateGainNode.connect(this.micDestinationNode);
+
+        return this.micDestinationNode.stream.getAudioTracks()[0];
+    }
+
+    /** Tears down the send-side graph entirely — only ever on full cleanup or
+     *  before rebuilding it, never on a mere gate toggle. */
+    private teardownMicProcessingGraph(): void {
+        this.stopGateLoop(false);
+        if (this.gateGainNode) {
+            this.gateGainNode.disconnect();
+            this.gateGainNode = null;
         }
-        if (this._analysisTrack) {
-            this._analysisTrack.stop();
-            this._analysisTrack = null;
+        if (this.micDestinationNode) {
+            this.micDestinationNode.disconnect();
+            this.micDestinationNode = null;
+        }
+        if (this.micSourceNode) {
+            this.micSourceNode.disconnect();
+            this.micSourceNode = null;
         }
         if (this.audioContext) {
             this.audioContext.close().catch(() => {});
             this.audioContext = null;
-            this.analyser = null;
         }
+        this.analyser = null;
+    }
 
-        if (!this.localStream) return;
+    // ── Mic Sensitivity / Noise Gate ────────────────────────────────────────
 
-        // Clone the track for analysis so the AnalyserNode always reads
-        // the raw mic signal, even when the original track is disabled
-        // by the noise gate (track.enabled = false sends silence).
-        const originalTrack = this.localStream.getAudioTracks()[0];
-        if (!originalTrack) return;
-        this._analysisTrack = originalTrack.clone();
-        const analysisStream = new MediaStream([this._analysisTrack]);
-
-        this.audioContext = new AudioContext();
-        this.analyser = this.audioContext.createAnalyser();
-        this.analyser.fftSize = 2048;
-
-        const source = this.audioContext.createMediaStreamSource(analysisStream);
-        source.connect(this.analyser);
-
-        const bufferLength = this.analyser.fftSize;
-        const dataArray = new Float32Array(bufferLength);
+    /**
+     * Starts the noise-gate envelope loop against the already-built
+     * processing graph. Every 50ms, compares the pre-gate RMS level to the
+     * threshold and drives `gateGainNode.gain` through a real attack/hold/
+     * release ramp instead of an instant on/off — a natural mid-sentence
+     * dip below threshold is absorbed by the hold window rather than
+     * cutting audio immediately (the original source of the choppiness).
+     */
+    private startGateLoop(): void {
+        if (this.silenceCheckInterval !== null) return; // already running
+        this.gateBelowThresholdSince = null;
+        this.gateState = "open";
 
         this.silenceCheckInterval = window.setInterval(() => {
-            if (!this.analyser || !this.producer) return;
+            if (!this.analyser || !this.gateGainNode || !this.audioContext) return;
 
-            this.analyser.getFloatTimeDomainData(dataArray);
-
-            // Compute RMS → dB
-            let sumSquares = 0;
-            for (let i = 0; i < bufferLength; i++) {
-                sumSquares += dataArray[i] * dataArray[i];
-            }
-            const rms = Math.sqrt(sumSquares / bufferLength);
-            const dB = rms > 0 ? 20 * Math.log10(rms) : -Infinity;
-
-            // Don't override manual mute
-            if (this._isManuallyMuted) return;
-
-            const track = this.localStream?.getAudioTracks()[0];
-            if (!track) return;
+            const dB = this.readAnalyserLevel();
+            const now = this.audioContext.currentTime;
 
             if (dB > this.sensitivityThreshold) {
-                if (!track.enabled) track.enabled = true;
-            } else {
-                if (track.enabled) track.enabled = false;
+                this.gateBelowThresholdSince = null;
+                if (this.gateState !== "open") {
+                    this.gateGainNode.gain.cancelScheduledValues(now);
+                    this.gateGainNode.gain.setValueAtTime(this.gateGainNode.gain.value, now);
+                    this.gateGainNode.gain.linearRampToValueAtTime(1.0, now + VoiceService.GATE_ATTACK_SEC);
+                    this.gateState = "open";
+                }
+            } else if (this.gateState !== "closed") {
+                if (this.gateBelowThresholdSince === null) {
+                    this.gateBelowThresholdSince = now;
+                } else if (now - this.gateBelowThresholdSince >= VoiceService.GATE_HOLD_SEC) {
+                    this.gateGainNode.gain.cancelScheduledValues(now);
+                    this.gateGainNode.gain.setValueAtTime(this.gateGainNode.gain.value, now);
+                    this.gateGainNode.gain.linearRampToValueAtTime(0.0, now + VoiceService.GATE_RELEASE_SEC);
+                    this.gateState = "closed";
+                }
             }
         }, 50) as unknown as number;
     }
 
-    /** Enable noise gate with the given dB threshold. */
-    enableSensitivity(threshold: number): void {
-        this.sensitivityEnabled = true;
-        this.sensitivityThreshold = threshold;
-        if (this.localStream) {
-            this.hookAnalyser();
-        }
-    }
-
-    /** Disable the noise gate. */
-    disableSensitivity(): void {
-        this.sensitivityEnabled = false;
+    /** Stops the envelope loop. `forceOpen` ramps the gate back to fully
+     *  open — used when the gate feature itself is disabled, so the mic
+     *  isn't left stuck at whatever gain the loop last set. */
+    private stopGateLoop(forceOpen: boolean): void {
         if (this.silenceCheckInterval !== null) {
             clearInterval(this.silenceCheckInterval);
             this.silenceCheckInterval = null;
         }
-        if (this._analysisTrack) {
-            this._analysisTrack.stop();
-            this._analysisTrack = null;
-        }
-        if (this.audioContext) {
-            this.audioContext.close().catch(() => {});
-            this.audioContext = null;
-            this.analyser = null;
-        }
-        // Re-enable track if not manually muted
-        if (!this._isManuallyMuted) {
-            const track = this.localStream?.getAudioTracks()[0];
-            if (track) track.enabled = true;
+        this.gateBelowThresholdSince = null;
+        this.gateState = "open";
+        if (forceOpen && this.gateGainNode && this.audioContext) {
+            const now = this.audioContext.currentTime;
+            this.gateGainNode.gain.cancelScheduledValues(now);
+            this.gateGainNode.gain.setValueAtTime(this.gateGainNode.gain.value, now);
+            this.gateGainNode.gain.linearRampToValueAtTime(1.0, now + VoiceService.GATE_ATTACK_SEC);
         }
     }
 
-    /** Update the noise gate threshold (while enabled). */
-    setThreshold(threshold: number): void {
-        this.sensitivityThreshold = threshold;
-    }
-
-    /** Returns the current mic input level in dB (for meter visualization). */
-    getCurrentLevel(): number {
+    private readAnalyserLevel(): number {
         if (!this.analyser) return -Infinity;
         const bufferLength = this.analyser.fftSize;
         const dataArray = new Float32Array(bufferLength);
@@ -913,6 +947,35 @@ export class VoiceService {
         return rms > 0 ? 20 * Math.log10(rms) : -Infinity;
     }
 
+    /** Enable noise gate with the given dB threshold. */
+    enableSensitivity(threshold: number): void {
+        this.sensitivityEnabled = true;
+        this.sensitivityThreshold = threshold;
+        // If a call is already active, the graph exists — start the loop
+        // immediately. If not, startProducing() checks `sensitivityEnabled`
+        // once the graph is built on join.
+        if (this.gateGainNode) {
+            this.startGateLoop();
+        }
+    }
+
+    /** Disable the noise gate — stops gating without touching the rest of
+     *  the send-side graph (mic volume / noise cancelling keep working). */
+    disableSensitivity(): void {
+        this.sensitivityEnabled = false;
+        this.stopGateLoop(true);
+    }
+
+    /** Update the noise gate threshold (while enabled). */
+    setThreshold(threshold: number): void {
+        this.sensitivityThreshold = threshold;
+    }
+
+    /** Returns the current mic input level in dB (for meter visualization). */
+    getCurrentLevel(): number {
+        return this.readAnalyserLevel();
+    }
+
     // ── Preview mode (meter without voice channel) ────────────────────────
 
     /**
@@ -921,7 +984,8 @@ export class VoiceService {
      * the user can calibrate the threshold before joining.
      */
     async startPreview(): Promise<void> {
-        // Don't start preview if already in a voice channel (hookAnalyser handles that)
+        // Don't start preview if already in a voice channel (the mic
+        // processing graph built in startProducing() already owns the meter)
         if (this.localStream) return;
         // Don't start if preview already running
         if (this._previewStream) return;
@@ -972,7 +1036,7 @@ export class VoiceService {
             this._previewStream = null;
         }
         // Only tear down AudioContext if we're in preview mode (no localStream)
-        // If localStream exists, hookAnalyser owns the AudioContext
+        // If localStream exists, the mic processing graph owns the AudioContext
         if (!this.localStream) {
             if (this.audioContext) {
                 this.audioContext.close().catch(() => {});
@@ -995,20 +1059,9 @@ export class VoiceService {
         // Clean up preview if running
         this.stopPreview();
 
-        // Clean up sensitivity / noise gate
-        if (this.silenceCheckInterval !== null) {
-            clearInterval(this.silenceCheckInterval);
-            this.silenceCheckInterval = null;
-        }
-        if (this._analysisTrack) {
-            this._analysisTrack.stop();
-            this._analysisTrack = null;
-        }
-        if (this.audioContext) {
-            this.audioContext.close().catch(() => {});
-            this.audioContext = null;
-            this.analyser = null;
-        }
+        // Clean up the send-side mic processing graph (noise gate, and its
+        // future mic-volume/noise-cancelling extensions)
+        this.teardownMicProcessingGraph();
 
         if (this.localStream) {
             for (const track of this.localStream.getTracks()) {

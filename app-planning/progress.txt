@@ -2122,3 +2122,74 @@ Feature/Fix: Connection Resilience for Weak/Flaky Networks
   restart actually recovers audio without a full rejoin, versus just
   silently falling through to the existing fallback every time.
 
+
+--- Entry: 29/08/2026 ---
+
+Feature/Fix: Phase 13.1 (PRD 13.2) — Fix Choppy Noise Gate With a Real Attack/Hold/Release Envelope
+
+  Problem: The microphone noise gate cut audio abruptly whenever the signal
+  dipped below the configured dB threshold, even briefly mid-sentence during
+  normal speech variance — there was no fade or hold, just an instant
+  on/off, making voice chat choppy for anyone using the feature.
+
+  Solution: Root cause was `hookAnalyser()` toggling `track.enabled` as a
+  hard boolean every 50ms based on an RMS→dB read — a MediaStreamTrack can
+  only snap on/off, it can never fade, so any real envelope required
+  replacing the boolean toggle with a GainNode driven by real Web Audio
+  automation. This meant introducing an always-on send-side processing
+  graph in `voice.service.ts` — previously `startProducing()` produced the
+  raw `getUserMedia` track directly, with zero Web Audio graph on the send
+  path; the noise gate's old analyser ran on a *cloned* track purely for
+  metering, entirely separate from what got produced.
+
+  New architecture (built once per join in `startProducing()`, torn down
+  only on full `cleanup()` or before a rebuild):
+    localStream → micSourceNode → gateGainNode → micDestinationNode → produce()
+  with `analyser` tapping `micSourceNode` in parallel (pre-gate), so gate
+  decisions and the settings meter always read the true, ungated input
+  level. The destination node's track — not the raw mic track — is what
+  gets produced from now on.
+
+  The gate itself (`startGateLoop()`) still polls every 50ms, but now
+  drives `gateGainNode.gain` through `linearRampToValueAtTime()`:
+  attack ~15ms when the signal crosses back above threshold, a 350ms hold
+  once it drops below (absorbing brief pauses without any change), and
+  only then a 200ms release ramp to silence — versus the previous instant
+  cut. Enabling/disabling the gate (`enableSensitivity()`/
+  `disableSensitivity()`) no longer tears down or rebuilds any
+  AudioContext/analyser — it only starts/stops this loop and, on disable,
+  ramps the gate back open — so the mic-processing graph now survives
+  toggling the feature on and off mid-call, which it needs to since PRD
+  13.3 (mic volume slider) and PRD 13.1 (noise cancelling) are planned to
+  extend this exact same graph rather than each building their own.
+
+  This also let the old clone-the-track-for-analysis approach be deleted
+  entirely (`_analysisTrack` field and all): since the gate no longer
+  touches `track.enabled`, the raw track always carries the true signal, so
+  the analyser can tap the same `micSourceNode` used for the gate instead
+  of needing an isolated cloned-track AudioContext.
+
+  Key Files Modified:
+    apps/client/src/services/voice.service.ts — new always-on send-side
+      graph (`micSourceNode`, `gateGainNode`, `micDestinationNode`,
+      `buildMicProcessingGraph()`, `teardownMicProcessingGraph()`),
+      envelope-based gate (`startGateLoop()`, `stopGateLoop()`,
+      `readAnalyserLevel()`, `GATE_ATTACK_SEC`/`GATE_HOLD_SEC`/
+      `GATE_RELEASE_SEC`), `startProducing()` now produces the graph's
+      destination track instead of the raw mic track, `enableSensitivity()`/
+      `disableSensitivity()`/`getCurrentLevel()` rewritten against the new
+      graph, `cleanup()` now calls `teardownMicProcessingGraph()`
+
+  Verification:
+    - npx tsc --noEmit (client) — clean
+    - npx tsc --noEmit (server) — clean (unaffected, checked for
+      regressions since this is a sensitive shared voice path)
+    - Manual in-call verification of the envelope feel (natural pauses no
+      longer cutting mid-word, background noise still fully gated after
+      the release ramp) is pending the user's own hands-on test, per this
+      phase's established workflow.
+
+  Next Step: PRD 13.3 (mic volume slider, 0-200%) — cascades a second
+  GainNode onto this same graph right after gateGainNode. Then PRD 13.1
+  (noise cancelling) adds the AudioWorkletNode as the first stage. Full
+  Phase 13 plan: app-planning/Reson8_Phase13_PRD.md.
