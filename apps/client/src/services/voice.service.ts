@@ -128,17 +128,22 @@ export class VoiceService {
     // Built once per join in startProducing() — `localStream`'s raw track is
     // never produced directly. Every effect that needs to touch the outgoing
     // mic signal taps or extends this same chain instead of building its own
-    // AudioContext (the noise gate below is the first; PRD 13.3's mic volume
-    // and PRD 13.1's noise-cancelling worklet extend it further):
-    //   micSourceNode → gateGainNode → micDestinationNode → produce()
-    // `analyser` taps `micSourceNode` in parallel (pre-gate) so gate
-    // decisions and the settings meter always read the true input level,
-    // never the already-gated output.
+    // AudioContext (the noise gate and mic volume below are the first two;
+    // PRD 13.1's noise-cancelling worklet extends it further):
+    //   micSourceNode → gateGainNode → volumeGainNode → micDestinationNode → produce()
+    // `analyser` taps `micSourceNode` in parallel (pre-gate, pre-volume) so
+    // gate decisions and the settings meter always read the true input
+    // level, never the already-processed output.
     private audioContext: AudioContext | null = null;
     private micSourceNode: MediaStreamAudioSourceNode | null = null;
     private analyser: AnalyserNode | null = null;
     private gateGainNode: GainNode | null = null;
+    private volumeGainNode: GainNode | null = null;
     private micDestinationNode: MediaStreamAudioDestinationNode | null = null;
+    /** Mic input volume as a linear gain multiplier (0.0–2.0, 100% = 1.0) —
+     *  kept even without a live graph so a volume set before joining a
+     *  channel is applied the instant the graph is built (PRD 13.3). */
+    private micVolume: number = 1.0;
 
     // ── Mic sensitivity / noise gate ──────────────────────────────────────
     private _previewStream: MediaStream | null = null;
@@ -845,8 +850,12 @@ export class VoiceService {
         this.gateGainNode.gain.value = 1.0;
         this.micSourceNode.connect(this.gateGainNode);
 
+        this.volumeGainNode = this.audioContext.createGain();
+        this.volumeGainNode.gain.value = this.micVolume;
+        this.gateGainNode.connect(this.volumeGainNode);
+
         this.micDestinationNode = this.audioContext.createMediaStreamDestination();
-        this.gateGainNode.connect(this.micDestinationNode);
+        this.volumeGainNode.connect(this.micDestinationNode);
 
         return this.micDestinationNode.stream.getAudioTracks()[0];
     }
@@ -858,6 +867,10 @@ export class VoiceService {
         if (this.gateGainNode) {
             this.gateGainNode.disconnect();
             this.gateGainNode = null;
+        }
+        if (this.volumeGainNode) {
+            this.volumeGainNode.disconnect();
+            this.volumeGainNode = null;
         }
         if (this.micDestinationNode) {
             this.micDestinationNode.disconnect();
@@ -974,6 +987,19 @@ export class VoiceService {
     /** Returns the current mic input level in dB (for meter visualization). */
     getCurrentLevel(): number {
         return this.readAnalyserLevel();
+    }
+
+    // ── Mic Volume (PRD 13.3) ────────────────────────────────────────────────
+
+    /** Set mic input volume (0–200%, 100% = unprocessed input level). Applies
+     *  live to the send-side graph; safe to call before joining a channel —
+     *  the value is applied the moment the graph is built. */
+    setMicVolume(percent: number): void {
+        const clamped = Math.max(0, Math.min(200, percent));
+        this.micVolume = clamped / 100;
+        if (this.volumeGainNode) {
+            this.volumeGainNode.gain.value = this.micVolume;
+        }
     }
 
     // ── Preview mode (meter without voice channel) ────────────────────────

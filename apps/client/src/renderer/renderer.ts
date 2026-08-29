@@ -695,6 +695,7 @@ interface Reson8Api {
     getLocalUserVolume(userId: string): number;
     getLocalUserMute(userId: string): boolean;
     setGlobalVoiceVolume(percent: number): void;
+    setMicVolume(percent: number): void;
     checkForUpdates(): Promise<{ status: "available" | "not-available" | "error"; message?: string }>;
     downloadUpdate(): Promise<void>;
     quitAndInstall(): void;
@@ -1115,6 +1116,10 @@ let soundAlertsMuted = localStorage.getItem("reson8-mute-alerts") === "true";
 let nudgeVolume = Number(localStorage.getItem("reson8-nudge-volume") ?? "100");
 let alertVolume = Number(localStorage.getItem("reson8-alert-volume") ?? "100");
 let voiceVolume = Number(localStorage.getItem("reson8-voice-volume") ?? "100");
+// Mic input volume (PRD 13.3) — 0-200%, scales the outgoing mic signal itself
+// (not local playback), lives in the Voice & Shortcuts tab alongside the
+// noise gate rather than the Audio tab's other volume sliders.
+let micVolume = Number(localStorage.getItem("reson8-mic-volume") ?? "100");
 const audioNudgeVolumeSlider = document.getElementById("audio-nudge-volume-slider") as HTMLInputElement;
 const audioNudgeVolumeValue = document.getElementById("audio-nudge-volume-value") as HTMLSpanElement;
 const audioAlertVolumeSlider = document.getElementById("audio-alert-volume-slider") as HTMLInputElement;
@@ -1132,6 +1137,15 @@ const micSensitivitySlider = document.getElementById("mic-sensitivity-slider") a
 const micSensitivityValue = document.getElementById("mic-sensitivity-value") as HTMLSpanElement;
 const micLevelBar = document.getElementById("mic-level-bar") as HTMLDivElement;
 const micSensitivitySection = document.getElementById("mic-sensitivity-section") as HTMLDivElement;
+const micVolumeSlider = document.getElementById("mic-volume-slider") as HTMLInputElement;
+const micVolumeValue = document.getElementById("mic-volume-value") as HTMLSpanElement;
+
+// Apply the saved mic volume before the user ever joins a channel (mirrors
+// setGlobalVoiceVolume above — a no-op until a VoiceService instance
+// exists, but consistent with that precedent; the value is re-applied
+// after each join below since joinVoiceChannel() constructs a fresh
+// VoiceService instance per session).
+api.setMicVolume(micVolume);
 
 // State for pending delete
 let pendingDeleteChannelId: string | null = null;
@@ -1752,9 +1766,10 @@ async function handleChannelClick(node: TreeNode): Promise<void> {
                 isDeafened = false;
 
                 // joinVoiceChannel() constructs a fresh VoiceService instance
-                // per session — reapply the saved global voice volume so it
-                // doesn't silently reset to 100% on every join.
+                // per session — reapply the saved global voice volume and mic
+                // volume so neither silently resets to 100% on every join.
                 api.setGlobalVoiceVolume(voiceVolume);
+                api.setMicVolume(micVolume);
 
                 // Initialize previous occupants for join/leave sound detection
                 previousOccupantIds = new Set(node.occupants.map((o: any) => o.userId));
@@ -2406,8 +2421,9 @@ api.on("voice-reconnected", (data: { channelId: string }) => {
     updateVoiceUI(node?.name);
     // Reapply local voice settings the same way a fresh manual join does —
     // a new VoiceService instance was constructed for the rejoin, so any
-    // per-session state (global volume) needs to be re-sent.
+    // per-session state (global volume, mic volume) needs to be re-sent.
     api.setGlobalVoiceVolume(voiceVolume);
+    api.setMicVolume(micVolume);
     api.setVoiceState(isMuted, isDeafened);
     previousOccupantIds = new Set((node?.occupants ?? []).map((o) => o.userId));
 
@@ -5744,4 +5760,16 @@ micSensitivitySlider?.addEventListener("input", () => {
     if (micSensitivityEnabled && isInVoice && !pttModeEnabled) {
         api.setMicThreshold(parseInt(val, 10));
     }
+});
+
+// ── Mic Volume (PRD 13.3) ───────────────────────────────────────────────────
+
+if (micVolumeSlider) micVolumeSlider.value = String(micVolume);
+if (micVolumeValue) micVolumeValue.textContent = `${micVolume}%`;
+
+micVolumeSlider?.addEventListener("input", () => {
+    micVolume = Number(micVolumeSlider.value);
+    micVolumeValue.textContent = `${micVolume}%`;
+    localStorage.setItem("reson8-mic-volume", String(micVolume));
+    api.setMicVolume(micVolume);
 });

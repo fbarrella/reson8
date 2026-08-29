@@ -551,6 +551,10 @@ const api = {
         voiceService?.setGlobalVoiceVolume(percent);
     },
 
+    setMicVolume(percent: number): void {
+        voiceService?.setMicVolume(percent);
+    },
+
     // ── Audio Settings ──────────────────────────────────────────────────────
 
     async enumerateAudioDevices(): Promise<{ inputs: { deviceId: string; label: string }[]; outputs: { deviceId: string; label: string }[] }> {

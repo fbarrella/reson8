@@ -2193,3 +2193,65 @@ Feature/Fix: Phase 13.1 (PRD 13.2) — Fix Choppy Noise Gate With a Real Attack/
   GainNode onto this same graph right after gateGainNode. Then PRD 13.1
   (noise cancelling) adds the AudioWorkletNode as the first stage. Full
   Phase 13 plan: app-planning/Reson8_Phase13_PRD.md.
+
+--- Entry: 29/08/2026 ---
+
+Feature/Fix: Phase 13.2 (PRD 13.3) — Microphone Volume Slider (0-200%)
+
+  Problem: There was no way to adjust the mic's own input volume — only
+  remote participants' local playback volume was adjustable. Some
+  microphones run quiet and need a boost; some users want to turn their own
+  input down without touching OS-level mic settings.
+
+  Solution: Extended the send-side mic processing graph introduced in PRD
+  13.2 (this same phase, entry above) with a second cascaded GainNode:
+    micSourceNode → gateGainNode → volumeGainNode → micDestinationNode → produce()
+  `VoiceService.setMicVolume(percent)` clamps to 0-200%, stores it as a
+  0.0-2.0 linear gain multiplier (`micVolume` field, defaulting to 1.0), and
+  applies it live to `volumeGainNode.gain.value` if the graph already
+  exists — otherwise it's picked up automatically the next time
+  `buildMicProcessingGraph()` runs, so setting the volume before joining a
+  channel still takes effect on join.
+
+  Since `joinVoiceChannel()` constructs a brand new `VoiceService` instance
+  per session (confirmed via an existing code comment on the global-voice-
+  volume reapplication), `api.setMicVolume(micVolume)` had to be re-sent
+  after every fresh join — mirrored the exact existing pattern used for
+  `setGlobalVoiceVolume`, adding the call at both of its call sites: the
+  manual join success handler and the `voice-reconnected` auto-rejoin
+  handler (PRD 11.1's reconnect path also constructs a fresh instance).
+
+  UI: added a "Microphone Volume" slider to the Voice & Shortcuts settings
+  tab, directly below the Noise Gate section (per this phase's confirmed
+  decision to group all mic-related controls on that tab rather than the
+  Audio tab), styled with the existing `.sensitivity-slider-row`/
+  `.sensitivity-value`/`.sensitivity-labels` classes already used by both
+  the noise gate threshold slider and the Audio tab's volume sliders.
+  Persisted to `localStorage` under `reson8-mic-volume`, following the
+  existing plain-percent-string convention (`reson8-voice-volume`, etc.).
+
+  Key Files Modified:
+    apps/client/src/services/voice.service.ts — `volumeGainNode`,
+      `micVolume` field, `setMicVolume()`, wired into
+      `buildMicProcessingGraph()`/`teardownMicProcessingGraph()`
+    apps/client/src/preload.ts — `setMicVolume()` bridging to
+      `voiceService?.setMicVolume()`
+    apps/client/src/renderer/renderer.ts — `micVolume` persisted var,
+      `Reson8Api.setMicVolume` interface declaration, slider DOM refs/init/
+      listener, reapplication in the manual-join and voice-reconnected
+      handlers
+    apps/client/src/renderer/index.html — new mic-volume-wrap slider
+      markup in the Voice & Shortcuts tab
+
+  Verification:
+    - npx tsc --noEmit (client) — clean
+    - Manual verification (0% silent to a second client, 100% matches
+      baseline, 200% audibly louder — checked from a second client, not
+      just locally) is pending the user's own hands-on test, per this
+      phase's established workflow, and per this exact feature's own
+      "avoid the placebo-slider mistake" caution in the source PRD.
+
+  Next Step: PRD 13.1 (noise cancelling) — adds the AudioWorkletNode as the
+  first stage of this same graph (before gateGainNode), plus re-routes the
+  meter's analyser tap. Full Phase 13 plan:
+  app-planning/Reson8_Phase13_PRD.md.
