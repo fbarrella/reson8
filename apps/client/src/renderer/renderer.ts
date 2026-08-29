@@ -47,6 +47,7 @@ interface CustomEmoji {
     uploadedByNickname?: string;
     status: "PENDING" | "APPROVED";
     createdAt: string;
+    isAnimated?: boolean;
 }
 
 interface LinkPreviewData {
@@ -756,7 +757,8 @@ interface Reson8Api {
     getClockOffset(): number;
     toggleReaction(messageId: string, emoji: string, isDm: boolean): Promise<{ success: boolean; error?: string }>;
     uploadEmojiFile(fileBuffer: ArrayBuffer, fileName: string, mimeType: string): Promise<{ url: string; publicId?: string }>;
-    createCustomEmoji(name: string, imageUrl: string, imagePublicId?: string): Promise<{ success: boolean; emojiId?: string; error?: string }>;
+    uploadAnimatedEmojiFile(fileBuffer: ArrayBuffer, fileName: string, mimeType: string): Promise<{ url: string; publicId?: string }>;
+    createCustomEmoji(name: string, imageUrl: string, imagePublicId?: string, isAnimated?: boolean): Promise<{ success: boolean; emojiId?: string; error?: string }>;
     getApprovedEmojis(): Promise<{ success: boolean; emojis?: CustomEmoji[]; error?: string }>;
     getPendingEmojis(): Promise<{ success: boolean; emojis?: CustomEmoji[]; error?: string }>;
     reviewCustomEmoji(emojiId: string, decision: "APPROVED" | "REJECTED"): Promise<{ success: boolean; error?: string }>;
@@ -1231,6 +1233,22 @@ const btnEmojiUploadConfirm = document.getElementById("btn-emoji-upload-confirm"
 
 const EMOJI_CROP_VIEWPORT_SIZE = 220;
 const EMOJI_MAX_UPLOAD_SIZE = 500 * 1024; // 500KB, pre-crop
+
+// ── Animated Custom Emoji Upload Modal (PRD 13.13) ──────────────────────────
+// No crop tool — a GIF's frames can't be cropped through a static canvas
+// without losing the animation, so this uploads the file as-is.
+const emojiUploadAnimatedModal = document.getElementById("emoji-upload-animated-modal") as HTMLDivElement;
+const emojiAnimatedFileInput = document.getElementById("emoji-animated-file-input") as HTMLInputElement;
+const btnEmojiAnimatedChooseFile = document.getElementById("btn-emoji-animated-choose-file") as HTMLButtonElement;
+const emojiAnimatedPreviewWrap = document.getElementById("emoji-animated-preview-wrap") as HTMLDivElement;
+const emojiAnimatedPreviewImg = document.getElementById("emoji-animated-preview-img") as HTMLImageElement;
+const emojiAnimatedNameInput = document.getElementById("emoji-animated-name-input") as HTMLInputElement;
+const btnEmojiAnimatedUploadCancel = document.getElementById("btn-emoji-animated-upload-cancel") as HTMLButtonElement;
+const btnEmojiAnimatedUploadConfirm = document.getElementById("btn-emoji-animated-upload-confirm") as HTMLButtonElement;
+
+const ANIMATED_EMOJI_MAX_UPLOAD_SIZE = 2 * 1024 * 1024; // 2MB, uploaded as-is
+let emojiAnimatedFile: File | null = null;
+let emojiAnimatedPreviewObjectUrl: string | null = null;
 
 // State for the crop tool
 let emojiCropNaturalWidth = 0;
@@ -5269,6 +5287,19 @@ function renderCustomEmojiSection(lowerFilter: string): void {
     });
     grid.appendChild(uploadBtn);
 
+    // Animated emoji (PRD 13.13) — separate entry point, since the upload
+    // flow skips the crop tool entirely (a GIF's frames can't be cropped
+    // through a static canvas without losing the animation).
+    const uploadAnimatedBtn = document.createElement("button");
+    uploadAnimatedBtn.className = "emoji-upload-btn emoji-upload-btn-animated";
+    uploadAnimatedBtn.title = "Upload an animated (GIF) emoji";
+    uploadAnimatedBtn.textContent = "GIF+";
+    uploadAnimatedBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        openAnimatedEmojiUploadModal();
+    });
+    grid.appendChild(uploadAnimatedBtn);
+
     const filtered = customEmojis.filter(
         (e) => !lowerFilter || e.name.toLowerCase().includes(lowerFilter),
     );
@@ -5469,6 +5500,82 @@ btnEmojiUploadConfirm.addEventListener("click", async () => {
         log(`Emoji upload failed: ${err.message}`, "error");
     } finally {
         btnEmojiUploadConfirm.disabled = false;
+    }
+});
+
+// ── Animated Custom Emoji Upload (PRD 13.13) ────────────────────────────────
+
+function openAnimatedEmojiUploadModal(): void {
+    emojiAnimatedFile = null;
+    emojiAnimatedNameInput.value = "";
+    emojiAnimatedPreviewWrap.style.display = "none";
+    btnEmojiAnimatedUploadConfirm.disabled = true;
+    emojiUploadAnimatedModal.classList.add("visible");
+}
+
+function closeAnimatedEmojiUploadModal(): void {
+    emojiUploadAnimatedModal.classList.remove("visible");
+    if (emojiAnimatedPreviewObjectUrl) {
+        URL.revokeObjectURL(emojiAnimatedPreviewObjectUrl);
+        emojiAnimatedPreviewObjectUrl = null;
+    }
+    emojiAnimatedFile = null;
+}
+
+btnEmojiAnimatedChooseFile.addEventListener("click", () => emojiAnimatedFileInput.click());
+btnEmojiAnimatedUploadCancel.addEventListener("click", () => closeAnimatedEmojiUploadModal());
+
+emojiUploadAnimatedModal.addEventListener("click", (e) => {
+    if (e.target === emojiUploadAnimatedModal) closeAnimatedEmojiUploadModal();
+});
+
+emojiAnimatedFileInput.addEventListener("change", () => {
+    const file = emojiAnimatedFileInput.files?.[0];
+    emojiAnimatedFileInput.value = ""; // allow re-selecting the same file later
+    if (!file) return;
+
+    if (file.size > ANIMATED_EMOJI_MAX_UPLOAD_SIZE) {
+        log(`GIF too large (max ${Math.round(ANIMATED_EMOJI_MAX_UPLOAD_SIZE / (1024 * 1024))}MB)`, "error");
+        return;
+    }
+    if (file.type !== "image/gif") {
+        log("Animated emoji must be a GIF", "error");
+        return;
+    }
+
+    emojiAnimatedFile = file;
+    if (emojiAnimatedPreviewObjectUrl) URL.revokeObjectURL(emojiAnimatedPreviewObjectUrl);
+    emojiAnimatedPreviewObjectUrl = URL.createObjectURL(file);
+    emojiAnimatedPreviewImg.src = emojiAnimatedPreviewObjectUrl;
+    emojiAnimatedPreviewWrap.style.display = "block";
+    btnEmojiAnimatedUploadConfirm.disabled = false;
+});
+
+btnEmojiAnimatedUploadConfirm.addEventListener("click", async () => {
+    const name = emojiAnimatedNameInput.value.trim();
+    if (!/^[a-zA-Z0-9_]{2,32}$/.test(name)) {
+        log("Emoji name must be 2-32 letters, numbers, or underscores", "error");
+        emojiAnimatedNameInput.focus();
+        return;
+    }
+    if (!emojiAnimatedFile) return;
+
+    btnEmojiAnimatedUploadConfirm.disabled = true;
+    try {
+        const buffer = await emojiAnimatedFile.arrayBuffer();
+        const uploadResult = await api.uploadAnimatedEmojiFile(buffer, `${name}.gif`, "image/gif");
+        const createResult = await api.createCustomEmoji(name, uploadResult.url, uploadResult.publicId, true);
+
+        if (createResult.success) {
+            log(`Animated emoji ":${name}:" submitted for admin approval`, "success");
+            closeAnimatedEmojiUploadModal();
+        } else {
+            log(`Failed to submit emoji: ${createResult.error}`, "error");
+        }
+    } catch (err: any) {
+        log(`Emoji upload failed: ${err.message}`, "error");
+    } finally {
+        btnEmojiAnimatedUploadConfirm.disabled = false;
     }
 });
 

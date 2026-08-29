@@ -302,9 +302,10 @@ export interface ClientToServerEvents {
 
     // ── Custom Emoji ─────────────────────────────────────────────────────
 
-    /** Submits an uploaded (already-cropped) emoji image for admin review. */
+    /** Submits an uploaded emoji image for admin review — already-cropped
+     *  for a static emoji, or a raw GIF buffer when `isAnimated` (PRD 13.13). */
     CREATE_CUSTOM_EMOJI: (
-        payload: { name: string; imageUrl: string; imagePublicId?: string },
+        payload: { name: string; imageUrl: string; imagePublicId?: string; isAnimated?: boolean },
         ack: (response: { success: boolean; emojiId?: string; error?: string }) => void,
     ) => void;
 

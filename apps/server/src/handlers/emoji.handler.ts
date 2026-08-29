@@ -46,6 +46,7 @@ function toDto(emoji: {
     imageUrl: string;
     uploadedBy: string;
     status: string;
+    isAnimated: boolean;
     createdAt: Date;
 }): ICustomEmoji {
     return {
@@ -55,6 +56,7 @@ function toDto(emoji: {
         imageUrl: emoji.imageUrl,
         uploadedBy: emoji.uploadedBy,
         status: emoji.status as "PENDING" | "APPROVED",
+        isAnimated: emoji.isAnimated,
         createdAt: emoji.createdAt.toISOString(),
     };
 }
@@ -67,7 +69,7 @@ export function registerEmojiHandlers(
         // ── CREATE_CUSTOM_EMOJI ──────────────────────────────────────────────
         socket.on("CREATE_CUSTOM_EMOJI", async (payload, ack) => {
             try {
-                const { name, imageUrl, imagePublicId } = payload;
+                const { name, imageUrl, imagePublicId, isAnimated } = payload;
                 const serverId = socket.data.serverId;
 
                 if (!NAME_PATTERN.test(name)) {
@@ -94,6 +96,7 @@ export function registerEmojiHandlers(
                         imageUrl,
                         imagePublicId: imagePublicId ?? null,
                         uploadedBy: socket.data.userId,
+                        isAnimated: isAnimated ?? false,
                     },
                 });
 

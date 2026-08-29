@@ -2469,3 +2469,79 @@ Feature/Fix: Phase 13.4 (PRD 13.4-13.12) — Batch of Nine Independent UI/UX Fix
 
   Next Step: PRD 13.13 (animated custom emoji GIF upload) — the next item
   per app-planning/Reson8_Phase13_PRD.md's recommended order.
+
+--- Entry: 29/08/2026 ---
+
+Feature/Fix: Phase 13.5 (PRD 13.13) — Animated Custom Emoji (GIF Upload)
+
+  Problem: Custom emoji upload only supported static images — the crop tool
+  rasterizes every selection to a single 128x128 PNG frame via canvas,
+  silently flattening any GIF picked through it. No way to upload a real
+  animated emoji.
+
+  Solution: Added a second, parallel upload path specifically for animated
+  GIFs that skips the crop tool entirely (a GIF's frames can't survive a
+  canvas re-draw) and uploads the file as-is. Confirmed with the user a
+  2MB size cap for this path (vs. the existing 512KB static-emoji cap,
+  which stays untouched) given GIFs are inherently larger than a cropped
+  128x128 PNG.
+
+  Data Model: Added `CustomEmoji.isAnimated` (Boolean, default false) via
+  `npx prisma migrate dev --name add_custom_emoji_is_animated`. Storage
+  and the admin approval flow (PENDING/APPROVED) needed no changes at
+  all — both were already format-agnostic, only ever handling an opaque
+  `imageUrl`/`imagePublicId` pair regardless of what's actually stored.
+
+  Server: New `POST /api/upload/emoji-animated` route (upload.route.ts),
+  reusing the existing dual local-disk/Cloudinary `handleUpload()` but
+  with its own 2MB cap and a GIF-only MIME allowlist — `handleUpload()`
+  gained an `allowedMimeTypes` parameter (defaulting to the existing set)
+  rather than hardcoding it, so the static route's behavior is unchanged.
+  `CREATE_CUSTOM_EMOJI`'s payload gained `isAnimated?: boolean`, persisted
+  on create and included in `ICustomEmoji` DTOs (`toDto()`).
+
+  Client: A second "GIF+" button next to the existing "+" upload button
+  in the emoji picker's Custom Emojis section opens a new, separate modal
+  (no crop UI at all) — pick a GIF (validated client-side against the 2MB
+  cap and `image/gif` MIME before any upload starts), see a live preview
+  (a plain `<img>` pointed at an object URL — GIFs animate natively, no
+  special preview logic needed), name it, upload. Deliberately built as
+  its own modal/flow rather than threading a "skip crop" branch through
+  the existing crop-tool code, to avoid touching that already-solid
+  feature at all.
+
+  Key Files Modified:
+    packages/shared-types/src/models.ts — `ICustomEmoji.isAnimated`
+    packages/shared-types/src/socket-events.ts — `CREATE_CUSTOM_EMOJI`
+      payload gains `isAnimated?: boolean`
+    apps/server/prisma/schema.prisma — `CustomEmoji.isAnimated`
+    apps/server/prisma/migrations/20260829231355_add_custom_emoji_is_animated/
+      (NEW)
+    apps/server/src/handlers/emoji.handler.ts — `toDto()` and
+      `CREATE_CUSTOM_EMOJI` persist/return `isAnimated`
+    apps/server/src/routes/upload.route.ts — new
+      `/api/upload/emoji-animated` route, `MAX_ANIMATED_EMOJI_FILE_SIZE`,
+      `ANIMATED_EMOJI_MIME_TYPES`, `handleUpload()` gains an
+      `allowedMimeTypes` parameter
+    apps/client/src/preload.ts — `uploadAnimatedEmojiFile()`,
+      `createCustomEmoji()` gains an `isAnimated` parameter
+    apps/client/src/renderer/renderer.ts — `CustomEmoji.isAnimated`,
+      "GIF+" button in `renderCustomEmojiSection()`, the entire animated
+      upload modal's open/close/file-select/confirm logic
+    apps/client/src/renderer/index.html — new
+      `#emoji-upload-animated-modal` markup, `.emoji-upload-btn-animated`
+      styling
+
+  Verification:
+    - npx tsc --build (shared-types) — clean
+    - npx tsc --noEmit (server) — clean
+    - npm run test (server) — 19/19 passing, unchanged
+    - npx tsc --noEmit and --build (client) — clean
+    - Manual verification (upload a GIF under 2MB, admin approval queue,
+      the approved emoji renders animated in chat and as a reaction, a
+      GIF over 2MB is rejected client-side, and the existing static-emoji
+      crop-tool flow is completely unaffected) is pending the user's own
+      hands-on test, per this phase's established workflow.
+
+  Next Step: PRD 13.14 (bigger rendering for solo-emoji messages) — the
+  next item per app-planning/Reson8_Phase13_PRD.md's recommended order.

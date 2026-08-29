@@ -899,6 +899,14 @@ const api = {
         return uploadTo("/api/upload/emoji", fileBuffer, fileName, mimeType);
     },
 
+    async uploadAnimatedEmojiFile(
+        fileBuffer: ArrayBuffer,
+        fileName: string,
+        mimeType: string,
+    ): Promise<{ url: string; publicId?: string }> {
+        return uploadTo("/api/upload/emoji-animated", fileBuffer, fileName, mimeType);
+    },
+
     // ── Image Download ───────────────────────────────────────────────────
 
     downloadImage(url: string): void {
@@ -1193,13 +1201,14 @@ const api = {
         name: string,
         imageUrl: string,
         imagePublicId?: string,
+        isAnimated?: boolean,
     ): Promise<{ success: boolean; emojiId?: string; error?: string }> {
         return new Promise((resolve) => {
             if (!socket?.connected) {
                 resolve({ success: false, error: "Not connected" });
                 return;
             }
-            socket.emit("CREATE_CUSTOM_EMOJI", { name, imageUrl, imagePublicId }, resolve);
+            socket.emit("CREATE_CUSTOM_EMOJI", { name, imageUrl, imagePublicId, isAnimated }, resolve);
         });
     },
 

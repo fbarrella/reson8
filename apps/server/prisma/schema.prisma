@@ -264,6 +264,7 @@ model CustomEmoji {
   imagePublicId String? // Cloudinary public_id — null for local-disk storage
   uploadedBy    String // instance ID
   status        EmojiStatus @default(PENDING)
+  isAnimated    Boolean     @default(false) // animated GIF, uploaded via the crop-free path (PRD 13.13)
   createdAt     DateTime    @default(now())
   reviewedAt    DateTime?
   reviewedBy    String? // instance ID of the admin who approved it

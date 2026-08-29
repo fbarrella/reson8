@@ -1414,6 +1414,7 @@
     #nsfw-confirm-modal,
     #delete-message-modal,
     #emoji-upload-modal,
+    #emoji-upload-animated-modal,
     #admin-modal,
     #update-modal,
     #whats-new-modal,
@@ -1441,6 +1442,7 @@
     #nsfw-confirm-modal.visible,
     #delete-message-modal.visible,
     #emoji-upload-modal.visible,
+    #emoji-upload-animated-modal.visible,
     #admin-modal.visible,
     #update-modal.visible,
     #whats-new-modal.visible,
@@ -2633,6 +2635,12 @@
       background: rgba(79, 195, 247, 0.08);
     }
 
+    .emoji-upload-btn-animated {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.3px;
+    }
+
     .custom-emoji-inline {
       display: inline-block;
       width: 1.3em;
@@ -3140,6 +3148,28 @@
           <button class="btn btn-cancel" id="btn-emoji-upload-cancel">Cancel</button>
           <button class="btn btn-create" id="btn-emoji-upload-confirm">Upload</button>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Animated Custom Emoji Upload Modal (PRD 13.13) ──────────────── -->
+  <div id="emoji-upload-animated-modal">
+    <div class="modal-content">
+      <h3>Upload Animated Emoji</h3>
+
+      <input type="file" id="emoji-animated-file-input" accept="image/gif" style="display:none;">
+      <button class="btn btn-create" id="btn-emoji-animated-choose-file">Choose GIF…</button>
+      <p class="emoji-upload-hint">Max 2MB. Animated GIF only — uploaded as-is, no crop tool. An admin must approve it before it becomes usable.</p>
+
+      <div id="emoji-animated-preview-wrap" style="display:none; text-align:center; margin-bottom:10px;">
+        <img id="emoji-animated-preview-img" alt="" style="max-width:128px; max-height:128px; border-radius:6px;">
+      </div>
+
+      <label for="emoji-animated-name-input">Name</label>
+      <input type="text" id="emoji-animated-name-input" placeholder="e.g. partyparrot" maxlength="32">
+      <div class="modal-actions">
+        <button class="btn btn-cancel" id="btn-emoji-animated-upload-cancel">Cancel</button>
+        <button class="btn btn-create" id="btn-emoji-animated-upload-confirm" disabled>Upload</button>
       </div>
     </div>
   </div>
