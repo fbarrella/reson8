@@ -2368,3 +2368,104 @@ Feature/Fix: Phase 13.3 (PRD 13.1) — AI Microphone Noise Cancelling (DeepFilte
   Remaining Phase 13 items are independent UI/feature work — see
   app-planning/Reson8_Phase13_PRD.md for the full remaining list and
   recommended order.
+
+--- Entry: 29/08/2026 ---
+
+Feature/Fix: Phase 13.4 (PRD 13.4-13.12) — Batch of Nine Independent UI/UX Fixes
+
+  Problem: Nine small, independent UI/UX issues from the Phase 13 backlog —
+  none touching shared architecture, so implemented together as one batch
+  per the PRD's own recommended order (simple/self-contained first).
+
+  PRD 13.9 — Voice channel participant names showed a text cursor on
+  hover, hiding that right-click actions exist. Added `cursor: pointer` to
+  `.tree-occupant` (index.html).
+
+  PRD 13.11 — The voice-channel participant-count badge (`.ch-count`) was
+  low-contrast (`--text-muted` #6a6a7a on a near-black background).
+  Bumped to `--text-secondary` (#a0a0b0) and a slightly more opaque badge
+  background.
+
+  PRD 13.7 — The custom-emoji picker tab icon was too small to read
+  (12x12 inside a tab sized for 16px glyphs). Bumped to 17x17
+  (renderer.ts's inline SVG for the emoji-picker's custom tab button).
+
+  PRD 13.12 — Replaced the "leave voice channel" button's plain X icon
+  with a Feather-style "phone-off" (hang-up) icon, same dimensions/stroke
+  convention, so it reads as "drop the call" rather than a generic close.
+
+  PRD 13.4 — The full-screen image viewer only had a download button, no
+  dedicated close button (background-click and Escape were the only ways
+  to close). Added a red `#btn-lightbox-close` button (top-left, mirroring
+  the download button's top-right placement) wired to a new shared
+  `closeLightbox()` helper, which the background-click and Escape
+  handlers now also call instead of duplicating the close logic.
+
+  PRD 13.8 — The "See more" truncation button landed *after* the reaction
+  bar in DOM order (attachMessageTruncation() ran after the reaction bar
+  was already appended and used appendChild), making it look like it
+  belonged to the message below. Changed to `insertBefore(btnSeeMore,
+  reactBar)` — found the reaction bar via `el.querySelector(".msg-reactions")`
+  so all three of `attachMessageTruncation()`'s call sites (initial render,
+  and both edit-re-render paths) get the fix for free. Also restyled from a
+  bare underlined text link to a pill-shaped, all-caps button.
+
+  PRD 13.5 — NSFW-channel image attachments rendered identically to any
+  other channel. Wrapped the thumbnail in a `.msg-image-nsfw-wrap` (blur
+  filter + a slight scale to hide blurred edge fringing) with an overlay
+  (eye icon + "NSFW. Click to open image and reveal content.") when
+  `findChannelNodeById(currentTree, tab.channelId)?.isNsfw` is true.
+  Clicking the overlay opens the existing full-screen lightbox at full
+  clarity (the lightbox `<img>` is a separate element with no blur filter,
+  so this needed no lightbox changes); closing it leaves the feed
+  thumbnail blurred, since there's no "seen" state tracked anywhere for
+  attachments — confirmed intentional per the request.
+
+  PRD 13.6 — Text chat had no way to tell which day a message was sent on
+  beyond the bare hour. Added `--- Month Day(th) ---` date-section
+  dividers (`, Year` appended once a message predates the current year),
+  reusing the existing `.unread-separator` divider's visual pattern under
+  a new `.date-separator` class. Tracked via a new
+  `ChatTab.lastRenderedDateKey` field (`YYYY-M-D`), checked by a new
+  `maybeInsertDateDivider()` called from both `renderChatMessage()` and
+  `renderDmMessage()` right before each message is appended — covers
+  initial history load, realtime receipt, and the pin-jump older-history
+  reload (which fully clears and re-renders `messagesEl`, so
+  `lastRenderedDateKey` is explicitly reset to undefined there too).
+
+  PRD 13.10 — The active-speaker indicator's server-side
+  `AudioLevelObserver` interval (already lowered once from mediasoup's
+  1000ms default to 300ms in an earlier phase) still caused a perceptible
+  lag before a speaker's halo lit up. Traced conclusively to this interval
+  (mediasoup only emits "volumes" at most once per interval, averaged over
+  that window) — the client already applies the "speaking" class
+  immediately on receipt, with zero added client-side delay; its 300ms
+  hold timer only affects turning the indicator back *off* (an intentional
+  anti-flicker debounce, unrelated to light-up lag). Lowered the interval
+  to 100ms.
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html — `.tree-occupant` cursor,
+      `.ch-count` color/background, `#btn-lightbox-close` markup + CSS,
+      `.btn-see-more` pill styling, `.msg-image-nsfw-wrap`/
+      `.msg-image-nsfw-overlay` CSS, `.date-separator` CSS,
+      `#btn-leave-voice` icon markup
+    apps/client/src/renderer/renderer.ts — emoji-tab icon size,
+      `closeLightbox()` + close button wiring, `attachMessageTruncation()`
+      insertion point, NSFW blur wrapping in `renderChatMessage()`,
+      `ordinalSuffix()`/`formatDateSectionLabel()`/`maybeInsertDateDivider()`,
+      `ChatTab.lastRenderedDateKey` field, reset in `jumpToPinnedMessage()`
+    apps/server/src/services/mediasoup.service.ts — AudioLevelObserver
+      interval 300ms -> 100ms
+
+  Verification:
+    - npx tsc --noEmit and --build (client) — clean
+    - npx tsc --noEmit (server) — clean
+    - npm run test (server) — 19/19 passing, unchanged
+    - Manual verification of all nine (visual/UX changes, plus the
+      active-speaker responsiveness feel and any new flicker on speech
+      pauses) is pending the user's own hands-on test, per this phase's
+      established workflow.
+
+  Next Step: PRD 13.13 (animated custom emoji GIF upload) — the next item
+  per app-planning/Reson8_Phase13_PRD.md's recommended order.

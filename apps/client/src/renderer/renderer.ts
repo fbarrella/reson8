@@ -977,6 +977,7 @@ const attachmentPreview = document.getElementById("attachment-preview") as HTMLD
 const imageLightboxModal = document.getElementById("image-lightbox-modal") as HTMLDivElement;
 const lightboxImage = document.getElementById("lightbox-image") as HTMLImageElement;
 const btnLightboxDownload = document.getElementById("btn-lightbox-download") as HTMLButtonElement;
+const btnLightboxClose = document.getElementById("btn-lightbox-close") as HTMLButtonElement;
 
 const voicePanel = document.getElementById("voice-panel") as HTMLDivElement;
 const voiceChannelName = document.getElementById("voice-channel-name") as HTMLSpanElement;
@@ -1253,6 +1254,11 @@ interface ChatTab {
     /** Undefined for DM tabs — pinning is text-channel only (PRD 11.5). */
     pinBarEl?: HTMLDivElement;
     pinnedMessageId: string | null;
+    /** Local-date key (`YYYY-MM-DD`) of the last message rendered into this
+     *  tab — drives the date-section dividers (PRD 13.6). Undefined until
+     *  the first message renders; reset to undefined wherever `messagesEl`
+     *  is cleared and re-rendered from scratch. */
+    lastRenderedDateKey?: string;
 }
 const chatTabs = new Map<string, ChatTab>();
 let activeTabId = "server-log"; // default active tab
@@ -3184,6 +3190,48 @@ async function loadChatHistory(tab: ChatTab): Promise<void> {
     }
 }
 
+/** "13th", "1st", "22nd", etc. */
+function ordinalSuffix(day: number): string {
+    if (day >= 11 && day <= 13) return `${day}th`;
+    switch (day % 10) {
+        case 1: return `${day}st`;
+        case 2: return `${day}nd`;
+        case 3: return `${day}rd`;
+        default: return `${day}th`;
+    }
+}
+
+const MONTH_NAMES = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+];
+
+/** "April 13th" for the current year, "April 13th, 2025" otherwise (PRD 13.6). */
+function formatDateSectionLabel(date: Date): string {
+    const label = `${MONTH_NAMES[date.getMonth()]} ${ordinalSuffix(date.getDate())}`;
+    return date.getFullYear() === new Date().getFullYear()
+        ? label
+        : `${label}, ${date.getFullYear()}`;
+}
+
+/**
+ * Inserts a "--- Month Day(th) ---" divider into `tab.messagesEl` whenever
+ * `msgDate` falls on a different local day than the last message rendered
+ * into this tab — called before each message is appended so the divider
+ * lands directly above it. A no-op for every message after the first on
+ * the same day.
+ */
+function maybeInsertDateDivider(tab: ChatTab, msgDate: Date): void {
+    const dayKey = `${msgDate.getFullYear()}-${msgDate.getMonth()}-${msgDate.getDate()}`;
+    if (tab.lastRenderedDateKey === dayKey) return;
+    tab.lastRenderedDateKey = dayKey;
+
+    const divider = document.createElement("div");
+    divider.className = "date-separator";
+    divider.innerHTML = `<span>${escapeHtml(formatDateSectionLabel(msgDate))}</span>`;
+    tab.messagesEl.appendChild(divider);
+}
+
 function renderChatMessage(tab: ChatTab, msg: ChatMessage): void {
     const el = document.createElement("div");
     el.className = "chat-msg";
@@ -3208,7 +3256,24 @@ function renderChatMessage(tab: ChatTab, msg: ChatMessage): void {
         img.loading = "lazy";
         img.alt = "Shared image";
         img.addEventListener("click", () => openLightbox(msg.attachmentUrl!));
-        el.appendChild(img);
+
+        // NSFW channels blur every image thumbnail permanently — only the
+        // full-screen lightbox (opened by clicking through) ever shows it
+        // clearly (PRD 13.5).
+        const channelNode = findChannelNodeById(currentTree, tab.channelId);
+        if (channelNode?.isNsfw) {
+            const wrap = document.createElement("div");
+            wrap.className = "msg-image-nsfw-wrap";
+            wrap.appendChild(img);
+            const overlay = document.createElement("div");
+            overlay.className = "msg-image-nsfw-overlay";
+            overlay.innerHTML = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><span>NSFW. Click to open image and reveal content.</span>`;
+            overlay.addEventListener("click", () => openLightbox(msg.attachmentUrl!));
+            wrap.appendChild(overlay);
+            el.appendChild(wrap);
+        } else {
+            el.appendChild(img);
+        }
     }
 
     // Reaction bar
@@ -3217,6 +3282,7 @@ function renderChatMessage(tab: ChatTab, msg: ChatMessage): void {
     attachEditButton(reactBar, msg, el);
     attachPinButton(reactBar, msg, tab);
 
+    maybeInsertDateDivider(tab, new Date(msg.createdAt));
     tab.messagesEl.appendChild(el);
     tab.messagesEl.scrollTop = tab.messagesEl.scrollHeight;
 
@@ -3265,7 +3331,15 @@ function attachMessageTruncation(el: HTMLDivElement, textEl: HTMLElement): void 
         textEl.classList.toggle("msg-text-clamped", !expanded);
         btnSeeMore.textContent = expanded ? "See less" : "See more";
     });
-    el.appendChild(btnSeeMore);
+    // Insert directly under this message's own content, above its reaction
+    // bar — appendChild would land it after the reaction bar in DOM order,
+    // reading visually as if it belonged to the message below (PRD 13.8).
+    const reactBar = el.querySelector(".msg-reactions");
+    if (reactBar) {
+        el.insertBefore(btnSeeMore, reactBar);
+    } else {
+        el.appendChild(btnSeeMore);
+    }
 }
 
 function collapseAllExpandedMessages(): void {
@@ -3412,6 +3486,7 @@ function renderDmMessage(tab: ChatTab, msg: DirectMessage): void {
     const reactBar = buildReactionBar(msg.id, true, msg.senderId, msg.reactions);
     el.appendChild(reactBar);
 
+    maybeInsertDateDivider(tab, new Date(msg.createdAt));
     tab.messagesEl.appendChild(el);
     tab.messagesEl.scrollTop = tab.messagesEl.scrollHeight;
 
@@ -4340,11 +4415,19 @@ function openLightbox(imageUrl: string): void {
     imageLightboxModal.classList.add("visible");
 }
 
+function closeLightbox(): void {
+    imageLightboxModal.classList.remove("visible");
+    lightboxImage.src = "";
+}
+
 imageLightboxModal.addEventListener("click", (e) => {
     if (e.target === imageLightboxModal) {
-        imageLightboxModal.classList.remove("visible");
-        lightboxImage.src = "";
+        closeLightbox();
     }
+});
+
+btnLightboxClose.addEventListener("click", () => {
+    closeLightbox();
 });
 
 btnLightboxDownload.addEventListener("click", () => {
@@ -4359,8 +4442,7 @@ document.addEventListener("keydown", (e) => {
         closeEmojiPicker();
     }
     if (e.key === "Escape" && imageLightboxModal.classList.contains("visible")) {
-        imageLightboxModal.classList.remove("visible");
-        lightboxImage.src = "";
+        closeLightbox();
     }
     if (e.key === "Escape" && videoLightboxModal.classList.contains("visible")) {
         closeVideoLightbox();
@@ -4605,6 +4687,7 @@ async function jumpToPinnedMessage(channelId: string, messageId: string): Promis
             return;
         }
         tab.messagesEl.innerHTML = "";
+        tab.lastRenderedDateKey = undefined;
         for (const msg of result.messages) {
             renderChatMessage(tab, msg);
         }
@@ -5090,7 +5173,7 @@ function buildEmojiCategoryTabs(): void {
     customBtn.className = "emoji-cat-tab";
     customBtn.title = "Custom Emojis";
     customBtn.innerHTML =
-        '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M17.5,12 C20.5375661,12 23,14.4624339 23,17.5 C23,20.5375661 20.5375661,23 17.5,23 C14.4624339,23 12,20.5375661 12,17.5 C12,14.4624339 14.4624339,12 17.5,12 Z M17.5,13.9992349 L17.4101244,14.0072906 C17.2060313,14.0443345 17.0450996,14.2052662 17.0080557,14.4093593 L17,14.4992349 L16.9996498,16.9992349 L14.4976498,17 L14.4077742,17.0080557 C14.2036811,17.0450996 14.0427494,17.2060313 14.0057055,17.4101244 L13.9976498,17.5 L14.0057055,17.5898756 C14.0427494,17.7939687 14.2036811,17.9549004 14.4077742,17.9919443 L14.4976498,18 L17.0006498,17.9992349 L17.0011076,20.5034847 L17.0091633,20.5933603 C17.0462073,20.7974534 17.207139,20.9583851 17.411232,20.995429 L17.5011076,21.0034847 L17.5909833,20.995429 C17.7950763,20.9583851 17.956008,20.7974534 17.993052,20.5933603 L18.0011076,20.5034847 L18.0006498,17.9992349 L20.5045655,18 L20.5944411,17.9919443 C20.7985342,17.9549004 20.9594659,17.7939687 20.9965098,17.5898756 L21.0045655,17.5 L20.9965098,17.4101244 C20.9594659,17.2060313 20.7985342,17.0450996 20.5944411,17.0080557 L20.5045655,17 L17.9996498,16.9992349 L18,14.4992349 L17.9919443,14.4093593 C17.9549004,14.2052662 17.7939687,14.0443345 17.5898756,14.0072906 L17.5,13.9992349 Z M17.75,3 C19.5449254,3 21,4.45507456 21,6.25 L21.0012092,12.0225923 C19.9906579,11.3752958 18.7891565,11 17.5,11 C14.8016531,11 12.4873327,12.6442127 11.5042701,14.9854066 C10.6572014,14.9085256 9.88524157,14.6257765 9.1765361,14.1355923 C8.83586995,13.8999666 8.36869314,13.9851187 8.13306748,14.3257849 C7.89744183,14.666451 7.98259397,15.1336279 8.32326012,15.3692535 C9.16645713,15.9524604 10.0900975,16.3129767 11.0850385,16.4484275 C11.0289661,16.7904675 11,17.1418511 11,17.5 C11,18.7891565 11.3752958,19.9906579 12.0225923,21.0012092 L6.25,21 C4.45507456,21 3,19.5449254 3,17.75 L3,6.25 C3,4.45507456 4.45507456,3 6.25,3 L17.75,3 Z M9.00044779,7.75115873 C8.3104845,7.75115873 7.75115873,8.3104845 7.75115873,9.00044779 C7.75115873,9.69041108 8.3104845,10.2497368 9.00044779,10.2497368 C9.69041108,10.2497368 10.2497368,9.69041108 10.2497368,9.00044779 C10.2497368,8.3104845 9.69041108,7.75115873 9.00044779,7.75115873 Z M15.0004478,7.75115873 C14.3104845,7.75115873 13.7511587,8.3104845 13.7511587,9.00044779 C13.7511587,9.69041108 14.3104845,10.2497368 15.0004478,10.2497368 C15.6904111,10.2497368 16.2497368,9.69041108 16.2497368,9.00044779 C16.2497368,8.3104845 15.6904111,7.75115873 15.0004478,7.75115873 Z"/></svg>';
+        '<svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor"><path d="M17.5,12 C20.5375661,12 23,14.4624339 23,17.5 C23,20.5375661 20.5375661,23 17.5,23 C14.4624339,23 12,20.5375661 12,17.5 C12,14.4624339 14.4624339,12 17.5,12 Z M17.5,13.9992349 L17.4101244,14.0072906 C17.2060313,14.0443345 17.0450996,14.2052662 17.0080557,14.4093593 L17,14.4992349 L16.9996498,16.9992349 L14.4976498,17 L14.4077742,17.0080557 C14.2036811,17.0450996 14.0427494,17.2060313 14.0057055,17.4101244 L13.9976498,17.5 L14.0057055,17.5898756 C14.0427494,17.7939687 14.2036811,17.9549004 14.4077742,17.9919443 L14.4976498,18 L17.0006498,17.9992349 L17.0011076,20.5034847 L17.0091633,20.5933603 C17.0462073,20.7974534 17.207139,20.9583851 17.411232,20.995429 L17.5011076,21.0034847 L17.5909833,20.995429 C17.7950763,20.9583851 17.956008,20.7974534 17.993052,20.5933603 L18.0011076,20.5034847 L18.0006498,17.9992349 L20.5045655,18 L20.5944411,17.9919443 C20.7985342,17.9549004 20.9594659,17.7939687 20.9965098,17.5898756 L21.0045655,17.5 L20.9965098,17.4101244 C20.9594659,17.2060313 20.7985342,17.0450996 20.5944411,17.0080557 L20.5045655,17 L17.9996498,16.9992349 L18,14.4992349 L17.9919443,14.4093593 C17.9549004,14.2052662 17.7939687,14.0443345 17.5898756,14.0072906 L17.5,13.9992349 Z M17.75,3 C19.5449254,3 21,4.45507456 21,6.25 L21.0012092,12.0225923 C19.9906579,11.3752958 18.7891565,11 17.5,11 C14.8016531,11 12.4873327,12.6442127 11.5042701,14.9854066 C10.6572014,14.9085256 9.88524157,14.6257765 9.1765361,14.1355923 C8.83586995,13.8999666 8.36869314,13.9851187 8.13306748,14.3257849 C7.89744183,14.666451 7.98259397,15.1336279 8.32326012,15.3692535 C9.16645713,15.9524604 10.0900975,16.3129767 11.0850385,16.4484275 C11.0289661,16.7904675 11,17.1418511 11,17.5 C11,18.7891565 11.3752958,19.9906579 12.0225923,21.0012092 L6.25,21 C4.45507456,21 3,19.5449254 3,17.75 L3,6.25 C3,4.45507456 4.45507456,3 6.25,3 L17.75,3 Z M9.00044779,7.75115873 C8.3104845,7.75115873 7.75115873,8.3104845 7.75115873,9.00044779 C7.75115873,9.69041108 8.3104845,10.2497368 9.00044779,10.2497368 C9.69041108,10.2497368 10.2497368,9.69041108 10.2497368,9.00044779 C10.2497368,8.3104845 9.69041108,7.75115873 9.00044779,7.75115873 Z M15.0004478,7.75115873 C14.3104845,7.75115873 13.7511587,8.3104845 13.7511587,9.00044779 C13.7511587,9.69041108 14.3104845,10.2497368 15.0004478,10.2497368 C15.6904111,10.2497368 16.2497368,9.69041108 16.2497368,9.00044779 C16.2497368,8.3104845 15.6904111,7.75115873 15.0004478,7.75115873 Z"/></svg>';
     customBtn.addEventListener("click", () => {
         emojiSearch.value = "";
         renderEmojiGrid();
