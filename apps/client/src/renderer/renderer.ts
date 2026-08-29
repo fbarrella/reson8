@@ -3364,6 +3364,12 @@ function renderChatMessage(tab: ChatTab, msg: ChatMessage): void {
  * push from main.ts.
  */
 function attachMessageTruncation(el: HTMLDivElement, textEl: HTMLElement): void {
+    // A solo-emoji message (PRD 13.14) is a single character rendered at
+    // ~4x size — never actually multi-line content to truncate, just
+    // visually tall. Clamping it would false-positive "overflow" purely
+    // from that height, with no hidden text to reveal via "See more".
+    if (textEl.classList.contains("msg-text-solo-emoji")) return;
+
     textEl.classList.add("msg-text-clamped");
     if (textEl.scrollHeight <= textEl.clientHeight + 1) {
         // Fits within the clamp already — no truncation actually happened,

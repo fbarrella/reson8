@@ -726,7 +726,13 @@
     }
 
     .btn-see-more {
-      display: inline-block;
+      /* Must always start its own line, whether the preceding .msg-text is
+         block (clamped) or plain inline (expanded) — `display: block`
+         guarantees the line break regardless of the sibling's own display,
+         and `width: fit-content` keeps the pill from stretching edge to
+         edge the way a plain block button would. */
+      display: block;
+      width: fit-content;
       background: rgba(255, 255, 255, 0.08);
       border: 1px solid var(--border);
       border-radius: 999px;

@@ -2692,3 +2692,66 @@ Feature/Fix: Phase 13.7 (PRD 13.14) — Bigger Rendering for Solo-Emoji Messages
 
   Next Step: PRD 13.15 (voice-connected-but-offline presence bug) — the
   next item per app-planning/Reson8_Phase13_PRD.md's recommended order.
+
+--- Entry: 29/08/2026 ---
+
+Feature/Fix: Phase 13.8 — Fix Two Message-Truncation Regressions Found During Testing
+
+  Problem: User testing PRD 13.14 (solo-emoji sizing) surfaced two bugs in
+  the message truncation feature:
+    1. A solo-emoji message (default Unicode emoji, not custom) spuriously
+       got a "See more" button, as if it were a long truncated message —
+       custom emoji didn't show the same issue.
+    2. The "See less" button (shown after expanding a truncated message)
+       rendered inline at the tail end of the message text with no line
+       break, instead of on its own line below it like "See more" does.
+
+  Root Cause 1: Not an SVG/text-parsing issue (default emoji are plain
+  Unicode characters, not SVGs) — `attachMessageTruncation()` adds
+  `.msg-text-clamped` (a `-webkit-line-clamp` box sized for normal 13px
+  text) and compares `scrollHeight` vs `clientHeight` to decide if
+  truncation is actually needed. PRD 13.14's `.msg-text-solo-emoji`
+  modifier sets `font-size: 4em` — a single character at 4x size is
+  visually *taller* than the clamp's height budget (computed for
+  normal-size multi-line text), so the overflow check false-positives even
+  though there's exactly one character and nothing to hide. (Custom emoji
+  apparently didn't trip the same check, likely due to how the browser
+  measures a sized inline-block replaced element vs. line-clamped text
+  differently — but the fix applies uniformly to both regardless.)
+
+  Root Cause 2: introduced by this same phase's own PRD 13.8 (the "See
+  more" reposition/restyle) — `.btn-see-more` was changed from
+  `display: block` to `display: inline-block` as part of the pill
+  restyle. While the message is clamped, the parent `.msg-text-clamped`
+  (a block-level `-webkit-box`) still forced the button onto a new line
+  incidentally; once expanded, `.msg-text` reverts to plain inline
+  (nothing else forces block layout), so the inline-block button no
+  longer breaks onto its own line — it was relying on the parent's
+  block-ness rather than its own.
+
+  Fix 1: `attachMessageTruncation()` now returns immediately, before
+  adding `.msg-text-clamped` at all, when `textEl` carries
+  `.msg-text-solo-emoji` — a solo-emoji message is a single character by
+  definition and can never have genuinely truncatable content.
+
+  Fix 2: `.btn-see-more` reverted to `display: block` (guaranteeing the
+  line break regardless of the sibling's own display state) plus a new
+  `width: fit-content` (so the pill doesn't stretch full-width the way a
+  plain block button would with no explicit width).
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts —
+      `attachMessageTruncation()`'s early-return guard for solo-emoji text
+    apps/client/src/renderer/index.html — `.btn-see-more` display/width
+
+  Verification:
+    - npx tsc --noEmit and --build (client) — clean
+    - Launched the dev build (ELECTRON_ENABLE_LOGGING=1) — no console
+      errors
+    - Manual re-verification of both fixes (a solo default-emoji message
+      no longer shows "See more"; "See less" appears on its own line
+      below the expanded message) is pending the user's own hands-on
+      retest.
+
+  Next Step: once confirmed, proceed to PRD 13.15 (voice-connected-but-
+  offline presence bug), per app-planning/Reson8_Phase13_PRD.md.
