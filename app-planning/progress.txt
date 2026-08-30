@@ -398,3 +398,122 @@ Feature/Fix: Remove code signing from the client build pipeline; stop electron-u
   and restore a CSC_LINK-based signing flow once a certificate chaining
   to a trusted root is available.
 
+--- Entry: 30/08/2026 ---
+
+Feature/Fix: Fix "Couldn't enable noise cancelling" in the packaged v2.2.0 release (CSP blocked the local asset fetch)
+
+  Problem: The user installed the real v2.2.0 release on both Windows and
+  Linux and reported that toggling AI Noise Cancelling always failed
+  immediately with "Couldn't enable noise cancelling", reproducing on
+  every platform (macOS suspected too, untested). This path had never
+  actually been verified in a packaged build before release — the PRD
+  13.1 entry's own Verification section explicitly left "a packaged —
+  not just dev — build still finds the vendored assets" as pending the
+  user's own hands-on test, and that test only happened now.
+
+  Solution: Root-caused by reading the vendored dependency's actual
+  compiled code (`node_modules/deepfilternet3-noise-filter/dist/
+  index.esm.js`) rather than guessing: `AssetLoader.fetchAsset()` calls a
+  plain `fetch()` against the configured `cdnUrl` (here, the relative
+  path `../../assets/deepfilternet`, resolved against the loaded page's
+  own URL). Since the whole client loads over `file://`, that fetch
+  targets a `file://.../assets/deepfilternet/v3/pkg/df_bg.wasm` (and the
+  `.../models/DeepFilterNet3_onnx.tar.gz` model) URL — and
+  `apps/client/src/renderer/index.html`'s CSP `<meta>` tag's `connect-src`
+  directive was `ws: wss: http: https:`, which never included the `file:`
+  scheme. Chromium's Fetch implementation enforces CSP `connect-src`
+  scheme restrictions, so every `fetch()` call `AssetLoader` made was
+  silently CSP-blocked, throwing (`TypeError: Failed to fetch`) inside
+  `ensureNoiseCancelInitialized()` → `createNoiseCancelNode()`, caught by
+  `setNoiseCancelEnabled()`'s catch block and surfaced via `onError` as
+  the generic "Couldn't enable noise cancelling." toast. Nothing else in
+  the client uses `fetch()` for local assets (sound alerts/images use
+  `<audio src>`/`<img src>`, which aren't governed by `connect-src`), so
+  this exact failure mode had never been exercised by any other feature —
+  platform-independent, so the Windows/Linux (and presumably macOS)
+  failures all share this one cause.
+
+  Fix: added `'self' file:` to the `connect-src` directive in
+  `apps/client/src/renderer/index.html`'s CSP meta tag, so local
+  `file://` fetches are permitted alongside the existing
+  ws/wss/http/https schemes.
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html
+
+  Verification:
+    npx tsc --noEmit (client) — clean (markup-only change, included for
+    completeness). Not yet re-tested live in a rebuilt packaged
+    installer — pending the user rebuilding v2.2.0 (or a patch build)
+    and re-testing Noise Cancelling on Windows/Linux/macOS.
+
+  Next Step: user to rebuild and reinstall, then confirm Noise Cancelling
+  actually enables successfully on all three platforms before considering
+  this closed.
+
+--- Entry: 30/08/2026 ---
+
+Feature/Fix: v2.2.1 patch release — version bump, combined release notes, mac added to release:all
+
+  Problem: The noise-cancelling CSP fix and the code-signing removal
+  (both logged above, same day) needed to ship as an actual release.
+  Because v2.2.0 and v2.2.1 are only hours apart, a v2.2.1-only release
+  note would hide v2.2.0's real feature set (AI noise cancelling, mic
+  volume, NSFW blur, date sectioning, etc.) from anyone whose first
+  successful auto-update lands directly on v2.2.1 — the "What's New"
+  modal only ever fetches the exact tag matching the running version
+  (`fetchReleaseNotes()` hits `releases/tags/v<version>`, never a range),
+  so v2.2.0's own notes would otherwise never be seen by those users.
+  Separately, `scripts/release-all.mjs` still unconditionally skipped
+  macOS on a Linux host, a limitation that predates today's code-signing
+  removal and was never re-verified against it.
+
+  Solution:
+  - Used `/bump-version` for a patch bump (2.2.0 → 2.2.1 — two bugfixes,
+    no new features/breaking changes): `package.json`,
+    `apps/client/package.json`, `apps/server/package.json`, README's
+    version badge, CLAUDE.md's "Current version" line, and
+    `package-lock.json` (via `npm install --package-lock-only`).
+  - Wrote `app-planning/releases/v2.2.1.md` with a "Fixed in v2.2.1"
+    section up top (the noise-cancelling CSP fix and the code-signing
+    removal) followed by v2.2.0's entire "New Features" and "Bug Fixes"
+    sections carried forward verbatim, so the What's New modal shows the
+    complete picture regardless of which version a given user is
+    updating from.
+  - Updated `scripts/release-all.mjs`: verified for real (not just
+    reasoned about) that `npx electron-builder --mac` succeeds on this
+    Linux host and produces a genuine `Reson8-2.2.1-mac.zip` —
+    electron-builder skips mac code signing unconditionally on any
+    non-darwin build host regardless of CSC_LINK, logging "skipped macOS
+    application code signing  reason=supported only on macOS", and the
+    `mac.target: "zip"` config needs no macOS-only tooling
+    (`codesign`/`hdiutil`) to build. Replaced the Linux-host branch's
+    `skip("electron-builder: mac", ...)` with pushing `--mac` onto
+    `electronBuilderTargets`, and updated the file's header comment and
+    the still-untested Windows-host skip's reason text accordingly (mac
+    cross-build stays unverified from Windows, so still skipped there).
+
+  Key Files Modified:
+    package.json
+    apps/client/package.json
+    apps/server/package.json
+    apps/server/tsconfig.tsbuildinfo (regenerated by `npx tsc --noEmit`)
+    package-lock.json
+    README.md
+    CLAUDE.md
+    scripts/release-all.mjs
+    app-planning/releases/v2.2.1.md (NEW)
+
+  Verification:
+    npx tsc --noEmit in apps/client and apps/server — both clean;
+    node --check + a --dry-run of scripts/release-all.mjs confirming the
+    new plan includes "electron-builder: mac (cross, unsigned)" on this
+    Linux host; a real (non-dry-run) `npx electron-builder --mac` run in
+    apps/client, producing an actual `release/Reson8-2.2.1-mac.zip` —
+    output/build artifacts removed afterward, not committed.
+
+  Next Step: user to build and publish the v2.2.1 GitHub release (with
+  latest*.yml files for all platforms actually built) and confirm the
+  What's New modal shows the combined v2.2.0+v2.2.1 notes correctly on
+  update.
+
