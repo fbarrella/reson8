@@ -398,3 +398,56 @@ Feature/Fix: Remove code signing from the client build pipeline; stop electron-u
   and restore a CSC_LINK-based signing flow once a certificate chaining
   to a trusted root is available.
 
+--- Entry: 30/08/2026 ---
+
+Feature/Fix: Fix "Couldn't enable noise cancelling" in the packaged v2.2.0 release (CSP blocked the local asset fetch)
+
+  Problem: The user installed the real v2.2.0 release on both Windows and
+  Linux and reported that toggling AI Noise Cancelling always failed
+  immediately with "Couldn't enable noise cancelling", reproducing on
+  every platform (macOS suspected too, untested). This path had never
+  actually been verified in a packaged build before release — the PRD
+  13.1 entry's own Verification section explicitly left "a packaged —
+  not just dev — build still finds the vendored assets" as pending the
+  user's own hands-on test, and that test only happened now.
+
+  Solution: Root-caused by reading the vendored dependency's actual
+  compiled code (`node_modules/deepfilternet3-noise-filter/dist/
+  index.esm.js`) rather than guessing: `AssetLoader.fetchAsset()` calls a
+  plain `fetch()` against the configured `cdnUrl` (here, the relative
+  path `../../assets/deepfilternet`, resolved against the loaded page's
+  own URL). Since the whole client loads over `file://`, that fetch
+  targets a `file://.../assets/deepfilternet/v3/pkg/df_bg.wasm` (and the
+  `.../models/DeepFilterNet3_onnx.tar.gz` model) URL — and
+  `apps/client/src/renderer/index.html`'s CSP `<meta>` tag's `connect-src`
+  directive was `ws: wss: http: https:`, which never included the `file:`
+  scheme. Chromium's Fetch implementation enforces CSP `connect-src`
+  scheme restrictions, so every `fetch()` call `AssetLoader` made was
+  silently CSP-blocked, throwing (`TypeError: Failed to fetch`) inside
+  `ensureNoiseCancelInitialized()` → `createNoiseCancelNode()`, caught by
+  `setNoiseCancelEnabled()`'s catch block and surfaced via `onError` as
+  the generic "Couldn't enable noise cancelling." toast. Nothing else in
+  the client uses `fetch()` for local assets (sound alerts/images use
+  `<audio src>`/`<img src>`, which aren't governed by `connect-src`), so
+  this exact failure mode had never been exercised by any other feature —
+  platform-independent, so the Windows/Linux (and presumably macOS)
+  failures all share this one cause.
+
+  Fix: added `'self' file:` to the `connect-src` directive in
+  `apps/client/src/renderer/index.html`'s CSP meta tag, so local
+  `file://` fetches are permitted alongside the existing
+  ws/wss/http/https schemes.
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html
+
+  Verification:
+    npx tsc --noEmit (client) — clean (markup-only change, included for
+    completeness). Not yet re-tested live in a rebuilt packaged
+    installer — pending the user rebuilding v2.2.0 (or a patch build)
+    and re-testing Noise Cancelling on Windows/Linux/macOS.
+
+  Next Step: user to rebuild and reinstall, then confirm Noise Cancelling
+  actually enables successfully on all three platforms before considering
+  this closed.
+
