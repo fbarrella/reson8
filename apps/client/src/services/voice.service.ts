@@ -11,6 +11,8 @@
  */
 
 import { Device, types as msTypes } from "mediasoup-client";
+import { dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 // Type-only — a genuine `import("...")` type query, erased entirely at
 // compile time (no require()/import() emitted). See the dynamicImport
@@ -46,12 +48,38 @@ type DeepFilterNet3CoreInstance = import("deepfilternet3-noise-filter").DeepFilt
 // crash, just lazily. The indirect-eval `Function("specifier", "return
 // import(specifier)")` trick below is opaque to TypeScript's static
 // analysis (the `import` keyword is inside a string, not real source), so
-// nothing rewrites it — at runtime it's a genuine dynamic import(),
-// resolving the package's "import" condition (dist/index.esm.js) through
-// the real ESM loader instead of require(). As a side benefit, this also
-// keeps the ~24MB dependency out of the preload script's synchronous
-// startup path entirely for the (likely common) case of a user who never
-// touches this feature.
+// nothing rewrites it. As a side benefit, this also keeps the ~24MB
+// dependency out of the preload script's synchronous startup path entirely
+// for the (likely common) case of a user who never touches this feature.
+//
+// A *bare* specifier ("deepfilternet3-noise-filter") doesn't work with this
+// trick, though — confirmed live in a real (non-sandboxed) Electron preload
+// context, both unpacked and inside a real .asar: `dynamicImport(bareName)`
+// throws "Failed to resolve module specifier ... Relative references must
+// start with either '/', './', or '../'". Unlike Node's own CLI/`node -e`
+// dynamic import (which resolves bare specifiers via Node's own ESM
+// resolver, walking node_modules and consulting "exports"), the indirect
+// dynamic import here goes through the same module resolution Blink uses
+// for `<script type="module">`, which only understands actual URLs — it
+// has no concept of a bare package name or an import map. This is a
+// different failure from the ESM-only-package crash above and wasn't
+// caught by that fix, since both surface identically (the enable-noise-
+// cancelling toast just says "Couldn't enable noise cancelling" either
+// way) unless you inspect the actual thrown error.
+//
+// The fix: resolve the bare specifier to an absolute `file://` URL
+// ourselves before importing it. `require.resolve()` follows the
+// package's "require" export condition (`dist/index.js`) rather than
+// "import" (`dist/index.esm.js`) — but resolving a path doesn't execute
+// the target file, so it's safe to call even though `dist/index.js`
+// itself would crash if actually require()'d (see above). Both files live
+// side by side in the package's `dist/` folder, so deriving the ESM
+// sibling from the resolved CJS path and importing *that* absolute URL
+// gets us the real ESM build through a URL Blink's loader can actually
+// resolve, without ever executing the broken CJS entry point. Verified
+// live (unpacked and packed into a real .asar) that this actually
+// constructs `DeepFilterNet3Core` successfully — the bare-specifier
+// import above never worked in *any* environment, dev or packaged.
 const dynamicImport = new Function("specifier", "return import(specifier)") as (
     specifier: string,
 ) => Promise<{
@@ -62,12 +90,18 @@ const dynamicImport = new Function("specifier", "return import(specifier)") as (
     }) => DeepFilterNet3CoreInstance;
 }>;
 
+function resolveNoiseCancelModuleUrl(): string {
+    const cjsEntry = require.resolve("deepfilternet3-noise-filter");
+    const esmEntry = join(dirname(cjsEntry), "index.esm.js");
+    return pathToFileURL(esmEntry).href;
+}
+
 let noiseCancelCore: DeepFilterNet3CoreInstance | null = null;
 let noiseCancelInitPromise: Promise<void> | null = null;
 function ensureNoiseCancelInitialized(): Promise<void> {
     if (!noiseCancelInitPromise) {
         noiseCancelInitPromise = (async () => {
-            const { DeepFilterNet3Core } = await dynamicImport("deepfilternet3-noise-filter");
+            const { DeepFilterNet3Core } = await dynamicImport(resolveNoiseCancelModuleUrl());
             noiseCancelCore = new DeepFilterNet3Core({
                 sampleRate: 48000,
                 noiseReductionLevel: 100,
