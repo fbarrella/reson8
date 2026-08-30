@@ -1793,6 +1793,30 @@
       gap: 0;
       border-bottom: 1px solid var(--border);
       margin-bottom: 12px;
+      /* More tabs than fit at once (PRD 13.17 added a longer label) —
+         scroll horizontally instead of squishing/wrapping tab labels,
+         same thin-scrollbar treatment as the emoji picker's category
+         tabs (.emoji-category-tabs) for a consistent look. */
+      overflow-x: auto;
+      scrollbar-width: thin;
+      scrollbar-color: var(--border) transparent;
+    }
+
+    .settings-tab-bar::-webkit-scrollbar {
+      height: 5px;
+    }
+
+    .settings-tab-bar::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    .settings-tab-bar::-webkit-scrollbar-thumb {
+      background: var(--border);
+      border-radius: 3px;
+    }
+
+    .settings-tab-bar::-webkit-scrollbar-thumb:hover {
+      background: var(--text-muted);
     }
 
     .settings-tab-btn {
@@ -1804,6 +1828,8 @@
       cursor: pointer;
       border-bottom: 2px solid transparent;
       transition: all 0.15s;
+      white-space: nowrap;
+      flex-shrink: 0;
     }
 
     .settings-tab-btn.active {
@@ -2069,22 +2095,28 @@
       border-color: var(--accent-hover);
     }
 
+    /* Pill-shaped to match the role-badge pills beside it in the User
+       Management tab (PRD 13.17) rather than standing out as a full,
+       solid-filled button. */
     .btn-ban {
-      background: #e74c3c;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 10px;
+      padding: 2px 10px;
+      border-radius: 10px;
       border: 1px solid #e74c3c;
-      color: #fff;
-      font-size: 12px;
-      padding: 6px 12px;
-      border-radius: var(--radius);
       cursor: pointer;
       transition: all 0.15s;
+      user-select: none;
+      color: #e74c3c;
+      background: transparent;
       flex-shrink: 0;
-      font-weight: 500;
     }
 
     .btn-ban:hover {
-      background: #c0392b;
-      border-color: #c0392b;
+      background: #e74c3c;
+      color: #fff;
     }
 
     .btn-nudge {
@@ -2127,20 +2159,21 @@
     }
 
     .btn-unban {
-      background: var(--surface);
+      font-size: 10px;
+      padding: 2px 10px;
+      border-radius: 10px;
       border: 1px solid var(--border);
-      color: var(--text-primary);
-      font-size: 12px;
-      padding: 6px 12px;
-      border-radius: var(--radius);
       cursor: pointer;
       transition: all 0.15s;
+      user-select: none;
+      color: var(--text-muted);
+      background: transparent;
       flex-shrink: 0;
-      font-weight: 500;
     }
 
     .btn-unban:hover {
-      background: var(--border);
+      border-color: var(--accent);
+      color: var(--accent);
     }
 
     /* Kick context menu (right-click on tree occupants) */

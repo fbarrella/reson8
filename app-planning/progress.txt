@@ -3009,3 +3009,54 @@ Feature/Fix: Phase 13.11 (PRD 13.17) — Move Ban to "User Management" Tab
   per app-planning/Reson8_Phase13_PRD.md's recommended order. Once
   confirmed, the whole Phase 13 PRD is complete and ready for version
   bump + release notes.
+
+--- Entry: 29/08/2026 ---
+
+Feature/Fix: Phase 13.12 — Fix Settings Tab Overflow and Ban Button Styling (PRD 13.17 follow-up)
+
+  Problem: User testing of PRD 13.17 found two rough edges introduced by
+  it: (1) the longer "🛡️ User Management" label pushed the settings tab
+  bar past the modal's width, with tab text spilling outside the modal
+  boundary; (2) the new Ban/Unban buttons were solid, full-sized buttons
+  that visually clashed with the small pill-shaped role badges next to
+  them in the same row.
+
+  Fix 1 (tab overflow): Applied the exact same horizontal-scroll pattern
+  already used by the emoji picker's category tabs
+  (`.emoji-category-tabs`) to `.settings-tab-bar` — `overflow-x: auto`
+  with a thin, always-visible custom scrollbar (both `scrollbar-width`/
+  `scrollbar-color` for Firefox and `::-webkit-scrollbar*` for Chromium/
+  Electron), plus `white-space: nowrap` and `flex-shrink: 0` on
+  `.settings-tab-btn` so labels stay on one line and the row scrolls
+  instead of squishing/wrapping tab text.
+
+  Fix 2 (Ban/Unban styling): Restyled `.btn-ban`/`.btn-unban` from solid
+  full-sized buttons (`padding: 6px 12px`, filled backgrounds) to small
+  pills matching `.role-badge`'s exact shape and sizing (`font-size: 10px`,
+  `padding: 2px 10px`, `border-radius: 10px`) — Ban keeps a red outline
+  (fills solid red on hover, signaling the destructive action) and Unban
+  matches the plain muted-then-accent-on-hover look already used by role
+  badges. Added a small inline SVG icon to the Ban button specifically (a
+  person glyph with a "no entry" circle-and-slash beside it) so the
+  destructive action reads at a glance; Unban stays text-only to match
+  the plain badges around it.
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html — `.settings-tab-bar`/
+      `.settings-tab-btn` scroll treatment, `.btn-ban`/`.btn-unban`
+      restyled as pills
+    apps/client/src/renderer/renderer.ts — Ban button gains the inline
+      SVG icon via `innerHTML`
+
+  Verification:
+    - npx tsc --noEmit and --build (client) — clean
+    - Launched the dev build (ELECTRON_ENABLE_LOGGING=1) — no console
+      errors
+    - Manual visual re-verification (tab bar scrolls cleanly with no
+      overflow past the modal, Ban/Unban now read as pills consistent
+      with the role badges, Ban icon renders correctly) is pending the
+      user's own hands-on test.
+
+  Next Step: once confirmed, proceed to PRD 13.18 (single-instance
+  Electron lock) — the final item per
+  app-planning/Reson8_Phase13_PRD.md's recommended order.
