@@ -227,6 +227,11 @@ let tray: Tray | null = null;
 let isQuitting = false;
 let minimizeToTray = false;
 let closeToTray = false;
+/** Set once the renderer has been asked to gracefully disconnect its
+ *  socket before quitting (see the window "close" and app "before-quit"
+ *  handlers below) — guards against re-triggering it on the follow-up
+ *  close/quit call that actually lets the window/app finish closing. */
+let hasSentQuitDisconnect = false;
 
 /**
  * `desktopCapturer.getSources()`, raced against a timeout. On Linux/Wayland
@@ -338,6 +343,26 @@ function createWindow(): void {
         if (closeToTray && !isQuitting) {
             event.preventDefault();
             mainWindow?.hide();
+            return;
+        }
+
+        // Actually closing (the common "click the X button" quit path,
+        // with close-to-tray off) — this window is destroyed before the
+        // app-level "before-quit" handler below ever runs (that one only
+        // catches Cmd+Q/Alt+F4, where the window is still alive when it
+        // fires), so this is the interception point that matters for a
+        // normal close. Same reasoning as "before-quit"'s own comment: ask
+        // the renderer to gracefully disconnect its socket first, so the
+        // server can finalize presence immediately instead of waiting out
+        // the reconnect-grace period on every ordinary quit.
+        if (!hasSentQuitDisconnect && mainWindow && !mainWindow.isDestroyed()) {
+            hasSentQuitDisconnect = true;
+            event.preventDefault();
+            mainWindow.webContents.send("app-quitting");
+            setTimeout(() => {
+                isQuitting = true;
+                mainWindow?.close();
+            }, 250);
         }
     });
 
@@ -787,8 +812,12 @@ app.whenReady().then(() => {
     createWindow();
 });
 
-// Ensure native quit signals (Cmd+Q, Alt+F4) bypass close-to-tray
-app.on("before-quit", () => {
+// Ensure native quit signals (Cmd+Q, Alt+F4) bypass close-to-tray — these
+// call app.quit() directly, so the window is still alive when this fires
+// (unlike the ordinary "click the X button" path, intercepted instead in
+// the window's own "close" handler above, since by the time this handler
+// runs there the window is already destroyed).
+app.on("before-quit", (event) => {
     isQuitting = true;
     // Don't leave a native-audio capture session running past app exit —
     // on the PulseAudio backend in particular (PRD 12.3), that session has
@@ -796,6 +825,24 @@ app.on("before-quit", () => {
     // themselves up on their own.
     screenAudioCapture?.stop();
     screenAudioCapture = null;
+
+    // Tell the renderer to gracefully disconnect its socket before the
+    // process actually dies. Without this, quitting just lets the OS kill
+    // the connection, which the server can only see as an ordinary dropped
+    // transport — indistinguishable from a flaky network blip — so it
+    // always waits out the full reconnect-grace period (10s) before
+    // marking presence offline, even for a deliberate, clean quit. An
+    // explicit socket.disconnect() call reports as "client namespace
+    // disconnect" server-side, which the server treats as unambiguous and
+    // finalizes immediately instead. Briefly delaying the actual quit
+    // gives the disconnect packet a moment to actually leave the process
+    // before it's torn down.
+    if (!hasSentQuitDisconnect && mainWindow && !mainWindow.isDestroyed()) {
+        hasSentQuitDisconnect = true;
+        event.preventDefault();
+        mainWindow.webContents.send("app-quitting");
+        setTimeout(() => app.quit(), 250);
+    }
 });
 
 app.on("window-all-closed", () => {

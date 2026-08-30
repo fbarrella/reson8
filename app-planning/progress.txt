@@ -2755,3 +2755,95 @@ Feature/Fix: Phase 13.8 — Fix Two Message-Truncation Regressions Found During 
 
   Next Step: once confirmed, proceed to PRD 13.15 (voice-connected-but-
   offline presence bug), per app-planning/Reson8_Phase13_PRD.md.
+
+--- Entry: 29/08/2026 ---
+
+Feature/Fix: Phase 13.9 — Fix Stale Online Presence After Quitting the App
+
+  Problem: User testing found that after closing a client and opening a
+  different one (different instance ID), the server kept showing the
+  closed client as online — as if that person never actually logged out,
+  even though the app didn't exist anymore.
+
+  Investigation: Directly tested the underlying disconnect/presence
+  mechanism with standalone socket.io-client scripts against a running
+  server + Redis, before touching any code. Confirmed the *existing*
+  disconnect → 10s grace period → `finalizeDisconnect()` → `leaveServer()`
+  chain (added in an earlier phase specifically to stop a brief network
+  blip from flickering someone's presence off and on) does correctly clear
+  Redis — just not until that grace period elapses, and only once the
+  server actually notices the connection is gone.
+
+  The real gap: quitting the app never tells the server it's an
+  intentional, permanent goodbye — it just lets the OS kill the process,
+  which the server can only observe as an ordinary dropped transport
+  (`reason: "transport close"`), indistinguishable from a flaky network
+  drop. So *every* deliberate quit paid the same multi-second delay meant
+  only for accidental disconnects, which is exactly what read as "still
+  online" to anyone checking shortly after.
+
+  Fix: the app now explicitly disconnects its socket before quitting,
+  giving the server a distinct, unambiguous signal
+  (`reason: "client namespace disconnect"`, Socket.io's own reason string
+  for a client-initiated `.disconnect()` call) it can act on immediately
+  instead of deferring.
+
+  Client — two separate interception points were needed, not one:
+    - `mainWindow`'s own `"close"` event (main.ts) — the actual quit path
+      for the common "click the X button" case (with close-to-tray off).
+      This window is already destroyed by the time the app-level
+      `"before-quit"` event fires, so intercepting only there (my first
+      attempt) would have silently never triggered for this exact case —
+      caught this via a real end-to-end test before it shipped (see
+      Verification).
+    - `app.on("before-quit")` — covers Cmd+Q/Alt+F4, which call
+      `app.quit()` directly while the window is still alive.
+    Both share one `hasSentQuitDisconnect` guard flag: on first trigger,
+    `event.preventDefault()`, push `"app-quitting"` to the renderer, then
+    actually close/quit ~250ms later (giving the disconnect packet time to
+    leave the process). preload.ts listens for `"app-quitting"` and calls
+    `socket.disconnect()` if connected.
+
+  Server — `connection.handler.ts`'s `disconnect` handler now branches on
+  `reason`: `"client namespace disconnect"` finalizes presence
+  immediately (no timer at all); anything else (network drops, ping
+  timeouts, etc.) keeps the existing 10-second grace-period behavior
+  completely unchanged, since that protection is still exactly right for
+  a connection that might still come back on its own.
+
+  Key Files Modified:
+    apps/client/src/main.ts — `hasSentQuitDisconnect` flag,
+      graceful-disconnect-then-close logic in both the window `"close"`
+      handler and `"before-quit"`
+    apps/client/src/preload.ts — `"app-quitting"` IPC listener calling
+      `socket.disconnect()`
+    apps/server/src/handlers/connection.handler.ts — `disconnect`
+      handler branches on `reason`, immediate finalize for
+      `"client namespace disconnect"`, unchanged deferred path otherwise;
+      log message reflects which path was taken
+
+  Verification:
+    - npx tsc --noEmit (server, client) — clean
+    - npm run test (server) — 19/19 passing, unchanged
+    - Standalone socket.io-client scripts against a live server+Redis:
+      confirmed an abrupt disconnect (no graceful call) still correctly
+      defers via the 10s grace period and clears after it elapses (no
+      regression); confirmed an explicit `socket.disconnect()` clears
+      Redis within ~1-2 seconds instead.
+    - Full end-to-end test of the *actual* Electron app via its Chrome
+      DevTools Protocol debugging port: launched the real app, called
+      `window.reson8Api.connect(...)` to join the real server, then
+      `window.close()` (the genuine equivalent of clicking the window's X
+      button, confirmed distinct from CDP's own `Page.close()`, which
+      bypasses Electron's window-close event entirely and does not
+      exercise this fix). Confirmed via server logs: reason "client
+      namespace disconnect", "finalized immediately"; confirmed via Redis:
+      the joined instanceId was already gone within ~1.5s; confirmed the
+      Electron process still exited cleanly (no hang from the added
+      `preventDefault()`/delayed-close logic).
+
+  Next Step: user to retest their original repro (open a client, close it,
+  open a different one) to confirm presence now clears promptly. Then
+  continue with PRD 13.16 (screen-share sound alerts) per
+  app-planning/Reson8_Phase13_PRD.md — the four sound files for that item
+  are already in place (user added them directly).

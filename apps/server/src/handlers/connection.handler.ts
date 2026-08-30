@@ -611,25 +611,48 @@ export function registerConnectionHandlers(
                         mediasoup.cleanupUserSession(currentChannelId, userId);
                     }
 
-                    // Defer presence removal + the USER_LEFT/PRESENCE_UPDATE
-                    // broadcast (see the grace-period comment above) — a
-                    // reconnect within DISCONNECT_GRACE_MS cancels this via
-                    // USER_JOIN_SERVER, so a brief drop never appears as a
-                    // leave to anyone else.
+                    // Cancel any earlier pending deferred-leave for this user
+                    // regardless of which path we take below — it's about to
+                    // be superseded either way.
                     const existing = pendingDisconnects.get(userId);
                     if (existing) clearTimeout(existing);
-                    const timer = setTimeout(() => {
+
+                    if (reason === "client namespace disconnect") {
+                        // The client explicitly called socket.disconnect()
+                        // itself (app quit — see main.ts's "before-quit" — or
+                        // preload.ts's connect() tearing down a stale socket
+                        // before opening a new one). Unlike an ordinary
+                        // dropped transport, this is unambiguous: the client
+                        // isn't coming back on this socket, so there's no
+                        // "might just be a network blip" case to protect
+                        // against here — finalize immediately instead of
+                        // making every deliberate quit wait out the same
+                        // grace period meant for accidental drops.
                         pendingDisconnects.delete(userId);
                         finalizeDisconnect(userId, serverId, currentChannelId).catch((err) => {
-                            app.log.error({ err }, "Error during deferred disconnect cleanup");
+                            app.log.error({ err }, "Error during immediate disconnect cleanup");
                         });
-                    }, DISCONNECT_GRACE_MS);
-                    pendingDisconnects.set(userId, timer);
+                    } else {
+                        // Defer presence removal + the USER_LEFT/PRESENCE_UPDATE
+                        // broadcast (see the grace-period comment above) — a
+                        // reconnect within DISCONNECT_GRACE_MS cancels this via
+                        // USER_JOIN_SERVER, so a brief drop never appears as a
+                        // leave to anyone else.
+                        const timer = setTimeout(() => {
+                            pendingDisconnects.delete(userId);
+                            finalizeDisconnect(userId, serverId, currentChannelId).catch((err) => {
+                                app.log.error({ err }, "Error during deferred disconnect cleanup");
+                            });
+                        }, DISCONNECT_GRACE_MS);
+                        pendingDisconnects.set(userId, timer);
+                    }
                 }
 
                 app.log.info(
                     { socketId: socket.id, nickname, reason },
-                    "Client disconnected (grace period started)",
+                    reason === "client namespace disconnect"
+                        ? "Client disconnected (finalized immediately)"
+                        : "Client disconnected (grace period started)",
                 );
             } catch (err) {
                 app.log.error({ err }, "Error during disconnect cleanup");

@@ -1299,6 +1299,18 @@ ipcRenderer.on("ptt-released", () => emit("ptt-released", null));
 // messages (Phase 12 sub-phase item 5).
 ipcRenderer.on("window-minimized", () => emit("window-minimized", null));
 
+// Fired once from main.ts's "before-quit" handler, briefly before the app
+// actually exits — gracefully disconnects the socket so the server sees an
+// explicit "client namespace disconnect" instead of the connection just
+// going dead, letting it skip the reconnect-grace period and mark presence
+// offline immediately rather than after a several-second delay (see that
+// handler's own comment for the full reasoning).
+ipcRenderer.on("app-quitting", () => {
+    if (socket?.connected) {
+        socket.disconnect();
+    }
+});
+
 // ── Screen share captured audio from main process (PRD 12.7) ───────────────
 // Registered once, not per-`startAppAudioCapture` call, matching this
 // file's existing convention for main→renderer push channels — a no-op
