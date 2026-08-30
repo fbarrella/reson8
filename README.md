@@ -215,20 +215,15 @@ npm run build:win      # or build:linux, build:mac
 
 Each of these also generates `latest.yml` / `latest-linux.yml` / `latest-mac.yml` in `apps/client/release/`, alongside the installer. **All of these files — the installer(s) *and* the matching `latest*.yml` — must be uploaded together as assets on the GitHub release.** Uploading only the installer (e.g. a manual drag-and-drop onto a GitHub release) leaves out the metadata `electron-updater` actually reads to detect a new version, and the auto-updater will silently fail to find the update on every platform, with no visible error until a user tries "Check for Updates" and gets a generic failure message.
 
-### Code Signing (Windows)
+### Code Signing
 
-`npm run build:win` (and `release:all`) sign the NSIS installer automatically, with no manual `export` needed each session:
+Installers are currently built and shipped **unsigned** — there's no code-signing certificate in the release pipeline. Practically, this means:
 
-1. Put the `.pfx`/`.p12` file at `apps/client/certs/certificate.pfx` (that whole folder is gitignored — never committed) — or anywhere else on disk, your call.
-2. `cp apps/client/.env.local.example apps/client/.env.local` and fill in `CSC_KEY_PASSWORD` (`.env.local` is gitignored too — this file is the *only* place the password needs to live).
-3. Just run `npm run build:win` (or `build:linux`/`build:mac`, or `release:all`) as usual.
+- Windows SmartScreen and antivirus tools may flag the installer as coming from an "Unknown Publisher"; users need to click through the warning ("More info" → "Run anyway").
+- `apps/client/src/main.ts` overrides `NsisUpdater`'s `verifyUpdateCodeSignature` (Windows only) with a verifier that always passes — electron-updater otherwise checks a downloaded update's Authenticode publisher against the publisher name baked into the installed app's own `app-update.yml` and rejects any unsigned (or differently-signed) update as "not signed by the application owner."
+- macOS builds are unsigned/un-notarized too, so Gatekeeper will block first launch until the user right-clicks the app and chooses "Open."
 
-`apps/client/scripts/build-signed.mjs` (used by all three `build:*` scripts) and `scripts/release-all.mjs` both load `.env.local` into the environment before invoking `electron-builder`, so `CSC_LINK`/`CSC_KEY_PASSWORD` are set automatically for that one process only — never written to a shell profile, never touching `process.env` outside the build itself. If `.env.local` doesn't exist, the build proceeds unsigned exactly as before, with a log line saying so.
-
-- **Never commit the `.pfx`/`.p12` file, `.env.local`, or the password anywhere else.** Only `apps/client/.env.local.example` (no real secret in it) is committed.
-- This only works for a **file-based** certificate (`.pfx`/`.p12`), including when cross-building the Windows target from Linux, since electron-builder signs it itself rather than shelling out to Windows' `signtool`. A certificate on a **USB hardware token** (common for EV certs) can't be used this way — that requires building on an actual Windows machine with the token plugged in and its driver installed, and a different `win.certificateSubjectName`/`win.certificateSha1` config instead of `CSC_LINK`.
-- After building, confirm signing actually happened — electron-builder logs a `signing` step in the build output; a build that completes with no such line produced an unsigned installer.
-- macOS signing (`Developer ID Application` certificate + notarization) is a separate setup with its own env vars (`CSC_LINK`/`CSC_KEY_PASSWORD` again, but for a `.p12`, plus `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID` for notarization) — `.env.local` would carry those too once macOS signing is set up, but that isn't wired up yet.
+If a proper code-signing certificate is obtained in the future, `electron-builder` will pick up `CSC_LINK`/`CSC_KEY_PASSWORD` env vars automatically for Windows/macOS signing — at that point, the `verifyUpdateCodeSignature` override in `main.ts` should be removed again so updates are actually verified.
 
 ---
 

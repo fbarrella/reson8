@@ -323,3 +323,78 @@ Feature/Fix: <name>
     ...
   Next Step: ...
 
+--- Entry: 30/08/2026 ---
+
+Feature/Fix: Remove code signing from the client build pipeline; stop electron-updater rejecting unsigned updates on Windows
+
+  Problem: The v2.2.0 GitHub release (built while a Windows Authenticode
+  certificate was configured via CSC_LINK) shipped a signed installer. A
+  user updating an already-installed, previously-signed client on Windows
+  hit an auto-update failure: "New version 2.2.0 is not signed by the
+  application owner" — the certificate chain terminated in an untrusted
+  root ("Codegic CA G2"). Rather than chase a trusted certificate, the
+  decision was to drop code signing entirely for now and ship unsigned
+  installers until a better certificate is available.
+
+  Solution: Removed the whole opt-in code-signing wrapper around
+  electron-builder and disabled electron-updater's Windows signature
+  check so unsigned updates are accepted:
+  - Deleted `apps/client/scripts/build-signed.mjs` (the wrapper that
+    loaded `.env.local` and shelled out to `electron-builder`) and
+    `apps/client/scripts/local-env.mjs` (the `.env.local` loader it and
+    `scripts/release-all.mjs` both used), plus the committed
+    `apps/client/.env.local.example` template. `build:win`/`build:linux`/
+    `build:mac` in `apps/client/package.json` now call `electron-builder`
+    directly instead of going through the wrapper.
+  - `scripts/release-all.mjs` no longer imports/calls `loadLocalEnv()`
+    before its `electron-builder` steps.
+  - Root-caused the actual runtime failure: `NsisUpdater` (from
+    `electron-updater`) reads a `publisherName` baked into the
+    *currently-installed* app's own `app-update.yml` (written by
+    electron-builder at build time, from whatever signing cert was
+    present then) and, if present, runs a PowerShell Authenticode check
+    on every downloaded update against it — this is why a client that
+    had been built+installed while still signed kept failing even once
+    future builds stopped signing. Fixed in `apps/client/src/main.ts` by
+    overriding `NsisUpdater`'s `verifyUpdateCodeSignature` (Windows only,
+    behind a `process.platform === "win32"` guard) with a verifier that
+    always resolves `null` — per electron-updater's own API this is a
+    `(publisherNames, path) => Promise<string | null>` function, not a
+    boolean, so `= false` alone does not compile and would not have
+    worked correctly either.
+  - Updated the "Code Signing" section in the root `README.md` to
+    describe the current unsigned state instead of the old CSC_LINK
+    setup guide (Windows SmartScreen / macOS Gatekeeper implications for
+    an unsigned build, and a note to remove the `verifyUpdateCodeSignature`
+    override again if signing is reintroduced later).
+  - Added a new Electron gotcha bullet to root `CLAUDE.md` documenting
+    this incident and the fix, so a future re-introduction of signing
+    doesn't forget to remove the override.
+  - Left `apps/client/certs/` and `apps/client/.env.local` (both
+    gitignored, never tracked) untouched — they may contain the user's
+    real private key/password material, so they were not read or
+    deleted; the user can remove them by hand if desired.
+
+  Key Files Modified:
+    apps/client/src/main.ts
+    apps/client/package.json
+    apps/client/scripts/build-signed.mjs (DELETED)
+    apps/client/scripts/local-env.mjs (DELETED)
+    apps/client/.env.local.example (DELETED)
+    scripts/release-all.mjs
+    README.md
+    CLAUDE.md
+
+  Verification:
+    npx tsc --noEmit in apps/client (confirmed the verifyUpdateCodeSignature
+    override typechecks against electron-updater's actual NsisUpdater type,
+    after first catching that a plain boolean assignment does not compile);
+    node --check on scripts/release-all.mjs; a --dry-run of
+    `node scripts/release-all.mjs` to confirm the loadLocalEnv removal
+    didn't break its electron-builder invocation planning.
+
+  Next Step: none — standalone fix. Next real code signing attempt (if
+  any) should remove the verifyUpdateCodeSignature override in main.ts
+  and restore a CSC_LINK-based signing flow once a certificate chaining
+  to a trusted root is available.
+

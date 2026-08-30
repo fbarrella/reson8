@@ -41,21 +41,11 @@
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { loadLocalEnv } from "../apps/client/scripts/local-env.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, "..");
 const NATIVE_AUDIO_DIR = join(REPO_ROOT, "packages", "native-audio");
 const CLIENT_DIR = join(REPO_ROOT, "apps", "client");
-
-// Load apps/client/.env.local (gitignored) into process.env before any
-// electron-builder invocation below — supplies code-signing secrets
-// (CSC_LINK, CSC_KEY_PASSWORD, ...) the same way `npm run build:win`
-// does on its own. No-op, and no change in behavior, if the file
-// doesn't exist.
-if (loadLocalEnv()) {
-  log("Loaded apps/client/.env.local");
-}
 
 const DRY_RUN = process.argv.includes("--dry-run");
 

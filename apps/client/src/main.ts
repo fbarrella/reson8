@@ -8,7 +8,7 @@
 import { app, BrowserWindow, session, ipcMain, globalShortcut, Menu, Tray, nativeImage, shell, desktopCapturer, dialog } from "electron";
 import path from "node:path";
 import { getInstanceId, hasExistingInstanceId } from "./instance-id.js";
-import { autoUpdater } from "electron-updater";
+import { autoUpdater, NsisUpdater } from "electron-updater";
 import { startCapture, resolvePidForWindowSourceId, listAudioProducingApps, platformSupportsCapture } from "@reson8/native-audio";
 import type { CaptureHandle } from "@reson8/native-audio";
 import MarkdownIt from "markdown-it";
@@ -503,6 +503,16 @@ function unregisterPttShortcut(): void {
 // Metadata check and download are separate steps: nothing downloads until
 // the user (or the modal's "Update Now") explicitly asks for it.
 autoUpdater.autoDownload = false;
+
+// Installers aren't Authenticode-signed (no code-signing certificate). On
+// Windows, NsisUpdater otherwise runs a PowerShell Authenticode check of
+// the downloaded update against the publisher name baked into the
+// currently-installed app's own app-update.yml, and rejects a legitimate
+// unsigned update with "not signed by the application owner" — replacing
+// the verifier with one that always passes disables that check entirely.
+if (process.platform === "win32") {
+    (autoUpdater as NsisUpdater).verifyUpdateCodeSignature = async () => null;
+}
 
 // True only while a download is in flight — distinguishes a download-phase
 // 'error' (surfaced immediately, no retry) from a check-phase 'error'
