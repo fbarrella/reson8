@@ -3060,3 +3060,63 @@ Feature/Fix: Phase 13.12 — Fix Settings Tab Overflow and Ban Button Styling (P
   Next Step: once confirmed, proceed to PRD 13.18 (single-instance
   Electron lock) — the final item per
   app-planning/Reson8_Phase13_PRD.md's recommended order.
+
+--- Entry: 29/08/2026 ---
+
+Feature/Fix: Phase 13.13 — Fix Settings Tab Bar Scroll Bug and Ban Button Sizing (second PRD 13.17 follow-up)
+
+  Problem: Continued testing of the previous fix surfaced three more
+  issues: (1) tab label text was visibly cut off at the bottom; (2)
+  scrolling down within the User Management tab's user list made the
+  entire tab bar scroll away too, leaving no way to switch tabs; (3) the
+  Ban/Unban buttons, while now correctly pill-shaped, were too small to
+  read comfortably, and Ban specifically needed to look more severe.
+
+  Root Cause (tab bar disappearing) — a genuine CSS spec quirk introduced
+  by the prior fix: setting only `overflow-x: auto` on `.settings-tab-bar`
+  (with `overflow-y` left at its default `visible`) is invalid per the
+  overflow spec — a UA must compute `overflow-y` as `auto` too once
+  `overflow-x` is non-`visible`, since one axis can't stay `visible` while
+  the other doesn't. That silently made the tab bar itself vertically
+  scrollable, and since it had no `flex-shrink: 0` in the modal's flex
+  column, it was free to drift/collapse whenever the sibling scrollable
+  panel below it moved — reading exactly as "the whole tabs section
+  scrolled down."
+
+  Root Cause (clipped text): `.settings-tab-btn` had no explicit
+  `line-height` — the default was tight enough, combined with an emoji
+  glyph (🛡️) in the label rendering taller than surrounding Latin text
+  in some fonts, to clip the bottom of descenders.
+
+  Fixes:
+    - `.settings-tab-bar`: explicit `overflow-y: hidden` (closes the
+      spec-quirk gap directly) plus `flex-shrink: 0` (pins it as a
+      fixed-height header row in the flex column, immune to the sibling
+      panel's own scrolling).
+    - `.settings-tab-btn`: added `line-height: 1.8` for comfortable
+      vertical spacing.
+    - `.btn-ban`/`.btn-unban`: sized up from `font-size: 10px`/
+      `padding: 2px 10px` to `font-size: 13px`/`padding: 6px 16px` for
+      better visibility. `.btn-ban` additionally gets `border: 2px`
+      (up from 1px) and `font-weight: 700` — a deliberately heavier
+      look than Unban, so the destructive action reads as more serious.
+      Its icon bumped from 12x12 to 15x15 to stay proportional.
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html — `.settings-tab-bar`/
+      `.settings-tab-btn`/`.btn-ban`/`.btn-unban` CSS
+    apps/client/src/renderer/renderer.ts — Ban icon SVG size
+
+  Verification:
+    - npx tsc --noEmit and --build (client) — clean
+    - Launched the dev build (ELECTRON_ENABLE_LOGGING=1) — no console
+      errors
+    - Manual visual re-verification (tab bar stays fixed and visible
+      while scrolling the User Management list, tab label text no
+      longer clipped, Ban/Unban buttons comfortably sized with Ban
+      visibly heavier/more severe than Unban) is pending the user's own
+      hands-on test.
+
+  Next Step: once confirmed, proceed to PRD 13.18 (single-instance
+  Electron lock) — the final item per
+  app-planning/Reson8_Phase13_PRD.md's recommended order.
