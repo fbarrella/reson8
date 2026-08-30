@@ -194,7 +194,16 @@ export class MediasoupService extends EventEmitter {
         observer = await router.createAudioLevelObserver({
             maxEntries: 10,
             threshold: -50,
-            interval: 300,
+            // Lowered 300ms -> 100ms (PRD 13.10) — the perceived lag in the
+            // active-speaker indicator lighting up traced entirely to this
+            // server-side polling interval (mediasoup emits "volumes" at
+            // most once per interval and averages within that window), not
+            // to the client, which already applies the "speaking" class
+            // immediately on receipt. The client's existing 300ms hold
+            // before turning the indicator back *off* is untouched and
+            // should absorb most of the extra flicker risk this shorter
+            // interval introduces on brief speech pauses.
+            interval: 100,
         });
 
         observer.on("volumes", (volumes: Array<{ producer: mediasoupTypes.Producer; volume: number }>) => {

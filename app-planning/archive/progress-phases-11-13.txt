@@ -1,0 +1,3108 @@
+================================================================================
+  RESON8 — Development Progress Log
+  Archived: 30/08/2026 (condensed into the phases 11-13 summary in
+  app-planning/progress.txt)
+================================================================================
+
+PROJECT OVERVIEW
+================
+Reson8 is a high-performance, self-hosted voice and text communication platform
+for desktop (Electron). It replicates the TeamSpeak 3 experience — low-latency
+voice, hierarchical channel trees, and private server ownership — while
+integrating modern persistent text channels.
+
+Tech Stack: Electron + TypeScript, Fastify + Socket.io, mediasoup (SFU),
+PostgreSQL + Prisma, Redis, Docker.
+
+Monorepo structure:
+  apps/client/            — Electron desktop client
+  apps/server/             — Node.js signaling + SFU server
+  packages/shared-types/    — Shared DTOs, enums, and Socket.io event types
+
+For build commands, environment variables, ports, and architecture details,
+see the root CLAUDE.md (and apps/client/CLAUDE.md, apps/server/CLAUDE.md) —
+not duplicated here to avoid drift between docs.
+
+================================================================================
+  FULL UNABRIDGED ENTRIES — PHASES 11-13
+================================================================================
+
+--- Entry: 13/08/2026 ---
+
+Feature/Fix: Phase 11 — PRD 11.1: Fix Random Voice Chat Disconnections
+
+  Problem: Voice chat participants would intermittently and
+  unpredictably get dropped from a voice channel with no clear
+  trigger. An audit of the full voice lifecycle (Socket.io signaling +
+  mediasoup WebRTC handshake) found several independent gaps: nothing
+  ever re-established a voice channel after a Socket.io reconnect
+  (the server fully tears down mediasoup + presence on every
+  disconnect, but the client never replayed the join handshake on
+  reconnect); a 10s/5s Socket.io ping/pong timeout tight enough to
+  trip a full disconnect on ordinary jitter (GC pause, laptop
+  sleep/wake); no client- or server-side WebRTC connection-state
+  monitoring, so a pure ICE-level drop (independent of the signaling
+  channel) went completely undetected; and a single mediasoup worker
+  crash called process.exit(1), taking down every voice session on
+  the server instead of just the ones on that worker.
+
+  Solution: Comprehensive fix addressing all four gaps, plus two
+  related bugs found during the audit.
+
+  Server Changes:
+    - apps/server/src/index.ts: retuned Socket.io pingInterval/
+      pingTimeout from 10_000/5_000 to 25_000/20_000 (Socket.io's own
+      defaults), which alone removes a class of false-positive
+      disconnects.
+    - apps/server/src/services/mediasoup.service.ts: MediasoupService
+      now extends EventEmitter. Added workerChannels (Worker → Set
+      <channelId>) and channelWorker (channelId → Worker) tracking,
+      maintained in getOrCreateRouter()/removeRouter(). The worker
+      "died" handler no longer calls process.exit(1) — a new
+      handleWorkerDeath() looks up exactly which channels were hosted
+      on the dead worker, drops the now-unrecoverable routers/
+      sessions/observers for just those channels, spawns a
+      replacement worker to keep the pool size stable, and emits a
+      "workerDied" event with the affected channelIds. Also added an
+      icestatechange listener on WebRtcTransport alongside the
+      existing dtlsstatechange one — mediasoup's ICE state has no
+      "failed" value (unlike DTLS), so a stuck "disconnected" state
+      is given a 10s grace period (ICE can self-recover) before the
+      transport is force-closed.
+    - apps/server/src/handlers/voice.handler.ts: registered a
+      one-time mediasoup.on("workerDied", ...) listener that emits
+      the new VOICE_SESSION_LOST event to every affected
+      `channel:${channelId}` room. Also fixed producer.on
+      ("transportclose") to emit PRODUCER_CLOSED to the rest of the
+      channel — previously this only nulled the session's producer
+      locally, so any transport-level close that wasn't routed
+      through the explicit CLOSE_PRODUCER/leave/kick paths (e.g. the
+      new ICE-grace-period close above) left peers holding a phantom
+      consumer.
+
+  Shared Types Changes:
+    - packages/shared-types/src/socket-events.ts: added
+      VOICE_SESSION_LOST: (payload: { channelId: string; reason:
+      string }) => void to ServerToClientEvents.
+
+  Client Changes:
+    - apps/client/src/services/voice.service.ts: added
+      connectionstatechange listeners on both sendTransport and
+      recvTransport. "disconnected" gets a 4s grace period (mirroring
+      the server-side ICE grace period) before being treated as a
+      real failure; "failed" is terminal immediately. Reports through
+      a new public onConnectionLost callback, at most once per join
+      (connectionLossReported flag, reset in cleanup()). Also added a
+      bounded retry (3 attempts, 1s apart) to queueConsumeProducer(),
+      surfacing a final failure through a new onError callback
+      instead of only console.error.
+    - apps/client/src/preload.ts: added module-level
+      lastVoiceChannelId (set on every successful joinVoiceChannel(),
+      cleared on leaveVoiceChannel()/disconnect()) and a new
+      attemptVoiceRejoin(channelId) helper that replays the full
+      USER_JOIN_CHANNEL + voiceService.joinVoiceChannel() handshake,
+      retrying up to 3 times (1.5s apart) before giving up and
+      clearing lastVoiceChannelId. Wired to fire from three triggers:
+      (1) the socket "connect" handler, when lastVoiceChannelId is
+      set (i.e. this is a reconnect, not the first-ever connect); (2)
+      VoiceService.onConnectionLost, for a pure WebRTC-level failure
+      with no Socket.io disconnect; (3) a new VOICE_SESSION_LOST
+      socket listener, for the server-initiated worker-crash case.
+      Emits voice-reconnecting / voice-reconnected / voice-rejoin-
+      failed / voice-connection-lost / voice-error events for the
+      renderer to react to.
+    - apps/client/src/renderer/renderer.ts: added a
+      findChannelNodeById() tree-lookup helper, and handlers for the
+      five new preload events — voice-reconnecting adds a
+      "reconnecting" CSS class to the voice panel and appends "
+      (reconnecting…)" to the channel name if still shown;
+      voice-reconnected restores isInVoice/currentChannelId, re-
+      applies the saved global voice volume and mute/deafen state to
+      the fresh VoiceService instance, and reseeds
+      previousOccupantIds so the next presence update doesn't fire a
+      spurious join sound; voice-rejoin-failed falls back to a clean
+      "left voice" state; voice-connection-lost and voice-error log
+      to the server log tab.
+    - apps/client/src/renderer/index.html: added
+      #voice-panel.reconnecting CSS (pulsing amber presence dot)
+      using the existing --warning token.
+
+  Key Files Modified:
+    apps/server/src/index.ts
+    apps/server/src/services/mediasoup.service.ts
+    apps/server/src/handlers/voice.handler.ts
+    packages/shared-types/src/socket-events.ts
+    apps/client/src/services/voice.service.ts
+    apps/client/src/preload.ts
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/renderer/index.html
+
+  Verification:
+    - npx tsc --build (shared-types) — passed
+    - npx tsc --noEmit (server) — passed
+    - npx tsc --noEmit (client) — passed
+    - npm run test (server, vitest) — 19/19 passed, no regressions
+    - Server boot smoke test: started via `npm run dev`, confirmed
+      all mediasoup workers spawn, Socket.io listens, and shutdown is
+      clean (no behavior change from the ping/pong retune or the
+      worker-crash-handling rewrite under normal operation).
+    - Client smoke test: built via tsc + copy-html.mjs, launched with
+      `npx electron .` against the running dev server — no renderer
+      exceptions on startup.
+    - Not yet exercised: an actual reconnect/rejoin cycle (killing
+      the network or a mediasoup worker mid-call) and the extended
+      soak test the PRD calls for — this bug is inherently
+      intermittent, so absence of a repro over a longer real-world
+      session is the only meaningful signal beyond the targeted
+      code-path fixes above.
+
+  Next Step: PRD 11.2 — fix the voice session timer starting from
+  negative numbers (clock-offset correction).
+
+--- Entry: 13/08/2026 ---
+
+Feature/Fix: Phase 11 — PRD 11.2: Fix Voice Session Timer Starting From Negative Numbers
+
+  Problem: Joining a voice channel would briefly show the session
+  timer starting at a negative value (e.g. -1:00 or -2:00) before
+  counting up to positive. Root cause: the client computed elapsed
+  time as `Date.now() - new Date(sessionStartedAt).getTime()`, i.e.
+  its own wall clock diffed against a server-issued absolute
+  timestamp, with no correction for clock skew between the two
+  machines — any skew where the client's clock read behind the
+  server's surfaced directly as a negative timer.
+
+  Solution: Derive a client↔server clock offset from the existing
+  ping/latency round trip and apply it everywhere sessionStartedAt is
+  diffed against, instead of only clamping the visible symptom.
+
+  Shared Types Changes:
+    - packages/shared-types/src/socket-events.ts: PING_LATENCY's ack
+      signature changed from `() => void` to `(serverTime: number) =>
+      void` — the server now hands back its own current timestamp on
+      every ping.
+
+  Server Changes:
+    - apps/server/src/handlers/connection.handler.ts: the PING_LATENCY
+      handler now calls `ack(Date.now())` instead of `ack()`.
+
+  Client Changes:
+    - apps/client/src/preload.ts: added module-level clockOffsetMs
+      (starts at 0, reset to 0 on disconnect). New
+      measureLatencyAndClockOffset() helper replaces the two ad-hoc
+      PING_LATENCY call sites (the 3s interval and the immediate
+      post-connect measurement) with one shared implementation that
+      computes both latencyMs (unchanged RTT calculation) and
+      clockOffsetMs using the standard NTP-style approximation:
+      offset ≈ serverTime - (localSendTime + rtt / 2). New
+      getClockOffset(): number bridge method exposes the latest
+      estimate, mirroring the existing getLatency().
+    - apps/client/src/renderer/renderer.ts: added a correctedNow() =
+      Date.now() + api.getClockOffset() helper (and the matching
+      getClockOffset() declaration on the Reson8Api interface). Both
+      elapsed-time computation sites — the synchronous timer-badge
+      render inside renderChannel() and the 1s setInterval tick that
+      updates both the tree badge and the voice panel timer — now
+      call correctedNow() instead of a raw Date.now(). formatDuration()
+      additionally clamps its input to a minimum of 0 before
+      formatting, as a defense-in-depth safety net for any residual
+      skew (the offset is a single round-trip estimate, not a full
+      NTP sync), not the primary fix.
+
+  Key Files Modified:
+    packages/shared-types/src/socket-events.ts
+    apps/server/src/handlers/connection.handler.ts
+    apps/client/src/preload.ts
+    apps/client/src/renderer/renderer.ts
+
+  Verification:
+    - npx tsc --build (shared-types) — passed
+    - npx tsc --noEmit (server) — passed
+    - npx tsc --noEmit (client) — passed
+    - npm run test (server, vitest) — 19/19 passed, no regressions
+    - Not yet exercised: no way in this session to artificially skew
+      a test machine's clock relative to the server to visually
+      confirm the timer no longer starts negative — the latency
+      display (which shares the same round-trip mechanism) was
+      unaffected by the change, but the clock-skew scenario itself
+      still needs a manual pass per the PRD's verification steps.
+
+  Next Step: PRD 11.3 — fix the emoji picker's custom-emoji tab
+  visibility.
+
+--- Entry: 13/08/2026 ---
+
+Feature/Fix: Phase 11 — PRD 11.3: Fix Emoji Picker Custom-Emoji Tab Visibility
+
+  Problem: The custom-emoji tab was the 10th tab appended to a single
+  non-wrapping, horizontally-scrolling category-tab row
+  (.emoji-category-tabs) with a deliberately hidden scrollbar
+  (scrollbar-width: none). With 9 built-in categories ahead of it, the
+  tab could scroll out of view with no visible cue that more tabs
+  existed. It also used a plain "➕" emoji character as its icon,
+  rendering inconsistently in size/weight across platforms/fonts and
+  at a dimmed 0.5 opacity unless active — easy to miss even when
+  technically visible.
+
+  Solution: Moved the custom-emoji tab into its own fixed slot,
+  outside the scrollable row, so it's always visible regardless of
+  category count or scroll position, and replaced its icon with an
+  inline SVG matching the app's existing icon convention.
+
+  Client Changes:
+    - apps/client/src/renderer/index.html: wrapped the tab bar in a
+      new .emoji-tabs-bar flex container holding two children — the
+      existing #emoji-category-tabs (unchanged scroll/overflow
+      behavior, now flex: 1 1 auto with min-width: 0 so it shrinks
+      instead of pushing the fixed slot off-screen) and a new
+      #emoji-custom-tab-slot (flex-shrink: 0, separated by a left
+      border) that permanently hosts just the custom-emoji tab.
+      Added display: inline-flex/align-items/justify-content to
+      .emoji-cat-tab so the new SVG-based tab centers correctly
+      (harmless for the existing text/emoji-character tabs too).
+    - apps/client/src/renderer/renderer.ts: added emojiTabsBar and
+      emojiCustomTabSlot element refs. buildEmojiCategoryTabs() now
+      appends the 9 built-in category buttons to
+      emojiCategoryTabs as before, but appends the custom-emoji
+      button to emojiCustomTabSlot instead. Replaced
+      `customBtn.textContent = "➕"` with
+      `customBtn.innerHTML = <svg ...>` — a 12x12 plus-in-circle icon
+      in the same stroke style (viewBox 0 0 24 24, stroke=
+      currentColor, stroke-width 2) as #btn-emoji's smiley icon,
+      sized down to fit the tab. A new clearActiveTabs() helper
+      queries emojiTabsBar (the shared parent of both zones) instead
+      of just emojiCategoryTabs, so clicking either a built-in
+      category tab or the custom tab still correctly clears/sets the
+      "active" class across both zones.
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html
+    apps/client/src/renderer/renderer.ts
+
+  Verification:
+    - npx tsc --noEmit (client) — passed
+    - No xdotool/ydotool/pyautogui was available to click through the
+      UI directly, so instead drove a real packaged-and-launched
+      instance (built via tsc --build + copy-html.mjs, run with
+      `electron --remote-debugging-port=9222 .`) through the Chrome
+      DevTools Protocol (Node's `ws` package + Runtime.evaluate/
+      Page.captureScreenshot over the CDP websocket): connected to
+      the local dev server, opened a real text channel tab, opened
+      the emoji picker, and confirmed live in the running app that
+      #emoji-custom-tab-slot renders the new SVG icon, stays visible
+      outside the scrollable category row, and correctly toggles its
+      "active" class and switches the grid on click — screenshots
+      confirmed the same visually. (First pass against a stale,
+      un-rebuilt dist/ falsely looked plausible — caught by dumping
+      the live DOM and cross-checking against a clean rebuild.)
+
+  Next Step: PRD 11.4 — post-update "what's new" modal.
+
+--- Entry: 13/08/2026 ---
+
+Feature/Fix: Phase 11 — PRD 11.4: Post-Update "What's New" Modal
+
+  Problem: Reson8 had no way to tell a user what changed after an
+  update — the auto-updater (Phase 10) installs new versions silently,
+  with no in-app summary of what's new beyond manually visiting
+  GitHub Releases.
+
+  Solution: On startup, compare the running app version against the
+  last version the user actually dismissed this modal for; if they
+  differ, fetch that version's GitHub release notes and show them
+  once, dismissible via a "Got it" button that persists the new
+  version so it doesn't reappear until the next bump.
+
+  Main Process Changes (main.ts):
+    - New fetchReleaseNotes(version) — fetches
+      https://api.github.com/repos/fbarrella/reson8/releases/tags/v{version}
+      (5s timeout via AbortController), returns { name, body, htmlUrl }
+      or null on any failure (offline, rate-limited, no matching
+      tag). Follows the same fetch-from-main pattern already used by
+      fetchLinkPreview().
+    - New ipcMain.handle("fetch-release-notes", ...) wired to it.
+    - No new "open external" IPC needed — the existing
+      mainWindow.webContents.setWindowOpenHandler() already routes
+      any http(s) window.open() call from the renderer through
+      shell.openExternal(), so the modal's "View on GitHub" button
+      reuses that.
+
+  Client Bridge (preload.ts):
+    - fetchReleaseNotes(version): Promise<{name, body, htmlUrl} | null>
+      bridge method.
+
+  Renderer Changes (renderer.ts, index.html):
+    - checkForWhatsNew(currentVersion), called right after the
+      existing api.getAppVersion() call in the About-tab startup
+      hydration. Compares currentVersion against
+      localStorage["reson8-last-seen-version"]:
+        - unset (first-ever launch) → silently records currentVersion,
+          no modal (a brand-new install shouldn't be greeted with a
+          "what's new since your last version" prompt).
+        - differs → calls fetchReleaseNotes(); on success shows the
+          new #whats-new-modal; on failure (null) does nothing this
+          launch — the version is deliberately NOT marked as seen
+          yet, so the check retries on the next launch instead of
+          the notification being silently lost to one bad network
+          moment.
+        - matches → no-op.
+      The "seen" marker is only written when "Got it" is clicked.
+      Clicking the backdrop closes the modal like other modals in
+      the app but does not persist "seen", so an accidental dismiss
+      isn't permanent.
+    - Release notes are rendered via `textContent`, never
+      `innerHTML` — the body is untrusted remote content, so raw
+      Markdown syntax (headers, **bold**, etc.) displays as plain
+      text rather than being parsed/rendered. Deliberate
+      security-over-polish tradeoff — no HTML injection surface at
+      all, no Markdown-to-HTML dependency needed.
+    - New #whats-new-modal markup (index.html), styled with the
+      existing .modal-content.wide variant (480px, 70vh max-height,
+      scrollable body) and added to the shared modal show/hide
+      selector group, consistent with every other modal in the app
+      (never a native alert/confirm).
+
+  localStorage Keys:
+    - reson8-last-seen-version — the last app version the user has
+      either launched for the first time or explicitly dismissed
+      this modal for.
+
+  Key Files Modified:
+    apps/client/src/main.ts
+    apps/client/src/preload.ts
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/renderer/index.html
+
+  Verification:
+    - npx tsc --noEmit (client) — passed
+    - Full live verification via Chrome DevTools Protocol against a
+      freshly rebuilt dist (tsc --build + copy-html.mjs), launched
+      with `electron --remote-debugging-port=9222 .`, driven with
+      Node's `ws` package: seeded reson8-last-seen-version to an
+      older version via localStorage, reloaded the renderer, and
+      confirmed against the real (not mocked) GitHub API that the
+      actual published v1.3.0 release notes were fetched and
+      rendered, the modal appeared with the correct title/body/
+      buttons (screenshotted), clicking "Got it" hid it and updated
+      last-seen-version to the current version, and a second run
+      confirmed the true first-launch path (no stored key) records
+      the version silently with no modal shown.
+
+  Next Step: PRD 11.5 — pin messages in text channels.
+
+--- Entry: 13/08/2026 ---
+
+Feature/Fix: Phase 11 — PRD 11.5: Pin Messages in Text Channels
+
+  Problem: There was no way to surface an important message in a text
+  channel — anything relevant (rules, an announcement, a pinned link)
+  scrolled away with the rest of the history.
+
+  Solution: Admins (MANAGE_CHANNELS) can pin exactly one message per
+  text channel. A bar above the message list shows a cropped preview
+  with a pin icon; clicking it scrolls to and briefly highlights the
+  original message, fetching it from the server first if it isn't
+  within the currently-loaded page.
+
+  Database Changes:
+    - schema.prisma: Channel gained `pinnedMessageId String? @unique`
+      + a `pinnedMessage` relation to Message (onDelete: SetNull —
+      deleting the pinned message clears the pin at the DB level
+      automatically), and Message gained the `pinnedInChannel`
+      back-relation. Migration
+      `20260813210500_add_channel_pinned_message` (hand-written from
+      `prisma migrate diff` since `prisma migrate dev` refused to run
+      non-interactively in this session; applied via
+      `prisma migrate deploy`).
+
+  Shared Types Changes:
+    - New `IPinnedMessage` model ({ id, content, authorNickname,
+      createdAt }); `IChannel` gained an optional `pinnedMessage`
+      field (present for symmetry, not actually populated in channel-
+      tree broadcasts — see Client Changes for why).
+    - New client→server events `PIN_MESSAGE` / `UNPIN_MESSAGE`
+      (MANAGE_CHANNELS-gated, ack-based — modeled directly on the
+      existing `UPDATE_CHANNEL` pattern).
+    - New server→client `CHANNEL_PIN_UPDATED` broadcast: `{ channelId,
+      channelName, pinnedMessage, actedByNickname? }` —
+      `actedByNickname` is omitted when the change was an automatic
+      unpin caused by the pinned message being deleted, so the client
+      can log a different message for that case.
+    - `FETCH_MESSAGES` extended with an optional `aroundMessageId`
+      (fetches a window of messages centered on a specific message,
+      ignoring `before` — used for the jump-to-pin fallback) and a
+      `pinnedMessage` field on the ack, populated only on the initial
+      load (`before`/`aroundMessageId` both unset) to avoid an extra
+      query on every "load more" scroll.
+
+  Server Changes:
+    - channel.handler.ts: `PIN_MESSAGE` validates the channel is
+      TEXT and the message actually belongs to it, then sets
+      `pinnedMessageId` and broadcasts; `UNPIN_MESSAGE` clears it.
+      Both require MANAGE_CHANNELS via the existing
+      `requirePermission()` middleware.
+    - message.handler.ts: `DELETE_MESSAGE` now checks — before
+      deleting — whether the message was the channel's current pin,
+      and broadcasts `CHANNEL_PIN_UPDATED` with `pinnedMessage: null`
+      if so (no `actedByNickname`), since the FK's `onDelete: SetNull`
+      only fixes the DB row, not already-connected clients' UI.
+      `FETCH_MESSAGES` gained the `aroundMessageId` window query
+      (half the page before the target + the target + half after, by
+      `createdAt`) and its Prisma-row→DTO mapping was refactored into
+      a shared `toMessageDto()` helper (previously duplicated inline).
+
+  Client Changes:
+    - Permission gating follows the existing rename/delete/NSFW-
+      toggle context-menu convention discovered during this session's
+      audit: the pin button is shown to **everyone**, and the server
+      rejects unauthorized attempts (inline `log()` error +
+      `insufficient_perms.mp3`) — not a client-side cached-permission
+      check like the Settings-modal admin tabs use. This is why
+      channel-tree hydration doesn't need to carry `pinnedMessage` at
+      all; pin state is instead sourced lazily per-tab from
+      `FETCH_MESSAGES`'s response and kept live via
+      `CHANNEL_PIN_UPDATED`.
+    - `attachPinButton()`: new per-message pin/unpin button in the
+      reaction bar (same 14×14 feather-icon convention as edit/
+      delete/react), added alongside `attachEditButton()`. Active
+      state (persistently visible, not just on hover) = this message
+      is the channel's current pin; click toggles pin/unpin.
+    - Pinning while a different message is already pinned shows a new
+      `#pin-replace-confirm-modal` (matches the existing NSFW-confirm
+      custom-modal pattern, not a native `confirm()`) before
+      replacing — confirmed with you as the desired UX.
+    - New pinned-bar element, one per channel tab (`ChatTab.pinBarEl`
+      / `pinnedMessageId`), prepended above `.chat-messages` inside
+      `.tab-content` — structurally isolated from `#voice-panel`, so
+      no voice-UI regression risk. Shows a ≤100-char cropped preview;
+      clicking it calls `jumpToPinnedMessage()`, which scrolls
+      directly to the message via its existing `data-msg-id` if
+      already loaded, or falls back to
+      `api.fetchMessages(channelId, undefined, 50, messageId)` (the
+      new `aroundMessageId` path) to fetch a window around it,
+      replaces the tab's rendered messages with that window, then
+      scrolls and applies a 2s `.msg-highlight` flash animation.
+    - `api.on("channel-pin-updated", ...)` updates the open tab's bar
+      and the affected message(s)' button active-state live, and logs
+      a system-style line to the server log tab — confirmed with you:
+      `"{nickname} pinned/unpinned a message in #{channel}"`, or
+      `"The pinned message in #{channel} was deleted"` for the
+      no-`actedByNickname` auto-unpin case.
+
+  Key Files Modified:
+    apps/server/prisma/schema.prisma
+    apps/server/prisma/migrations/20260813210500_add_channel_pinned_message/migration.sql (NEW)
+    packages/shared-types/src/models.ts
+    packages/shared-types/src/socket-events.ts
+    apps/server/src/handlers/channel.handler.ts
+    apps/server/src/handlers/message.handler.ts
+    apps/client/src/preload.ts
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/renderer/index.html
+
+  Verification:
+    - npx tsc --build (shared-types) — passed
+    - npx tsc --noEmit (server) — passed
+    - npm run test (server, vitest) — 19/19 passed, no regressions
+    - npx tsc --noEmit (client) — passed
+    - Full live verification via Chrome DevTools Protocol against a
+      real running server + Postgres (freshly rebuilt dist, launched
+      with `electron --remote-debugging-port`): granted the test
+      client's random dev-mode instance ID the admin role via a
+      direct `INSERT INTO user_roles` (dev-mode regenerates instance
+      IDs per launch, so `ADMIN_INSTANCE_ID` couldn't be pre-seeded),
+      sent real messages in a real text channel, then confirmed
+      end-to-end: pinning with no existing pin (no confirm shown),
+      pinning over an existing pin (confirm modal appears, replacing
+      correctly updates the bar and both messages' button states),
+      clicking the bar scrolls to and highlights the message,
+      unpinning clears the bar, deleting the pinned message
+      auto-unpins it, and the server log records the expected
+      pin/unpin/auto-unpin lines. A separate follow-up test cleared a
+      tab's rendered DOM to simulate the pinned message being
+      scrolled out of the loaded page, then confirmed clicking the
+      bar correctly triggered the `aroundMessageId` fetch fallback,
+      re-rendered a window of messages, and highlighted the target.
+    - Not exercised: no second (non-admin) client was tested for the
+      "server rejects unauthorized PIN_MESSAGE" path specifically —
+      inferred correct from `requirePermission()` being identical to
+      the already-proven UPDATE_CHANNEL gate, but not directly
+      observed this session.
+
+  Next Step: none — this was the final Phase 11 PRD item. Remaining
+  work is bumping the version to 1.4.0 and updating README.md.
+
+--- Entry: 13/08/2026 ---
+
+Feature/Fix: Auto-Update Failure Investigation & Fix (v1.3.0 → v1.4.0
+didn't detect the new release)
+
+  Problem: The client's electron-updater-based auto-update feature
+  (Phase 10, PRD 10.1) failed to detect v1.4.0 from a v1.3.0 install,
+  both via the automatic startup check and the manual "Check for
+  Updates" button in Settings → About, which showed a generic "Could
+  not check for updates. Try again later."
+
+  Root cause: The v1.3.0 and v1.4.0 GitHub releases were missing the
+  latest.yml/latest-linux.yml/latest-mac.yml metadata files
+  electron-updater's GitHub provider requires to detect a newer
+  version. Only the human-facing installers were uploaded by hand —
+  never through electron-builder's --publish step, which is the only
+  thing that uploads the yml files alongside installers.
+  electron-builder correctly generates all three yml files locally
+  under apps/client/release/, they just never left the machine.
+  Confirmed live against api.github.com/repos/fbarrella/reson8: the
+  v1.4.0 release assets contained only the installers, no yml files.
+  Everything else (build.publish owner/repo, app-update.yml, repo
+  visibility, electron-updater/electron-builder versions) checked out
+  correctly — owner/repo matches `git remote -v` exactly. This exact
+  gap was foreseen in the original PRD 10.1 implementation notes
+  (app-planning/archive/progress-phases-9-10.txt) — a planned
+  post-release smoke test to confirm the "up to date" path was never
+  followed through, and the manual release process kept omitting the
+  metadata files.
+
+  Solution: Two-part fix, decided with the user: (1) surface the real
+  underlying error in the UI instead of a swallowed generic message,
+  so future update-check failures are diagnosable without
+  main-process console access; (2) document the release-asset
+  requirement prominently so it isn't missed on future releases. The
+  user explicitly chose NOT to have this session upload the missing
+  yml files to the existing v1.4.0 GitHub release (will do so
+  manually) and NOT to add electron-builder --publish=always scripts
+  (documentation-only fix instead).
+
+  Client Changes:
+    - apps/client/src/main.ts: checkForUpdatesWithRetry() now returns
+      { status, message? } instead of a bare status string, capturing
+      the last attempt's Error message on exhausted retries; the
+      check-for-updates IPC handler now returns this directly instead
+      of re-wrapping just the status.
+    - apps/client/src/preload.ts: checkForUpdates() return type
+      updated to include the optional message field.
+    - apps/client/src/renderer/renderer.ts: the duplicated Reson8Api
+      interface's checkForUpdates() signature updated to match; the
+      "Check for Updates" button handler now shows "Could not check
+      for updates: {message}" when a message is present, falling back
+      to the old generic text otherwise.
+
+  Documentation Changes:
+    - CLAUDE.md: added a bullet to the "Electron gotchas that have
+      bitten this project before" list documenting the latest*.yml
+      release-asset requirement.
+    - README.md: added a new "Releasing" section explaining that
+      npm run build:win/linux/mac alone does not publish an update,
+      and that the generated latest*.yml files must be uploaded
+      alongside the installers on every GitHub release.
+    - app-planning/nextsteps.txt: deleted (all 5 items, including this
+      session's starting point, were already implemented across Phase
+      11's entries above).
+
+  Key Files Modified:
+    apps/client/src/main.ts
+    apps/client/src/preload.ts
+    apps/client/src/renderer/renderer.ts
+    CLAUDE.md
+    README.md
+    app-planning/nextsteps.txt (DELETED)
+
+  Verification:
+    - npx tsc --noEmit (client) — passed
+    - Not fixed in this session (by explicit user choice): the actual
+      missing latest.yml/latest-linux.yml/latest-mac.yml assets on the
+      live v1.3.0/v1.4.0 GitHub releases — the user will upload
+      apps/client/release/latest*.yml (already correctly generated
+      locally from the original v1.4.0 build) to the v1.4.0 release
+      manually. Until that's done, existing v1.3.0 installs will still
+      not detect v1.4.0 as available, though the About tab will now
+      explain why if checked again before that upload happens.
+    - Not exercised: a live "Check for Updates" click against a
+      release that IS missing the yml files, to visually confirm the
+      new message text end-to-end (the error-message plumbing was
+      verified by type-checking and code inspection only).
+
+  Next Step: none — this was the full scope of the requested fix.
+  Future releases must follow the newly-documented process (upload
+  latest*.yml alongside installers) or auto-update will silently
+  break again.
+
+--- Entry: 13/08/2026 ---
+
+Feature/Fix: "What's New" Modal Silently Skipped on Upgrade From a
+Pre-11.4 Client
+
+  Problem: After manually uploading the missing latest*.yml files to
+  the v1.4.0 GitHub release (closing out the prior entry above), the
+  user confirmed the auto-update itself now worked end-to-end — but
+  the post-update "What's New" modal (PRD 11.4) never appeared.
+
+  Root cause: The "What's New" modal feature was introduced IN
+  v1.4.0 itself. checkForWhatsNew() in renderer.ts treats an unset
+  reson8-last-seen-version localStorage key as "first-ever launch,
+  nothing to announce" and silently records the current version
+  without showing the modal — a deliberate design choice so
+  brand-new installs aren't greeted with a "what's new since your
+  last version" prompt. But a v1.3.0 client (which predates this
+  feature entirely) never wrote that key either, so on the very
+  first launch after auto-updating from v1.3.0 to v1.4.0, this code
+  saw the same "unset" state as a truly fresh install and incorrectly
+  took the silent-record path, permanently losing the modal for that
+  transition.
+
+  Solution: Reused an existing, more fundamental "has this client run
+  before" signal instead of inventing a new one:
+  apps/client/src/instance-id.ts's persisted instance-id.txt file,
+  written on this client's actual first-ever launch, independent of
+  any single feature's own state. Added hasExistingInstanceId() to
+  instance-id.ts (must be called before getInstanceId(), which
+  creates the file as a side effect), wired through a new
+  is-existing-install IPC handler in main.ts, a new
+  isExistingInstall() preload bridge method, and a matching Reson8Api
+  interface entry in renderer.ts. checkForWhatsNew() now only takes
+  the silent "brand-new install" path when isExistingInstall() is
+  false; otherwise (an unset marker on an existing install) it falls
+  through to fetch and show the current version's release notes,
+  same as any other version bump.
+
+  Key Files Modified:
+    apps/client/src/instance-id.ts — new exported hasExistingInstanceId()
+    apps/client/src/main.ts — computes isExistingInstall before
+      getInstanceId() creates the ID file; new is-existing-install
+      IPC handler
+    apps/client/src/preload.ts — new isExistingInstall() bridge method
+    apps/client/src/renderer/renderer.ts — Reson8Api interface gained
+      isExistingInstall(); checkForWhatsNew() no longer conflates
+      "unset marker" with "brand-new install"
+    app-planning/releases/v1.4.1.md — added this fix to the Bug Fixes
+      section
+
+  Verification:
+    - npx tsc --noEmit (client) — passed
+    - Not exercised: no way in this session to simulate a second real
+      upgrade cycle to confirm the modal now appears live; reasoned
+      through the exact code path instead. Noted for the user: their
+      own install already has reson8-last-seen-version incorrectly
+      set to "1.4.0" by the pre-fix bug, so this specific machine
+      won't retroactively see v1.4.0's notes, but will see the modal
+      correctly on the next update (to v1.4.1, which carries this
+      fix) since lastSeen will differ from currentVersion again at
+      that point — no manual localStorage cleanup needed.
+
+  Next Step: none — build and publish v1.4.1 (with this fix and the
+  auto-update error-surfacing fix included) following the
+  newly-documented release process (installers + latest*.yml
+  uploaded together).
+
+--- Entry: 24/08/2026 ---
+
+Feature/Fix: Linux/Wayland Screen-Share Fixes, VP9 Black-Video Root
+Cause, Packaging Build Fix, and Viewer UI Polish
+
+  Problem: Live testing on the user's CachyOS/KDE Plasma (Wayland)
+  machine, continuing from the 13/08/2026 entry's screen-sharing
+  work, surfaced several distinct issues: (1) the in-app Selection
+  Modal was redundant on Wayland, since desktopCapturer.getSources()
+  already drives the OS-level xdg-desktop-portal picker itself; (2)
+  once a Linux/Wayland bypass was attempted, real screen captures
+  always rendered black on the viewer side, on every platform, not
+  just Wayland; (3) `npm run build:linux`, `build:win`, and the
+  newly-added `release:all` (PRD 12.5) all failed outright with
+  "Cargo.lock must be under apps/client/"; and (4) three smaller
+  Viewer/UI issues once video was working: the "Started sharing"
+  log showed an empty/generic source name, the Viewer's "Exit
+  Stream" button didn't read as a destructive action, and the
+  Share Screen button's icon didn't change to signal "stop sharing"
+  while active.
+
+  Linux/Wayland Screen-Share Bypass:
+    Per user decision, the bypass applies only when Wayland is
+    actually detected (XDG_SESSION_TYPE=wayland or WAYLAND_DISPLAY
+    set), not to all Linux sessions — X11 has no OS-level picker to
+    defer to, so it keeps the existing in-app Selection Modal.
+    preload.ts exposes a new `isLinuxWayland` flag; renderer.ts's
+    Share Screen click handler branches on it.
+
+    Went through three iterations before landing on a working
+    approach, each confirmed live against the real portal (not
+    guessed):
+      1. First attempt: renderer calls the existing
+         `get-desktop-sources` IPC handler, then
+         `startScreenShareVideo(source.id)` (the same
+         getUserMedia({chromeMediaSourceId}) path the modal already
+         used). Confirmed broken: showed the OS picker a *second*
+         time inside the getUserMedia call, the resulting video was
+         black, and the log showed `Started sharing ""` — the
+         getSources() placeholder source's `name` field is empty at
+         that point.
+      2. Second attempt: switched capture to
+         navigator.mediaDevices.getDisplayMedia() directly (new
+         voiceService.startScreenVideoProducingViaSystemPicker()).
+         Confirmed broken differently: rejected immediately with
+         "Not supported" — Electron requires a
+         session.setDisplayMediaRequestHandler to be registered at
+         all before getDisplayMedia() works, contrary to an initial
+         (wrong) assumption that omitting it falls back to a native
+         Wayland picker.
+      3. Final approach: registered
+         session.defaultSession.setDisplayMediaRequestHandler in
+         main.ts's createWindow(), whose handler calls
+         desktopCapturer.getSources() itself (via a new shared
+         getDesktopSourcesWithTimeout() helper, refactored out of
+         the existing get-desktop-sources handler, keeping the same
+         20s hang-protection for a broken portal backend) and calls
+         back with the first source. This unifies picker-selection
+         and stream-negotiation into getDisplayMedia()'s single
+         request/callback cycle instead of two independent IPC round
+         trips. Note: `useSystemPicker` (DisplayMediaRequestHandlerOpts)
+         was investigated and confirmed, from Electron 34.5.8's own
+         bundled type definitions, to be "currently available for
+         MacOS 15+ only" — not usable here, despite external
+         information suggesting otherwise.
+
+    Real source name for the "Started sharing" log: since
+    getDisplayMedia()'s resulting MediaStreamTrack.label comes back
+    empty for portal-based captures, main.ts's
+    setDisplayMediaRequestHandler now stashes the real
+    DesktopCapturerSource.name it saw (module-level
+    lastScreenShareSourceName) right before granting it, exposed via
+    a new get-last-screen-share-source-name IPC handler that
+    preload.ts's startScreenShareViaSystemPicker() reads right after
+    the stream resolves, preferring it over the empty track label.
+
+    Remaining known issue, investigated but NOT fixed (deliberately,
+    per user decision): the OS portal picker still sometimes shows
+    twice before succeeding. Root-caused via correlated journalctl
+    logs (system journal, not user journal — KWin/portal services
+    log there): the first negotiation genuinely fails inside
+    Chromium's C++ capturer (`xdg-desktop-portal-kde: rejecting` →
+    `screencast_portal.cc: Failed to start the screen cast session`
+    → `base_capturer_pipewire.cc: ScreenCastPortal failed: 2`, all
+    within ~10ms), correlated with the same `kwin_wayland: atomic
+    commit failed: Dispositivo ou recurso está ocupado` (DRM/KMS
+    "device busy") signature already root-caused in the prior
+    session as NVIDIA-Optimus + KWin + PipeWire Wayland contention.
+    Chromium retries by re-showing the picker entirely inside its
+    own native code, with no JS-visible rejection and no Electron
+    API hook to intervene. User explicitly decided (after weighing
+    a force-iGPU-only launch experiment and further driver-level
+    digging) to accept this as a known platform quirk and move on,
+    since it self-recovers and video now works correctly once past
+    it.
+
+  VP9 SVC Black-Video Root Cause (separate bug, not Wayland-specific):
+    The black video during bypass testing was NOT primarily a
+    Wayland/portal issue. Electron main-process stderr showed, ~45s
+    after a successful capture grant: `libvpx_vp9_encoder.cc:
+    "Flexible mode is required for screenshare with several spatial
+    layers"` → `simulcast_encoder_adapter.cc: InitEncode failed
+    WEBRTC_VIDEO_CODEC_ERR_PARAMETER` → `video_stream_encoder.cc:
+    Failed to initialize the encoder... Error: -4`.
+    voice.service.ts's screen-video Producer used `scalabilityMode:
+    "L3T3_KEY"` (3 spatial + 3 temporal layers, K-SVC) — Chromium's
+    VP9 encoder rejects multi-spatial-layer K-SVC outright for any
+    track flagged as screen content, so the encoder never
+    initialized and no frame was ever sent to any viewer, on any
+    platform. This had been silently broken since the original
+    Phase 12 implementation; a synthetic canvas-sourced test track
+    used in the prior session's investigation wasn't flagged as
+    screen content, so it never hit this and masked the bug (the
+    mediasoup/transport/Viewer-window pipeline itself was never
+    actually broken). Fixed by switching to `scalabilityMode:
+    "L1T3"` (single spatial layer, still temporal scaling) —
+    confirmed working end-to-end live. Multi-resolution SVC (not
+    just multi-framerate) can be revisited later, but needs a
+    flexible-mode-compatible scalability mode, not K-SVC, and must
+    be verified against a real screen capture, not a synthetic one.
+
+  Packaging Build Fix (build:linux, build:win, release:all):
+    Root cause: `@reson8/native-audio` and `@reson8/shared-types`
+    are npm workspace packages — `node_modules/@reson8/*` are
+    symlinks whose real target (packages/native-audio,
+    packages/shared-types) sits outside apps/client/. Two separate
+    electron-builder code paths choke on that: (a) the asar
+    packager's per-file relative-path check (getRelativePath in
+    app-builder-lib), which throws for any packaged file whose real
+    disk path is both outside apps/client/ and contains no literal
+    "node_modules" path segment, regardless of any `files` entry's
+    `to` destination; and (b) a second, independent automatic
+    production-dependency walk electron-builder runs whenever
+    something is listed under `dependencies`, which resolves the
+    same symlinks itself and hits the identical crash.
+
+    Fix, in apps/client/package.json's `build` config and a new
+    apps/client/scripts/before-pack.mjs (beforePack hook):
+      - before-pack.mjs stages real, filtered copies of both
+        packages under apps/client/.release-vendor/ (gitignored)
+        before packing — genuinely under apps/client/, so the
+        relative-path check never needs its node_modules-searching
+        fallback.
+      - `files` maps that staging dir to the correct
+        node_modules/@reson8/... destination via `from`/`to`
+        entries, with the raw symlinked paths explicitly excluded
+        from the blanket node_modules/**/* glob.
+      - `asarUnpack` points at the staging-relative path
+        (.release-vendor/native-audio/prebuilds/**/*.node), not the
+        final node_modules/... path — the asar unpack-pattern check
+        matches a file's source-relative path, not its mapped
+        destination, so this had to change too (confirmed via a
+        second bug where the .node binary packed into the asar
+        proper instead of unpacking, ELF binaries can't dlopen from
+        inside an asar).
+      - `@reson8/native-audio` and `@reson8/shared-types` moved from
+        `dependencies` to `devDependencies` — not because they're
+        dev-only (they're required at runtime, shipped via the
+        staging mechanism instead), but so electron-builder's
+        separate automatic dependency walk skips them entirely.
+
+    Also added apps/client/scripts/test-build.mjs and three new
+    root-package.json-adjacent scripts (test-build:win/linux/mac) —
+    same electron-builder pipeline as build:win/linux/mac, but with
+    an artifactName override producing e.g. "Reson8 Setup 1.4.1
+    (test build).exe", for cutting ad hoc test builds without
+    touching a real release's naming. Implemented as a script rather
+    than an inline `-c.artifactName=...` shell one-liner in
+    package.json, since a shell would try to expand
+    `${version}`/`${ext}` itself before electron-builder ever saw
+    them.
+
+  Viewer/UI Polish:
+    - Exit Stream button (Viewer window) now styled like the main
+      window's "Leave Voice" button (red outline, solid red fill +
+      white text on hover) instead of blending in. First attempt
+      used a plain `#btn-exit-stream` selector, which silently lost
+      the cascade to the pre-existing `#controls-bar button`/`button
+      :hover` rules (higher specificity — ID + element type beats a
+      single ID) — fixed by scoping to `#controls-bar
+      #btn-exit-stream` (two IDs).
+    - Share Screen button now swaps to a crossed-out-monitor icon
+      while actively sharing, purely via CSS keyed off the existing
+      `.active` class the JS already toggles (two SVGs in the
+      button markup, shown/hidden by `#btn-share-screen.active`) —
+      no new JS needed.
+
+  Key Files Modified:
+    apps/client/src/main.ts — getDesktopSourcesWithTimeout() shared
+      helper; setDisplayMediaRequestHandler registration;
+      lastScreenShareSourceName state + get-last-screen-share-
+      source-name IPC handler
+    apps/client/src/preload.ts — isLinuxWayland flag;
+      startScreenShareViaSystemPicker() bridge method
+    apps/client/src/services/voice.service.ts —
+      startScreenVideoProducingViaSystemPicker() (getDisplayMedia
+      path); produceScreenVideoStream() extracted as a shared
+      helper; scalabilityMode L3T3_KEY → L1T3
+    apps/client/src/renderer/renderer.ts — Share Screen click
+      handler branches on isLinuxWayland; startScreenShareViaSystem
+      Picker() bypass function; Reson8Api interface additions
+    apps/client/src/renderer/index.html — Share Screen button
+      two-SVG icon swap + CSS
+    apps/client/src/renderer/viewer.html — Exit Stream button red
+      styling, fixed for CSS specificity
+    apps/client/package.json — build.files/asarUnpack/beforePack
+      config; @reson8/native-audio and @reson8/shared-types moved
+      to devDependencies; test-build:win/linux/mac scripts
+    apps/client/scripts/before-pack.mjs (NEW) — beforePack staging
+      script
+    apps/client/scripts/test-build.mjs (NEW) — test-build wrapper
+      script
+    .gitignore — apps/client/.release-vendor/
+    package-lock.json — reflects the dependencies → devDependencies
+      move
+
+  Verification:
+    - npx tsc --noEmit / --build — clean across shared-types,
+      server, and client, run repeatedly through the session as
+      each change landed
+    - `npx electron-builder --linux --dir` and `--win --dir` —
+      both succeed; confirmed the native-audio binary unpacks to
+      the correct location (app.asar.unpacked/node_modules/
+      @reson8/native-audio/prebuilds/*.node, correct ELF/PE
+      format) and is absent from the packed asar itself
+    - `npm run release:all` — full end-to-end run succeeds,
+      producing real Reson8-1.4.1.AppImage and "Reson8 Setup
+      1.4.1.exe"; smoke-tested the AppImage launch (extracted and
+      ran for 8s, no MODULE_NOT_FOUND/require errors)
+    - Live, user-confirmed testing on the real Linux/Wayland
+      machine: screen-share video now renders correctly (not
+      black); Exit Stream button styling confirmed correct after
+      the specificity fix; user's own words: "everything on linux
+      is tested and working"
+    - NOT exercised: the Windows build has only been verified at
+      the packaging level (`--win --dir` succeeds, correct files
+      present) — no actual run on Windows yet; user is testing that
+      separately before deciding whether to bump the version
+
+  Next Step: user is testing the Windows build next. Do not bump
+  the version (`/bump-version`) until they explicitly confirm the
+  Windows build also passes — this was an explicit instruction, not
+  a default to infer.
+
+--- Entry: 24/08/2026 (2) ---
+
+Feature/Fix: Windows Audio-Capture Crash Fix, Linux Audio-Share
+Consent Redesign, macOS Gating, Custom Stream Names, and
+Viewer/Sharer-Awareness Polish
+
+  Problem: Continuing the same day's cross-platform screen-share
+  testing (previous entry), the user ran real Windows testing and
+  hit an immediate whole-app crash when starting an app-with-audio
+  share. Separately, Linux's new audio-share picker (from the
+  previous entry) returned "unsupported" every time despite a real
+  audio-producing app being open, and once fixed, also showed
+  Reson8's own audio as a shareable option. There was also no way
+  to set a custom name for a share (Wayland's "your screen"
+  fallback in particular reads poorly), no visibility for the
+  sharer that a share had actually stopped promptly for viewers,
+  and only subtle cues (a LIVE badge others see, a button color) let
+  a user know they were actively sharing their own screen at all.
+
+  Windows Crash — Root-Caused via Real Event Viewer Data:
+    Windows Event Viewer's Application Error report gave exception
+    code 0xC0000374 (STATUS_HEAP_CORRUPTION), faulting module
+    ntdll.dll. Traced to `packages/native-audio/src/windows.rs`'s
+    `activate_process_loopback_client()`: it builds a raw PROPVARIANT
+    with `vt = VT_BLOB` whose `blob.pBlobData` points at
+    `&mut activation_params` — a plain stack local, never allocated
+    via `CoTaskMemAlloc`. Confirmed against the actual
+    `windows-core-0.58.0` crate source (cached locally, not
+    guessed): `PROPVARIANT`'s `Drop` impl unconditionally calls
+    `PropVariantClear`, which for `VT_BLOB` frees `pBlobData` via
+    `CoTaskMemFree` — freeing a non-heap pointer through the process
+    heap allocator, corrupting it. The corruption was only detected
+    later, on some unrelated allocation, which is why the crash's
+    timing only loosely correlated with when audio capture started
+    (masked by concurrent WGC video-capture noise in the logs, which
+    turned out to be an unrelated red herring). Fixed with
+    `std::mem::forget(prop)` right after the synchronous
+    `ActivateAudioInterfaceAsync` call — `prop` never legitimately
+    owned anything `PropVariantClear` needed to touch.
+    User-confirmed live on real Windows hardware after this fix:
+    "the windows sound worked perfectly!! It didn't even stutter,
+    it just plain shared the app + audio."
+
+  Linux Audio-Share Consent Redesign:
+    The PRD 12.11-style "share this window's audio too?" checkbox
+    doesn't exist on the Wayland bypass path (no in-app modal for
+    video source selection at all) — a native
+    `dialog.showMessageBox` was added instead, but naming it required
+    knowing which app the picked window belonged to, and there's no
+    reliable signal for that on Wayland (confirmed live: the picked
+    source's `id` is just `"window:1:0"`, a sequential handle scoped
+    to the one portal grant, not a PID or anything else
+    correlatable). Solution: a new Linux-only native-audio export,
+    `listAudioProducingApps(excludePids)`, queries PipeWire/
+    PulseAudio directly for apps *actually* producing audio right
+    now (not privacy-gated the way window capture is) and offers a
+    direct choice via dynamic dialog buttons — exact name, no
+    guessing.
+    Two real bugs found and fixed getting this working:
+      1. First implementation matched by name only, using an exact
+         string comparison — always failed ("unsupported: no audio
+         stream matched..."). Root cause found via the diagnostic
+         message itself: ordinary desktop apps (Firefox, Electron
+         apps) connect to PipeWire through its PulseAudio-
+         compatibility layer (`client.api: "pipewire-pulse"`,
+         confirmed by dumping every prop PipeWire returned), and
+         that layer's nodes simply never carry
+         `application.process.id` in the plain PipeWire registry's
+         `global` event — even though `pw-dump`/`pactl` independently
+         confirm the same node genuinely has one. Fixed by having
+         `list_audio_producing_apps` always go through PulseAudio's
+         own introspection API (which does reliably carry PID) when
+         its compatibility socket is present, rather than the native
+         PipeWire registry.
+      2. Once PID exclusion worked, Reson8's own audio stream
+         (self-identified generically as "Chromium", indistinguishable
+         by name from a real separate Chrome/Chromium browser) still
+         appeared as a shareable option. Fixed by passing every PID
+         from Electron's own `app.getAppMetrics()` (main, renderer,
+         GPU, audio service, etc.) as `excludePids` — deliberately
+         PID-based, not name-based, so a real separate Chromium
+         browser window stays a valid, distinct option.
+    User-confirmed live after both fixes: "It worked perfectly!!
+    This is really good now!"
+
+  macOS Gating:
+    Share Screen button now `disabled` with an explanatory tooltip
+    whenever `platform === "darwin"` — the macOS packaging pipeline
+    has never been run on real Apple hardware, so this ships with
+    the feature off rather than an untested path reaching users.
+
+  Custom Stream Names:
+    Both screen-share paths now let the user set an optional custom
+    display name instead of the source's own name:
+      - Windows/macOS/X11 (existing Selection Modal): a new text
+        input alongside the audio checkbox.
+      - Linux/Wayland bypass: a new `#stream-name-modal` (a real
+        in-app modal, since this path has no existing UI step to
+        attach a field to), shown right after video capture starts.
+    Fallback chain on both paths, left empty: custom name → real
+    source name (where available) → generic "your screen" — the
+    Selection Modal path previously had no explicit fallback at all
+    for an empty source name, now also covered.
+    The resolved name (not the raw user input) is sent to the
+    server via a new `streamName` field on `SET_SCREEN_SHARE_STATE`,
+    stored in Redis presence alongside `isSharingScreen`, and
+    returned via `WATCH_SCREEN_SHARE`'s ack so a viewer's Viewer
+    window shows the exact same name — see next section.
+
+  Viewer Window Fixes:
+    - Stream name now shown in the Viewer window's OS title bar only
+      ("Watching X's screen share: [name]") — NOT the controls-bar
+      nickname label next to the mute button, which stays the plain
+      nickname; an earlier pass had mistakenly changed both, caught
+      and reverted per explicit user feedback.
+    - Mute button: was reusing the generic `.active` class (meant
+      for "this is turned ON, highlight it") for mute, which read
+      backwards — muted looked *brighter* than unmuted, and the icon
+      never changed at all. Fixed: blue (`--accent`) by default,
+      opaque grey (`--text-muted`) once muted via a dedicated
+      `.muted` class (correctly scoped with two IDs to outrank the
+      generic `#controls-bar button` rules, same specificity issue
+      as the Exit Stream button fix from the previous entry), plus a
+      real icon swap (speaker → speaker with a diagonal line through
+      it).
+    - Instant stream-end detection: viewers were waiting a long time
+      (in practice, until the sharer's whole voice session ended) to
+      learn a share had stopped. Root cause: stopping a screen share
+      only ever closed the mediasoup-client Producer *locally* —
+      `producer.close()` does not itself notify the server, and
+      nothing called the existing (but entirely unused until now)
+      `CLOSE_PRODUCER` signal, so the server-side Producer stayed
+      open indefinitely. Compounding bug found in the same handler:
+      it only ever checked the mic Producer slot (`session.producer`),
+      never `screenVideoProducer`/`screenAudioProducer`, so even a
+      correct client-side call would have silently no-opped. Fixed
+      both: `voice.service.ts`'s `stopScreenVideoProducing()`/
+      `closeScreenAudioProducer()` now call a new
+      `VoiceSignaling.closeProducer()` before closing locally, and
+      the server's `CLOSE_PRODUCER` handler now checks all three
+      Producer slots (mirroring `PRODUCE`'s own `sessionField`
+      logic). Viewers already had the correct
+      `consumer.on('producerclose')` listener for this — it just
+      never fired because the server-side Producer never actually
+      closed.
+
+  Sharer-Awareness Features:
+    The LIVE badge (visible to others) and the Share Screen button's
+    own color/icon state are easy to miss while paying attention to
+    whatever's on the shared screen — added three louder, redundant
+    cues for the sharer's own client while `isSharingScreen` is true:
+      - A red banner (bold white text on a solid red background)
+        directly above the voice channel status/action buttons.
+      - A second, bigger, full-width "Stop Sharing" button inside
+        that banner — wired to a new shared `stopSharingScreen()`
+        function also used by the original Share Screen button's
+        stop path, so both stay in sync.
+      - 🔴 prefixed onto the OS window title bar
+        (`document.title = "🔴 Reson8"`) — no IPC/main-process work
+        needed, since Electron mirrors `document.title` to the
+        native title bar by default and nothing in main.ts
+        intercepts `page-title-updated`.
+    All three are driven centrally through the existing
+    `updateShareScreenButton()`, which is now also called from
+    `updateVoiceUI()`'s "left voice" branch (previously skipped),
+    so leaving voice entirely while sharing (not just the explicit
+    stop paths) correctly resets the title bar and banner instead of
+    leaving them stuck.
+    User-confirmed live: "It worked like a charm! Awesome!"
+
+  Key Files Modified:
+    packages/native-audio/src/windows.rs — the `std::mem::forget(prop)`
+      heap-corruption fix
+    packages/native-audio/src/linux.rs — `list_audio_producing_apps`
+      (new export, PID-exclusion, PulseAudio-introspection routing),
+      `names_plausibly_match` substring heuristic (superseded by the
+      app-picker approach but left in as the fallback path's best
+      effort)
+    packages/native-audio/index.js / index.d.ts — hand-maintained
+      forwarding/typing for the new export
+    packages/shared-types/src/socket-events.ts — `streamName` added
+      to `SET_SCREEN_SHARE_STATE` and `WATCH_SCREEN_SHARE`'s ack
+    apps/server/src/services/presence.service.ts — `screenShareName`
+      field alongside `isSharingScreen` in the Redis presence hash
+    apps/server/src/handlers/voice.handler.ts — `CLOSE_PRODUCER`
+      handler now checks all three Producer slots; `streamName`
+      plumbed through `SET_SCREEN_SHARE_STATE`/`WATCH_SCREEN_SHARE`
+    apps/client/src/main.ts — `pick-audio-app-to-share` IPC handler
+      (native dialog with dynamic app-name buttons), macOS gating is
+      renderer-only (no main.ts change needed there)
+    apps/client/src/preload.ts — `pickAudioAppToShare`,
+      `setScreenShareState` gained `streamName`,
+      `closeProducer` added to both `VoiceSignaling` implementations
+    apps/client/src/preload-viewer.ts — `streamName` read from
+      `WATCH_SCREEN_SHARE`'s ack, exposed via a new `getStreamName()`
+      function (not a plain `info` property — contextBridge
+      snapshots those at expose time, before the async watch
+      resolves)
+    apps/client/src/services/voice.service.ts — `VoiceSignaling`
+      gained `closeProducer`; both screen Producer stop paths call it
+    apps/client/src/renderer/renderer.ts — custom-name modal +
+      Selection Modal input, macOS gating, `stopSharingScreen()`
+      extracted/shared, screen-share alert banner + title bar toggle
+    apps/client/src/renderer/index.html — `#stream-name-modal`,
+      Selection Modal's name input, `#screen-share-alert-banner` +
+      its "Stop Sharing" button and CSS
+    apps/client/src/renderer/viewer.ts — window-title-only stream
+      name display (reverted an initial over-broad change to the
+      controls-bar label too), `.muted` class instead of `.active`
+      for mute
+    apps/client/src/renderer/viewer.html — mute button icon swap +
+      corrected color scheme (two-ID-scoped CSS, same specificity
+      fix pattern as Exit Stream)
+
+  Verification:
+    - npx tsc --noEmit — clean across shared-types, server, and
+      client, run repeatedly through the session as each change
+      landed
+    - Windows: user-confirmed live on real hardware — app+audio
+      sharing works with no crash and no stuttering
+    - Linux: user-confirmed live — audio-share app picker excludes
+      Reson8's own stream correctly, offers real separate apps
+      (Firefox, a real Chromium/VS Code-class app) correctly
+    - Custom stream names, Viewer window fixes (title-only name
+      display, mute icon/color, instant stream-end), and the
+      sharer-awareness banner/button/title — all user-confirmed live
+      on Linux ("worked like a charm", "worked perfectly")
+    - NOT independently re-verified on Windows/macOS after the
+      Viewer/sharer-awareness changes (those landed after the
+      Windows testing session ended) — low risk, since they're
+      renderer-only UI changes with no platform-specific branching,
+      but worth keeping in mind if anything looks off there later
+
+  Next Step: user is moving on to a list of general Reson8 bug
+  fixes unrelated to screen sharing. Do not bump the version
+  (`/bump-version`) until explicitly told to — still pending per the
+  previous entry's instruction, now also covering all of this
+  entry's work.
+
+--- Entry: 24/08/2026 (3) ---
+
+Feature/Fix: Window Title Bar Shows Connected Server Name (Phase 12
+sub-phase, item 1/11)
+
+  Problem: The OS window title bar always read plain "Reson8"
+  (or "🔴 Reson8" while sharing), regardless of which server the
+  user was connected to — no way to tell servers apart from the
+  title bar alone, and the server's own configured display name
+  (`SERVER_NAME` env var, stored as `Server.name`) was never exposed
+  to clients at all.
+
+  Solution: Bundled `name` into `GET_SERVER_SETTINGS`'s ack — already
+  the "fetch server-wide info once connected" round trip the client
+  makes right after joining, so no new event was needed. Server
+  handler now selects `name` alongside the existing
+  `nudgeEnabled`/`screenShareEnabled` fields. Client stores it in a
+  new `connectedServerName` module variable, reset to `null` on
+  disconnect. Title composition is centralized in a new
+  `updateWindowTitle()` function — "Reson8" or "Reson8 -
+  [ServerName]", with the existing 🔴 live-sharing prefix applied on
+  top — replacing the previous hardcoded `document.title = ...`
+  inline in `updateShareScreenButton()`, which would otherwise have
+  clobbered the server name every time sharing state changed (the
+  two concerns update independently and at different times).
+
+  Key Files Modified:
+    packages/shared-types/src/socket-events.ts — `name?: string`
+      added to `GET_SERVER_SETTINGS`'s ack
+    apps/server/src/handlers/nudge.handler.ts — selects/returns
+      `server.name`
+    apps/client/src/preload.ts — `getServerSettings()` return type
+    apps/client/src/renderer/renderer.ts — `connectedServerName`
+      state, `updateWindowTitle()`, wired at connect/disconnect and
+      into the existing sharing-state title update
+
+  Verification:
+    - npx tsc --noEmit — clean, server and client
+    - npx tsc --build (client) — clean
+    - NOT live-tested yet — queued for the user's manual pass at the
+      end of this sub-phase alongside the other 10 items
+
+  Next Step: continue through the remaining 10 items in this
+  sub-phase.
+
+--- Entry: 24/08/2026 (4) ---
+
+Feature/Fix: Emoji Picker Custom-Emoji Icon Visibility and Category
+Scrollbar Discoverability (Phase 12 sub-phase, item 2/11)
+
+  Problem: The custom-emoji quick-jump icon (a plain circle-plus SVG)
+  was nearly invisible — `.emoji-cat-tab` never sets a `color`, so
+  the SVG's `stroke="currentColor"` fell through to the browser's
+  initial black with nothing else in the ancestor chain overriding
+  it (every sibling category tab renders an emoji glyph instead,
+  which ignores `color`, so this was the only tab actually affected
+  — easy to miss without checking specifically). Separately, the
+  horizontal category-tabs row had its scrollbar fully hidden
+  (`scrollbar-width: none` / `-webkit-scrollbar { display: none }`),
+  giving no visual cue that more categories exist off-screen behind
+  the fixed custom-emoji slot.
+
+  Solution:
+    - Added `color: var(--text-primary)` to `.emoji-cat-tab`, fixing
+      the root cause directly (harmless for emoji-glyph tabs, fixes
+      any current/future SVG-based one).
+    - Replaced the icon itself with a filled sticker+plus design
+      (adapted from the user-provided reference,
+      app-planning/custom_emoji_icon.svg — an
+      ic_fluent_sticker_add_24_filled icon — recolored to
+      `fill="currentColor"` and resized to fit the existing 12x12
+      slot; path data reused as-is rather than hand-crafted, to
+      avoid introducing a worse bezier curve than a professionally
+      designed one) — reads as "custom emoji" rather than a generic
+      "add" circle.
+    - Replaced the hidden scrollbar with a thin (5px), always-visible
+      (not hover-only) styled one — `scrollbar-width: thin` +
+      `scrollbar-color` for Firefox, `::-webkit-scrollbar{-track,
+      -thumb}` for Chromium/Electron — matching the app's dark theme
+      rather than falling back to the OS's full-size default
+      scrollbar, which would look out of place here. Added a touch
+      of bottom padding to the row so the new scrollbar doesn't
+      visually crowd the tab icons above it.
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html — `.emoji-cat-tab` color
+      fix, `.emoji-category-tabs` scrollbar styling
+    apps/client/src/renderer/renderer.ts — custom-emoji tab icon SVG
+
+  Verification:
+    - npx tsc --noEmit / --build — clean
+    - NOT live-tested yet — queued for the user's manual pass at the
+      end of this sub-phase; the new scrollbar's exact visual weight
+      and the custom-tab-slot's vertical alignment against the
+      slightly-taller category row are both worth a look during that
+      pass
+
+  Next Step: continue through the remaining 9 items in this
+  sub-phase.
+
+--- Entry: 24/08/2026 (5) ---
+
+Feature/Fix: Edit Message Button Now Hides Once Its Window Expires
+(Phase 12 sub-phase, item 3/11)
+
+  Problem: The pencil edit button on a user's own message stayed
+  visible forever, even long after the server's 2-minute edit window
+  (PRD 4.11) had passed. Clicking it after expiry just surfaced the
+  server's rejection as an error log — `attachEditButton()` only
+  ever checked message age inside the click handler, never at
+  render time.
+
+  Solution: `attachEditButton()` now computes the remaining time
+  before rendering anything and returns early (no button at all) if
+  the window has already lapsed. For a message still within its
+  window at render time, a `setTimeout` is scheduled for the exact
+  remaining duration to remove the button — covers a message going
+  stale *while visible* in a channel that stays open past the
+  2-minute mark, not just the initial-render case. The click
+  handler's own re-check (defense in depth against the timer being
+  wrong/delayed) now also removes the button on a late click instead
+  of just logging an error.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts — `attachEditButton()`
+
+  Verification:
+    - npx tsc --noEmit / --build — clean
+    - NOT live-tested yet (would need waiting out a real 2-minute
+      window) — queued for the user's manual pass at the end of this
+      sub-phase
+
+  Next Step: continue through the remaining 8 items in this
+  sub-phase.
+
+--- Entry: 24/08/2026 (6) ---
+
+Feature/Fix: Admin-Configurable Max Chat Message Length (Phase 12
+sub-phase, item 4/11)
+
+  Problem: Chat messages (channel messages, edits, and DMs alike)
+  had no length limit anywhere in the stack — no client-side
+  maxlength, no server-side check, no DB-level column bound
+  (Message.content was unbounded Postgres TEXT). A malicious or
+  careless client could send a pathologically large message,
+  costing real DB/bandwidth/broadcast-fanout resources for every
+  connected client on every send. Confirmed via investigation across
+  the client input, all three server handlers (SEND_MESSAGE,
+  EDIT_MESSAGE, SEND_DIRECT_MESSAGE), and the Prisma schema before
+  implementing, to make sure this wasn't just a missing UI nicety.
+
+  Solution: New `Server.maxMessageLength` column (default 4000,
+  admin-configurable, Prisma migration
+  `20260824214129_add_max_message_length`), enforced server-side —
+  the only enforcement that actually matters — in all three message
+  handlers, checked against trimmed content length. Bounds
+  (1–100,000) live in a new shared `apps/server/src/config/
+  message.config.ts` so the validation in
+  UPDATE_SERVER_SETTINGS and the enforcement in the three message
+  handlers can't drift apart. `GET_SERVER_SETTINGS`/
+  `UPDATE_SERVER_SETTINGS`/`SERVER_SETTINGS_UPDATED` extended to
+  carry the value, mirroring the existing nudgeEnabled/
+  screenShareEnabled pattern exactly. Client applies it as
+  `chatInput.maxLength` (soft UX limit only — the server enforcement
+  is what actually matters) and surfaces the server's rejection
+  message on send/edit instead of a generic failure (SEND_MESSAGE's
+  ack previously had no `error` field at all). New "Max Message
+  Length" row in Settings → Server tab (number input + explicit Save
+  button, not live-on-change like the two existing toggles, since a
+  numeric field mid-edit shouldn't fire on every keystroke).
+
+  Key Files Modified:
+    apps/server/prisma/schema.prisma — `Server.maxMessageLength`
+    apps/server/prisma/migrations/20260824214129_add_max_message_length/
+      (NEW)
+    apps/server/src/config/message.config.ts (NEW) — shared
+      DEFAULT/MIN/MAX constants
+    apps/server/src/handlers/nudge.handler.ts — GET/UPDATE_SERVER_SETTINGS
+    apps/server/src/handlers/message.handler.ts — SEND_MESSAGE/
+      EDIT_MESSAGE enforcement
+    apps/server/src/handlers/dm.handler.ts — SEND_DIRECT_MESSAGE
+      enforcement
+    packages/shared-types/src/socket-events.ts —
+      `maxMessageLength`/`error` fields across the relevant events
+    apps/client/src/preload.ts — return-type updates
+    apps/client/src/renderer/renderer.ts — `serverMaxMessageLength`
+      state, chatInput.maxLength wiring, Settings → Server tab UI,
+      send/edit error surfacing
+
+  Verification:
+    - npx tsc --noEmit / --build — clean, server and client
+    - npm run test (server, vitest) — 19/19 passing, no regressions
+    - NOT live-tested yet (sending an over-limit message, or an
+      admin changing the limit live) — queued for the user's manual
+      pass at the end of this sub-phase
+
+  Next Step: continue through the remaining 7 items in this
+  sub-phase.
+
+--- Entry: 24/08/2026 (7) ---
+
+Feature/Fix: Long Chat Message Truncation With "See More"/"See
+Less" (Phase 12 sub-phase, item 5/11)
+
+  Problem: Long channel messages rendered at full length with no
+  truncation at all — confirmed via investigation that this feature
+  (described in the request as an existing behavior with a
+  persistence bug) doesn't exist anywhere in the current codebase.
+  Built fresh per explicit user clarification: truncate to a few
+  lines with a "See more" expand toggle, and deliberately do NOT
+  persist the expanded state anywhere — it should reset to
+  truncated on a channel switch, an app restart, AND when the window
+  is minimized (to tray or a plain OS minimize), not just stay
+  expanded until manually re-collapsed.
+
+  Solution: `attachMessageTruncation()` applies a `-webkit-line-
+  clamp: 4` CSS class to a message's `.msg-text` span, measures
+  `scrollHeight` vs `clientHeight` to see if it's actually
+  overflowing, and only then appends a "See more" button (a short
+  message never gets the clamp class at all, so it keeps flowing
+  inline after the nickname exactly as before — no visual change for
+  the common case). Clicking toggles a `.msg-text-expanded` class
+  and the button's own label between "See more"/"See less". No
+  state is stored anywhere outside these DOM classes, so:
+    - Channel switch away and back already resets it for free —
+      `loadChannelMessages()` rebuilds the tab's message list (and
+      therefore every `.msg-text` element) from scratch.
+    - App restart already resets it for free — nothing survives
+      process exit.
+    - Window minimize needed explicit handling, since the renderer
+      keeps running and the DOM stays untouched while just hidden —
+      added a new `window-minimized` IPC push from main.ts's
+      existing "minimize" handler (fires for both minimize-to-tray
+      and a plain OS minimize) through to a new
+      `collapseAllExpandedMessages()` that finds and re-collapses
+      every currently-expanded message.
+    - Also wired into both places a message's `.msg-text` gets
+      rebuilt after this feature's own initial render: the editor's
+      own optimistic post-edit DOM update, and `applyMessageEdit()`
+      (the MESSAGE_EDITED broadcast other viewers receive) — an edit
+      can just as easily turn a short message long as the reverse,
+      so truncation is re-evaluated in both rather than only at
+      initial render.
+
+  Key Files Modified:
+    apps/client/src/main.ts — "minimize" handler now also pushes
+      `window-minimized`
+    apps/client/src/preload.ts — forwards it as the
+      "window-minimized" renderer event
+    apps/client/src/renderer/renderer.ts —
+      `attachMessageTruncation()`, `collapseAllExpandedMessages()`,
+      wired into `renderChatMessage()` and both edit-DOM-update paths
+    apps/client/src/renderer/index.html — `.msg-text-clamped`,
+      `.btn-see-more` CSS
+
+  Verification:
+    - npx tsc --noEmit / --build — clean
+    - NOT live-tested yet — queued for the user's manual pass at the
+      end of this sub-phase; the 4-line clamp threshold and the
+      minimize-triggered collapse are both worth a specific look
+      during that pass
+
+  Next Step: continue through the remaining 6 items in this
+  sub-phase.
+
+--- Entry: 24/08/2026 (8) ---
+
+Feature/Fix: Nudge Button Fixed Width and Countdown "Blink" (Phase
+12 sub-phase, item 6/11)
+
+  Problem: The Nudge button (Online Users modal) had no fixed
+  width, so switching its label between "👋 Nudge" and a short
+  countdown ("5s") shrank the button and misaligned rows against
+  other users still showing the full label. Separately, closing and
+  reopening the modal made an already-on-cooldown nudge button
+  briefly flash back to the normal "Nudge" label before correcting
+  to the countdown a moment later.
+
+  Investigation (a fork, before touching anything): confirmed the
+  cooldown-state logic itself is synchronous and race-free —
+  `applyCooldownState()` runs and corrects the button's label
+  *before* the button is ever appended to the DOM, both at initial
+  render and via the click handler. No second `renderOnlineUsers()`
+  call exists that could explain a genuine re-render race either.
+  Given that, `.btn-nudge`'s `transition: all 0.15s` — combined with
+  no fixed width — was the more likely actual cause: without a
+  fixed width, the button's own rendered width changes shape between
+  "👋 Nudge" and "5s", and `transition: all` would animate that
+  width change, which can visually read as "flashes back to normal
+  before snapping to the countdown" even though the underlying label
+  was already correct throughout.
+
+  Solution: added `min-width: 84px` + `text-align: center` so the
+  button never changes size regardless of label, and narrowed
+  `transition: all` to `transition: color 0.15s, border-color
+  0.15s` — nothing layout-affecting can animate here again even if
+  a future label change alters the button's natural width. This is
+  a single fix addressing both reported symptoms, not two separate
+  ones, since the width fix is what removes the animation the
+  "blink" almost certainly was.
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html — `.btn-nudge`
+
+  Verification:
+    - npx tsc --noEmit / --build — clean (CSS-only change)
+    - NOT live-tested yet — queued for the user's manual pass; if
+      the "blink" persists after this fix, it would mean the CSS-
+      transition theory was wrong and there's a genuine timing bug
+      elsewhere not found by static analysis, worth a live-diagnostic
+      pass (e.g. console logging inside applyCooldownState) at that
+      point rather than guessing further
+
+  Next Step: continue through the remaining 5 items in this
+  sub-phase.
+
+--- Entry: 24/08/2026 (9) ---
+
+Feature/Fix: Disabled Mic autoGainControl After a Windows Mic-Gain
+Investigation (Phase 12 sub-phase, item 7/11)
+
+  Problem: A user's Windows mic input gain changed unexpectedly
+  (once), unconfirmed whether Reson8's own code was responsible.
+
+  Investigation (a fork, before touching anything): searched
+  voice.service.ts, main.ts, preload.ts, and native-audio's Windows
+  backend for any code that writes to OS-level input/mixer volume
+  (Windows Core Audio APIs, mixer calls, unusual getUserMedia
+  constraints) — found none. native-audio's Windows code only
+  implements process-loopback *output* capture (reading another
+  app's audio for screen-share-with-audio); it never opens or
+  touches a mic/input device at all. The one plausible mechanism
+  found: `autoGainControl: true` in the mic's `getUserMedia`
+  constraints. Chromium's AGC implementation has a documented
+  history (WebRTC/browser community reports) of driving the actual
+  OS-level input volume on Windows as a side effect, not just
+  applying gain purely in its own software pipeline the way the W3C
+  spec describes the constraint — a single unexplained gain change
+  is consistent with one such AGC adjustment pass, not a bug
+  introduced by this app's own code.
+
+  Solution: since this can't be fixed (it's Chromium/OS-driver
+  interaction, not something this codebase controls) but can be
+  avoided, set `autoGainControl: false` in both places the mic is
+  opened (`startProducing()` for real voice, `startPreview()` for
+  the Settings mic preview — kept consistent with each other).
+  Reson8 already has its own client-side noise gate/threshold
+  (mic sensitivity settings), which covers most of what AGC would
+  otherwise be doing, so this costs little.
+
+  Key Files Modified:
+    apps/client/src/services/voice.service.ts — both
+      `autoGainControl` constraints
+
+  Verification:
+    - npx tsc --noEmit / --build — clean
+    - NOT independently verifiable that this actually prevents a
+      recurrence (the original report was a single, not reliably
+      reproducible, event) — this is a reasoned mitigation of the
+      only plausible mechanism found, not a confirmed fix for a
+      confirmed root cause; flag if a mic-gain change is ever
+      observed again after this change ships, since that would mean
+      the AGC theory was wrong
+
+  Next Step: continue through the remaining 4 items in this
+  sub-phase.
+
+--- Entry: 25/08/2026 (10) ---
+
+Feature/Fix: Fixed Per-User Local Volume/Mute Having No Audible Effect,
+Added "Muted for You" Indicator (Phase 12 sub-phase, item 8/11)
+
+  Problem: the per-participant local volume slider and "Mute Locally"
+  button (right-click an occupant in a voice channel) appeared to do
+  nothing — audio played at full, unchanged volume regardless of the
+  slider position or mute state.
+
+  Investigation: every layer of the feature — the preload/interface
+  wiring, context-menu construction and event handlers, CSS, and the
+  Web Audio GainNode graph in voice.service.ts — read as structurally
+  correct with no bug findable by static analysis (confirmed
+  independently by both a fork's investigation and a direct re-read).
+  Live diagnostics (temporary console logging, added and later
+  removed) were needed to actually find it: `applyOverrideForUser()`
+  was confirmed to correctly locate the live GainNode for the target
+  user and drive `gain.gain.value` all the way to `0.000`, yet audio
+  stayed fully audible — and a DOM dump confirmed there was no
+  phantom/duplicate `<audio>` element or untracked consumer either.
+  A kill-test (fully quitting the remote client mid-conversation,
+  which immediately silenced the audio) confirmed the sound really
+  was coming from Reson8's own WebRTC pipeline, not another source.
+
+  Root cause: `consumeProducer()` fed the per-participant GainNode
+  graph via `ctx.createMediaElementSource(audioElement)`, on the
+  assumption (standard Web Audio behavior, and the design already in
+  place per PRD 4.1/4.2 — "GainNode-per-participant Web Audio graph")
+  that capturing an `<audio>` element for a Web Audio graph redirects
+  the element's own native output exclusively into that graph. That
+  redirection turned out to be unreliable in this Electron/Chromium
+  build specifically for `srcObject`/live-MediaStream-backed elements
+  (as opposed to `src="file"` elements, where the redirection is
+  solid): with the element left unmuted, the GainNode's value had
+  zero audible effect since the element's own native playback path
+  was still the thing actually producing sound, entirely bypassing
+  the graph. (A first fix attempt — muting the element outright while
+  still sourcing the graph from it via `createMediaElementSource`
+  — produced total silence for both participants instead, which
+  proved the graph was never the real audible output path at all.)
+
+  Solution: switched the graph's source node from
+  `ctx.createMediaElementSource(audioElement)` to
+  `ctx.createMediaStreamSource(stream)`, tapping the same
+  `MediaStream` directly and independently of the `<audio>` element.
+  The `<audio>` element is still created, appended to `document.body`,
+  and played (per root CLAUDE.md's "detached audio element" gotcha,
+  to keep the MediaStreamTrack actively flowing/decoded) but is now
+  explicitly `muted = true`, since the GainNode graph — sourced
+  independently via `createMediaStreamSource` — is the sole intended
+  audible route. This makes the per-user GainNode unambiguously
+  authoritative regardless of any element-capture quirks.
+
+  Also added, since the underlying mechanism was already being
+  touched: a light-blue "muted for you" mic-slash icon next to an
+  occupant's name in the voice-channel tree (`OCC_LOCALLY_MUTED_ICON`
+  in renderer.ts, reusing `OCC_MUTED_ICON`'s shape with `var(--accent)`
+  instead of `var(--danger)`), shown only to the client who locally
+  muted that occupant — distinct from the existing red icon, which
+  reflects the occupant's own server-broadcast self-mute and is
+  visible to everyone. Wired to re-render immediately on toggling
+  "Mute Locally" (`renderTree(currentTree)`) rather than waiting for
+  an incidental tree update to pick up the new localStorage state.
+
+  Key Files Modified:
+    apps/client/src/services/voice.service.ts — `remoteMediaSources`
+      retyped to `MediaStreamAudioSourceNode`; `consumeProducer()`
+      now mutes the `<audio>` element and sources the GainNode graph
+      via `createMediaStreamSource(stream)` instead of
+      `createMediaElementSource(audio)`
+    apps/client/src/renderer/renderer.ts — new
+      `OCC_LOCALLY_MUTED_ICON` constant; `renderOccupants()` shows it
+      when `getSavedLocalMute(occ.userId)` is true for a non-self
+      occupant; the context menu's mute-button handler now triggers
+      an immediate `renderTree(currentTree)` re-render
+
+  Verification:
+    - npx tsc --noEmit — clean
+    - Live-tested by the user across two real clients in the same
+      voice channel: confirmed both the volume slider (down to 0%)
+      and "Mute Locally" now genuinely silence the target
+      participant, where they previously had no effect at all
+
+  Next Step: continue through the remaining 3 items in this
+  sub-phase (9, 10, 11).
+
+--- Entry: 25/08/2026 (11) ---
+
+Feature/Fix: Fixed Nicknames Showing "Unknown" in Online Users Modal
+After Long Sessions (Phase 12 sub-phase, item 9/11)
+
+  Problem: a user connected for 3+ hours could show up as "Unknown"
+  in the Online Users modal, despite their nickname displaying
+  correctly everywhere else (e.g. inside the voice channel itself).
+
+  Root cause: Redis presence hashes carry a 1-hour TTL (`USER_TTL`
+  in presence.service.ts), refreshed on activity — but nothing
+  refreshed it on pure *inactivity*/idle presence. A
+  `PresenceService.heartbeat(userId)` method already existed
+  specifically to refresh this TTL, but had zero callers anywhere in
+  the codebase — no client→server event ever invoked it. Any session
+  idle (voice-inactive, no channel/message activity) for longer than
+  the 1-hour TTL had its presence hash silently expire out of Redis;
+  `getUserPresence()`'s fallback (`nickname: data.nickname ??
+  "Unknown"`) then kicked in for that user in the Online Users
+  modal specifically, since that's the one place presence is looked
+  up in bulk for users who may no longer have a live hash. Other UI
+  (e.g. inside a voice channel) resolves nicknames via a different,
+  already-camera-locked-on-the-occupant path that doesn't hit this
+  same fallback.
+
+  Solution: rather than adding a brand new periodic client→server
+  event solely for this, wired the heartbeat into the existing
+  `PING_LATENCY` handshake — already emitted by every connected
+  client every ~3 seconds for RTT/clock-offset measurement (PRD
+  11.2), far more often than the 1-hour TTL needs. The server's
+  `PING_LATENCY` handler now also calls
+  `presence.heartbeat(socket.data.userId)` (fire-and-forget, never
+  blocking the latency ack) alongside its existing instant ack. Zero
+  added client-side code and zero added network traffic — reuses a
+  signal that was already firing continuously for the entire
+  lifetime of any connected session.
+
+  Key Files Modified:
+    apps/server/src/handlers/connection.handler.ts — `PING_LATENCY`
+      handler now also refreshes the caller's presence TTL
+
+  Verification:
+    - npx tsc --noEmit (server) — clean
+    - npm run test (server) — 19/19 passing, unchanged
+    - Not independently reproducible in this session (requires a
+      3+ hour idle session to trigger the original TTL expiry) —
+      root cause and fix mechanism are confirmed by direct reading
+      of presence.service.ts's TTL/heartbeat code; flag if "Unknown"
+      is still observed after this ships, which would mean the
+      heartbeat isn't reaching the right users (e.g. a client not
+      running the PING_LATENCY interval while idle)
+
+  Next Step: continue through the remaining 2 items in this
+  sub-phase (10, 11).
+
+--- Entry: 25/08/2026 (12) ---
+
+Feature/Fix: Fixed Deafen Not Applying to Participants Consumed After
+Toggle-On (Phase 12 sub-phase, item 10/11)
+
+  Problem: a user joining a voice channel *after* local deafen was
+  already activated could still sometimes be heard — deafen only
+  reliably silenced participants who were already being consumed at
+  the moment it was toggled on.
+
+  Root cause: `toggleDeafen()` silenced sound by setting
+  `audio.muted = true/false` directly on each currently-tracked
+  `<audio>` element — a one-shot pass over whoever existed in
+  `audioElements` at that instant. `consumeProducer()`, which runs
+  for every participant consumed *afterward*, never checked
+  `_isDeafened` at all, so a newly-consumed participant's element
+  always started unmuted regardless of the current deafen state.
+
+  This bug was about to get considerably worse as a side effect of
+  entry (10) above: that fix made every remote `<audio>` element
+  permanently `muted = true` (audible output now flows solely through
+  the per-user GainNode graph via `createMediaStreamSource`), which
+  would have made `toggleDeafen()`'s `audio.muted` toggling
+  completely inert for everyone, not just late joiners — caught and
+  fixed here before it shipped.
+
+  Solution: introduced a single `computeGainForUser(userId)` helper
+  that derives a participant's GainNode value from three inputs —
+  their per-user volume/mute override, the master volume attenuator,
+  and `_isDeafened` (deafen wins outright, forcing 0 regardless of
+  anything else) — and wired every gain-setting site through it:
+  `consumeProducer()`'s initial gain, `applyOverrideForUser()`
+  (per-user slider/mute), and `setGlobalVoiceVolume()` (master
+  slider), all previously duplicating the override-only formula
+  inline. `toggleDeafen()` no longer touches `<audio>.muted` at all;
+  it flips `_isDeafened` and then re-derives every currently-tracked
+  consumer's gain via the same helper. Because `consumeProducer()`
+  now consults `_isDeafened` through that same helper, a participant
+  consumed after deafen was toggled on starts correctly silenced —
+  fixing both the original bug and the regression entry (10) would
+  otherwise have introduced.
+
+  Key Files Modified:
+    apps/client/src/services/voice.service.ts — new
+      `computeGainForUser()`; `consumeProducer()`,
+      `applyOverrideForUser()`, `setGlobalVoiceVolume()`, and
+      `toggleDeafen()` all updated to use it
+
+  Verification:
+    - npx tsc --noEmit — clean
+    - Not yet live-tested by the user (deafen-then-late-join is a
+      two-client, precisely-timed scenario) — flag if deafen still
+      leaks audio for a late joiner after this ships
+
+  Next Step: continue through the last item in this sub-phase (11).
+
+--- Entry: 25/08/2026 (13) ---
+
+Feature/Fix: Client/Server Version Mismatch Warning (Phase 12
+sub-phase, item 11/11 — final item)
+
+  Problem: no warning existed if a client's version didn't match the
+  server it connected to, in either direction — a stale client
+  against an upgraded server (or vice versa) could silently hit
+  protocol/behavior differences with no indication why.
+
+  Solution: the server's own running build version (read once from
+  apps/server/package.json at import time, not admin-configurable —
+  distinct from the DB-backed `Server.name`) is now bundled into the
+  existing GET_SERVER_SETTINGS ack, alongside `name`/
+  `maxMessageLength` already added earlier this sub-phase — no new
+  socket event needed, reusing the "fetch server-wide info once
+  connected" round trip. On every connection, the client compares
+  this against its own `getAppVersion()` (already used for the About
+  tab / What's New modal) with a small major.minor.patch comparator.
+  Any difference at all (per explicit requirement — warn in either
+  direction, not just "server is newer") shows a modal with both
+  actual version numbers. A "View Releases" button (linking to the
+  project's GitHub releases page) appears only when the server is
+  newer — the client's fix is to update itself; a newer client
+  against an older server has no client-side action to offer, so
+  only the plain warning shows. Not persisted/dismissed-forever like
+  the What's New modal — a mismatch is a per-connection fact (the
+  next server connected to might not have one), so it re-warns on
+  every connection where it's still true, and dismissal only closes
+  it for that instance.
+
+  Key Files Modified:
+    packages/shared-types/src/socket-events.ts — GET_SERVER_SETTINGS
+      ack gains `version?: string`
+    apps/server/src/config/version.config.ts (NEW) — reads
+      `SERVER_VERSION` from package.json once at import time
+    apps/server/src/handlers/nudge.handler.ts — GET_SERVER_SETTINGS
+      now returns `version: SERVER_VERSION`
+    apps/client/src/preload.ts — `getServerSettings()` return type
+      gains `version?: string`
+    apps/client/src/renderer/renderer.ts — matching interface update;
+      new `compareVersions()` and `checkVersionMismatch()`, wired
+      into the connect-time GET_SERVER_SETTINGS callback; new modal
+      DOM refs and button handlers
+    apps/client/src/renderer/index.html — new
+      `#version-mismatch-modal` (styled like the existing
+      auto-updater modal), added to the shared modal
+      display/visibility CSS selector lists
+
+  Verification:
+    - npx tsc --build (shared-types) — clean
+    - npx tsc --noEmit (server) — clean
+    - npm run test (server) — 19/19 passing, unchanged
+    - npx tsc --noEmit (client) — clean
+    - Not yet live-tested (requires connecting a client to a server
+      running a genuinely different version)
+
+  Next Step: this was the last item in the Phase 12 sub-phase
+  (11/11). All items now implemented and committed. Per the user's
+  process instructions: wait for their explicit confirmation that
+  everything has been tested (they're doing manual testing for what
+  couldn't be automated here) before running /bump-version and
+  writing one consolidated release description spanning all of
+  Phase 12 (the original 14-item PRD) plus this entire sub-phase.
+
+--- Entry: 29/08/2026 ---
+
+Feature/Fix: Connection Resilience for Weak/Flaky Networks
+
+  Problem: user-supplied server logs from a live session (a client on
+  a weak signal) showed repeated Socket.io `ping timeout`/`transport
+  close` disconnects over ~15 minutes. Investigation of
+  connection.handler.ts found the `disconnect` handler had zero grace
+  period: the instant a socket dropped, it immediately wiped the
+  user's Redis presence and broadcast USER_LEFT/PRESENCE_UPDATE to
+  the whole server. The client's existing reconnection logic
+  (Socket.io auto-reconnect + `attemptVoiceRejoin` in preload.ts)
+  would then reconnect within a second or two and rejoin — but from
+  every *other* client's perspective this was indistinguishable from
+  a real leave+rejoin: renderer.ts plays
+  `user_disconnected_from_channel.mp3` then
+  `user_joined_channel.mp3` for the whole channel, and the occupant
+  list flickers, every time the flaky user blips. Separately, the
+  existing ICE-disconnected grace timers (client 4s / server 10s,
+  from PRD 11.1) only ever waited-then-killed a degraded WebRTC
+  transport — mediasoup supports `restartIce()` to recover a live
+  transport without destroying its producer/consumers, and nothing in
+  the codebase called it, so even a pure media-path hiccup (socket
+  fine, only the UDP path degraded) escalated to a full voice-channel
+  rejoin instead of a silent in-place recovery.
+
+  Solution: four independent fixes, chosen with the user after
+  presenting the diagnosis via AskUserQuestion (all four selected):
+
+  1. Disconnect grace period (server): `connection.handler.ts`'s
+     `disconnect` handler no longer immediately calls
+     `presence.leaveChannel`/`presence.leaveServer` or broadcasts
+     USER_LEFT/PRESENCE_UPDATE. Mediasoup cleanup (PRODUCER_CLOSED +
+     `mediasoup.cleanupUserSession`) still happens immediately — that
+     transport is tied to the dead socket either way, and the client
+     rebuilds a fresh one on rejoin regardless. The presence
+     removal + broadcast is now deferred via a `setTimeout`
+     (`DISCONNECT_GRACE_MS = 10_000`) keyed by `userId` in a new
+     `pendingDisconnects` map, run through a new `finalizeDisconnect()`
+     helper. `USER_JOIN_SERVER` checks this map first and clears the
+     timer if the same `instanceId` reconnects within the window, so
+     a brief blip never triggers the leave broadcast (and therefore
+     never triggers the leave/join sound pair or occupant-list
+     flicker) at all.
+  2. ICE restart on transient transport drops (shared-types + server
+     + client): new `RESTART_ICE` Socket.io event
+     (`{transportId} -> {success, iceParameters?}`). Server:
+     `MediasoupService.restartTransportIce()` finds the send/recv
+     transport by ID in the user's session and calls mediasoup's
+     `transport.restartIce()`; a new handler in `voice.handler.ts`
+     wires this up. Client: `voice.service.ts`'s
+     `handleTransportConnectionStateChange` now takes the transport
+     instance too, and on `"disconnected"` immediately fires a new
+     `attemptIceRestart()` (guarded by an `iceRestartInFlight` Set
+     keyed by transport ID) which calls the new
+     `signaling.restartIce()` and applies the result via
+     mediasoup-client's `transport.restartIce({iceParameters})`. The
+     existing grace timer (bumped 4s -> 6000ms to give the restart
+     round-trip room) still runs in parallel as a fallback —if the
+     restart doesn't recover the connection (or signaling is down
+     too), `reportConnectionLost()` still fires and the existing full
+     `attemptVoiceRejoin()` path in preload.ts is unchanged as the
+     safety net.
+  3. Unlimited Socket.io reconnection attempts (client): preload.ts's
+     `io()` call had `reconnectionAttempts: 5` (~17s of backoff before
+     giving up entirely, per Socket.io's default delay/cap), which
+     could strand a user on a connection bad enough to need more than
+     a few retries — requiring a manual reconnect even though the new
+     server-side grace period is happy to wait far longer. Changed to
+     `reconnectionAttempts: Infinity` (delay/backoff unchanged).
+  4. Log noise (server): `permissions.middleware.ts`'s
+     `requirePermission()` logged every denial at `warn` level,
+     including routine capability probes (MANAGE_ROLES/MANAGE_EMOJIS
+     checks that fire on every join for every non-admin user to
+     decide whether to show admin UI) — not a bug (the client already
+     silently ignores `PERMISSION_DENIED`, per
+     `renderer.ts:2437`), but this was drowning out genuine signal
+     while reading server logs during this investigation. Downgraded
+     to `debug`.
+
+  Key Files Modified:
+    packages/shared-types/src/socket-events.ts — new RESTART_ICE
+      event on ClientToServerEvents
+    apps/server/src/services/mediasoup.service.ts — new
+      `restartTransportIce()`
+    apps/server/src/handlers/voice.handler.ts — new RESTART_ICE
+      handler
+    apps/server/src/handlers/connection.handler.ts — disconnect
+      grace period (`pendingDisconnects` map, `finalizeDisconnect()`,
+      cancellation in USER_JOIN_SERVER)
+    apps/server/src/middleware/permissions.middleware.ts — denial log
+      downgraded warn -> debug
+    apps/client/src/services/voice.service.ts — `VoiceSignaling.
+      restartIce()`, `attemptIceRestart()`, `iceRestartInFlight` Set,
+      `handleTransportConnectionStateChange()` now takes the
+      transport and triggers a restart attempt on "disconnected"
+    apps/client/src/preload.ts — `createSignaling()`'s
+      `restartIce()` implementation, the mic-preview dummy
+      `VoiceSignaling` stub updated to match the interface,
+      `reconnectionAttempts: Infinity`
+
+  Verification:
+    - npx tsc --build (shared-types) — clean
+    - npx tsc --noEmit (server) — clean
+    - npm run test (server) — 19/19 passing, unchanged
+    - npx tsc --noEmit (client) — clean
+    - Not yet live-tested against a real weak/flaky connection — the
+      user's original repro was an actual weak WiFi session, which
+      isn't reproducible on demand; ask the user to watch for
+      recurrence (or its absence) on their next session on a poor
+      connection.
+
+  Next Step: none of the four fixes are session-blocking, but the ICE
+  restart path (#2) is the most architecturally novel — worth extra
+  attention on the next live weak-connection test to confirm the
+  restart actually recovers audio without a full rejoin, versus just
+  silently falling through to the existing fallback every time.
+
+
+--- Entry: 29/08/2026 ---
+
+Feature/Fix: Phase 13.1 (PRD 13.2) — Fix Choppy Noise Gate With a Real Attack/Hold/Release Envelope
+
+  Problem: The microphone noise gate cut audio abruptly whenever the signal
+  dipped below the configured dB threshold, even briefly mid-sentence during
+  normal speech variance — there was no fade or hold, just an instant
+  on/off, making voice chat choppy for anyone using the feature.
+
+  Solution: Root cause was `hookAnalyser()` toggling `track.enabled` as a
+  hard boolean every 50ms based on an RMS→dB read — a MediaStreamTrack can
+  only snap on/off, it can never fade, so any real envelope required
+  replacing the boolean toggle with a GainNode driven by real Web Audio
+  automation. This meant introducing an always-on send-side processing
+  graph in `voice.service.ts` — previously `startProducing()` produced the
+  raw `getUserMedia` track directly, with zero Web Audio graph on the send
+  path; the noise gate's old analyser ran on a *cloned* track purely for
+  metering, entirely separate from what got produced.
+
+  New architecture (built once per join in `startProducing()`, torn down
+  only on full `cleanup()` or before a rebuild):
+    localStream → micSourceNode → gateGainNode → micDestinationNode → produce()
+  with `analyser` tapping `micSourceNode` in parallel (pre-gate), so gate
+  decisions and the settings meter always read the true, ungated input
+  level. The destination node's track — not the raw mic track — is what
+  gets produced from now on.
+
+  The gate itself (`startGateLoop()`) still polls every 50ms, but now
+  drives `gateGainNode.gain` through `linearRampToValueAtTime()`:
+  attack ~15ms when the signal crosses back above threshold, a 350ms hold
+  once it drops below (absorbing brief pauses without any change), and
+  only then a 200ms release ramp to silence — versus the previous instant
+  cut. Enabling/disabling the gate (`enableSensitivity()`/
+  `disableSensitivity()`) no longer tears down or rebuilds any
+  AudioContext/analyser — it only starts/stops this loop and, on disable,
+  ramps the gate back open — so the mic-processing graph now survives
+  toggling the feature on and off mid-call, which it needs to since PRD
+  13.3 (mic volume slider) and PRD 13.1 (noise cancelling) are planned to
+  extend this exact same graph rather than each building their own.
+
+  This also let the old clone-the-track-for-analysis approach be deleted
+  entirely (`_analysisTrack` field and all): since the gate no longer
+  touches `track.enabled`, the raw track always carries the true signal, so
+  the analyser can tap the same `micSourceNode` used for the gate instead
+  of needing an isolated cloned-track AudioContext.
+
+  Key Files Modified:
+    apps/client/src/services/voice.service.ts — new always-on send-side
+      graph (`micSourceNode`, `gateGainNode`, `micDestinationNode`,
+      `buildMicProcessingGraph()`, `teardownMicProcessingGraph()`),
+      envelope-based gate (`startGateLoop()`, `stopGateLoop()`,
+      `readAnalyserLevel()`, `GATE_ATTACK_SEC`/`GATE_HOLD_SEC`/
+      `GATE_RELEASE_SEC`), `startProducing()` now produces the graph's
+      destination track instead of the raw mic track, `enableSensitivity()`/
+      `disableSensitivity()`/`getCurrentLevel()` rewritten against the new
+      graph, `cleanup()` now calls `teardownMicProcessingGraph()`
+
+  Verification:
+    - npx tsc --noEmit (client) — clean
+    - npx tsc --noEmit (server) — clean (unaffected, checked for
+      regressions since this is a sensitive shared voice path)
+    - Manual in-call verification of the envelope feel (natural pauses no
+      longer cutting mid-word, background noise still fully gated after
+      the release ramp) is pending the user's own hands-on test, per this
+      phase's established workflow.
+
+  Next Step: PRD 13.3 (mic volume slider, 0-200%) — cascades a second
+  GainNode onto this same graph right after gateGainNode. Then PRD 13.1
+  (noise cancelling) adds the AudioWorkletNode as the first stage. Full
+  Phase 13 plan: app-planning/Reson8_Phase13_PRD.md.
+
+--- Entry: 29/08/2026 ---
+
+Feature/Fix: Phase 13.2 (PRD 13.3) — Microphone Volume Slider (0-200%)
+
+  Problem: There was no way to adjust the mic's own input volume — only
+  remote participants' local playback volume was adjustable. Some
+  microphones run quiet and need a boost; some users want to turn their own
+  input down without touching OS-level mic settings.
+
+  Solution: Extended the send-side mic processing graph introduced in PRD
+  13.2 (this same phase, entry above) with a second cascaded GainNode:
+    micSourceNode → gateGainNode → volumeGainNode → micDestinationNode → produce()
+  `VoiceService.setMicVolume(percent)` clamps to 0-200%, stores it as a
+  0.0-2.0 linear gain multiplier (`micVolume` field, defaulting to 1.0), and
+  applies it live to `volumeGainNode.gain.value` if the graph already
+  exists — otherwise it's picked up automatically the next time
+  `buildMicProcessingGraph()` runs, so setting the volume before joining a
+  channel still takes effect on join.
+
+  Since `joinVoiceChannel()` constructs a brand new `VoiceService` instance
+  per session (confirmed via an existing code comment on the global-voice-
+  volume reapplication), `api.setMicVolume(micVolume)` had to be re-sent
+  after every fresh join — mirrored the exact existing pattern used for
+  `setGlobalVoiceVolume`, adding the call at both of its call sites: the
+  manual join success handler and the `voice-reconnected` auto-rejoin
+  handler (PRD 11.1's reconnect path also constructs a fresh instance).
+
+  UI: added a "Microphone Volume" slider to the Voice & Shortcuts settings
+  tab, directly below the Noise Gate section (per this phase's confirmed
+  decision to group all mic-related controls on that tab rather than the
+  Audio tab), styled with the existing `.sensitivity-slider-row`/
+  `.sensitivity-value`/`.sensitivity-labels` classes already used by both
+  the noise gate threshold slider and the Audio tab's volume sliders.
+  Persisted to `localStorage` under `reson8-mic-volume`, following the
+  existing plain-percent-string convention (`reson8-voice-volume`, etc.).
+
+  Key Files Modified:
+    apps/client/src/services/voice.service.ts — `volumeGainNode`,
+      `micVolume` field, `setMicVolume()`, wired into
+      `buildMicProcessingGraph()`/`teardownMicProcessingGraph()`
+    apps/client/src/preload.ts — `setMicVolume()` bridging to
+      `voiceService?.setMicVolume()`
+    apps/client/src/renderer/renderer.ts — `micVolume` persisted var,
+      `Reson8Api.setMicVolume` interface declaration, slider DOM refs/init/
+      listener, reapplication in the manual-join and voice-reconnected
+      handlers
+    apps/client/src/renderer/index.html — new mic-volume-wrap slider
+      markup in the Voice & Shortcuts tab
+
+  Verification:
+    - npx tsc --noEmit (client) — clean
+    - Manual verification (0% silent to a second client, 100% matches
+      baseline, 200% audibly louder — checked from a second client, not
+      just locally) is pending the user's own hands-on test, per this
+      phase's established workflow, and per this exact feature's own
+      "avoid the placebo-slider mistake" caution in the source PRD.
+
+  Next Step: PRD 13.1 (noise cancelling) — adds the AudioWorkletNode as the
+  first stage of this same graph (before gateGainNode), plus re-routes the
+  meter's analyser tap. Full Phase 13 plan:
+  app-planning/Reson8_Phase13_PRD.md.
+
+--- Entry: 29/08/2026 ---
+
+Feature/Fix: Phase 13.3 (PRD 13.1) — AI Microphone Noise Cancelling (DeepFilterNet3, WASM/AudioWorklet)
+
+  Problem: No way to suppress background noise (keyboard clicks, fan noise)
+  beyond the existing hard-threshold noise gate, which cuts audio rather
+  than cleaning it. The source request specifically asked for a real
+  AI-based denoiser (DeepFilterNet) running client-side via WASM in an
+  AudioWorklet, toggleable without ever tearing down the voice connection.
+
+  Solution: Evaluated available options for a browser-usable DeepFilterNet3
+  WASM build (no official one exists) and settled on the npm package
+  `deepfilternet3-noise-filter` (pinned at 1.3.0), specifically its
+  LiveKit-agnostic `DeepFilterNet3Core` export — inspected its actual
+  compiled output (not just its README) to confirm real behavior: it embeds
+  the entire AudioWorkletProcessor as a self-contained code string (blob-URL
+  loaded, no separate worklet file to ship), fetches a ~16.4MB df_bg.wasm +
+  ~8MB DeepFilterNet3_onnx.tar.gz model, `WebAssembly.compile()`s the wasm
+  on the calling thread, and passes the compiled module + raw model bytes
+  into the worklet at construction — with an already-built `SET_BYPASS`
+  message the worklet honors by copying input straight to output, which is
+  exactly the "toggle without tearing down the graph" behavior this feature
+  needed.
+
+  Asset sourcing (confirmed with user): the package's default behavior
+  fetches both files from a third-party CDN (cdn.mezon.ai) at runtime,
+  which conflicts with this project's self-hosted/no-third-party-servers
+  design and would make every install depend on an external host staying
+  up indefinitely. Downloaded both files once and vendored them into
+  `apps/client/assets/deepfilternet/v3/{pkg/df_bg.wasm,models/
+  DeepFilterNet3_onnx.tar.gz}` (~24MB added to the repo), and pointed the
+  package's `assetConfig.cdnUrl` at that local path (relative to
+  dist/renderer/index.html, `../../assets/deepfilternet` — the exact same
+  relative-path convention already used for sound-alert assets) instead of
+  the default CDN. No electron-builder config changes were needed for the
+  assets themselves (`assets/**/*` was already in `files`); confirmed via
+  `mediasoup-client`'s identical hoisting that regular npm deps hoisted to
+  the monorepo root `node_modules` already package correctly today.
+
+  Dependency hygiene: `deepfilternet3-noise-filter` has a `livekit-client`
+  peerDependency needed only for `tsc` to resolve its .d.ts (the actual
+  compiled JS never references livekit-client at runtime — confirmed by
+  grepping the compiled output) — installing it pulled in ~14MB+5.5MB of
+  LiveKit/protobuf code we never use. Excluded `node_modules/livekit-client`
+  and `node_modules/@livekit/**` from the packaged build via new `!`
+  entries in `apps/client/package.json`'s `files` array, leaving them
+  present for typechecking but absent from installers.
+
+  Graph integration: extended the send-side mic processing graph (PRD 13.2/
+  13.3, this same phase) with the AudioWorkletNode as the *first* stage:
+    micSourceNode → [noiseCancelNode] → gateGainNode → volumeGainNode → destination → produce()
+  and re-routed the meter/gate `analyser` to tap *after* noiseCancelNode
+  (or after micSourceNode directly if noise cancelling isn't wired in),
+  exactly as specified — so gate decisions and the settings meter reflect
+  denoised signal, not raw input. `buildMicProcessingGraph()` is now async
+  (awaits the worklet's setup) to accommodate this.
+
+  Because a fresh VoiceService instance is constructed on every join (and
+  the renderer only reapplies the persisted noise-cancel setting *after*
+  join success resolves, mirroring the existing mic-volume/global-volume
+  pattern), `buildMicProcessingGraph()`'s "already enabled at build time"
+  branch is correct but not the one actually exercised in practice today —
+  the real path taken is `setNoiseCancelEnabled()`'s "splice the
+  AudioWorkletNode into an already-running graph" branch, which
+  disconnects/reconnects `micSourceNode` around the new node (a one-time,
+  per-join event). Every toggle after that first enable, for the rest of
+  that join, is instant — a `SET_BYPASS` port message only, never touching
+  the graph again. The shared `DeepFilterNet3Core` instance (module-level,
+  not per-VoiceService) means the WASM fetch + compile only happens once
+  per whole app session, not once per join.
+
+  UI: added a "Noise Cancelling" toggle to the Voice & Shortcuts tab (per
+  this phase's confirmed decision), below the new Mic Volume slider,
+  styled as a `.toggle-row` matching the existing Noise Gate toggle.
+  Persisted to `localStorage` under `reson8-noise-cancel-enabled`.
+
+  Key Files Modified:
+    apps/client/src/services/voice.service.ts — module-level
+      `noiseCancelCore`/`ensureNoiseCancelInitialized()`, `noiseCancelNode`/
+      `noiseCancelEnabled` fields, `buildMicProcessingGraph()` made async
+      with the worklet spliced in as the first stage and 48kHz-pinned
+      AudioContext, `createNoiseCancelNode()`, `setNoiseCancelEnabled()`,
+      `teardownMicProcessingGraph()` now also disconnects the worklet node
+    apps/client/src/preload.ts — `setNoiseCancelEnabled()` bridging to
+      `voiceService?.setNoiseCancelEnabled()`
+    apps/client/src/renderer/renderer.ts — `noiseCancelEnabled` persisted
+      var, `Reson8Api.setNoiseCancelEnabled` interface declaration, toggle
+      DOM ref/init/listener, reapplication in the manual-join and
+      voice-reconnected handlers
+    apps/client/src/renderer/index.html — new noise-cancel toggle-row
+      markup in the Voice & Shortcuts tab
+    apps/client/package.json — new `deepfilternet3-noise-filter`
+      dependency (pinned 1.3.0), `livekit-client`/`@livekit/*` excluded
+      from packaged `files`
+    apps/client/assets/deepfilternet/v3/pkg/df_bg.wasm (NEW, vendored)
+    apps/client/assets/deepfilternet/v3/models/DeepFilterNet3_onnx.tar.gz
+      (NEW, vendored)
+
+  Verification:
+    - npx tsc --noEmit (client) — clean
+    - npx tsc --build (client) — clean
+    - Manual in-call verification (background noise audibly suppressed,
+      speech stays clear, toggling mid-call causes no audio dropout or
+      mediasoup reconnect, a packaged — not just dev — build still finds
+      the vendored assets) is pending the user's own hands-on test, per
+      this phase's established workflow. This is the highest-complexity
+      item in the phase — worth extra attention on first live test.
+
+  Next Step: PRD 13.1-13.3 (the three audio-graph items) are now complete.
+  Remaining Phase 13 items are independent UI/feature work — see
+  app-planning/Reson8_Phase13_PRD.md for the full remaining list and
+  recommended order.
+
+--- Entry: 29/08/2026 ---
+
+Feature/Fix: Phase 13.4 (PRD 13.4-13.12) — Batch of Nine Independent UI/UX Fixes
+
+  Problem: Nine small, independent UI/UX issues from the Phase 13 backlog —
+  none touching shared architecture, so implemented together as one batch
+  per the PRD's own recommended order (simple/self-contained first).
+
+  PRD 13.9 — Voice channel participant names showed a text cursor on
+  hover, hiding that right-click actions exist. Added `cursor: pointer` to
+  `.tree-occupant` (index.html).
+
+  PRD 13.11 — The voice-channel participant-count badge (`.ch-count`) was
+  low-contrast (`--text-muted` #6a6a7a on a near-black background).
+  Bumped to `--text-secondary` (#a0a0b0) and a slightly more opaque badge
+  background.
+
+  PRD 13.7 — The custom-emoji picker tab icon was too small to read
+  (12x12 inside a tab sized for 16px glyphs). Bumped to 17x17
+  (renderer.ts's inline SVG for the emoji-picker's custom tab button).
+
+  PRD 13.12 — Replaced the "leave voice channel" button's plain X icon
+  with a Feather-style "phone-off" (hang-up) icon, same dimensions/stroke
+  convention, so it reads as "drop the call" rather than a generic close.
+
+  PRD 13.4 — The full-screen image viewer only had a download button, no
+  dedicated close button (background-click and Escape were the only ways
+  to close). Added a red `#btn-lightbox-close` button (top-left, mirroring
+  the download button's top-right placement) wired to a new shared
+  `closeLightbox()` helper, which the background-click and Escape
+  handlers now also call instead of duplicating the close logic.
+
+  PRD 13.8 — The "See more" truncation button landed *after* the reaction
+  bar in DOM order (attachMessageTruncation() ran after the reaction bar
+  was already appended and used appendChild), making it look like it
+  belonged to the message below. Changed to `insertBefore(btnSeeMore,
+  reactBar)` — found the reaction bar via `el.querySelector(".msg-reactions")`
+  so all three of `attachMessageTruncation()`'s call sites (initial render,
+  and both edit-re-render paths) get the fix for free. Also restyled from a
+  bare underlined text link to a pill-shaped, all-caps button.
+
+  PRD 13.5 — NSFW-channel image attachments rendered identically to any
+  other channel. Wrapped the thumbnail in a `.msg-image-nsfw-wrap` (blur
+  filter + a slight scale to hide blurred edge fringing) with an overlay
+  (eye icon + "NSFW. Click to open image and reveal content.") when
+  `findChannelNodeById(currentTree, tab.channelId)?.isNsfw` is true.
+  Clicking the overlay opens the existing full-screen lightbox at full
+  clarity (the lightbox `<img>` is a separate element with no blur filter,
+  so this needed no lightbox changes); closing it leaves the feed
+  thumbnail blurred, since there's no "seen" state tracked anywhere for
+  attachments — confirmed intentional per the request.
+
+  PRD 13.6 — Text chat had no way to tell which day a message was sent on
+  beyond the bare hour. Added `--- Month Day(th) ---` date-section
+  dividers (`, Year` appended once a message predates the current year),
+  reusing the existing `.unread-separator` divider's visual pattern under
+  a new `.date-separator` class. Tracked via a new
+  `ChatTab.lastRenderedDateKey` field (`YYYY-M-D`), checked by a new
+  `maybeInsertDateDivider()` called from both `renderChatMessage()` and
+  `renderDmMessage()` right before each message is appended — covers
+  initial history load, realtime receipt, and the pin-jump older-history
+  reload (which fully clears and re-renders `messagesEl`, so
+  `lastRenderedDateKey` is explicitly reset to undefined there too).
+
+  PRD 13.10 — The active-speaker indicator's server-side
+  `AudioLevelObserver` interval (already lowered once from mediasoup's
+  1000ms default to 300ms in an earlier phase) still caused a perceptible
+  lag before a speaker's halo lit up. Traced conclusively to this interval
+  (mediasoup only emits "volumes" at most once per interval, averaged over
+  that window) — the client already applies the "speaking" class
+  immediately on receipt, with zero added client-side delay; its 300ms
+  hold timer only affects turning the indicator back *off* (an intentional
+  anti-flicker debounce, unrelated to light-up lag). Lowered the interval
+  to 100ms.
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html — `.tree-occupant` cursor,
+      `.ch-count` color/background, `#btn-lightbox-close` markup + CSS,
+      `.btn-see-more` pill styling, `.msg-image-nsfw-wrap`/
+      `.msg-image-nsfw-overlay` CSS, `.date-separator` CSS,
+      `#btn-leave-voice` icon markup
+    apps/client/src/renderer/renderer.ts — emoji-tab icon size,
+      `closeLightbox()` + close button wiring, `attachMessageTruncation()`
+      insertion point, NSFW blur wrapping in `renderChatMessage()`,
+      `ordinalSuffix()`/`formatDateSectionLabel()`/`maybeInsertDateDivider()`,
+      `ChatTab.lastRenderedDateKey` field, reset in `jumpToPinnedMessage()`
+    apps/server/src/services/mediasoup.service.ts — AudioLevelObserver
+      interval 300ms -> 100ms
+
+  Verification:
+    - npx tsc --noEmit and --build (client) — clean
+    - npx tsc --noEmit (server) — clean
+    - npm run test (server) — 19/19 passing, unchanged
+    - Manual verification of all nine (visual/UX changes, plus the
+      active-speaker responsiveness feel and any new flicker on speech
+      pauses) is pending the user's own hands-on test, per this phase's
+      established workflow.
+
+  Next Step: PRD 13.13 (animated custom emoji GIF upload) — the next item
+  per app-planning/Reson8_Phase13_PRD.md's recommended order.
+
+--- Entry: 29/08/2026 ---
+
+Feature/Fix: Phase 13.5 (PRD 13.13) — Animated Custom Emoji (GIF Upload)
+
+  Problem: Custom emoji upload only supported static images — the crop tool
+  rasterizes every selection to a single 128x128 PNG frame via canvas,
+  silently flattening any GIF picked through it. No way to upload a real
+  animated emoji.
+
+  Solution: Added a second, parallel upload path specifically for animated
+  GIFs that skips the crop tool entirely (a GIF's frames can't survive a
+  canvas re-draw) and uploads the file as-is. Confirmed with the user a
+  2MB size cap for this path (vs. the existing 512KB static-emoji cap,
+  which stays untouched) given GIFs are inherently larger than a cropped
+  128x128 PNG.
+
+  Data Model: Added `CustomEmoji.isAnimated` (Boolean, default false) via
+  `npx prisma migrate dev --name add_custom_emoji_is_animated`. Storage
+  and the admin approval flow (PENDING/APPROVED) needed no changes at
+  all — both were already format-agnostic, only ever handling an opaque
+  `imageUrl`/`imagePublicId` pair regardless of what's actually stored.
+
+  Server: New `POST /api/upload/emoji-animated` route (upload.route.ts),
+  reusing the existing dual local-disk/Cloudinary `handleUpload()` but
+  with its own 2MB cap and a GIF-only MIME allowlist — `handleUpload()`
+  gained an `allowedMimeTypes` parameter (defaulting to the existing set)
+  rather than hardcoding it, so the static route's behavior is unchanged.
+  `CREATE_CUSTOM_EMOJI`'s payload gained `isAnimated?: boolean`, persisted
+  on create and included in `ICustomEmoji` DTOs (`toDto()`).
+
+  Client: A second "GIF+" button next to the existing "+" upload button
+  in the emoji picker's Custom Emojis section opens a new, separate modal
+  (no crop UI at all) — pick a GIF (validated client-side against the 2MB
+  cap and `image/gif` MIME before any upload starts), see a live preview
+  (a plain `<img>` pointed at an object URL — GIFs animate natively, no
+  special preview logic needed), name it, upload. Deliberately built as
+  its own modal/flow rather than threading a "skip crop" branch through
+  the existing crop-tool code, to avoid touching that already-solid
+  feature at all.
+
+  Key Files Modified:
+    packages/shared-types/src/models.ts — `ICustomEmoji.isAnimated`
+    packages/shared-types/src/socket-events.ts — `CREATE_CUSTOM_EMOJI`
+      payload gains `isAnimated?: boolean`
+    apps/server/prisma/schema.prisma — `CustomEmoji.isAnimated`
+    apps/server/prisma/migrations/20260829231355_add_custom_emoji_is_animated/
+      (NEW)
+    apps/server/src/handlers/emoji.handler.ts — `toDto()` and
+      `CREATE_CUSTOM_EMOJI` persist/return `isAnimated`
+    apps/server/src/routes/upload.route.ts — new
+      `/api/upload/emoji-animated` route, `MAX_ANIMATED_EMOJI_FILE_SIZE`,
+      `ANIMATED_EMOJI_MIME_TYPES`, `handleUpload()` gains an
+      `allowedMimeTypes` parameter
+    apps/client/src/preload.ts — `uploadAnimatedEmojiFile()`,
+      `createCustomEmoji()` gains an `isAnimated` parameter
+    apps/client/src/renderer/renderer.ts — `CustomEmoji.isAnimated`,
+      "GIF+" button in `renderCustomEmojiSection()`, the entire animated
+      upload modal's open/close/file-select/confirm logic
+    apps/client/src/renderer/index.html — new
+      `#emoji-upload-animated-modal` markup, `.emoji-upload-btn-animated`
+      styling
+
+  Verification:
+    - npx tsc --build (shared-types) — clean
+    - npx tsc --noEmit (server) — clean
+    - npm run test (server) — 19/19 passing, unchanged
+    - npx tsc --noEmit and --build (client) — clean
+    - Manual verification (upload a GIF under 2MB, admin approval queue,
+      the approved emoji renders animated in chat and as a reaction, a
+      GIF over 2MB is rejected client-side, and the existing static-emoji
+      crop-tool flow is completely unaffected) is pending the user's own
+      hands-on test, per this phase's established workflow.
+
+  Next Step: PRD 13.14 (bigger rendering for solo-emoji messages) — the
+  next item per app-planning/Reson8_Phase13_PRD.md's recommended order.
+
+--- Entry: 29/08/2026 ---
+
+Feature/Fix: Phase 13.6 — Fix Preload Script Crash From Noise-Cancelling Dependency (regression in PRD 13.1)
+
+  Problem: After PRD 13.1 (noise cancelling), the entire client broke on
+  launch — clicking "Connect" did nothing, and the bottom status bar never
+  showed an instance ID. Both symptoms traced to a single root cause: the
+  preload script itself was crashing at load time, so none of its API
+  (including the Connect flow and the "connected" event that populates the
+  instance ID display) was ever exposed to the renderer.
+
+  Root Cause (confirmed by actually launching the app with
+  `ELECTRON_ENABLE_LOGGING=1`, not just re-reading the diff): the vendored
+  `deepfilternet3-noise-filter` package declares `"type": "module"` in its
+  own package.json. `voice.service.ts`'s static
+  `import { DeepFilterNet3Core } from "deepfilternet3-noise-filter"`
+  compiles (this project's tsconfig targets CommonJS) to a top-level
+  `require("deepfilternet3-noise-filter")`, executed unconditionally the
+  moment preload.js loads (since preload.ts constructs a VoiceService at
+  module scope). Node resolves the package's "require" export condition to
+  `dist/index.js`, but because the package's own `"type": "module"` marks
+  all its plain `.js` files as ESM regardless of which export condition
+  pointed at them, that file gets parsed as an ES module — which has no
+  `exports` global — while its actual body still assumes one (a Rollup
+  CJS-shaped build), producing `ReferenceError: exports is not defined`,
+  crashing preload.js entirely. This is a dual-package-hazard bug in the
+  dependency's own publish output, not something fixable by changing our
+  import style alone in the naive way.
+
+  First attempted fix — a plain `await import(...)` inside the already-
+  lazy `ensureNoiseCancelInitialized()` — was insufficient on its own:
+  confirmed in the compiled output that TypeScript rewrites dynamic
+  `import()` to `Promise.resolve().then(() => require(...))` when the
+  compiler's own module target is CommonJS, hitting the identical crash,
+  just deferred to first use instead of app startup (better, but the
+  feature itself would still be completely broken).
+
+  Actual Fix: an indirect-eval dynamic import —
+  `new Function("specifier", "return import(specifier)")` — invoked as
+  `dynamicImport("deepfilternet3-noise-filter")`. Because the literal
+  `import(...)` keyword lives inside a string passed to the `Function`
+  constructor rather than in real parsed source, TypeScript's compiler
+  can't see or rewrite it; at runtime it's a genuine dynamic import
+  resolved through Node's real ESM loader (the package's "import"
+  condition, `dist/index.esm.js`), sidestepping the CJS/ESM mismatch
+  entirely. Verified empirically with a standalone `node -e` script
+  before wiring it in, then confirmed against the compiled
+  `voice.service.js` output that no `require()` call remains for this
+  package. The class's *type* (for `noiseCancelCore`'s field type and the
+  helper's return type) is still available via a type-only
+  `import("deepfilternet3-noise-filter").DeepFilterNet3Core` query, which
+  is fully erased at compile time and emits no require/import of its own.
+
+  Key Files Modified:
+    apps/client/src/services/voice.service.ts — replaced the static
+      top-level import with the indirect-eval `dynamicImport` helper;
+      `noiseCancelCore` and `createNoiseCancelNode()` updated for the
+      resulting nullable-until-loaded type
+
+  Verification:
+    - npx tsc --noEmit and --build (client) — clean
+    - Confirmed the compiled dist/services/voice.service.js contains no
+      `require("deepfilternet3-noise-filter")` call
+    - Actually launched the packaged dev build
+      (`ELECTRON_ENABLE_LOGGING=1 NODE_ENV=development npx electron .`,
+      ~10s each run) before and after the fix: before, the preload-crash
+      and cascading "Cannot read properties of undefined" errors were
+      reproduced exactly as reported; after, the app launches cleanly
+      with no console errors beyond harmless DevTools Autofill protocol
+      noise.
+    - Not yet re-tested by the user for the actual Connect flow / instance
+      ID display, or for the noise-cancelling feature itself now
+      succeeding when toggled on (this fix only proves the crash is
+      gone, not that the feature's happy path works end-to-end).
+
+  Next Step: user to retest connecting normally, then re-verify PRD 13.1
+  (noise cancelling itself) and PRD 13.13 (animated emoji) now that the
+  app actually launches. Then continue with PRD 13.14.
+
+--- Entry: 29/08/2026 ---
+
+Feature/Fix: Phase 13.7 (PRD 13.14) — Bigger Rendering for Solo-Emoji Messages
+
+  Problem: A message containing nothing but a single emoji rendered at the
+  same size as normal text — no visual emphasis for the common "just send
+  an emoji" case.
+
+  Solution: Added `isSoloEmojiMessage(text)` — trims the message and
+  checks whether it's exactly one emoji, in either form:
+    - a single recognized `:custom_name:` custom-emoji token, or
+    - a single Unicode emoji *grapheme cluster*, correctly counting
+      multi-codepoint sequences (flags, ZWJ family/profession combos, skin-
+      tone modifiers) as one character via `Intl.Segmenter`
+      (`granularity: "grapheme"`) rather than naively counting code points
+      or UTF-16 units, which would misclassify those as "multiple emoji."
+  A message with any additional text alongside an emoji is left completely
+  untouched.
+
+  When true, both `renderChatMessage()` and `renderDmMessage()` add a
+  `.msg-text-solo-emoji` modifier class to the message's `<span
+  class="msg-text">`, which sets `font-size: 4em` — since the existing
+  `.custom-emoji-inline` `<img>` is already sized in `em` units (`1.3em`,
+  relative to its inherited font-size), this one CSS rule automatically
+  scales *both* plain Unicode emoji text and a custom-emoji image
+  proportionally, with no separate image-sizing logic needed. Also wired
+  into both message-edit paths (the editor's own optimistic update and
+  `applyMessageEdit()`'s broadcast-driven update for other clients) so
+  editing a message in or out of "solo emoji" status re-evaluates the
+  class live, matching the existing pattern already used there for
+  re-evaluating truncation.
+
+  Edge case found and fixed during testing: initially used only
+  `\p{Extended_Pictographic}` as a quick pre-filter before segmenting —
+  standalone testing (outside the app, via `node -e`) surfaced that flag
+  emoji (e.g. 🇧🇷, a pair of Regional Indicator codepoints) aren't
+  classified as `Extended_Pictographic` in Unicode and were being missed
+  entirely. Added `\p{Regional_Indicator}` to the test regex to cover
+  flags too. (A rarer remaining gap: digit-keycap emoji like 3️⃣ still
+  aren't detected, since neither Unicode property covers the bare digit
+  codepoint they're built from — accepted as a minor, very-low-frequency
+  miss rather than chasing full coverage across Unicode's ~20 overlapping
+  emoji-related properties.)
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts — `isSoloEmojiMessage()`,
+      `EMOJI_TEST_REGEX`, `graphemeSegmenter`; wired into
+      `renderChatMessage()`, `renderDmMessage()`, and both message-edit
+      paths
+    apps/client/src/renderer/index.html — `.msg-text-solo-emoji` CSS
+
+  Verification:
+    - npx tsc --noEmit and --build (client) — clean
+    - Standalone `node -e` tests of the grapheme-segmentation logic
+      against single emoji, multiple emoji, flags, ZWJ sequences, plain
+      text, and digit/# edge cases — confirmed correct after the
+      Regional_Indicator fix
+    - Actually launched the dev build (ELECTRON_ENABLE_LOGGING=1) after
+      this change specifically to confirm no regression of the preload
+      crash from the previous entry — clean, no console errors
+    - Manual in-app verification (an actual solo emoji message rendering
+      ~4x, a custom emoji alone doing the same, and a message with text
+      alongside an emoji staying normal-sized) is pending the user's own
+      hands-on test.
+
+  Next Step: PRD 13.15 (voice-connected-but-offline presence bug) — the
+  next item per app-planning/Reson8_Phase13_PRD.md's recommended order.
+
+--- Entry: 29/08/2026 ---
+
+Feature/Fix: Phase 13.8 — Fix Two Message-Truncation Regressions Found During Testing
+
+  Problem: User testing PRD 13.14 (solo-emoji sizing) surfaced two bugs in
+  the message truncation feature:
+    1. A solo-emoji message (default Unicode emoji, not custom) spuriously
+       got a "See more" button, as if it were a long truncated message —
+       custom emoji didn't show the same issue.
+    2. The "See less" button (shown after expanding a truncated message)
+       rendered inline at the tail end of the message text with no line
+       break, instead of on its own line below it like "See more" does.
+
+  Root Cause 1: Not an SVG/text-parsing issue (default emoji are plain
+  Unicode characters, not SVGs) — `attachMessageTruncation()` adds
+  `.msg-text-clamped` (a `-webkit-line-clamp` box sized for normal 13px
+  text) and compares `scrollHeight` vs `clientHeight` to decide if
+  truncation is actually needed. PRD 13.14's `.msg-text-solo-emoji`
+  modifier sets `font-size: 4em` — a single character at 4x size is
+  visually *taller* than the clamp's height budget (computed for
+  normal-size multi-line text), so the overflow check false-positives even
+  though there's exactly one character and nothing to hide. (Custom emoji
+  apparently didn't trip the same check, likely due to how the browser
+  measures a sized inline-block replaced element vs. line-clamped text
+  differently — but the fix applies uniformly to both regardless.)
+
+  Root Cause 2: introduced by this same phase's own PRD 13.8 (the "See
+  more" reposition/restyle) — `.btn-see-more` was changed from
+  `display: block` to `display: inline-block` as part of the pill
+  restyle. While the message is clamped, the parent `.msg-text-clamped`
+  (a block-level `-webkit-box`) still forced the button onto a new line
+  incidentally; once expanded, `.msg-text` reverts to plain inline
+  (nothing else forces block layout), so the inline-block button no
+  longer breaks onto its own line — it was relying on the parent's
+  block-ness rather than its own.
+
+  Fix 1: `attachMessageTruncation()` now returns immediately, before
+  adding `.msg-text-clamped` at all, when `textEl` carries
+  `.msg-text-solo-emoji` — a solo-emoji message is a single character by
+  definition and can never have genuinely truncatable content.
+
+  Fix 2: `.btn-see-more` reverted to `display: block` (guaranteeing the
+  line break regardless of the sibling's own display state) plus a new
+  `width: fit-content` (so the pill doesn't stretch full-width the way a
+  plain block button would with no explicit width).
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts —
+      `attachMessageTruncation()`'s early-return guard for solo-emoji text
+    apps/client/src/renderer/index.html — `.btn-see-more` display/width
+
+  Verification:
+    - npx tsc --noEmit and --build (client) — clean
+    - Launched the dev build (ELECTRON_ENABLE_LOGGING=1) — no console
+      errors
+    - Manual re-verification of both fixes (a solo default-emoji message
+      no longer shows "See more"; "See less" appears on its own line
+      below the expanded message) is pending the user's own hands-on
+      retest.
+
+  Next Step: once confirmed, proceed to PRD 13.15 (voice-connected-but-
+  offline presence bug), per app-planning/Reson8_Phase13_PRD.md.
+
+--- Entry: 29/08/2026 ---
+
+Feature/Fix: Phase 13.9 — Fix Stale Online Presence After Quitting the App
+
+  Problem: User testing found that after closing a client and opening a
+  different one (different instance ID), the server kept showing the
+  closed client as online — as if that person never actually logged out,
+  even though the app didn't exist anymore.
+
+  Investigation: Directly tested the underlying disconnect/presence
+  mechanism with standalone socket.io-client scripts against a running
+  server + Redis, before touching any code. Confirmed the *existing*
+  disconnect → 10s grace period → `finalizeDisconnect()` → `leaveServer()`
+  chain (added in an earlier phase specifically to stop a brief network
+  blip from flickering someone's presence off and on) does correctly clear
+  Redis — just not until that grace period elapses, and only once the
+  server actually notices the connection is gone.
+
+  The real gap: quitting the app never tells the server it's an
+  intentional, permanent goodbye — it just lets the OS kill the process,
+  which the server can only observe as an ordinary dropped transport
+  (`reason: "transport close"`), indistinguishable from a flaky network
+  drop. So *every* deliberate quit paid the same multi-second delay meant
+  only for accidental disconnects, which is exactly what read as "still
+  online" to anyone checking shortly after.
+
+  Fix: the app now explicitly disconnects its socket before quitting,
+  giving the server a distinct, unambiguous signal
+  (`reason: "client namespace disconnect"`, Socket.io's own reason string
+  for a client-initiated `.disconnect()` call) it can act on immediately
+  instead of deferring.
+
+  Client — two separate interception points were needed, not one:
+    - `mainWindow`'s own `"close"` event (main.ts) — the actual quit path
+      for the common "click the X button" case (with close-to-tray off).
+      This window is already destroyed by the time the app-level
+      `"before-quit"` event fires, so intercepting only there (my first
+      attempt) would have silently never triggered for this exact case —
+      caught this via a real end-to-end test before it shipped (see
+      Verification).
+    - `app.on("before-quit")` — covers Cmd+Q/Alt+F4, which call
+      `app.quit()` directly while the window is still alive.
+    Both share one `hasSentQuitDisconnect` guard flag: on first trigger,
+    `event.preventDefault()`, push `"app-quitting"` to the renderer, then
+    actually close/quit ~250ms later (giving the disconnect packet time to
+    leave the process). preload.ts listens for `"app-quitting"` and calls
+    `socket.disconnect()` if connected.
+
+  Server — `connection.handler.ts`'s `disconnect` handler now branches on
+  `reason`: `"client namespace disconnect"` finalizes presence
+  immediately (no timer at all); anything else (network drops, ping
+  timeouts, etc.) keeps the existing 10-second grace-period behavior
+  completely unchanged, since that protection is still exactly right for
+  a connection that might still come back on its own.
+
+  Key Files Modified:
+    apps/client/src/main.ts — `hasSentQuitDisconnect` flag,
+      graceful-disconnect-then-close logic in both the window `"close"`
+      handler and `"before-quit"`
+    apps/client/src/preload.ts — `"app-quitting"` IPC listener calling
+      `socket.disconnect()`
+    apps/server/src/handlers/connection.handler.ts — `disconnect`
+      handler branches on `reason`, immediate finalize for
+      `"client namespace disconnect"`, unchanged deferred path otherwise;
+      log message reflects which path was taken
+
+  Verification:
+    - npx tsc --noEmit (server, client) — clean
+    - npm run test (server) — 19/19 passing, unchanged
+    - Standalone socket.io-client scripts against a live server+Redis:
+      confirmed an abrupt disconnect (no graceful call) still correctly
+      defers via the 10s grace period and clears after it elapses (no
+      regression); confirmed an explicit `socket.disconnect()` clears
+      Redis within ~1-2 seconds instead.
+    - Full end-to-end test of the *actual* Electron app via its Chrome
+      DevTools Protocol debugging port: launched the real app, called
+      `window.reson8Api.connect(...)` to join the real server, then
+      `window.close()` (the genuine equivalent of clicking the window's X
+      button, confirmed distinct from CDP's own `Page.close()`, which
+      bypasses Electron's window-close event entirely and does not
+      exercise this fix). Confirmed via server logs: reason "client
+      namespace disconnect", "finalized immediately"; confirmed via Redis:
+      the joined instanceId was already gone within ~1.5s; confirmed the
+      Electron process still exited cleanly (no hang from the added
+      `preventDefault()`/delayed-close logic).
+
+  Next Step: user to retest their original repro (open a client, close it,
+  open a different one) to confirm presence now clears promptly. Then
+  continue with PRD 13.16 (screen-share sound alerts) per
+  app-planning/Reson8_Phase13_PRD.md — the four sound files for that item
+  are already in place (user added them directly).
+
+--- Entry: 29/08/2026 ---
+
+Feature/Fix: Phase 13.10 (PRD 13.16) — Screen-Share Sound Alerts
+
+  Problem: When someone starts/stops sharing their screen, other voice
+  channel participants have no audible cue if the app is minimized (only
+  the visual LIVE badge shows it). Symmetrically, a sharer has no idea
+  whether anyone is actually watching their stream.
+
+  Solution: Four new sound alerts, all routed through the existing
+  `SoundAlert.play()` dispatcher (`apps/client/assets/sound-alerts/`,
+  already respects the "mute sound alerts" toggle and the Sound Alerts
+  Volume slider automatically — no per-sound wiring needed for either).
+
+  Start/stop sharing (`user_started_sharing.mp3`/`user_stopped_sharing.mp3`):
+  purely client-side, no new server signaling needed. Extended the exact
+  existing pattern used for occupant join/leave sounds — a
+  `previousOccupantIds` diff inside the `PRESENCE_UPDATE` ("presence")
+  handler — with a parallel `previousSharingIds` diff computed via a new
+  `sharingIdsOf(occupants)` helper (filters occupants by `isSharingScreen`,
+  already present on the occupant DTO from prior phases). Reset alongside
+  `previousOccupantIds` at every one of its own reset points (join,
+  leave, disconnect, reconnect, kick) — six call sites in total, since
+  they describe the same voice channel and must never drift out of sync
+  with each other.
+
+  Viewer joined/exited your stream
+  (`user_joined_your_stream.mp3`/`user_exited_your_stream.mp3`): needed
+  genuinely new server signaling — confirmed there was no existing
+  broadcast to a sharer when someone starts/stops watching. Added two
+  new no-payload `ServerToClientEvents`
+  (`VIEWER_JOINED_YOUR_STREAM`/`VIEWER_LEFT_YOUR_STREAM`), delivered only
+  to the sharer's *primary* socket (a viewer socket shares the same
+  userId, so `socket.data.role === "primary"` is the filter — same
+  iterate-`io.sockets.sockets` pattern already used by nudge/dm/moderation
+  handlers for "deliver to a specific user" elsewhere in this codebase).
+
+  A new `SocketData.watchingUserId` field (set on a viewer socket by
+  `WATCH_SCREEN_SHARE`, read/cleared by whichever cleanup path runs first)
+  was needed because `STOP_WATCHING_SCREEN_SHARE`'s payload never carried
+  the sharer's userId, only the channelId — without it, there'd be no way
+  to know who to notify on stop. Wired into *both* cleanup paths: the
+  explicit `STOP_WATCHING_SCREEN_SHARE` call ("Leave Stream" / clean
+  window close) and the viewer-socket branch of the primary `disconnect`
+  handler (Viewer window closed via its native X button, or a crash) —
+  the existing code comment on that disconnect branch already noted it's
+  the *only* path some cleanups take if the window never gets to fire
+  STOP_WATCHING_SCREEN_SHARE, and this needed the same treatment.
+
+  Key Files Modified:
+    packages/shared-types/src/socket-events.ts —
+      `VIEWER_JOINED_YOUR_STREAM`/`VIEWER_LEFT_YOUR_STREAM` events,
+      `SocketData.watchingUserId`
+    apps/server/src/handlers/voice.handler.ts — `emitToUserPrimarySocket()`
+      helper, `watchingUserId` set in `WATCH_SCREEN_SHARE`, both new
+      events emitted from `WATCH_SCREEN_SHARE`/`STOP_WATCHING_SCREEN_SHARE`
+    apps/server/src/handlers/connection.handler.ts — viewer-socket
+      disconnect branch also emits `VIEWER_LEFT_YOUR_STREAM` when
+      `watchingUserId` was set
+    apps/client/src/preload.ts — bridges both new events to the renderer
+    apps/client/src/renderer/renderer.ts — `previousSharingIds`/
+      `sharingIdsOf()`, start/stop-sharing diff in the `presence` handler,
+      `viewer-joined-your-stream`/`viewer-left-your-stream` listeners
+
+  Verification:
+    - npx tsc --build (shared-types) — clean
+    - npx tsc --noEmit and --build (server, client) — clean
+    - npm run test (server) — 19/19 passing, unchanged
+    - Launched the dev build (ELECTRON_ENABLE_LOGGING=1) — no console
+      errors
+    - Manual in-app verification (start/stop sharing sounds for other
+      occupants, viewer-joined/exited sounds for the sharer — including
+      via the Viewer window's native close button, not just "Leave
+      Stream" — and that mute/volume settings apply to all four) is
+      pending the user's own hands-on test, per this phase's established
+      workflow. The four sound files were already in place, added by the
+      user ahead of this item.
+
+  Next Step: PRD 13.17 (move Ban button to a renamed "User Management"
+  tab) — the next item per app-planning/Reson8_Phase13_PRD.md's
+  recommended order.
+
+--- Entry: 29/08/2026 ---
+
+Feature/Fix: Phase 13.11 (PRD 13.17) — Move Ban to "User Management" Tab
+
+  Problem: The Ban button only lived in the Online Users modal, which only
+  ever lists *online* users — an offline troublemaker couldn't be banned
+  at all, since their name never appears there.
+
+  Solution: Moved Ban/Unban into the Settings → "User Management" tab
+  (renamed from "Roles" 👑 → 🛡️), which already lists every user with a
+  role on the server — online or not — via the existing `GET_ALL_USERS`
+  handler, confirmed as exactly the right data source (no new listing
+  mechanism needed). Removed the Ban button and the separate "Banned
+  Users" list section from the Online Users modal entirely, including
+  their now-dead CSS.
+
+  Permission scoping (confirmed with the user before implementing): moving
+  Ban into a tab formerly gated by MANAGE_ROLES alone would have silently
+  revoked ban ability from any role holding BAN_USER without MANAGE_ROLES.
+  Fixed by:
+    - New `requireAnyPermission()` in `permissions.middleware.ts` (mirrors
+      `requirePermission()`, passes if the caller holds *any* of several
+      flags) — `GET_ALL_USERS` now accepts MANAGE_ROLES *or* BAN_USER,
+      since the tab now serves both roles.
+    - `GET_ALL_USERS`'s response gained `isBanned: boolean` per user
+      (cross-referenced against `BannedUser` in one extra query), so the
+      client can render Ban vs. Unban per row without a second round trip.
+    - Client-side, split the previously-conflated `isAdminUser` flag's
+      *use* from its *source*: `isAdminUser` now derives from `GET_ROLES`'s
+      own success (still MANAGE_ROLES-only, unchanged) rather than
+      `GET_ALL_USERS`'s (now ambiguous between the two permissions), and a
+      new `canBanUsers` derives from `GET_BANNED_USERS`'s success (still
+      BAN_USER-only, unchanged). The tab itself shows for
+      `isAdminUser || canBanUsers`; inside it, role-editing badges are
+      gated by `isAdminUser` alone and the Ban/Unban button by
+      `canBanUsers` alone — a BAN_USER-only holder now sees the tab with
+      only a working Ban/Unban control, no role badges that would just
+      403 on click.
+
+  Key Files Modified:
+    packages/shared-types/src/socket-events.ts — `GET_ALL_USERS` response
+      gains `isBanned`, doc comment updated
+    apps/server/src/middleware/permissions.middleware.ts —
+      `requireAnyPermission()`
+    apps/server/src/handlers/admin.handler.ts — `GET_ALL_USERS` uses
+      `requireAnyPermission(MANAGE_ROLES, BAN_USER)`, cross-references
+      `BannedUser` for `isBanned`
+    apps/client/src/renderer/index.html — tab label/icon, new
+      `.user-banned-badge` style, removed now-dead
+      `.online-users-separator.banned`/`.online-user-dot.banned`/
+      `.online-user-nick.banned`
+    apps/client/src/renderer/renderer.ts — `canBanUsers` flag,
+      `applySettingsTabVisibility()`/connect-time pre-check/
+      `openSettingsPanel()` updated to derive `isAdminUser`/`canBanUsers`
+      from their own dedicated calls, `renderAdminUsers()` gains a
+      "BANNED" badge + Ban/Unban button (individually gated), Ban button
+      and "Banned Users" section removed from the Online Users modal
+
+  Verification:
+    - npx tsc --build (shared-types) — clean
+    - npx tsc --noEmit and --build (server, client) — clean
+    - npm run test (server) — 19/19 passing, unchanged
+    - Launched the dev build (ELECTRON_ENABLE_LOGGING=1) — no console
+      errors
+    - Live server tests against a real running server: confirmed
+      `isBanned` correctly flips false → true → false through a real
+      ban/unban cycle via `GET_ALL_USERS`; confirmed a regular (no
+      MANAGE_ROLES/BAN_USER) user still gets "Permission denied" from
+      `GET_ALL_USERS`, i.e. the widened gate didn't accidentally open it
+      to everyone.
+    - Manual in-app verification (tab renders correctly for an
+      ADMIN/MANAGE_ROLES user, offline users are now bannable, a
+      BAN_USER-only role sees the tab with a working ban control but no
+      role badges) is pending the user's own hands-on test.
+
+  Next Step: PRD 13.18 (single-instance Electron lock) — the final item
+  per app-planning/Reson8_Phase13_PRD.md's recommended order. Once
+  confirmed, the whole Phase 13 PRD is complete and ready for version
+  bump + release notes.
+
+--- Entry: 29/08/2026 ---
+
+Feature/Fix: Phase 13.12 — Fix Settings Tab Overflow and Ban Button Styling (PRD 13.17 follow-up)
+
+  Problem: User testing of PRD 13.17 found two rough edges introduced by
+  it: (1) the longer "🛡️ User Management" label pushed the settings tab
+  bar past the modal's width, with tab text spilling outside the modal
+  boundary; (2) the new Ban/Unban buttons were solid, full-sized buttons
+  that visually clashed with the small pill-shaped role badges next to
+  them in the same row.
+
+  Fix 1 (tab overflow): Applied the exact same horizontal-scroll pattern
+  already used by the emoji picker's category tabs
+  (`.emoji-category-tabs`) to `.settings-tab-bar` — `overflow-x: auto`
+  with a thin, always-visible custom scrollbar (both `scrollbar-width`/
+  `scrollbar-color` for Firefox and `::-webkit-scrollbar*` for Chromium/
+  Electron), plus `white-space: nowrap` and `flex-shrink: 0` on
+  `.settings-tab-btn` so labels stay on one line and the row scrolls
+  instead of squishing/wrapping tab text.
+
+  Fix 2 (Ban/Unban styling): Restyled `.btn-ban`/`.btn-unban` from solid
+  full-sized buttons (`padding: 6px 12px`, filled backgrounds) to small
+  pills matching `.role-badge`'s exact shape and sizing (`font-size: 10px`,
+  `padding: 2px 10px`, `border-radius: 10px`) — Ban keeps a red outline
+  (fills solid red on hover, signaling the destructive action) and Unban
+  matches the plain muted-then-accent-on-hover look already used by role
+  badges. Added a small inline SVG icon to the Ban button specifically (a
+  person glyph with a "no entry" circle-and-slash beside it) so the
+  destructive action reads at a glance; Unban stays text-only to match
+  the plain badges around it.
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html — `.settings-tab-bar`/
+      `.settings-tab-btn` scroll treatment, `.btn-ban`/`.btn-unban`
+      restyled as pills
+    apps/client/src/renderer/renderer.ts — Ban button gains the inline
+      SVG icon via `innerHTML`
+
+  Verification:
+    - npx tsc --noEmit and --build (client) — clean
+    - Launched the dev build (ELECTRON_ENABLE_LOGGING=1) — no console
+      errors
+    - Manual visual re-verification (tab bar scrolls cleanly with no
+      overflow past the modal, Ban/Unban now read as pills consistent
+      with the role badges, Ban icon renders correctly) is pending the
+      user's own hands-on test.
+
+  Next Step: once confirmed, proceed to PRD 13.18 (single-instance
+  Electron lock) — the final item per
+  app-planning/Reson8_Phase13_PRD.md's recommended order.
+
+--- Entry: 29/08/2026 ---
+
+Feature/Fix: Phase 13.13 — Fix Settings Tab Bar Scroll Bug and Ban Button Sizing (second PRD 13.17 follow-up)
+
+  Problem: Continued testing of the previous fix surfaced three more
+  issues: (1) tab label text was visibly cut off at the bottom; (2)
+  scrolling down within the User Management tab's user list made the
+  entire tab bar scroll away too, leaving no way to switch tabs; (3) the
+  Ban/Unban buttons, while now correctly pill-shaped, were too small to
+  read comfortably, and Ban specifically needed to look more severe.
+
+  Root Cause (tab bar disappearing) — a genuine CSS spec quirk introduced
+  by the prior fix: setting only `overflow-x: auto` on `.settings-tab-bar`
+  (with `overflow-y` left at its default `visible`) is invalid per the
+  overflow spec — a UA must compute `overflow-y` as `auto` too once
+  `overflow-x` is non-`visible`, since one axis can't stay `visible` while
+  the other doesn't. That silently made the tab bar itself vertically
+  scrollable, and since it had no `flex-shrink: 0` in the modal's flex
+  column, it was free to drift/collapse whenever the sibling scrollable
+  panel below it moved — reading exactly as "the whole tabs section
+  scrolled down."
+
+  Root Cause (clipped text): `.settings-tab-btn` had no explicit
+  `line-height` — the default was tight enough, combined with an emoji
+  glyph (🛡️) in the label rendering taller than surrounding Latin text
+  in some fonts, to clip the bottom of descenders.
+
+  Fixes:
+    - `.settings-tab-bar`: explicit `overflow-y: hidden` (closes the
+      spec-quirk gap directly) plus `flex-shrink: 0` (pins it as a
+      fixed-height header row in the flex column, immune to the sibling
+      panel's own scrolling).
+    - `.settings-tab-btn`: added `line-height: 1.8` for comfortable
+      vertical spacing.
+    - `.btn-ban`/`.btn-unban`: sized up from `font-size: 10px`/
+      `padding: 2px 10px` to `font-size: 13px`/`padding: 6px 16px` for
+      better visibility. `.btn-ban` additionally gets `border: 2px`
+      (up from 1px) and `font-weight: 700` — a deliberately heavier
+      look than Unban, so the destructive action reads as more serious.
+      Its icon bumped from 12x12 to 15x15 to stay proportional.
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html — `.settings-tab-bar`/
+      `.settings-tab-btn`/`.btn-ban`/`.btn-unban` CSS
+    apps/client/src/renderer/renderer.ts — Ban icon SVG size
+
+  Verification:
+    - npx tsc --noEmit and --build (client) — clean
+    - Launched the dev build (ELECTRON_ENABLE_LOGGING=1) — no console
+      errors
+    - Manual visual re-verification (tab bar stays fixed and visible
+      while scrolling the User Management list, tab label text no
+      longer clipped, Ban/Unban buttons comfortably sized with Ban
+      visibly heavier/more severe than Unban) is pending the user's own
+      hands-on test.
+
+  Next Step: once confirmed, proceed to PRD 13.18 (single-instance
+  Electron lock) — the final item per
+  app-planning/Reson8_Phase13_PRD.md's recommended order.
+
+--- Entry: 29/08/2026 ---
+
+Feature/Fix: Phase 13.14 — Final Size Correction for User Management Buttons (third PRD 13.17 follow-up)
+
+  Problem: The previous sizing pass (font-size 10px -> 13px, padding
+  2px 10px -> 6px 16px, border-radius 10px -> 14px) overshot — the Ban/
+  Unban buttons and role badges read as too large after fixing the
+  original "too small" complaint.
+
+  Fix: Scaled padding and border-radius down to roughly a third of that
+  size (padding 6px 16px -> 2px 6px, border-radius 14px -> 8px) across
+  `.role-badge`, `.btn-ban`, and `.btn-unban`, keeping all three in sync
+  with each other as before. Font-size was brought down to 11px rather
+  than a literal third of 13px (~4px, illegible) — the one deliberate
+  deviation from a strict 1/3 scale, called out to the user rather than
+  applied silently. The Ban button's icon was resized to match (11x11,
+  down from 15x15). `.btn-ban`'s heavier weight (2px border, bold text)
+  and `.role-badge`'s plain weight are both unchanged, per the user's
+  explicit instruction that only size — not weight — needed correcting
+  this round.
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html — `.role-badge`/`.btn-ban`/
+      `.btn-unban` font-size/padding/border-radius
+    apps/client/src/renderer/renderer.ts — Ban icon SVG size
+
+  Verification:
+    - npx tsc --noEmit and --build (client) — clean
+    - Launched the dev build (ELECTRON_ENABLE_LOGGING=1) — no console
+      errors
+    - Confirmed working by the user's own hands-on test — no further
+      sizing changes needed.
+
+  Next Step: PRD 13.18 (single-instance Electron lock) — the final item
+  per app-planning/Reson8_Phase13_PRD.md's recommended order.
+
+--- Entry: 29/08/2026 ---
+
+Feature/Fix: Phase 13.15 (PRD 13.18) — Single-Instance Electron Lock
+
+  Problem: Opening Reson8 again while it was already running (even
+  minimized to tray) always spawned a brand new, fully independent
+  instance instead of focusing the existing one.
+
+  Solution: Standard Electron single-instance-lock pattern.
+  `app.requestSingleInstanceLock()` is requested as early as possible —
+  right after imports, before any other startup work (metascraper setup,
+  auto-updater, window/tray creation). If the lock isn't obtained, another
+  instance is already running: call `app.quit()` immediately. Calling it
+  this early means `app.whenReady()` never resolves for this process, so
+  none of the window/tray/IPC setup further down the file actually
+  executes — no need to wrap the rest of this large file in an
+  `if (gotLock) { ... }` block, which would have been a much riskier,
+  more invasive change for equivalent effect.
+
+  If the lock *is* obtained, a `"second-instance"` listener is registered:
+  when a later launch attempt is detected, it restores the window if
+  minimized, shows it if hidden (to tray), and focuses it — covering both
+  ways the window could be non-visible when someone tries to open the app
+  again.
+
+  Key Files Modified:
+    apps/client/src/main.ts — `requestSingleInstanceLock()`/
+      `"second-instance"` handler, added right after the import block
+
+  Verification:
+    - npx tsc --noEmit and --build (client) — clean
+    - Real end-to-end test: launched one instance, confirmed it running,
+      then launched a second `electron .` process — confirmed via its
+      log that it exited within seconds with *no* window/DevTools/console
+      activity at all (never reached `whenReady()`), while the first
+      instance remained alive and unaffected throughout.
+    - Focus-on-second-launch itself (the visible "restore + focus"
+      behavior) is pending the user's own hands-on test, since verifying
+      window focus state isn't observable from this sandboxed
+      environment the way the process-level behavior above was.
+
+  Next Step: This was the last item in Phase 13
+  (app-planning/Reson8_Phase13_PRD.md) — pending the user's final
+  confirmation, the phase is complete and ready for the version bump
+  (bump-version skill), release notes, and CLAUDE.md/README updates.
+
+--- Entry: 30/08/2026 ---
+
+Feature/Fix: Phase 13.16 — Always-Visible Mic Level Meter + Rendered "What's New" Markdown (post-PRD additions, still v2.2.0)
+
+  Problem: Two rough edges noticed after Phase 13's PRD was otherwise
+  complete, both explicitly scoped as additions to the same unreleased
+  v2.2.0 rather than a version bump of their own:
+    1. The microphone level meter only appeared while the noise gate
+       toggle was enabled, hidden inside its slider's wrapper — so
+       adjusting mic volume or noise cancelling gave no live visual
+       feedback at all unless the (unrelated) gate happened to be on too.
+    2. The "What's New" modal displayed GitHub's raw release-notes
+       markdown verbatim — literal "#"/"**"/"-" syntax visible to the
+       user instead of rendered formatting.
+
+  Fix 1 — Detached Mic Meter: Moved the meter's markup out of
+  `#mic-sensitivity-slider-wrap` into its own always-visible
+  `#mic-level-section`, positioned above the Noise Gate section so it's
+  visible regardless of which mic-related control (gate, volume, noise
+  cancelling) is being adjusted. The underlying `VoiceService` analyser
+  already ran independently of the gate's enabled state since PRD 13.2's
+  refactor (confirmed, not a new change) — this was purely a renderer-side
+  UI/lifecycle decoupling:
+    - `openSettingsPanel()` now always starts the meter (and, if not in a
+      call, the preview capture it reads from) instead of gating on
+      `micSensitivityEnabled`.
+    - A new `closeSettingsPanel()` helper stops both on modal close (a
+      latent gap even before this — no such lifecycle cleanup existed
+      until now, so this also fixes what would otherwise become a much
+      more frequently-triggered background mic-preview leak).
+    - The voice-channel join handler starts the meter unconditionally
+      after a successful join, instead of only when the gate was on.
+    - Removed all `startMicLevelMeter()`/`stopMicLevelMeter()` calls from
+      the PTT-mode toggle handlers and the noise-gate checkbox's own
+      change handler — those now only touch the gate itself; the meter's
+      lifecycle is fully independent of both.
+
+  Fix 2 — Rendered Markdown in "What's New": Added `markdown-it` (a
+  properly dual-published CJS/ESM package — verified its package.json has
+  no top-level `"type": "module"` override before adding it, specifically
+  to avoid a repeat of this same phase's earlier
+  deepfilternet3-noise-filter ESM/CJS packaging incident) as a client
+  dependency. Rendering happens in `main.ts` (which, unlike the renderer —
+  a plain `<script>`-loaded page with no bundler — can `require()` an
+  ordinary CommonJS package directly), converting `fetchReleaseNotes()`'s
+  raw GitHub markdown `body` into HTML (`bodyHtml`) before it ever reaches
+  the renderer via IPC. `html: false` in the markdown-it config so no raw
+  HTML from the source ever passes through unescaped. Caught and fixed a
+  related Electron link-navigation gotcha before it could ship: a plain
+  rendered `<a href>` with no `target="_blank"` would navigate the main
+  window itself to that URL on click, rather than opening the user's
+  browser — added a `link_open` renderer-rule override forcing
+  `target="_blank" rel="noopener noreferrer"` on every rendered link, so
+  they route through the existing `setWindowOpenHandler`/
+  `shell.openExternal()` path already used elsewhere (chat's own
+  `linkifyContent()`). `whatsNewBody.textContent` became `.innerHTML`;
+  added CSS for headings/paragraphs/lists/bold/links/code/hr/blockquote
+  matching the app's dark theme.
+
+  Key Files Modified:
+    apps/client/package.json — new `markdown-it` dependency +
+      `@types/markdown-it`
+    apps/client/src/main.ts — `markdownRenderer` (markdown-it instance +
+      link_open override), `ReleaseNotes.body` renamed to `bodyHtml`
+      (now rendered HTML)
+    apps/client/src/preload.ts — `fetchReleaseNotes()` return type
+      updated to `bodyHtml`
+    apps/client/src/renderer/renderer.ts — `fetchReleaseNotes()` type,
+      `whatsNewBody.innerHTML` instead of `.textContent`; mic-meter
+      lifecycle decoupled from the noise gate across
+      `openSettingsPanel()`, the new `closeSettingsPanel()`, the voice
+      join handler, both PTT-mode handlers, and the gate's own checkbox
+      handler
+    apps/client/src/renderer/index.html — `#mic-level-section` extracted
+      as its own always-visible block; `#whats-new-modal .whats-new-body`
+      markdown-element styling, removed the now-inapplicable
+      `white-space: pre-wrap`
+
+  Verification:
+    - npx tsc --noEmit and --build (client) — clean
+    - Confirmed `markdown-it`'s compiled output uses a plain `require()`
+      (not the dynamic-import workaround this same phase's noise-
+      cancelling dependency needed) — verified directly in Node that it
+      loads and renders correctly
+    - Real end-to-end test via the actual Electron app's CDP debugging
+      port: called `fetchReleaseNotes("2.1.0")` against the real,
+      already-published GitHub release — confirmed the returned
+      `bodyHtml` contains real `<h1>`/`<p>`/`<ul>`/`<li>`/`<strong>` tags
+      and zero raw "# " markdown syntax
+    - Launched the dev build (ELECTRON_ENABLE_LOGGING=1) — no console
+      errors
+    - Manual in-app verification (mic meter visible and live while
+      adjusting mic volume/noise cancelling with the gate off, "What's
+      New" modal rendering cleanly, links opening in the external
+      browser rather than navigating the app window) is pending the
+      user's own hands-on test.
+
+  Next Step: once confirmed, proceed to the final wrap-up — updating the
+  CLAUDE.md files and README with the full Phase 13 feature set. No
+  further version bump needed; both additions ship as part of the
+  already-prepared v2.2.0.

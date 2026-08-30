@@ -47,6 +47,7 @@ interface CustomEmoji {
     uploadedByNickname?: string;
     status: "PENDING" | "APPROVED";
     createdAt: string;
+    isAnimated?: boolean;
 }
 
 interface LinkPreviewData {
@@ -695,11 +696,13 @@ interface Reson8Api {
     getLocalUserVolume(userId: string): number;
     getLocalUserMute(userId: string): boolean;
     setGlobalVoiceVolume(percent: number): void;
+    setMicVolume(percent: number): void;
+    setNoiseCancelEnabled(enabled: boolean): Promise<void>;
     checkForUpdates(): Promise<{ status: "available" | "not-available" | "error"; message?: string }>;
     downloadUpdate(): Promise<void>;
     quitAndInstall(): void;
     getAppVersion(): Promise<string>;
-    fetchReleaseNotes(version: string): Promise<{ name: string; body: string; htmlUrl: string } | null>;
+    fetchReleaseNotes(version: string): Promise<{ name: string; bodyHtml: string; htmlUrl: string } | null>;
     createChannel(
         serverId: string,
         name: string,
@@ -754,7 +757,8 @@ interface Reson8Api {
     getClockOffset(): number;
     toggleReaction(messageId: string, emoji: string, isDm: boolean): Promise<{ success: boolean; error?: string }>;
     uploadEmojiFile(fileBuffer: ArrayBuffer, fileName: string, mimeType: string): Promise<{ url: string; publicId?: string }>;
-    createCustomEmoji(name: string, imageUrl: string, imagePublicId?: string): Promise<{ success: boolean; emojiId?: string; error?: string }>;
+    uploadAnimatedEmojiFile(fileBuffer: ArrayBuffer, fileName: string, mimeType: string): Promise<{ url: string; publicId?: string }>;
+    createCustomEmoji(name: string, imageUrl: string, imagePublicId?: string, isAnimated?: boolean): Promise<{ success: boolean; emojiId?: string; error?: string }>;
     getApprovedEmojis(): Promise<{ success: boolean; emojis?: CustomEmoji[]; error?: string }>;
     getPendingEmojis(): Promise<{ success: boolean; emojis?: CustomEmoji[]; error?: string }>;
     reviewCustomEmoji(emojiId: string, decision: "APPROVED" | "REJECTED"): Promise<{ success: boolean; error?: string }>;
@@ -853,6 +857,13 @@ const speakerHoldTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 // Track previous occupants per voice channel for join/leave sound detection
 let previousOccupantIds: Set<string> = new Set();
+// Track which occupants were sharing their screen, for start/stop sharing
+// sound detection (PRD 13.16) — reset alongside previousOccupantIds
+// everywhere that gets reset, since both describe the same voice channel.
+let previousSharingIds: Set<string> = new Set();
+function sharingIdsOf(occupants: { userId: string; isSharingScreen?: boolean }[]): Set<string> {
+    return new Set(occupants.filter((o) => o.isSharingScreen).map((o) => o.userId));
+}
 
 // Suppress presence-based join/leave sounds after a kick (avoids double sound)
 let suppressNextPresenceSound = false;
@@ -975,6 +986,7 @@ const attachmentPreview = document.getElementById("attachment-preview") as HTMLD
 const imageLightboxModal = document.getElementById("image-lightbox-modal") as HTMLDivElement;
 const lightboxImage = document.getElementById("lightbox-image") as HTMLImageElement;
 const btnLightboxDownload = document.getElementById("btn-lightbox-download") as HTMLButtonElement;
+const btnLightboxClose = document.getElementById("btn-lightbox-close") as HTMLButtonElement;
 
 const voicePanel = document.getElementById("voice-panel") as HTMLDivElement;
 const voiceChannelName = document.getElementById("voice-channel-name") as HTMLSpanElement;
@@ -1115,6 +1127,13 @@ let soundAlertsMuted = localStorage.getItem("reson8-mute-alerts") === "true";
 let nudgeVolume = Number(localStorage.getItem("reson8-nudge-volume") ?? "100");
 let alertVolume = Number(localStorage.getItem("reson8-alert-volume") ?? "100");
 let voiceVolume = Number(localStorage.getItem("reson8-voice-volume") ?? "100");
+// Mic input volume (PRD 13.3) — 0-200%, scales the outgoing mic signal itself
+// (not local playback), lives in the Voice & Shortcuts tab alongside the
+// noise gate rather than the Audio tab's other volume sliders.
+let micVolume = Number(localStorage.getItem("reson8-mic-volume") ?? "100");
+// AI noise cancelling (PRD 13.1) — off by default (a real CPU/latency cost),
+// persisted like the noise gate's own enabled flag.
+let noiseCancelEnabled = localStorage.getItem("reson8-noise-cancel-enabled") === "true";
 const audioNudgeVolumeSlider = document.getElementById("audio-nudge-volume-slider") as HTMLInputElement;
 const audioNudgeVolumeValue = document.getElementById("audio-nudge-volume-value") as HTMLSpanElement;
 const audioAlertVolumeSlider = document.getElementById("audio-alert-volume-slider") as HTMLInputElement;
@@ -1132,6 +1151,16 @@ const micSensitivitySlider = document.getElementById("mic-sensitivity-slider") a
 const micSensitivityValue = document.getElementById("mic-sensitivity-value") as HTMLSpanElement;
 const micLevelBar = document.getElementById("mic-level-bar") as HTMLDivElement;
 const micSensitivitySection = document.getElementById("mic-sensitivity-section") as HTMLDivElement;
+const micVolumeSlider = document.getElementById("mic-volume-slider") as HTMLInputElement;
+const micVolumeValue = document.getElementById("mic-volume-value") as HTMLSpanElement;
+const chkNoiseCancel = document.getElementById("chk-noise-cancel") as HTMLInputElement;
+
+// Apply the saved mic volume before the user ever joins a channel (mirrors
+// setGlobalVoiceVolume above — a no-op until a VoiceService instance
+// exists, but consistent with that precedent; the value is re-applied
+// after each join below since joinVoiceChannel() constructs a fresh
+// VoiceService instance per session).
+api.setMicVolume(micVolume);
 
 // State for pending delete
 let pendingDeleteChannelId: string | null = null;
@@ -1212,6 +1241,22 @@ const btnEmojiUploadConfirm = document.getElementById("btn-emoji-upload-confirm"
 const EMOJI_CROP_VIEWPORT_SIZE = 220;
 const EMOJI_MAX_UPLOAD_SIZE = 500 * 1024; // 500KB, pre-crop
 
+// ── Animated Custom Emoji Upload Modal (PRD 13.13) ──────────────────────────
+// No crop tool — a GIF's frames can't be cropped through a static canvas
+// without losing the animation, so this uploads the file as-is.
+const emojiUploadAnimatedModal = document.getElementById("emoji-upload-animated-modal") as HTMLDivElement;
+const emojiAnimatedFileInput = document.getElementById("emoji-animated-file-input") as HTMLInputElement;
+const btnEmojiAnimatedChooseFile = document.getElementById("btn-emoji-animated-choose-file") as HTMLButtonElement;
+const emojiAnimatedPreviewWrap = document.getElementById("emoji-animated-preview-wrap") as HTMLDivElement;
+const emojiAnimatedPreviewImg = document.getElementById("emoji-animated-preview-img") as HTMLImageElement;
+const emojiAnimatedNameInput = document.getElementById("emoji-animated-name-input") as HTMLInputElement;
+const btnEmojiAnimatedUploadCancel = document.getElementById("btn-emoji-animated-upload-cancel") as HTMLButtonElement;
+const btnEmojiAnimatedUploadConfirm = document.getElementById("btn-emoji-animated-upload-confirm") as HTMLButtonElement;
+
+const ANIMATED_EMOJI_MAX_UPLOAD_SIZE = 2 * 1024 * 1024; // 2MB, uploaded as-is
+let emojiAnimatedFile: File | null = null;
+let emojiAnimatedPreviewObjectUrl: string | null = null;
+
 // State for the crop tool
 let emojiCropNaturalWidth = 0;
 let emojiCropNaturalHeight = 0;
@@ -1234,6 +1279,11 @@ interface ChatTab {
     /** Undefined for DM tabs — pinning is text-channel only (PRD 11.5). */
     pinBarEl?: HTMLDivElement;
     pinnedMessageId: string | null;
+    /** Local-date key (`YYYY-MM-DD`) of the last message rendered into this
+     *  tab — drives the date-section dividers (PRD 13.6). Undefined until
+     *  the first message renders; reset to undefined wherever `messagesEl`
+     *  is cleared and re-rendered from scratch. */
+    lastRenderedDateKey?: string;
 }
 const chatTabs = new Map<string, ChatTab>();
 let activeTabId = "server-log"; // default active tab
@@ -1752,12 +1802,16 @@ async function handleChannelClick(node: TreeNode): Promise<void> {
                 isDeafened = false;
 
                 // joinVoiceChannel() constructs a fresh VoiceService instance
-                // per session — reapply the saved global voice volume so it
-                // doesn't silently reset to 100% on every join.
+                // per session — reapply the saved global voice volume, mic
+                // volume, and noise cancelling setting so none silently reset
+                // on every join.
                 api.setGlobalVoiceVolume(voiceVolume);
+                api.setMicVolume(micVolume);
+                api.setNoiseCancelEnabled(noiseCancelEnabled);
 
                 // Initialize previous occupants for join/leave sound detection
                 previousOccupantIds = new Set(node.occupants.map((o: any) => o.userId));
+                previousSharingIds = sharingIdsOf(node.occupants);
 
                 // In PTT mode, mic starts muted (resting state) but isMuted=false
                 // so PTT key can activate it. isMuted=true means "PTT locked".
@@ -1770,9 +1824,11 @@ async function handleChannelClick(node: TreeNode): Promise<void> {
                     if (micSensitivityEnabled) {
                         const threshold = parseInt(micSensitivitySlider.value, 10);
                         api.setMicSensitivity(true, threshold);
-                        startMicLevelMeter();
                     }
                 }
+                // Mic level meter runs regardless of gate/PTT state — it now
+                // reflects live input at all times, not just while gating.
+                startMicLevelMeter();
 
                 // Sync mute/deafen state to the server so other occupants' icons
                 // aren't left showing a stale state from a previous session.
@@ -1921,6 +1977,7 @@ function leaveVoiceAndNotify(): void {
     isInVoice = false;
     currentChannelId = null;
     previousOccupantIds = new Set();
+    previousSharingIds = new Set();
     stopMicLevelMeter();
     updateVoiceUI();
     log("Left voice channel", "info");
@@ -2287,13 +2344,16 @@ api.on("connected", (data: { serverId: string; instanceId: string }) => {
     // Settings modal opens) so openSettingsPanel() already knows the answer
     // and can render the right tabs on the very first paint — see
     // applySettingsTabVisibility().
-    Promise.all([api.getAllUsers(data.serverId), api.getPendingEmojis()]).then(
-        ([usersRes, pendingEmojisRes]) => {
-            isAdminUser = usersRes.success;
-            canManageEmojis = pendingEmojisRes.success;
-            settingsTabRoles.disabled = !isAdminUser;
-        },
-    );
+    Promise.all([
+        api.getRoles(data.serverId),
+        api.getBannedUsers(),
+        api.getPendingEmojis(),
+    ]).then(([rolesRes, bannedRes, pendingEmojisRes]) => {
+        isAdminUser = rolesRes.success;
+        canBanUsers = bannedRes.success;
+        canManageEmojis = pendingEmojisRes.success;
+        settingsTabRoles.disabled = !(isAdminUser || canBanUsers);
+    });
 
     // Auto-open DM tabs for partners with unread messages
     api.getUnreadDmPartners().then((res) => {
@@ -2345,6 +2405,7 @@ api.on("disconnected", () => {
     currentTree = [];
     customEmojis = [];
     previousOccupantIds = new Set();
+    previousSharingIds = new Set();
     connectedServerName = null;
     updateWindowTitle();
     activeSpeakers.clear();
@@ -2406,10 +2467,14 @@ api.on("voice-reconnected", (data: { channelId: string }) => {
     updateVoiceUI(node?.name);
     // Reapply local voice settings the same way a fresh manual join does —
     // a new VoiceService instance was constructed for the rejoin, so any
-    // per-session state (global volume) needs to be re-sent.
+    // per-session state (global volume, mic volume, noise cancelling) needs
+    // to be re-sent.
     api.setGlobalVoiceVolume(voiceVolume);
+    api.setMicVolume(micVolume);
+    api.setNoiseCancelEnabled(noiseCancelEnabled);
     api.setVoiceState(isMuted, isDeafened);
     previousOccupantIds = new Set((node?.occupants ?? []).map((o) => o.userId));
+    previousSharingIds = sharingIdsOf(node?.occupants ?? []);
 
     log(`Reconnected to voice channel${node ? `: ${node.name}` : ""}`, "success");
     if (currentTree.length > 0) renderTree(currentTree);
@@ -2421,6 +2486,7 @@ api.on("voice-rejoin-failed", (data: { channelId: string; error?: string }) => {
         isInVoice = false;
         currentChannelId = null;
         previousOccupantIds = new Set();
+        previousSharingIds = new Set();
         updateVoiceUI();
     }
     log(`Couldn't reconnect to voice: ${data.error ?? "unknown error"}. Please rejoin manually.`, "error");
@@ -2447,6 +2513,7 @@ api.on("user-kicked", (data: { channelId: string }) => {
         isInVoice = false;
         currentChannelId = null;
         previousOccupantIds = new Set();
+        previousSharingIds = new Set();
         voiceChannelName.textContent = "";
         voicePanel.classList.remove("in-voice");
     }
@@ -2503,11 +2570,13 @@ api.on("presence", (data: { channelId: string; occupants: any[]; sessionStartedA
     if (isInVoice && data.channelId === currentChannelId) {
         const myId = api.getInstanceId();
         const newIds = new Set(data.occupants.map((o: any) => o.userId));
+        const newSharingIds = sharingIdsOf(data.occupants);
 
         // Skip sounds if a kick just occurred (avoids double sound)
         if (suppressNextPresenceSound) {
             suppressNextPresenceSound = false;
             previousOccupantIds = newIds;
+            previousSharingIds = newSharingIds;
             return;
         }
 
@@ -2525,7 +2594,21 @@ api.on("presence", (data: { channelId: string; occupants: any[]; sessionStartedA
                 break;
             }
         }
+        // Detect screen-share start/stop among other occupants (PRD 13.16)
+        for (const uid of newSharingIds) {
+            if (!previousSharingIds.has(uid) && uid !== myId) {
+                SoundAlert.play("user_started_sharing.mp3");
+                break;
+            }
+        }
+        for (const uid of previousSharingIds) {
+            if (!newSharingIds.has(uid) && uid !== myId) {
+                SoundAlert.play("user_stopped_sharing.mp3");
+                break;
+            }
+        }
         previousOccupantIds = newIds;
+        previousSharingIds = newSharingIds;
     }
 });
 
@@ -2676,6 +2759,36 @@ function renderEmojiToken(token: string): string {
         }
     }
     return escapeHtml(token);
+}
+
+// Extended_Pictographic covers most emoji; Regional_Indicator is needed
+// separately for flags (a pair of regional-indicator codepoints, e.g. 🇧🇷 —
+// not itself classified as Extended_Pictographic).
+const EMOJI_TEST_REGEX = /\p{Extended_Pictographic}|\p{Regional_Indicator}/u;
+const graphemeSegmenter = typeof Intl !== "undefined" && "Segmenter" in Intl
+    ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
+    : null;
+
+/**
+ * True when a message consists of nothing but a single emoji — either one
+ * Unicode emoji grapheme cluster (correctly counting multi-codepoint
+ * sequences like flags, skin-tone modifiers, or ZWJ combos as *one*
+ * character) or one recognized `:custom_name:` token — with no other
+ * text. Used to render such messages at ~4x size (PRD 13.14).
+ */
+function isSoloEmojiMessage(text: string): boolean {
+    const trimmed = text.trim();
+    if (!trimmed) return false;
+
+    const customMatch = trimmed.match(/^:([a-zA-Z0-9_]{2,32}):$/);
+    if (customMatch) {
+        return customEmojis.some((e) => e.name === customMatch[1]);
+    }
+
+    if (!EMOJI_TEST_REGEX.test(trimmed)) return false;
+    return graphemeSegmenter
+        ? [...graphemeSegmenter.segment(trimmed)].length === 1
+        : [...trimmed].length === 1;
 }
 
 /** Build HTML for message text with clickable URL links and inline custom
@@ -2886,6 +2999,8 @@ function renderAdminUsers(users: any[]): void {
         return;
     }
 
+    const myId = api.getInstanceId();
+
     for (const user of users) {
         const row = document.createElement("div");
         row.className = "admin-user-row";
@@ -2895,52 +3010,86 @@ function renderAdminUsers(users: any[]): void {
         // User info
         const infoEl = document.createElement("div");
         infoEl.className = "admin-user-info";
+        const bannedBadge = user.isBanned ? ' <span class="user-banned-badge">BANNED</span>' : "";
         infoEl.innerHTML = `
-            <div class="admin-user-nickname">${escapeHtml(user.nickname)}</div>
+            <div class="admin-user-nickname">${escapeHtml(user.nickname)}${bannedBadge}</div>
             <div class="admin-user-id">${escapeHtml(user.id)}</div>
         `;
         row.appendChild(infoEl);
 
-        // Role toggles
-        const badgesEl = document.createElement("div");
-        badgesEl.className = "admin-role-badges";
+        // Role toggles — only for those who can actually manage roles; a
+        // BAN_USER-only holder would just get PERMISSION_DENIED on click
+        // (PRD 13.17), so don't show them as if they were usable.
+        if (isAdminUser) {
+            const badgesEl = document.createElement("div");
+            badgesEl.className = "admin-role-badges";
 
-        for (const role of allServerRoles) {
-            const badge = document.createElement("span");
-            badge.className = `role-badge${userRoleIds.has(role.id) ? " active" : ""}`;
-            badge.textContent = role.name;
-            if (role.color) {
-                badge.style.borderColor = role.color;
-                if (userRoleIds.has(role.id)) {
-                    badge.style.background = role.color;
-                    badge.style.color = "#fff";
+            for (const role of allServerRoles) {
+                const badge = document.createElement("span");
+                badge.className = `role-badge${userRoleIds.has(role.id) ? " active" : ""}`;
+                badge.textContent = role.name;
+                if (role.color) {
+                    badge.style.borderColor = role.color;
+                    if (userRoleIds.has(role.id)) {
+                        badge.style.background = role.color;
+                        badge.style.color = "#fff";
+                    }
                 }
+
+                badge.addEventListener("click", async () => {
+                    const hasRole = badge.classList.contains("active");
+                    const action = hasRole ? "remove" : "add";
+
+                    // Block admin from removing their own admin role
+                    if (action === "remove" && user.id === myId && role.name === "Server Admin") {
+                        log("You cannot remove your own admin role", "error");
+                        return;
+                    }
+
+                    const result = await api.assignRole(user.id, role.id, action);
+                    if (result.success) {
+                        // Refresh the panel
+                        openSettingsPanel();
+                    } else {
+                        log(`Failed to ${action} role: ${result.error}`, "error");
+                    }
+                });
+
+                badgesEl.appendChild(badge);
             }
 
-            badge.addEventListener("click", async () => {
-                const hasRole = badge.classList.contains("active");
-                const action = hasRole ? "remove" : "add";
-
-                // Block admin from removing their own admin role
-                const myId = api.getInstanceId();
-                if (action === "remove" && user.id === myId && role.name === "Server Admin") {
-                    log("You cannot remove your own admin role", "error");
-                    return;
-                }
-
-                const result = await api.assignRole(user.id, role.id, action);
-                if (result.success) {
-                    // Refresh the panel
-                    openSettingsPanel();
-                } else {
-                    log(`Failed to ${action} role: ${result.error}`, "error");
-                }
-            });
-
-            badgesEl.appendChild(badge);
+            row.appendChild(badgesEl);
         }
 
-        row.appendChild(badgesEl);
+        // Ban / Unban — only for those who hold BAN_USER, never for yourself
+        // (PRD 13.17). Works for offline users too, unlike the old Online
+        // Users modal button this replaces — GET_ALL_USERS lists every user
+        // with a role on this server regardless of online status.
+        if (canBanUsers && user.id !== myId) {
+            const banBtn = document.createElement("button");
+            banBtn.className = user.isBanned ? "btn-unban" : "btn-ban";
+            // "Ban" gets a user-with-a-no-entry-circle icon so the
+            // destructive action reads at a glance; "Unban" stays
+            // text-only, matching the plain role-badge pills beside it.
+            banBtn.innerHTML = user.isBanned
+                ? "Unban"
+                : '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="7" cy="7" r="4"/><circle cx="18" cy="17" r="5"/><line x1="14.5" y1="20.5" x2="21.5" y2="13.5"/></svg> Ban';
+            banBtn.addEventListener("click", async () => {
+                const res = user.isBanned
+                    ? await api.unbanUser(user.id)
+                    : await api.banUser(user.id);
+                if (res.success) {
+                    log(`${user.isBanned ? "Unbanned" : "Banned"} ${escapeHtml(user.nickname)}`, "success");
+                    SoundAlert.play(user.isBanned ? "user_unbanned_from_server.mp3" : "user_banned_from_server.mp3");
+                    openSettingsPanel(); // refresh to reflect the new banned state
+                } else {
+                    log(`Failed to ${user.isBanned ? "unban" : "ban"}: ${res.error}`, "error");
+                    if (res.error && /permission|denied/i.test(res.error)) SoundAlert.play("insufficient_perms.mp3");
+                }
+            });
+            row.appendChild(banBtn);
+        }
+
         adminUserList.appendChild(row);
     }
 }
@@ -3159,6 +3308,48 @@ async function loadChatHistory(tab: ChatTab): Promise<void> {
     }
 }
 
+/** "13th", "1st", "22nd", etc. */
+function ordinalSuffix(day: number): string {
+    if (day >= 11 && day <= 13) return `${day}th`;
+    switch (day % 10) {
+        case 1: return `${day}st`;
+        case 2: return `${day}nd`;
+        case 3: return `${day}rd`;
+        default: return `${day}th`;
+    }
+}
+
+const MONTH_NAMES = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+];
+
+/** "April 13th" for the current year, "April 13th, 2025" otherwise (PRD 13.6). */
+function formatDateSectionLabel(date: Date): string {
+    const label = `${MONTH_NAMES[date.getMonth()]} ${ordinalSuffix(date.getDate())}`;
+    return date.getFullYear() === new Date().getFullYear()
+        ? label
+        : `${label}, ${date.getFullYear()}`;
+}
+
+/**
+ * Inserts a "--- Month Day(th) ---" divider into `tab.messagesEl` whenever
+ * `msgDate` falls on a different local day than the last message rendered
+ * into this tab — called before each message is appended so the divider
+ * lands directly above it. A no-op for every message after the first on
+ * the same day.
+ */
+function maybeInsertDateDivider(tab: ChatTab, msgDate: Date): void {
+    const dayKey = `${msgDate.getFullYear()}-${msgDate.getMonth()}-${msgDate.getDate()}`;
+    if (tab.lastRenderedDateKey === dayKey) return;
+    tab.lastRenderedDateKey = dayKey;
+
+    const divider = document.createElement("div");
+    divider.className = "date-separator";
+    divider.innerHTML = `<span>${escapeHtml(formatDateSectionLabel(msgDate))}</span>`;
+    tab.messagesEl.appendChild(divider);
+}
+
 function renderChatMessage(tab: ChatTab, msg: ChatMessage): void {
     const el = document.createElement("div");
     el.className = "chat-msg";
@@ -3171,7 +3362,8 @@ function renderChatMessage(tab: ChatTab, msg: ChatMessage): void {
     let html = `<span class="msg-time">${time}</span>${editedLabel}<span class="msg-nick">${escapeHtml(msg.nickname)}</span>`;
 
     if (msg.content) {
-        html += `<span class="msg-text">${linkifyContent(msg.content)}</span>`;
+        const soloEmojiClass = isSoloEmojiMessage(msg.content) ? " msg-text-solo-emoji" : "";
+        html += `<span class="msg-text${soloEmojiClass}">${linkifyContent(msg.content)}</span>`;
     }
 
     el.innerHTML = html;
@@ -3183,7 +3375,24 @@ function renderChatMessage(tab: ChatTab, msg: ChatMessage): void {
         img.loading = "lazy";
         img.alt = "Shared image";
         img.addEventListener("click", () => openLightbox(msg.attachmentUrl!));
-        el.appendChild(img);
+
+        // NSFW channels blur every image thumbnail permanently — only the
+        // full-screen lightbox (opened by clicking through) ever shows it
+        // clearly (PRD 13.5).
+        const channelNode = findChannelNodeById(currentTree, tab.channelId);
+        if (channelNode?.isNsfw) {
+            const wrap = document.createElement("div");
+            wrap.className = "msg-image-nsfw-wrap";
+            wrap.appendChild(img);
+            const overlay = document.createElement("div");
+            overlay.className = "msg-image-nsfw-overlay";
+            overlay.innerHTML = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><span>NSFW. Click to open image and reveal content.</span>`;
+            overlay.addEventListener("click", () => openLightbox(msg.attachmentUrl!));
+            wrap.appendChild(overlay);
+            el.appendChild(wrap);
+        } else {
+            el.appendChild(img);
+        }
     }
 
     // Reaction bar
@@ -3192,6 +3401,7 @@ function renderChatMessage(tab: ChatTab, msg: ChatMessage): void {
     attachEditButton(reactBar, msg, el);
     attachPinButton(reactBar, msg, tab);
 
+    maybeInsertDateDivider(tab, new Date(msg.createdAt));
     tab.messagesEl.appendChild(el);
     tab.messagesEl.scrollTop = tab.messagesEl.scrollHeight;
 
@@ -3224,6 +3434,12 @@ function renderChatMessage(tab: ChatTab, msg: ChatMessage): void {
  * push from main.ts.
  */
 function attachMessageTruncation(el: HTMLDivElement, textEl: HTMLElement): void {
+    // A solo-emoji message (PRD 13.14) is a single character rendered at
+    // ~4x size — never actually multi-line content to truncate, just
+    // visually tall. Clamping it would false-positive "overflow" purely
+    // from that height, with no hidden text to reveal via "See more".
+    if (textEl.classList.contains("msg-text-solo-emoji")) return;
+
     textEl.classList.add("msg-text-clamped");
     if (textEl.scrollHeight <= textEl.clientHeight + 1) {
         // Fits within the clamp already — no truncation actually happened,
@@ -3240,7 +3456,15 @@ function attachMessageTruncation(el: HTMLDivElement, textEl: HTMLElement): void 
         textEl.classList.toggle("msg-text-clamped", !expanded);
         btnSeeMore.textContent = expanded ? "See less" : "See more";
     });
-    el.appendChild(btnSeeMore);
+    // Insert directly under this message's own content, above its reaction
+    // bar — appendChild would land it after the reaction bar in DOM order,
+    // reading visually as if it belonged to the message below (PRD 13.8).
+    const reactBar = el.querySelector(".msg-reactions");
+    if (reactBar) {
+        el.insertBefore(btnSeeMore, reactBar);
+    } else {
+        el.appendChild(btnSeeMore);
+    }
 }
 
 function collapseAllExpandedMessages(): void {
@@ -3368,7 +3592,8 @@ function renderDmMessage(tab: ChatTab, msg: DirectMessage): void {
     let html = `<span class="msg-time">${time}</span><span class="msg-nick">${escapeHtml(msg.senderNickname)}</span>`;
 
     if (msg.content) {
-        html += `<span class="msg-text">${linkifyContent(msg.content)}</span>`;
+        const soloEmojiClass = isSoloEmojiMessage(msg.content) ? " msg-text-solo-emoji" : "";
+        html += `<span class="msg-text${soloEmojiClass}">${linkifyContent(msg.content)}</span>`;
     }
 
     el.innerHTML = html;
@@ -3387,6 +3612,7 @@ function renderDmMessage(tab: ChatTab, msg: DirectMessage): void {
     const reactBar = buildReactionBar(msg.id, true, msg.senderId, msg.reactions);
     el.appendChild(reactBar);
 
+    maybeInsertDateDivider(tab, new Date(msg.createdAt));
     tab.messagesEl.appendChild(el);
     tab.messagesEl.scrollTop = tab.messagesEl.scrollHeight;
 
@@ -3444,50 +3670,6 @@ btnOnlineUsers.addEventListener("click", async () => {
         renderOnlineUsers(result.users);
     } else {
         onlineUserList.innerHTML = '<div class="admin-empty">Failed to load users.</div>';
-    }
-
-    // Append banned users section (admin only)
-    if (isAdminUser) {
-        const bannedResult = await api.getBannedUsers();
-        if (bannedResult.success && bannedResult.users && bannedResult.users.length > 0) {
-            const separator = document.createElement("div");
-            separator.className = "online-users-separator banned";
-            separator.textContent = "Banned Users";
-            onlineUserList.appendChild(separator);
-
-            for (const banned of bannedResult.users) {
-                const row = document.createElement("div");
-                row.className = "online-user-row";
-
-                const info = document.createElement("div");
-                info.className = "online-user-info";
-                info.innerHTML = `<span class="online-user-dot banned"></span><span class="online-user-nick banned">${escapeHtml(banned.nickname)}</span>`;
-                row.appendChild(info);
-
-                const unbanBtn = document.createElement("button");
-                unbanBtn.className = "btn-unban";
-                unbanBtn.textContent = "Unban";
-                unbanBtn.addEventListener("click", async () => {
-                    const res = await api.unbanUser(banned.userId);
-                    if (res.success) {
-                        log(`Unbanned ${escapeHtml(banned.nickname)}`, "success");
-                        SoundAlert.play("user_unbanned_from_server.mp3");
-                        row.remove();
-                        // Remove separator if no more banned users
-                        const remaining = onlineUserList.querySelectorAll(".btn-unban");
-                        if (remaining.length === 0) {
-                            separator.remove();
-                        }
-                    } else {
-                        log(`Failed to unban: ${res.error}`, "error");
-                        if (res.error && /permission|denied/i.test(res.error)) SoundAlert.play("insufficient_perms.mp3");
-                    }
-                });
-                row.appendChild(unbanBtn);
-
-                onlineUserList.appendChild(row);
-            }
-        }
     }
 });
 
@@ -3610,24 +3792,8 @@ function createUserRow(user: { userId: string; nickname: string; isOnline: boole
         btnGroup.appendChild(nudgeBtn);
     }
 
-    // Admin-only ban button (don't show for self)
-    if (isAdminUser && user.userId !== myId) {
-        const banBtn = document.createElement("button");
-        banBtn.className = "btn-ban";
-        banBtn.textContent = "Ban";
-        banBtn.addEventListener("click", async () => {
-            const res = await api.banUser(user.userId);
-            if (res.success) {
-                log(`Banned ${escapeHtml(user.nickname)} from server`, "success");
-                SoundAlert.play("user_banned_from_server.mp3");
-                row.remove();
-            } else {
-                log(`Failed to ban: ${res.error}`, "error");
-                if (res.error && /permission|denied/i.test(res.error)) SoundAlert.play("insufficient_perms.mp3");
-            }
-        });
-        btnGroup.appendChild(banBtn);
-    }
+    // Ban moved to the User Management settings tab (PRD 13.17) — it
+    // now also works for offline users, which this modal never could.
 
     row.appendChild(btnGroup);
     return row;
@@ -3649,8 +3815,14 @@ async function updateOnlineDot(): Promise<void> {
 
 // ── Unified Settings Modal (Tabs) ─────────────────────────────────────
 
+// `isAdminUser` reflects MANAGE_ROLES specifically (despite the name — kept
+// as-is since it's also relied on for the Server tab's literal-ADMIN gate).
+// `canBanUsers` reflects BAN_USER specifically — separate flags so the User
+// Management tab (PRD 13.17) can open to either holder while still gating
+// role-editing vs. ban/unban controls individually within it.
 let isAdminUser = false;
 let canManageEmojis = false;
+let canBanUsers = false;
 
 // Settings tab switching
 const settingsTabBtns = document.querySelectorAll(".settings-tab-btn");
@@ -3673,7 +3845,9 @@ settingsTabBtns.forEach((btn) => {
  * shown (using state cached at connect time) and again after a live re-check
  * resolves, without ever flashing the wrong tabs on screen in between. */
 function applySettingsTabVisibility(): void {
-    settingsTabRoles.style.display = isConnected && isAdminUser ? "" : "none";
+    // User Management (PRD 13.17) opens to either MANAGE_ROLES or BAN_USER —
+    // the controls inside are individually gated by each flag separately.
+    settingsTabRoles.style.display = isConnected && (isAdminUser || canBanUsers) ? "" : "none";
     settingsTabEmojis.style.display = isConnected && canManageEmojis ? "" : "none";
     settingsTabServer.style.display = isConnected && isAdminUser ? "" : "none";
 
@@ -3700,36 +3874,41 @@ async function openSettingsPanel(): Promise<void> {
     // Populate audio devices
     await populateAudioDevices();
 
-    // Start mic preview for meter if sensitivity is enabled and not already in voice
-    if (micSensitivityEnabled && !isInVoice) {
+    // Mic level meter is always visible now, independent of the noise gate
+    // — start a preview capture if not already in a voice channel (a live
+    // call already has its own mic pipeline for the meter to read from).
+    if (!isInVoice) {
         api.startMicPreview();
-        startMicLevelMeter();
     }
+    startMicLevelMeter();
 
     if (isConnected) {
         // Live re-check, in case permissions changed since connect (e.g. an
         // admin promoted/demoted this user mid-session). Fetch users, roles,
-        // and the pending-emoji queue concurrently. The Emojis tab's
-        // visibility is decided by whether GET_PENDING_EMOJIS actually
-        // succeeds (i.e. the server confirms MANAGE_EMOJIS) rather than
-        // reusing the isAdminUser heuristic — MANAGE_EMOJIS is a distinct
-        // permission bit, even though in practice only the Admin role (via
-        // its ADMIN bypass) holds it today.
-        const [usersRes, rolesRes, pendingEmojisRes] = await Promise.all([
+        // banned users, and the pending-emoji queue concurrently. Each tab's
+        // visibility is decided by whether its own permission-gated call
+        // actually succeeds, rather than a shared heuristic — GET_ROLES
+        // stays MANAGE_ROLES-only and GET_BANNED_USERS stays BAN_USER-only,
+        // so `isAdminUser`/`canBanUsers` reflect exactly those two
+        // permissions even though GET_ALL_USERS itself now accepts either
+        // one (PRD 13.17, since the tab serves both).
+        const [usersRes, rolesRes, bannedRes, pendingEmojisRes] = await Promise.all([
             api.getAllUsers(currentServerId),
             api.getRoles(currentServerId),
+            api.getBannedUsers(),
             api.getPendingEmojis(),
         ]);
 
-        isAdminUser = usersRes.success;
+        isAdminUser = rolesRes.success;
+        canBanUsers = bannedRes.success;
         canManageEmojis = pendingEmojisRes.success;
         applySettingsTabVisibility();
 
-        if (isAdminUser) {
+        if (usersRes.success) {
             allServerRoles = rolesRes.roles ?? [];
             renderAdminUsers(usersRes.users ?? []);
         } else {
-            adminUserList.innerHTML = '<div class="admin-empty">You don\'t have permission to manage roles.</div>';
+            adminUserList.innerHTML = '<div class="admin-empty">You don\'t have permission to manage users.</div>';
         }
 
         if (canManageEmojis) {
@@ -3853,15 +4032,23 @@ btnSaveMaxMessageLength.addEventListener("click", async () => {
     }
 });
 
-btnAdminClose.addEventListener("click", () => {
+/** Stops the mic level meter's RAF loop and (if not in a call) the preview
+ *  capture it was reading from — otherwise both would keep running
+ *  invisibly in the background after the modal that displays them closes. */
+function closeSettingsPanel(): void {
     adminModal.classList.remove("visible");
     activeShortcutSlot = null;
+    stopMicLevelMeter();
+    api.stopMicPreview();
+}
+
+btnAdminClose.addEventListener("click", () => {
+    closeSettingsPanel();
 });
 
 adminModal.addEventListener("click", (e) => {
     if (e.target === adminModal) {
-        adminModal.classList.remove("visible");
-        activeShortcutSlot = null;
+        closeSettingsPanel();
     }
 });
 
@@ -4157,7 +4344,6 @@ btnVoiceActivation.addEventListener("click", () => {
         if (micSensitivityEnabled) {
             const threshold = parseInt(micSensitivitySlider.value, 10);
             api.setMicSensitivity(true, threshold);
-            startMicLevelMeter();
         }
     }
     log("Voice input mode: Voice Activation", "info");
@@ -4172,7 +4358,6 @@ btnPttMode.addEventListener("click", () => {
     // Disable noise gate if active
     if (micSensitivityEnabled && isInVoice) {
         api.setMicSensitivity(false, 0);
-        stopMicLevelMeter();
     }
     // If currently in voice, mute mic (PTT resting state) but don't lock
     if (isInVoice) {
@@ -4315,11 +4500,19 @@ function openLightbox(imageUrl: string): void {
     imageLightboxModal.classList.add("visible");
 }
 
+function closeLightbox(): void {
+    imageLightboxModal.classList.remove("visible");
+    lightboxImage.src = "";
+}
+
 imageLightboxModal.addEventListener("click", (e) => {
     if (e.target === imageLightboxModal) {
-        imageLightboxModal.classList.remove("visible");
-        lightboxImage.src = "";
+        closeLightbox();
     }
+});
+
+btnLightboxClose.addEventListener("click", () => {
+    closeLightbox();
 });
 
 btnLightboxDownload.addEventListener("click", () => {
@@ -4334,8 +4527,7 @@ document.addEventListener("keydown", (e) => {
         closeEmojiPicker();
     }
     if (e.key === "Escape" && imageLightboxModal.classList.contains("visible")) {
-        imageLightboxModal.classList.remove("visible");
-        lightboxImage.src = "";
+        closeLightbox();
     }
     if (e.key === "Escape" && videoLightboxModal.classList.contains("visible")) {
         closeVideoLightbox();
@@ -4580,6 +4772,7 @@ async function jumpToPinnedMessage(channelId: string, messageId: string): Promis
             return;
         }
         tab.messagesEl.innerHTML = "";
+        tab.lastRenderedDateKey = undefined;
         for (const msg of result.messages) {
             renderChatMessage(tab, msg);
         }
@@ -4896,7 +5089,7 @@ function startMessageEdit(el: HTMLDivElement, msg: ChatMessage): void {
         // client) and just harmlessly re-applies the same content.
         msg.content = newContent;
         const newTextEl = document.createElement("span");
-        newTextEl.className = "msg-text";
+        newTextEl.className = isSoloEmojiMessage(newContent) ? "msg-text msg-text-solo-emoji" : "msg-text";
         newTextEl.innerHTML = linkifyContent(newContent);
         input.replaceWith(newTextEl);
         if (!el.querySelector(".msg-edited")) {
@@ -4931,6 +5124,7 @@ function applyMessageEdit(msg: ChatMessage): void {
         const textEl = el.querySelector(".msg-text") as HTMLElement | null;
         if (textEl) {
             textEl.classList.remove("msg-text-clamped", "msg-text-expanded");
+            textEl.classList.toggle("msg-text-solo-emoji", isSoloEmojiMessage(msg.content));
             textEl.innerHTML = linkifyContent(msg.content);
             // Re-evaluate truncation for the other clients viewing this
             // edit too, not just the editor's own optimistic path above.
@@ -4988,6 +5182,16 @@ api.on("nudge-received", async (data: { fromUserId: string; fromNickname: string
     if (!isFocused) {
         api.flashWindow();
     }
+});
+
+// A viewer opened/closed the Viewer window on this client's own screen
+// share (PRD 13.16) — sound-cue only, no visible UI.
+api.on("viewer-joined-your-stream", () => {
+    SoundAlert.play("user_joined_your_stream.mp3");
+});
+
+api.on("viewer-left-your-stream", () => {
+    SoundAlert.play("user_exited_your_stream.mp3");
 });
 
 // ── Emoji Picker ──────────────────────────────────────────────────────────
@@ -5065,7 +5269,7 @@ function buildEmojiCategoryTabs(): void {
     customBtn.className = "emoji-cat-tab";
     customBtn.title = "Custom Emojis";
     customBtn.innerHTML =
-        '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M17.5,12 C20.5375661,12 23,14.4624339 23,17.5 C23,20.5375661 20.5375661,23 17.5,23 C14.4624339,23 12,20.5375661 12,17.5 C12,14.4624339 14.4624339,12 17.5,12 Z M17.5,13.9992349 L17.4101244,14.0072906 C17.2060313,14.0443345 17.0450996,14.2052662 17.0080557,14.4093593 L17,14.4992349 L16.9996498,16.9992349 L14.4976498,17 L14.4077742,17.0080557 C14.2036811,17.0450996 14.0427494,17.2060313 14.0057055,17.4101244 L13.9976498,17.5 L14.0057055,17.5898756 C14.0427494,17.7939687 14.2036811,17.9549004 14.4077742,17.9919443 L14.4976498,18 L17.0006498,17.9992349 L17.0011076,20.5034847 L17.0091633,20.5933603 C17.0462073,20.7974534 17.207139,20.9583851 17.411232,20.995429 L17.5011076,21.0034847 L17.5909833,20.995429 C17.7950763,20.9583851 17.956008,20.7974534 17.993052,20.5933603 L18.0011076,20.5034847 L18.0006498,17.9992349 L20.5045655,18 L20.5944411,17.9919443 C20.7985342,17.9549004 20.9594659,17.7939687 20.9965098,17.5898756 L21.0045655,17.5 L20.9965098,17.4101244 C20.9594659,17.2060313 20.7985342,17.0450996 20.5944411,17.0080557 L20.5045655,17 L17.9996498,16.9992349 L18,14.4992349 L17.9919443,14.4093593 C17.9549004,14.2052662 17.7939687,14.0443345 17.5898756,14.0072906 L17.5,13.9992349 Z M17.75,3 C19.5449254,3 21,4.45507456 21,6.25 L21.0012092,12.0225923 C19.9906579,11.3752958 18.7891565,11 17.5,11 C14.8016531,11 12.4873327,12.6442127 11.5042701,14.9854066 C10.6572014,14.9085256 9.88524157,14.6257765 9.1765361,14.1355923 C8.83586995,13.8999666 8.36869314,13.9851187 8.13306748,14.3257849 C7.89744183,14.666451 7.98259397,15.1336279 8.32326012,15.3692535 C9.16645713,15.9524604 10.0900975,16.3129767 11.0850385,16.4484275 C11.0289661,16.7904675 11,17.1418511 11,17.5 C11,18.7891565 11.3752958,19.9906579 12.0225923,21.0012092 L6.25,21 C4.45507456,21 3,19.5449254 3,17.75 L3,6.25 C3,4.45507456 4.45507456,3 6.25,3 L17.75,3 Z M9.00044779,7.75115873 C8.3104845,7.75115873 7.75115873,8.3104845 7.75115873,9.00044779 C7.75115873,9.69041108 8.3104845,10.2497368 9.00044779,10.2497368 C9.69041108,10.2497368 10.2497368,9.69041108 10.2497368,9.00044779 C10.2497368,8.3104845 9.69041108,7.75115873 9.00044779,7.75115873 Z M15.0004478,7.75115873 C14.3104845,7.75115873 13.7511587,8.3104845 13.7511587,9.00044779 C13.7511587,9.69041108 14.3104845,10.2497368 15.0004478,10.2497368 C15.6904111,10.2497368 16.2497368,9.69041108 16.2497368,9.00044779 C16.2497368,8.3104845 15.6904111,7.75115873 15.0004478,7.75115873 Z"/></svg>';
+        '<svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor"><path d="M17.5,12 C20.5375661,12 23,14.4624339 23,17.5 C23,20.5375661 20.5375661,23 17.5,23 C14.4624339,23 12,20.5375661 12,17.5 C12,14.4624339 14.4624339,12 17.5,12 Z M17.5,13.9992349 L17.4101244,14.0072906 C17.2060313,14.0443345 17.0450996,14.2052662 17.0080557,14.4093593 L17,14.4992349 L16.9996498,16.9992349 L14.4976498,17 L14.4077742,17.0080557 C14.2036811,17.0450996 14.0427494,17.2060313 14.0057055,17.4101244 L13.9976498,17.5 L14.0057055,17.5898756 C14.0427494,17.7939687 14.2036811,17.9549004 14.4077742,17.9919443 L14.4976498,18 L17.0006498,17.9992349 L17.0011076,20.5034847 L17.0091633,20.5933603 C17.0462073,20.7974534 17.207139,20.9583851 17.411232,20.995429 L17.5011076,21.0034847 L17.5909833,20.995429 C17.7950763,20.9583851 17.956008,20.7974534 17.993052,20.5933603 L18.0011076,20.5034847 L18.0006498,17.9992349 L20.5045655,18 L20.5944411,17.9919443 C20.7985342,17.9549004 20.9594659,17.7939687 20.9965098,17.5898756 L21.0045655,17.5 L20.9965098,17.4101244 C20.9594659,17.2060313 20.7985342,17.0450996 20.5944411,17.0080557 L20.5045655,17 L17.9996498,16.9992349 L18,14.4992349 L17.9919443,14.4093593 C17.9549004,14.2052662 17.7939687,14.0443345 17.5898756,14.0072906 L17.5,13.9992349 Z M17.75,3 C19.5449254,3 21,4.45507456 21,6.25 L21.0012092,12.0225923 C19.9906579,11.3752958 18.7891565,11 17.5,11 C14.8016531,11 12.4873327,12.6442127 11.5042701,14.9854066 C10.6572014,14.9085256 9.88524157,14.6257765 9.1765361,14.1355923 C8.83586995,13.8999666 8.36869314,13.9851187 8.13306748,14.3257849 C7.89744183,14.666451 7.98259397,15.1336279 8.32326012,15.3692535 C9.16645713,15.9524604 10.0900975,16.3129767 11.0850385,16.4484275 C11.0289661,16.7904675 11,17.1418511 11,17.5 C11,18.7891565 11.3752958,19.9906579 12.0225923,21.0012092 L6.25,21 C4.45507456,21 3,19.5449254 3,17.75 L3,6.25 C3,4.45507456 4.45507456,3 6.25,3 L17.75,3 Z M9.00044779,7.75115873 C8.3104845,7.75115873 7.75115873,8.3104845 7.75115873,9.00044779 C7.75115873,9.69041108 8.3104845,10.2497368 9.00044779,10.2497368 C9.69041108,10.2497368 10.2497368,9.69041108 10.2497368,9.00044779 C10.2497368,8.3104845 9.69041108,7.75115873 9.00044779,7.75115873 Z M15.0004478,7.75115873 C14.3104845,7.75115873 13.7511587,8.3104845 13.7511587,9.00044779 C13.7511587,9.69041108 14.3104845,10.2497368 15.0004478,10.2497368 C15.6904111,10.2497368 16.2497368,9.69041108 16.2497368,9.00044779 C16.2497368,8.3104845 15.6904111,7.75115873 15.0004478,7.75115873 Z"/></svg>';
     customBtn.addEventListener("click", () => {
         emojiSearch.value = "";
         renderEmojiGrid();
@@ -5160,6 +5364,19 @@ function renderCustomEmojiSection(lowerFilter: string): void {
         openEmojiUploadModal();
     });
     grid.appendChild(uploadBtn);
+
+    // Animated emoji (PRD 13.13) — separate entry point, since the upload
+    // flow skips the crop tool entirely (a GIF's frames can't be cropped
+    // through a static canvas without losing the animation).
+    const uploadAnimatedBtn = document.createElement("button");
+    uploadAnimatedBtn.className = "emoji-upload-btn emoji-upload-btn-animated";
+    uploadAnimatedBtn.title = "Upload an animated (GIF) emoji";
+    uploadAnimatedBtn.textContent = "GIF+";
+    uploadAnimatedBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        openAnimatedEmojiUploadModal();
+    });
+    grid.appendChild(uploadAnimatedBtn);
 
     const filtered = customEmojis.filter(
         (e) => !lowerFilter || e.name.toLowerCase().includes(lowerFilter),
@@ -5361,6 +5578,82 @@ btnEmojiUploadConfirm.addEventListener("click", async () => {
         log(`Emoji upload failed: ${err.message}`, "error");
     } finally {
         btnEmojiUploadConfirm.disabled = false;
+    }
+});
+
+// ── Animated Custom Emoji Upload (PRD 13.13) ────────────────────────────────
+
+function openAnimatedEmojiUploadModal(): void {
+    emojiAnimatedFile = null;
+    emojiAnimatedNameInput.value = "";
+    emojiAnimatedPreviewWrap.style.display = "none";
+    btnEmojiAnimatedUploadConfirm.disabled = true;
+    emojiUploadAnimatedModal.classList.add("visible");
+}
+
+function closeAnimatedEmojiUploadModal(): void {
+    emojiUploadAnimatedModal.classList.remove("visible");
+    if (emojiAnimatedPreviewObjectUrl) {
+        URL.revokeObjectURL(emojiAnimatedPreviewObjectUrl);
+        emojiAnimatedPreviewObjectUrl = null;
+    }
+    emojiAnimatedFile = null;
+}
+
+btnEmojiAnimatedChooseFile.addEventListener("click", () => emojiAnimatedFileInput.click());
+btnEmojiAnimatedUploadCancel.addEventListener("click", () => closeAnimatedEmojiUploadModal());
+
+emojiUploadAnimatedModal.addEventListener("click", (e) => {
+    if (e.target === emojiUploadAnimatedModal) closeAnimatedEmojiUploadModal();
+});
+
+emojiAnimatedFileInput.addEventListener("change", () => {
+    const file = emojiAnimatedFileInput.files?.[0];
+    emojiAnimatedFileInput.value = ""; // allow re-selecting the same file later
+    if (!file) return;
+
+    if (file.size > ANIMATED_EMOJI_MAX_UPLOAD_SIZE) {
+        log(`GIF too large (max ${Math.round(ANIMATED_EMOJI_MAX_UPLOAD_SIZE / (1024 * 1024))}MB)`, "error");
+        return;
+    }
+    if (file.type !== "image/gif") {
+        log("Animated emoji must be a GIF", "error");
+        return;
+    }
+
+    emojiAnimatedFile = file;
+    if (emojiAnimatedPreviewObjectUrl) URL.revokeObjectURL(emojiAnimatedPreviewObjectUrl);
+    emojiAnimatedPreviewObjectUrl = URL.createObjectURL(file);
+    emojiAnimatedPreviewImg.src = emojiAnimatedPreviewObjectUrl;
+    emojiAnimatedPreviewWrap.style.display = "block";
+    btnEmojiAnimatedUploadConfirm.disabled = false;
+});
+
+btnEmojiAnimatedUploadConfirm.addEventListener("click", async () => {
+    const name = emojiAnimatedNameInput.value.trim();
+    if (!/^[a-zA-Z0-9_]{2,32}$/.test(name)) {
+        log("Emoji name must be 2-32 letters, numbers, or underscores", "error");
+        emojiAnimatedNameInput.focus();
+        return;
+    }
+    if (!emojiAnimatedFile) return;
+
+    btnEmojiAnimatedUploadConfirm.disabled = true;
+    try {
+        const buffer = await emojiAnimatedFile.arrayBuffer();
+        const uploadResult = await api.uploadAnimatedEmojiFile(buffer, `${name}.gif`, "image/gif");
+        const createResult = await api.createCustomEmoji(name, uploadResult.url, uploadResult.publicId, true);
+
+        if (createResult.success) {
+            log(`Animated emoji ":${name}:" submitted for admin approval`, "success");
+            closeAnimatedEmojiUploadModal();
+        } else {
+            log(`Failed to submit emoji: ${createResult.error}`, "error");
+        }
+    } catch (err: any) {
+        log(`Emoji upload failed: ${err.message}`, "error");
+    } finally {
+        btnEmojiAnimatedUploadConfirm.disabled = false;
     }
 });
 
@@ -5589,7 +5882,9 @@ async function checkForWhatsNew(currentVersion: string): Promise<void> {
     pendingWhatsNewVersion = currentVersion;
     pendingWhatsNewUrl = notes.htmlUrl;
     whatsNewTitle.textContent = `🎉 What's New in ${notes.name || `v${currentVersion}`}`;
-    whatsNewBody.textContent = notes.body.trim() || "No release notes were provided for this version.";
+    // Already-rendered HTML (see main.ts's ReleaseNotes doc comment) — not
+    // raw markdown, so this no longer shows literal "#"/"**"/"-" syntax.
+    whatsNewBody.innerHTML = notes.bodyHtml || "<p>No release notes were provided for this version.</p>";
     whatsNewModal.classList.add("visible");
 }
 
@@ -5716,6 +6011,9 @@ function stopMicLevelMeter(): void {
 }
 
 chkMicSensitivity?.addEventListener("change", () => {
+    // The mic level meter no longer starts/stops with this toggle — it's
+    // always running independently (see openSettingsPanel()/join handler)
+    // — this only controls the gate itself now.
     micSensitivityEnabled = chkMicSensitivity.checked;
     if (micSensitivityEnabled) {
         localStorage.setItem("reson8-mic-sensitivity-enabled", "true");
@@ -5723,17 +6021,11 @@ chkMicSensitivity?.addEventListener("change", () => {
         if (isInVoice && !pttModeEnabled) {
             const threshold = parseInt(micSensitivitySlider.value, 10);
             api.setMicSensitivity(true, threshold);
-        } else if (!isInVoice) {
-            // Start preview so the meter works outside a voice channel
-            api.startMicPreview();
         }
-        startMicLevelMeter();
     } else {
         localStorage.removeItem("reson8-mic-sensitivity-enabled");
         micSensitivitySliderWrap.style.display = "none";
         api.setMicSensitivity(false, 0);
-        api.stopMicPreview();
-        stopMicLevelMeter();
     }
 });
 
@@ -5744,4 +6036,32 @@ micSensitivitySlider?.addEventListener("input", () => {
     if (micSensitivityEnabled && isInVoice && !pttModeEnabled) {
         api.setMicThreshold(parseInt(val, 10));
     }
+});
+
+// ── Mic Volume (PRD 13.3) ───────────────────────────────────────────────────
+
+if (micVolumeSlider) micVolumeSlider.value = String(micVolume);
+if (micVolumeValue) micVolumeValue.textContent = `${micVolume}%`;
+
+micVolumeSlider?.addEventListener("input", () => {
+    micVolume = Number(micVolumeSlider.value);
+    micVolumeValue.textContent = `${micVolume}%`;
+    localStorage.setItem("reson8-mic-volume", String(micVolume));
+    api.setMicVolume(micVolume);
+});
+
+// ── Noise Cancelling (PRD 13.1) ──────────────────────────────────────────────
+
+if (chkNoiseCancel) chkNoiseCancel.checked = noiseCancelEnabled;
+
+chkNoiseCancel?.addEventListener("change", () => {
+    noiseCancelEnabled = chkNoiseCancel.checked;
+    if (noiseCancelEnabled) {
+        localStorage.setItem("reson8-noise-cancel-enabled", "true");
+    } else {
+        localStorage.removeItem("reson8-noise-cancel-enabled");
+    }
+    // The very first enable this session fetches/compiles the vendored WASM
+    // engine — no UI blocking needed, it applies whenever it resolves.
+    api.setNoiseCancelEnabled(noiseCancelEnabled);
 });

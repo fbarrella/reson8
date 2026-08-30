@@ -14,7 +14,7 @@ import type {
     InterServerEvents,
     SocketData,
 } from "@reson8/shared-types";
-import { getUserPermissions, hasPermission } from "../services/permissions.service.js";
+import { getUserPermissions, hasPermission, hasAnyPermission } from "../services/permissions.service.js";
 
 type TypedSocket = Socket<
     ClientToServerEvents,
@@ -63,6 +63,49 @@ export async function requirePermission(
         // server logs during connection-issue investigations.
         app.log.debug(
             { userId, serverId, requiredPermission: permission.toString() },
+            "Permission denied",
+        );
+        return false;
+    }
+
+    return true;
+}
+
+/**
+ * Like `requirePermission`, but passes if the socket's user holds *any* of
+ * the given permissions — for actions shared by more than one role (e.g.
+ * GET_ALL_USERS, needed by both MANAGE_ROLES and BAN_USER holders since the
+ * User Management tab serves both, PRD 13.17).
+ */
+export async function requireAnyPermission(
+    app: FastifyInstance,
+    socket: TypedSocket,
+    ...permissions: bigint[]
+): Promise<boolean> {
+    const userId = socket.data.userId;
+    const serverId = socket.data.serverId;
+
+    if (!userId || !serverId) {
+        socket.emit("ERROR", {
+            code: "NOT_AUTHENTICATED",
+            message: "You must join a server before performing this action.",
+        });
+        return false;
+    }
+
+    const userPerms = await getUserPermissions(
+        app.prisma as any,
+        userId,
+        serverId,
+    );
+
+    if (!hasAnyPermission(userPerms, ...permissions)) {
+        socket.emit("ERROR", {
+            code: "PERMISSION_DENIED",
+            message: "You do not have permission to perform this action.",
+        });
+        app.log.debug(
+            { userId, serverId, requiredPermissions: permissions.map((p) => p.toString()) },
             "Permission denied",
         );
         return false;

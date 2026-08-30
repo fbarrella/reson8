@@ -11,6 +11,28 @@ import { getInstanceId, hasExistingInstanceId } from "./instance-id.js";
 import { autoUpdater } from "electron-updater";
 import { startCapture, resolvePidForWindowSourceId, listAudioProducingApps, platformSupportsCapture } from "@reson8/native-audio";
 import type { CaptureHandle } from "@reson8/native-audio";
+import MarkdownIt from "markdown-it";
+
+// ── Single-instance lock (PRD 13.18) ────────────────────────────────────
+// Requested as early as possible, before any other startup work. Opening
+// the app again while one instance is already running should just focus
+// the existing window rather than spawning a second, fully-independent
+// instance (its own server connection, tray icon, global shortcuts, etc.
+// all competing with the first). If this process didn't get the lock, an
+// instance is already running elsewhere; quit immediately — calling
+// app.quit() this early prevents app.whenReady() from ever resolving, so
+// none of the window/tray/IPC setup further down actually runs.
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+    app.quit();
+} else {
+    app.on("second-instance", () => {
+        if (!mainWindow) return;
+        if (mainWindow.isMinimized()) mainWindow.restore();
+        if (!mainWindow.isVisible()) mainWindow.show();
+        mainWindow.focus();
+    });
+}
 
 // ── Link Preview (metascraper) ───────────────────────────────────────────
 // @ts-ignore — metascraper packages lack type declarations
@@ -77,9 +99,36 @@ function extractOgTags(html: string): Record<string, string> {
 
 interface ReleaseNotes {
     name: string;
-    body: string;
+    /** Rendered HTML, not raw markdown — the "What's New" modal used to
+     *  display GitHub's raw markdown body verbatim (literal "#"/"**"/"-"
+     *  syntax visible to the user); rendered here, in the main process,
+     *  since markdown-it is an ordinary CommonJS package the main process
+     *  can just require() directly, unlike the renderer (a plain <script>-
+     *  loaded page with no module bundler to resolve a bare import into). */
+    bodyHtml: string;
     htmlUrl: string;
 }
+
+const markdownRenderer = new MarkdownIt({
+    html: false, // never pass through raw HTML from the release notes source
+    linkify: true, // auto-link bare URLs (release notes often have them)
+    breaks: true,
+});
+
+// A plain rendered <a href> without target="_blank" would navigate the
+// main window itself away to that URL on click — the existing
+// setWindowOpenHandler below only intercepts new-window-style navigation
+// (target="_blank"/window.open()), not a same-window link click. Force
+// every rendered link through that path instead, same as chat's own
+// linkifyContent() already does for message links.
+const defaultLinkOpenRenderer = markdownRenderer.renderer.rules.link_open ?? (
+    (tokens, idx, options, _env, self) => self.renderToken(tokens, idx, options)
+);
+markdownRenderer.renderer.rules.link_open = (tokens, idx, options, env, self) => {
+    tokens[idx].attrSet("target", "_blank");
+    tokens[idx].attrSet("rel", "noopener noreferrer");
+    return defaultLinkOpenRenderer(tokens, idx, options, env, self);
+};
 
 /**
  * Fetches the published GitHub release notes for a given app version (PRD
@@ -107,9 +156,10 @@ async function fetchReleaseNotes(version: string): Promise<ReleaseNotes | null> 
         if (!response.ok) return null;
 
         const data = await response.json();
+        const rawBody = typeof data.body === "string" ? data.body : "";
         return {
             name: typeof data.name === "string" && data.name ? data.name : `v${version}`,
-            body: typeof data.body === "string" ? data.body : "",
+            bodyHtml: rawBody.trim() ? markdownRenderer.render(rawBody) : "",
             htmlUrl:
                 typeof data.html_url === "string"
                     ? data.html_url
@@ -227,6 +277,11 @@ let tray: Tray | null = null;
 let isQuitting = false;
 let minimizeToTray = false;
 let closeToTray = false;
+/** Set once the renderer has been asked to gracefully disconnect its
+ *  socket before quitting (see the window "close" and app "before-quit"
+ *  handlers below) — guards against re-triggering it on the follow-up
+ *  close/quit call that actually lets the window/app finish closing. */
+let hasSentQuitDisconnect = false;
 
 /**
  * `desktopCapturer.getSources()`, raced against a timeout. On Linux/Wayland
@@ -338,6 +393,26 @@ function createWindow(): void {
         if (closeToTray && !isQuitting) {
             event.preventDefault();
             mainWindow?.hide();
+            return;
+        }
+
+        // Actually closing (the common "click the X button" quit path,
+        // with close-to-tray off) — this window is destroyed before the
+        // app-level "before-quit" handler below ever runs (that one only
+        // catches Cmd+Q/Alt+F4, where the window is still alive when it
+        // fires), so this is the interception point that matters for a
+        // normal close. Same reasoning as "before-quit"'s own comment: ask
+        // the renderer to gracefully disconnect its socket first, so the
+        // server can finalize presence immediately instead of waiting out
+        // the reconnect-grace period on every ordinary quit.
+        if (!hasSentQuitDisconnect && mainWindow && !mainWindow.isDestroyed()) {
+            hasSentQuitDisconnect = true;
+            event.preventDefault();
+            mainWindow.webContents.send("app-quitting");
+            setTimeout(() => {
+                isQuitting = true;
+                mainWindow?.close();
+            }, 250);
         }
     });
 
@@ -787,8 +862,12 @@ app.whenReady().then(() => {
     createWindow();
 });
 
-// Ensure native quit signals (Cmd+Q, Alt+F4) bypass close-to-tray
-app.on("before-quit", () => {
+// Ensure native quit signals (Cmd+Q, Alt+F4) bypass close-to-tray — these
+// call app.quit() directly, so the window is still alive when this fires
+// (unlike the ordinary "click the X button" path, intercepted instead in
+// the window's own "close" handler above, since by the time this handler
+// runs there the window is already destroyed).
+app.on("before-quit", (event) => {
     isQuitting = true;
     // Don't leave a native-audio capture session running past app exit —
     // on the PulseAudio backend in particular (PRD 12.3), that session has
@@ -796,6 +875,24 @@ app.on("before-quit", () => {
     // themselves up on their own.
     screenAudioCapture?.stop();
     screenAudioCapture = null;
+
+    // Tell the renderer to gracefully disconnect its socket before the
+    // process actually dies. Without this, quitting just lets the OS kill
+    // the connection, which the server can only see as an ordinary dropped
+    // transport — indistinguishable from a flaky network blip — so it
+    // always waits out the full reconnect-grace period (10s) before
+    // marking presence offline, even for a deliberate, clean quit. An
+    // explicit socket.disconnect() call reports as "client namespace
+    // disconnect" server-side, which the server treats as unambiguous and
+    // finalizes immediately instead. Briefly delaying the actual quit
+    // gives the disconnect packet a moment to actually leave the process
+    // before it's torn down.
+    if (!hasSentQuitDisconnect && mainWindow && !mainWindow.isDestroyed()) {
+        hasSentQuitDisconnect = true;
+        event.preventDefault();
+        mainWindow.webContents.send("app-quitting");
+        setTimeout(() => app.quit(), 250);
+    }
 });
 
 app.on("window-all-closed", () => {

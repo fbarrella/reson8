@@ -12,6 +12,77 @@
 
 import { Device, types as msTypes } from "mediasoup-client";
 
+// Type-only — a genuine `import("...")` type query, erased entirely at
+// compile time (no require()/import() emitted). See the dynamicImport
+// comment below for why this can't be a normal `import type {...} from`
+// statement's value-shaped counterpart.
+type DeepFilterNet3CoreInstance = import("deepfilternet3-noise-filter").DeepFilterNet3Core;
+
+// ── Noise cancelling (PRD 13.1) — shared module-level engine ────────────────
+// One DeepFilterNet3Core instance for the whole app session, not per join:
+// `initialize()` fetches + WebAssembly.compile()s the vendored ~24MB WASM +
+// ONNX model (apps/client/assets/deepfilternet/, NOT the package's default
+// third-party CDN — see PRD 13.1's asset-sourcing decision) exactly once and
+// caches the compiled module/bytes internally; every subsequent join reuses
+// that cache via createAudioWorkletNode(), which only spins up a fresh node
+// bound to that join's own AudioContext. `cdnUrl` is relative to
+// dist/renderer/index.html, mirroring the existing sound-alert asset path
+// convention (`../../assets/...`) already used elsewhere in this codebase.
+//
+// The package is loaded via a genuine dynamic import() rather than a static
+// one — confirmed live that a static import (compiling to a top-level
+// require(), since this project's tsconfig targets CommonJS) crashes the
+// entire preload script at startup with "ReferenceError: exports is not
+// defined": the package's own package.json declares `"type": "module"`, so
+// Node treats its plain `.js` files as ESM regardless of the "require"
+// condition in its "exports" map pointing at one — a dual-package-hazard
+// bug in the dependency itself, not fixable from this side except by never
+// require()-ing it.
+//
+// A literal `await import(...)` isn't enough on its own: TypeScript still
+// rewrites dynamic import() to a deferred require() when the compiler's own
+// module target is CommonJS (confirmed in the compiled output —
+// `Promise.resolve().then(() => require(...))`), hitting the exact same
+// crash, just lazily. The indirect-eval `Function("specifier", "return
+// import(specifier)")` trick below is opaque to TypeScript's static
+// analysis (the `import` keyword is inside a string, not real source), so
+// nothing rewrites it — at runtime it's a genuine dynamic import(),
+// resolving the package's "import" condition (dist/index.esm.js) through
+// the real ESM loader instead of require(). As a side benefit, this also
+// keeps the ~24MB dependency out of the preload script's synchronous
+// startup path entirely for the (likely common) case of a user who never
+// touches this feature.
+const dynamicImport = new Function("specifier", "return import(specifier)") as (
+    specifier: string,
+) => Promise<{
+    DeepFilterNet3Core: new (config?: {
+        sampleRate?: number;
+        noiseReductionLevel?: number;
+        assetConfig?: { cdnUrl?: string };
+    }) => DeepFilterNet3CoreInstance;
+}>;
+
+let noiseCancelCore: DeepFilterNet3CoreInstance | null = null;
+let noiseCancelInitPromise: Promise<void> | null = null;
+function ensureNoiseCancelInitialized(): Promise<void> {
+    if (!noiseCancelInitPromise) {
+        noiseCancelInitPromise = (async () => {
+            const { DeepFilterNet3Core } = await dynamicImport("deepfilternet3-noise-filter");
+            noiseCancelCore = new DeepFilterNet3Core({
+                sampleRate: 48000,
+                noiseReductionLevel: 100,
+                assetConfig: { cdnUrl: "../../assets/deepfilternet" },
+            });
+            await noiseCancelCore.initialize();
+        })().catch((err) => {
+            noiseCancelInitPromise = null; // allow a retry on the next enable attempt
+            noiseCancelCore = null;
+            throw err;
+        });
+    }
+    return noiseCancelInitPromise;
+}
+
 /** Signaling callbacks — the preload wires these to the Socket.io connection. */
 export interface VoiceSignaling {
     getRouterCapabilities(
@@ -124,15 +195,52 @@ export class VoiceService {
     /** Master attenuator (0-1) applied on top of every per-user gain (PRD 10.2). */
     private globalVoiceVolume = 1.0;
 
-    // ── Mic sensitivity / noise gate ──────────────────────────────────────
-    private analyser: AnalyserNode | null = null;
+    // ── Send-side mic processing graph ─────────────────────────────────────
+    // Built once per join in startProducing() — `localStream`'s raw track is
+    // never produced directly. Every effect that needs to touch the outgoing
+    // mic signal taps or extends this same chain instead of building its own
+    // AudioContext:
+    //   micSourceNode → [noiseCancelNode] → gateGainNode → volumeGainNode → micDestinationNode → produce()
+    // `analyser` taps strictly *after* `noiseCancelNode` (or after
+    // `micSourceNode` directly if noise cancelling isn't wired in) so gate
+    // decisions and the settings meter read the denoised signal per PRD
+    // 13.1, while still being pre-gate/pre-volume so they reflect true input
+    // level rather than the already-gated/scaled output.
     private audioContext: AudioContext | null = null;
-    private _analysisTrack: MediaStreamTrack | null = null;
+    private micSourceNode: MediaStreamAudioSourceNode | null = null;
+    private analyser: AnalyserNode | null = null;
+    private gateGainNode: GainNode | null = null;
+    private volumeGainNode: GainNode | null = null;
+    private micDestinationNode: MediaStreamAudioDestinationNode | null = null;
+    /** Mic input volume as a linear gain multiplier (0.0–2.0, 100% = 1.0) —
+     *  kept even without a live graph so a volume set before joining a
+     *  channel is applied the instant the graph is built (PRD 13.3). */
+    private micVolume: number = 1.0;
+
+    // ── Noise cancelling (PRD 13.1) ──────────────────────────────────────────
+    private noiseCancelNode: AudioWorkletNode | null = null;
+    /** Kept even without a live graph, mirroring `sensitivityEnabled`, so a
+     *  setting persisted from a previous session can be honored the moment
+     *  a graph is next built. */
+    private noiseCancelEnabled: boolean = false;
+
+    // ── Mic sensitivity / noise gate ──────────────────────────────────────
     private _previewStream: MediaStream | null = null;
     private silenceCheckInterval: number | null = null;
     private sensitivityThreshold: number = -40; // dB
     private sensitivityEnabled: boolean = false;
     private _isManuallyMuted: boolean = false;
+    /** Attack/hold/release envelope constants (PRD 13.2) — chosen to feel
+     *  instant on open while surviving natural mid-sentence pauses without
+     *  cutting: fast attack, a hold window before release even starts, then
+     *  a short fade rather than an instant cut. */
+    private static readonly GATE_ATTACK_SEC = 0.015;
+    private static readonly GATE_HOLD_SEC = 0.35;
+    private static readonly GATE_RELEASE_SEC = 0.2;
+    private gateState: "open" | "closed" = "open";
+    /** audioContext.currentTime when the signal first dropped below
+     *  threshold since the gate was last open; null while above threshold. */
+    private gateBelowThresholdSince: number | null = null;
     /** True only when deafening had to pause the producer itself (i.e. the
      *  mic wasn't already paused going in) — so undeafening knows whether to
      *  resume it, rather than clobbering a mute that predates the deafen. */
@@ -531,12 +639,13 @@ export class VoiceService {
             audio: audioConstraints,
         });
 
-        const track = this.localStream.getAudioTracks()[0];
-        this.producer = await this.sendTransport.produce({ track });
+        const processedTrack = await this.buildMicProcessingGraph();
+        this.producer = await this.sendTransport.produce({ track: processedTrack });
 
-        // If sensitivity was already enabled, reconnect analyser to the new stream
-        if (this.sensitivityEnabled && this.localStream) {
-            this.hookAnalyser();
+        // If the noise gate setting was already on before this join, start
+        // its envelope loop now that the graph it needs exists.
+        if (this.sensitivityEnabled) {
+            this.startGateLoop();
         }
     }
 
@@ -793,114 +902,157 @@ export class VoiceService {
         return { isMuted: this.producer?.paused ?? false, isDeafened: this._isDeafened };
     }
 
-    // ── Mic Sensitivity / Noise Gate ────────────────────────────────────────
+    // ── Send-side mic processing graph (PRD 13.2/13.3/13.1) ─────────────────
 
-    /** Hook the AnalyserNode to the current localStream. */
-    private hookAnalyser(): void {
-        // Stop preview mode if it was running
-        this.stopPreview();
+    /**
+     * Builds the always-on send-side Web Audio graph for the current
+     * `localStream` and returns the track to actually produce. Runs once per
+     * join, from `startProducing()` — the noise gate's GainNode lives here
+     * unconditionally (defaulting to fully open) so enabling/disabling the
+     * gate mid-call never needs to tear down or re-produce; it only starts
+     * or stops the envelope loop below. Constructed at a fixed 48kHz — the
+     * noise-cancelling model (PRD 13.1) assumes 48kHz frames; Web Audio
+     * resamples the actual mic hardware's rate into the context transparently,
+     * so this is safe regardless of the input device's native rate.
+     *
+     * If noise cancelling is already enabled when this runs, the
+     * AudioWorkletNode is wired in as the very first stage; if not, it's
+     * inserted later (dynamically, mid-call, no teardown) by
+     * `setNoiseCancelEnabled()` if the user turns it on during this session.
+     */
+    private async buildMicProcessingGraph(): Promise<MediaStreamTrack> {
+        this.teardownMicProcessingGraph();
+        if (!this.localStream) throw new Error("No local stream to build mic graph from");
 
-        // Tear down any previous analyser
-        if (this.silenceCheckInterval !== null) {
-            clearInterval(this.silenceCheckInterval);
-            this.silenceCheckInterval = null;
+        this.audioContext = new AudioContext({ sampleRate: 48000 });
+        this.micSourceNode = this.audioContext.createMediaStreamSource(this.localStream);
+
+        let tapSource: AudioNode = this.micSourceNode;
+        if (this.noiseCancelEnabled) {
+            try {
+                this.noiseCancelNode = await this.createNoiseCancelNode();
+                this.micSourceNode.connect(this.noiseCancelNode);
+                tapSource = this.noiseCancelNode;
+            } catch (err) {
+                console.error("[voice] Noise cancelling failed to initialize, continuing without it:", err);
+                this.noiseCancelNode = null;
+                this.onError?.("Noise cancelling couldn't start — continuing without it.");
+            }
         }
-        if (this._analysisTrack) {
-            this._analysisTrack.stop();
-            this._analysisTrack = null;
+
+        // Post-noise-cancel (or pre-gate, if noise cancelling isn't wired
+        // in) tap — always reflects the true input level, whether or not
+        // the gate is currently enabled.
+        this.analyser = this.audioContext.createAnalyser();
+        this.analyser.fftSize = 2048;
+        tapSource.connect(this.analyser);
+
+        this.gateGainNode = this.audioContext.createGain();
+        this.gateGainNode.gain.value = 1.0;
+        tapSource.connect(this.gateGainNode);
+
+        this.volumeGainNode = this.audioContext.createGain();
+        this.volumeGainNode.gain.value = this.micVolume;
+        this.gateGainNode.connect(this.volumeGainNode);
+
+        this.micDestinationNode = this.audioContext.createMediaStreamDestination();
+        this.volumeGainNode.connect(this.micDestinationNode);
+
+        return this.micDestinationNode.stream.getAudioTracks()[0];
+    }
+
+    /** Tears down the send-side graph entirely — only ever on full cleanup or
+     *  before rebuilding it, never on a mere gate/noise-cancel toggle. */
+    private teardownMicProcessingGraph(): void {
+        this.stopGateLoop(false);
+        if (this.noiseCancelNode) {
+            this.noiseCancelNode.disconnect();
+            this.noiseCancelNode = null;
+        }
+        if (this.gateGainNode) {
+            this.gateGainNode.disconnect();
+            this.gateGainNode = null;
+        }
+        if (this.volumeGainNode) {
+            this.volumeGainNode.disconnect();
+            this.volumeGainNode = null;
+        }
+        if (this.micDestinationNode) {
+            this.micDestinationNode.disconnect();
+            this.micDestinationNode = null;
+        }
+        if (this.micSourceNode) {
+            this.micSourceNode.disconnect();
+            this.micSourceNode = null;
         }
         if (this.audioContext) {
             this.audioContext.close().catch(() => {});
             this.audioContext = null;
-            this.analyser = null;
         }
+        this.analyser = null;
+    }
 
-        if (!this.localStream) return;
+    // ── Mic Sensitivity / Noise Gate ────────────────────────────────────────
 
-        // Clone the track for analysis so the AnalyserNode always reads
-        // the raw mic signal, even when the original track is disabled
-        // by the noise gate (track.enabled = false sends silence).
-        const originalTrack = this.localStream.getAudioTracks()[0];
-        if (!originalTrack) return;
-        this._analysisTrack = originalTrack.clone();
-        const analysisStream = new MediaStream([this._analysisTrack]);
-
-        this.audioContext = new AudioContext();
-        this.analyser = this.audioContext.createAnalyser();
-        this.analyser.fftSize = 2048;
-
-        const source = this.audioContext.createMediaStreamSource(analysisStream);
-        source.connect(this.analyser);
-
-        const bufferLength = this.analyser.fftSize;
-        const dataArray = new Float32Array(bufferLength);
+    /**
+     * Starts the noise-gate envelope loop against the already-built
+     * processing graph. Every 50ms, compares the pre-gate RMS level to the
+     * threshold and drives `gateGainNode.gain` through a real attack/hold/
+     * release ramp instead of an instant on/off — a natural mid-sentence
+     * dip below threshold is absorbed by the hold window rather than
+     * cutting audio immediately (the original source of the choppiness).
+     */
+    private startGateLoop(): void {
+        if (this.silenceCheckInterval !== null) return; // already running
+        this.gateBelowThresholdSince = null;
+        this.gateState = "open";
 
         this.silenceCheckInterval = window.setInterval(() => {
-            if (!this.analyser || !this.producer) return;
+            if (!this.analyser || !this.gateGainNode || !this.audioContext) return;
 
-            this.analyser.getFloatTimeDomainData(dataArray);
-
-            // Compute RMS → dB
-            let sumSquares = 0;
-            for (let i = 0; i < bufferLength; i++) {
-                sumSquares += dataArray[i] * dataArray[i];
-            }
-            const rms = Math.sqrt(sumSquares / bufferLength);
-            const dB = rms > 0 ? 20 * Math.log10(rms) : -Infinity;
-
-            // Don't override manual mute
-            if (this._isManuallyMuted) return;
-
-            const track = this.localStream?.getAudioTracks()[0];
-            if (!track) return;
+            const dB = this.readAnalyserLevel();
+            const now = this.audioContext.currentTime;
 
             if (dB > this.sensitivityThreshold) {
-                if (!track.enabled) track.enabled = true;
-            } else {
-                if (track.enabled) track.enabled = false;
+                this.gateBelowThresholdSince = null;
+                if (this.gateState !== "open") {
+                    this.gateGainNode.gain.cancelScheduledValues(now);
+                    this.gateGainNode.gain.setValueAtTime(this.gateGainNode.gain.value, now);
+                    this.gateGainNode.gain.linearRampToValueAtTime(1.0, now + VoiceService.GATE_ATTACK_SEC);
+                    this.gateState = "open";
+                }
+            } else if (this.gateState !== "closed") {
+                if (this.gateBelowThresholdSince === null) {
+                    this.gateBelowThresholdSince = now;
+                } else if (now - this.gateBelowThresholdSince >= VoiceService.GATE_HOLD_SEC) {
+                    this.gateGainNode.gain.cancelScheduledValues(now);
+                    this.gateGainNode.gain.setValueAtTime(this.gateGainNode.gain.value, now);
+                    this.gateGainNode.gain.linearRampToValueAtTime(0.0, now + VoiceService.GATE_RELEASE_SEC);
+                    this.gateState = "closed";
+                }
             }
         }, 50) as unknown as number;
     }
 
-    /** Enable noise gate with the given dB threshold. */
-    enableSensitivity(threshold: number): void {
-        this.sensitivityEnabled = true;
-        this.sensitivityThreshold = threshold;
-        if (this.localStream) {
-            this.hookAnalyser();
-        }
-    }
-
-    /** Disable the noise gate. */
-    disableSensitivity(): void {
-        this.sensitivityEnabled = false;
+    /** Stops the envelope loop. `forceOpen` ramps the gate back to fully
+     *  open — used when the gate feature itself is disabled, so the mic
+     *  isn't left stuck at whatever gain the loop last set. */
+    private stopGateLoop(forceOpen: boolean): void {
         if (this.silenceCheckInterval !== null) {
             clearInterval(this.silenceCheckInterval);
             this.silenceCheckInterval = null;
         }
-        if (this._analysisTrack) {
-            this._analysisTrack.stop();
-            this._analysisTrack = null;
-        }
-        if (this.audioContext) {
-            this.audioContext.close().catch(() => {});
-            this.audioContext = null;
-            this.analyser = null;
-        }
-        // Re-enable track if not manually muted
-        if (!this._isManuallyMuted) {
-            const track = this.localStream?.getAudioTracks()[0];
-            if (track) track.enabled = true;
+        this.gateBelowThresholdSince = null;
+        this.gateState = "open";
+        if (forceOpen && this.gateGainNode && this.audioContext) {
+            const now = this.audioContext.currentTime;
+            this.gateGainNode.gain.cancelScheduledValues(now);
+            this.gateGainNode.gain.setValueAtTime(this.gateGainNode.gain.value, now);
+            this.gateGainNode.gain.linearRampToValueAtTime(1.0, now + VoiceService.GATE_ATTACK_SEC);
         }
     }
 
-    /** Update the noise gate threshold (while enabled). */
-    setThreshold(threshold: number): void {
-        this.sensitivityThreshold = threshold;
-    }
-
-    /** Returns the current mic input level in dB (for meter visualization). */
-    getCurrentLevel(): number {
+    private readAnalyserLevel(): number {
         if (!this.analyser) return -Infinity;
         const bufferLength = this.analyser.fftSize;
         const dataArray = new Float32Array(bufferLength);
@@ -913,6 +1065,111 @@ export class VoiceService {
         return rms > 0 ? 20 * Math.log10(rms) : -Infinity;
     }
 
+    /** Enable noise gate with the given dB threshold. */
+    enableSensitivity(threshold: number): void {
+        this.sensitivityEnabled = true;
+        this.sensitivityThreshold = threshold;
+        // If a call is already active, the graph exists — start the loop
+        // immediately. If not, startProducing() checks `sensitivityEnabled`
+        // once the graph is built on join.
+        if (this.gateGainNode) {
+            this.startGateLoop();
+        }
+    }
+
+    /** Disable the noise gate — stops gating without touching the rest of
+     *  the send-side graph (mic volume / noise cancelling keep working). */
+    disableSensitivity(): void {
+        this.sensitivityEnabled = false;
+        this.stopGateLoop(true);
+    }
+
+    /** Update the noise gate threshold (while enabled). */
+    setThreshold(threshold: number): void {
+        this.sensitivityThreshold = threshold;
+    }
+
+    /** Returns the current mic input level in dB (for meter visualization). */
+    getCurrentLevel(): number {
+        return this.readAnalyserLevel();
+    }
+
+    // ── Mic Volume (PRD 13.3) ────────────────────────────────────────────────
+
+    /** Set mic input volume (0–200%, 100% = unprocessed input level). Applies
+     *  live to the send-side graph; safe to call before joining a channel —
+     *  the value is applied the moment the graph is built. */
+    setMicVolume(percent: number): void {
+        const clamped = Math.max(0, Math.min(200, percent));
+        this.micVolume = clamped / 100;
+        if (this.volumeGainNode) {
+            this.volumeGainNode.gain.value = this.micVolume;
+        }
+    }
+
+    // ── Noise Cancelling (PRD 13.1) ──────────────────────────────────────────
+
+    /** Waits for the shared engine to be ready, then spins up a fresh
+     *  AudioWorkletNode bound to this join's own AudioContext. The WASM
+     *  fetch + compile only actually happens the first time this is called
+     *  across the whole app session (cached on `noiseCancelCore` after). */
+    private async createNoiseCancelNode(): Promise<AudioWorkletNode> {
+        await ensureNoiseCancelInitialized();
+        if (!this.audioContext) throw new Error("No audio context to attach noise cancelling to");
+        if (!noiseCancelCore) throw new Error("Noise cancelling engine failed to initialize");
+        return noiseCancelCore.createAudioWorkletNode(this.audioContext);
+    }
+
+    /**
+     * Enable/disable AI noise cancelling. Mirrors `enableSensitivity()`'s
+     * "safe to call before a graph exists" contract, but is async: the very
+     * first enable *this session* fetches + compiles the vendored WASM
+     * engine (a few hundred ms), and the very first enable *this join* has
+     * to splice the AudioWorkletNode into an already-running graph (a brief
+     * reconnect). Every toggle after that — for the rest of this join — is
+     * instant: it only sends a passthrough/bypass message to the
+     * already-created node, never tearing down or rebuilding the graph or
+     * the mediasoup connection, per the feature's own requirement.
+     */
+    async setNoiseCancelEnabled(enabled: boolean): Promise<void> {
+        this.noiseCancelEnabled = enabled;
+
+        // No live graph yet (not in a call) — startProducing() will honor
+        // the flag itself once it next builds one.
+        if (!this.micSourceNode || !this.audioContext || !this.gateGainNode || !this.analyser) {
+            return;
+        }
+
+        if (this.noiseCancelNode) {
+            // Already spliced into the graph — just flip its mode. The
+            // worklet's own message handler is the (unexported) internal
+            // API of the vendored package — this mirrors its literal source.
+            this.noiseCancelNode.port.postMessage({ type: "SET_BYPASS", value: !enabled });
+            return;
+        }
+
+        if (!enabled) return; // never created, nothing to disable
+
+        try {
+            const node = await this.createNoiseCancelNode();
+            // A disable or a full cleanup() could have raced this await.
+            if (!this.noiseCancelEnabled || !this.micSourceNode || !this.audioContext || !this.gateGainNode || !this.analyser) {
+                node.disconnect();
+                return;
+            }
+            this.micSourceNode.disconnect(this.analyser);
+            this.micSourceNode.disconnect(this.gateGainNode);
+            this.micSourceNode.connect(node);
+            node.connect(this.analyser);
+            node.connect(this.gateGainNode);
+            this.noiseCancelNode = node;
+        } catch (err) {
+            console.error("[voice] Failed to enable noise cancelling:", err);
+            this.noiseCancelEnabled = false;
+            this.onError?.("Couldn't enable noise cancelling.");
+        }
+    }
+
     // ── Preview mode (meter without voice channel) ────────────────────────
 
     /**
@@ -921,7 +1178,8 @@ export class VoiceService {
      * the user can calibrate the threshold before joining.
      */
     async startPreview(): Promise<void> {
-        // Don't start preview if already in a voice channel (hookAnalyser handles that)
+        // Don't start preview if already in a voice channel (the mic
+        // processing graph built in startProducing() already owns the meter)
         if (this.localStream) return;
         // Don't start if preview already running
         if (this._previewStream) return;
@@ -972,7 +1230,7 @@ export class VoiceService {
             this._previewStream = null;
         }
         // Only tear down AudioContext if we're in preview mode (no localStream)
-        // If localStream exists, hookAnalyser owns the AudioContext
+        // If localStream exists, the mic processing graph owns the AudioContext
         if (!this.localStream) {
             if (this.audioContext) {
                 this.audioContext.close().catch(() => {});
@@ -995,20 +1253,9 @@ export class VoiceService {
         // Clean up preview if running
         this.stopPreview();
 
-        // Clean up sensitivity / noise gate
-        if (this.silenceCheckInterval !== null) {
-            clearInterval(this.silenceCheckInterval);
-            this.silenceCheckInterval = null;
-        }
-        if (this._analysisTrack) {
-            this._analysisTrack.stop();
-            this._analysisTrack = null;
-        }
-        if (this.audioContext) {
-            this.audioContext.close().catch(() => {});
-            this.audioContext = null;
-            this.analyser = null;
-        }
+        // Clean up the send-side mic processing graph (noise gate, and its
+        // future mic-volume/noise-cancelling extensions)
+        this.teardownMicProcessingGraph();
 
         if (this.localStream) {
             for (const track of this.localStream.getTracks()) {

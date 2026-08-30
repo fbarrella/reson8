@@ -297,8 +297,8 @@
 
     .tree-channel .ch-count {
       font-size: 10px;
-      color: var(--text-muted);
-      background: rgba(255, 255, 255, 0.05);
+      color: var(--text-secondary);
+      background: rgba(255, 255, 255, 0.1);
       padding: 1px 5px;
       border-radius: 8px;
     }
@@ -324,6 +324,7 @@
       padding: 2px 12px 2px 40px;
       font-size: 12px;
       color: var(--text-secondary);
+      cursor: pointer;
     }
 
     .tree-occupant .occ-dot {
@@ -703,6 +704,16 @@
       color: var(--text-primary);
     }
 
+    /* A message that's nothing but a single emoji renders ~4x size (PRD
+       13.14) — the custom-emoji <img> is sized in `em` units (see
+       .custom-emoji-inline below) so it scales along with plain text. */
+    .chat-msg .msg-text.msg-text-solo-emoji {
+      display: inline-block;
+      font-size: 4em;
+      line-height: 1.1;
+      vertical-align: middle;
+    }
+
     /* Long-message truncation (Phase 12 sub-phase item 5) — only applied
        (via JS, attachMessageTruncation()) to messages that actually
        overflow this clamp; a short message never gets this class at all,
@@ -715,19 +726,31 @@
     }
 
     .btn-see-more {
+      /* Must always start its own line, whether the preceding .msg-text is
+         block (clamped) or plain inline (expanded) — `display: block`
+         guarantees the line break regardless of the sibling's own display,
+         and `width: fit-content` keeps the pill from stretching edge to
+         edge the way a plain block button would. */
       display: block;
-      background: none;
-      border: none;
-      padding: 0;
-      margin-top: 2px;
+      width: fit-content;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 2px 10px;
+      margin-top: 4px;
       color: var(--accent);
-      font-size: 11px;
+      font-size: 10px;
       font-family: var(--font);
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
       cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
     }
 
     .btn-see-more:hover {
-      text-decoration: underline;
+      background: rgba(255, 255, 255, 0.15);
+      border-color: var(--accent);
     }
 
     .msg-edited {
@@ -765,6 +788,44 @@
 
     .msg-image:hover {
       opacity: 0.85;
+    }
+
+    /* ── NSFW Blurred Thumbnails (PRD 13.5) ──────────────────────────── */
+    .msg-image-nsfw-wrap {
+      position: relative;
+      display: block;
+      max-width: 300px;
+      max-height: 200px;
+      margin-top: 4px;
+      border-radius: 6px;
+      overflow: hidden;
+      cursor: pointer;
+    }
+
+    .msg-image-nsfw-wrap .msg-image {
+      margin-top: 0;
+      filter: blur(20px);
+      transform: scale(1.05); /* hides blurred edge fringing */
+    }
+
+    .msg-image-nsfw-wrap .msg-image:hover {
+      opacity: 1;
+    }
+
+    .msg-image-nsfw-overlay {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 10px;
+      background: rgba(0, 0, 0, 0.45);
+      color: #fff;
+      text-align: center;
+      font-size: 11px;
+      font-weight: 500;
     }
 
     /* ── Message Reactions ──────────────────────────────────────── */
@@ -1228,6 +1289,31 @@
       border-color: rgba(255, 255, 255, 0.5);
     }
 
+    #btn-lightbox-close {
+      position: fixed;
+      top: 16px;
+      left: 16px;
+      background: rgba(220, 38, 38, 0.25);
+      border: 1px solid rgba(220, 38, 38, 0.5);
+      color: #fff;
+      border-radius: 8px;
+      padding: 8px 14px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      font-family: var(--font);
+      font-weight: 500;
+      transition: all 0.15s;
+      z-index: 201;
+    }
+
+    #btn-lightbox-close:hover {
+      background: rgba(220, 38, 38, 0.45);
+      border-color: rgba(220, 38, 38, 0.7);
+    }
+
     /* ── Video Lightbox ──────────────────────────────────────────────── */
     #video-lightbox-modal {
       display: none;
@@ -1344,6 +1430,7 @@
     #nsfw-confirm-modal,
     #delete-message-modal,
     #emoji-upload-modal,
+    #emoji-upload-animated-modal,
     #admin-modal,
     #update-modal,
     #whats-new-modal,
@@ -1371,6 +1458,7 @@
     #nsfw-confirm-modal.visible,
     #delete-message-modal.visible,
     #emoji-upload-modal.visible,
+    #emoji-upload-animated-modal.visible,
     #admin-modal.visible,
     #update-modal.visible,
     #whats-new-modal.visible,
@@ -1390,8 +1478,74 @@
       font-size: 13px;
       line-height: 1.6;
       color: var(--text-secondary);
-      white-space: pre-wrap;
       word-break: break-word;
+    }
+
+    /* Rendered markdown (PRD 13 follow-up) — GitHub release notes body,
+       rendered to HTML in the main process rather than shown as raw
+       markdown syntax. */
+    #whats-new-modal .whats-new-body h1,
+    #whats-new-modal .whats-new-body h2,
+    #whats-new-modal .whats-new-body h3 {
+      color: var(--text-primary);
+      font-size: 14px;
+      font-weight: 600;
+      margin: 14px 0 6px;
+    }
+
+    #whats-new-modal .whats-new-body h1:first-child,
+    #whats-new-modal .whats-new-body h2:first-child,
+    #whats-new-modal .whats-new-body h3:first-child {
+      margin-top: 0;
+    }
+
+    #whats-new-modal .whats-new-body p {
+      margin: 0 0 10px;
+    }
+
+    #whats-new-modal .whats-new-body ul,
+    #whats-new-modal .whats-new-body ol {
+      margin: 0 0 10px;
+      padding-left: 20px;
+    }
+
+    #whats-new-modal .whats-new-body li {
+      margin-bottom: 4px;
+    }
+
+    #whats-new-modal .whats-new-body strong {
+      color: var(--text-primary);
+      font-weight: 600;
+    }
+
+    #whats-new-modal .whats-new-body a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+
+    #whats-new-modal .whats-new-body a:hover {
+      text-decoration: underline;
+    }
+
+    #whats-new-modal .whats-new-body code {
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      padding: 1px 4px;
+      font-size: 12px;
+    }
+
+    #whats-new-modal .whats-new-body hr {
+      border: none;
+      border-top: 1px solid var(--border);
+      margin: 12px 0;
+    }
+
+    #whats-new-modal .whats-new-body blockquote {
+      margin: 0 0 10px;
+      padding-left: 10px;
+      border-left: 2px solid var(--border);
+      color: var(--text-muted);
     }
 
     #update-modal .update-progress-wrap {
@@ -1598,6 +1752,19 @@
       text-overflow: ellipsis;
     }
 
+    .user-banned-badge {
+      display: inline-block;
+      background: #e74c3c;
+      color: #fff;
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: 0.3px;
+      padding: 1px 5px;
+      border-radius: 4px;
+      margin-left: 6px;
+      vertical-align: middle;
+    }
+
     .admin-user-id {
       font-size: 9px;
       font-family: monospace;
@@ -1614,15 +1781,23 @@
     }
 
     .role-badge {
-      font-size: 10px;
-      padding: 2px 8px;
-      border-radius: 10px;
+      /* Sized to match .btn-ban/.btn-unban beside it (PRD 13.17 follow-up)
+         — weight (border/font-weight) stays the plain default, since role
+         toggles don't carry the same severity as banning someone. Labels
+         wrap (no white-space: nowrap) rather than overflow if a role name
+         doesn't fit at this larger size. */
+      font-size: 11px;
+      padding: 2px 6px;
+      border-radius: 8px;
       border: 1px solid var(--border);
       cursor: pointer;
       transition: all 0.15s;
       user-select: none;
       color: var(--text-muted);
       background: transparent;
+      text-align: center;
+      max-width: 100%;
+      overflow-wrap: break-word;
     }
 
     .role-badge.active {
@@ -1692,6 +1867,39 @@
       gap: 0;
       border-bottom: 1px solid var(--border);
       margin-bottom: 12px;
+      /* More tabs than fit at once (PRD 13.17 added a longer label) —
+         scroll horizontally instead of squishing/wrapping tab labels,
+         same thin-scrollbar treatment as the emoji picker's category
+         tabs (.emoji-category-tabs) for a consistent look. */
+      overflow-x: auto;
+      /* Explicit, not left to default — setting only overflow-x forces
+         overflow-y to compute as `auto` too per spec (an axis can't stay
+         `visible` once the other isn't), which let this bar itself start
+         scrolling vertically and (being an unconstrained flex-column
+         child, no flex-shrink) drift out of view whenever the active
+         panel below it scrolled. `hidden` + `flex-shrink: 0` pins it as a
+         fixed-height header row, exactly like it looked before. */
+      overflow-y: hidden;
+      flex-shrink: 0;
+      scrollbar-width: thin;
+      scrollbar-color: var(--border) transparent;
+    }
+
+    .settings-tab-bar::-webkit-scrollbar {
+      height: 5px;
+    }
+
+    .settings-tab-bar::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    .settings-tab-bar::-webkit-scrollbar-thumb {
+      background: var(--border);
+      border-radius: 3px;
+    }
+
+    .settings-tab-bar::-webkit-scrollbar-thumb:hover {
+      background: var(--text-muted);
     }
 
     .settings-tab-btn {
@@ -1699,10 +1907,13 @@
       border: none;
       color: var(--text-muted);
       font-size: 11px;
+      line-height: 1.8;
       padding: 6px 14px;
       cursor: pointer;
       border-bottom: 2px solid transparent;
       transition: all 0.15s;
+      white-space: nowrap;
+      flex-shrink: 0;
     }
 
     .settings-tab-btn.active {
@@ -1944,19 +2155,6 @@
       user-select: none;
     }
 
-    .online-users-separator.banned {
-      color: #e74c3c;
-    }
-
-    .online-user-dot.banned {
-      background: #e74c3c;
-    }
-
-    .online-user-nick.banned {
-      color: #e74c3c;
-      text-decoration: line-through;
-    }
-
     .online-user-btns {
       display: flex;
       gap: 6px;
@@ -1981,22 +2179,29 @@
       border-color: var(--accent-hover);
     }
 
+    /* Pill-shaped to match the role-badge pills beside it in the User
+       Management tab (PRD 13.17) rather than standing out as a full,
+       solid-filled button. */
     .btn-ban {
-      background: #e74c3c;
-      border: 1px solid #e74c3c;
-      color: #fff;
-      font-size: 12px;
-      padding: 6px 12px;
-      border-radius: var(--radius);
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 2px 6px;
+      border-radius: 8px;
+      border: 2px solid #e74c3c;
       cursor: pointer;
       transition: all 0.15s;
+      user-select: none;
+      color: #e74c3c;
+      background: transparent;
       flex-shrink: 0;
-      font-weight: 500;
     }
 
     .btn-ban:hover {
-      background: #c0392b;
-      border-color: #c0392b;
+      background: #e74c3c;
+      color: #fff;
     }
 
     .btn-nudge {
@@ -2039,20 +2244,21 @@
     }
 
     .btn-unban {
-      background: var(--surface);
+      font-size: 11px;
+      padding: 2px 6px;
+      border-radius: 8px;
       border: 1px solid var(--border);
-      color: var(--text-primary);
-      font-size: 12px;
-      padding: 6px 12px;
-      border-radius: var(--radius);
       cursor: pointer;
       transition: all 0.15s;
+      user-select: none;
+      color: var(--text-muted);
+      background: transparent;
       flex-shrink: 0;
-      font-weight: 500;
     }
 
     .btn-unban:hover {
-      background: var(--border);
+      border-color: var(--accent);
+      color: var(--accent);
     }
 
     /* Kick context menu (right-click on tree occupants) */
@@ -2192,6 +2398,32 @@
       font-size: 10px;
       font-weight: 600;
       color: var(--accent);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      white-space: nowrap;
+    }
+
+    /* ── Date Separator (PRD 13.6) ────────────────────────────────────── */
+    .date-separator {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 8px 0;
+      user-select: none;
+    }
+
+    .date-separator::before,
+    .date-separator::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: var(--border);
+    }
+
+    .date-separator span {
+      font-size: 10px;
+      font-weight: 600;
+      color: var(--text-muted);
       text-transform: uppercase;
       letter-spacing: 0.5px;
       white-space: nowrap;
@@ -2537,6 +2769,12 @@
       background: rgba(79, 195, 247, 0.08);
     }
 
+    .emoji-upload-btn-animated {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.3px;
+    }
+
     .custom-emoji-inline {
       display: inline-block;
       width: 1.3em;
@@ -2782,8 +3020,8 @@
           <button class="voice-btn leave" id="btn-leave-voice" title="Leave Voice"><svg width="14" height="14"
               viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
               stroke-linejoin="round">
-              <line x1="18" y1="6" x2="6" y2="18" />
-              <line x1="6" y1="6" x2="18" y2="18" />
+              <path d="M10.68 13.31a16 16 0 0 0 3.41 2.6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 17v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11l-1.27 1.27" />
+              <line x1="22" y1="2" x2="2" y2="22" />
             </svg></button>
         </div>
       </div>
@@ -3048,12 +3286,34 @@
     </div>
   </div>
 
+  <!-- ── Animated Custom Emoji Upload Modal (PRD 13.13) ──────────────── -->
+  <div id="emoji-upload-animated-modal">
+    <div class="modal-content">
+      <h3>Upload Animated Emoji</h3>
+
+      <input type="file" id="emoji-animated-file-input" accept="image/gif" style="display:none;">
+      <button class="btn btn-create" id="btn-emoji-animated-choose-file">Choose GIF…</button>
+      <p class="emoji-upload-hint">Max 2MB. Animated GIF only — uploaded as-is, no crop tool. An admin must approve it before it becomes usable.</p>
+
+      <div id="emoji-animated-preview-wrap" style="display:none; text-align:center; margin-bottom:10px;">
+        <img id="emoji-animated-preview-img" alt="" style="max-width:128px; max-height:128px; border-radius:6px;">
+      </div>
+
+      <label for="emoji-animated-name-input">Name</label>
+      <input type="text" id="emoji-animated-name-input" placeholder="e.g. partyparrot" maxlength="32">
+      <div class="modal-actions">
+        <button class="btn btn-cancel" id="btn-emoji-animated-upload-cancel">Cancel</button>
+        <button class="btn btn-create" id="btn-emoji-animated-upload-confirm" disabled>Upload</button>
+      </div>
+    </div>
+  </div>
+
   <!-- ── Unified Settings Modal ───────────────────────────────────── -->
   <div id="admin-modal">
     <div class="modal-content wide">
       <h3>⚙ Settings</h3>
       <div class="settings-tab-bar">
-        <button class="settings-tab-btn active" data-settings-tab="roles" id="settings-tab-roles">👑 Roles</button>
+        <button class="settings-tab-btn active" data-settings-tab="roles" id="settings-tab-roles">🛡️ User Management</button>
         <button class="settings-tab-btn" data-settings-tab="emojis" id="settings-tab-emojis">😀 Emojis</button>
         <button class="settings-tab-btn" data-settings-tab="server" id="settings-tab-server">🔔 Server</button>
         <button class="settings-tab-btn" data-settings-tab="voice">🎤 Voice & Shortcuts</button>
@@ -3136,6 +3396,17 @@
           <button class="btn" id="btn-ptt-mode" style="flex:1; font-size:11px; padding:5px 0; border:1px solid var(--border); background:var(--bg-input); color:var(--text-secondary); border-radius:var(--radius); cursor:pointer; transition:all 0.15s;">🔘 Push-To-Talk</button>
         </div>
 
+        <!-- Microphone Level Meter — always visible, independent of the noise
+             gate (previously only shown while the gate was enabled) so any
+             change to mic volume, noise cancelling, or the gate threshold is
+             reflected live. -->
+        <div id="mic-level-section" style="margin-bottom:14px;">
+          <label style="display:block; margin-bottom:6px;">Microphone Level</label>
+          <div class="mic-level-meter">
+            <div class="mic-level-meter-bar" id="mic-level-bar"></div>
+          </div>
+        </div>
+
         <!-- Mic Sensitivity / Noise Gate -->
         <div id="mic-sensitivity-section">
           <div class="toggle-row" id="mic-sensitivity-toggle-row">
@@ -3163,10 +3434,36 @@
               <span>-60 dB (more sensitive)</span>
               <span>0 dB (less sensitive)</span>
             </div>
-            <div class="mic-level-meter">
-              <div class="mic-level-meter-bar" id="mic-level-bar"></div>
+          </div>
+        </div>
+
+        <!-- Mic Volume (PRD 13.3) -->
+        <div id="mic-volume-wrap" style="margin-bottom:14px; margin-top:14px;">
+          <label style="display:block; margin-bottom:6px;">Microphone Volume</label>
+          <div class="sensitivity-slider-row">
+            <input type="range" id="mic-volume-slider" min="0" max="200" value="100" step="5">
+            <span class="sensitivity-value" id="mic-volume-value">100%</span>
+          </div>
+          <div class="sensitivity-labels">
+            <span>Scales your outgoing mic signal — 100% is your unprocessed input level</span>
+          </div>
+        </div>
+
+        <!-- Noise Cancelling (PRD 13.1) -->
+        <div class="toggle-row" id="noise-cancel-toggle-row" style="margin-bottom:14px;">
+          <div class="toggle-row-info">
+            <div class="toggle-row-icon">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+            </div>
+            <div class="toggle-row-text">
+              <span class="toggle-row-title">Noise Cancelling</span>
+              <span class="toggle-row-desc">AI-powered suppression of keyboard clicks, fan noise, and other background sound</span>
             </div>
           </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="chk-noise-cancel">
+            <span class="toggle-slider"></span>
+          </label>
         </div>
 
         <label style="margin-bottom:8px; display:block; margin-top:6px;">Keyboard Shortcuts</label>
@@ -3325,6 +3622,13 @@
   <!-- ── Image Lightbox Modal ───────────────────────────────────── -->
   <div id="image-lightbox-modal">
     <img id="lightbox-image" src="" alt="Expanded image">
+    <button id="btn-lightbox-close" title="Close">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="18" y1="6" x2="6" y2="18"/>
+        <line x1="6" y1="6" x2="18" y2="18"/>
+      </svg>
+      Close
+    </button>
     <button id="btn-lightbox-download" title="Download Image">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>

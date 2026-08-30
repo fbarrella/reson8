@@ -413,6 +413,11 @@ const api = {
             voiceService?.removeConsumer(payload.producerId);
         });
 
+        // Sound-cue only (PRD 13.16) — a viewer opened/closed the Viewer
+        // window on this client's own screen share.
+        socket.on("VIEWER_JOINED_YOUR_STREAM", () => emit("viewer-joined-your-stream", null));
+        socket.on("VIEWER_LEFT_YOUR_STREAM", () => emit("viewer-left-your-stream", null));
+
         socket.on("EXISTING_PRODUCERS", (payload) => {
             for (const p of payload.producers) {
                 voiceService?.queueConsumeProducer(p.producerId, p.userId);
@@ -549,6 +554,14 @@ const api = {
 
     setGlobalVoiceVolume(percent: number): void {
         voiceService?.setGlobalVoiceVolume(percent);
+    },
+
+    setMicVolume(percent: number): void {
+        voiceService?.setMicVolume(percent);
+    },
+
+    async setNoiseCancelEnabled(enabled: boolean): Promise<void> {
+        await voiceService?.setNoiseCancelEnabled(enabled);
     },
 
     // ── Audio Settings ──────────────────────────────────────────────────────
@@ -891,6 +904,14 @@ const api = {
         return uploadTo("/api/upload/emoji", fileBuffer, fileName, mimeType);
     },
 
+    async uploadAnimatedEmojiFile(
+        fileBuffer: ArrayBuffer,
+        fileName: string,
+        mimeType: string,
+    ): Promise<{ url: string; publicId?: string }> {
+        return uploadTo("/api/upload/emoji-animated", fileBuffer, fileName, mimeType);
+    },
+
     // ── Image Download ───────────────────────────────────────────────────
 
     downloadImage(url: string): void {
@@ -1110,8 +1131,10 @@ const api = {
         return ipcRenderer.invoke("get-app-version");
     },
 
-    /** Fetches the GitHub release notes for a given app version (PRD 11.4). */
-    async fetchReleaseNotes(version: string): Promise<{ name: string; body: string; htmlUrl: string } | null> {
+    /** Fetches the GitHub release notes for a given app version (PRD 11.4).
+     *  `bodyHtml` is already-rendered HTML, not raw markdown (rendered
+     *  main-process-side — see main.ts's ReleaseNotes doc comment). */
+    async fetchReleaseNotes(version: string): Promise<{ name: string; bodyHtml: string; htmlUrl: string } | null> {
         return ipcRenderer.invoke("fetch-release-notes", version);
     },
 
@@ -1185,13 +1208,14 @@ const api = {
         name: string,
         imageUrl: string,
         imagePublicId?: string,
+        isAnimated?: boolean,
     ): Promise<{ success: boolean; emojiId?: string; error?: string }> {
         return new Promise((resolve) => {
             if (!socket?.connected) {
                 resolve({ success: false, error: "Not connected" });
                 return;
             }
-            socket.emit("CREATE_CUSTOM_EMOJI", { name, imageUrl, imagePublicId }, resolve);
+            socket.emit("CREATE_CUSTOM_EMOJI", { name, imageUrl, imagePublicId, isAnimated }, resolve);
         });
     },
 
@@ -1281,6 +1305,18 @@ ipcRenderer.on("ptt-released", () => emit("ptt-released", null));
 // main.ts's "minimize" handler. Used to re-collapse expanded long chat
 // messages (Phase 12 sub-phase item 5).
 ipcRenderer.on("window-minimized", () => emit("window-minimized", null));
+
+// Fired once from main.ts's "before-quit" handler, briefly before the app
+// actually exits — gracefully disconnects the socket so the server sees an
+// explicit "client namespace disconnect" instead of the connection just
+// going dead, letting it skip the reconnect-grace period and mark presence
+// offline immediately rather than after a several-second delay (see that
+// handler's own comment for the full reasoning).
+ipcRenderer.on("app-quitting", () => {
+    if (socket?.connected) {
+        socket.disconnect();
+    }
+});
 
 // ── Screen share captured audio from main process (PRD 12.7) ───────────────
 // Registered once, not per-`startAppAudioCapture` call, matching this

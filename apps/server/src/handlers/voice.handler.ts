@@ -39,6 +39,22 @@ type TypedSocket = Socket<
     SocketData
 >;
 
+/** Delivers a no-payload event to a user's *primary* socket only (never a
+ *  viewer socket, which shares the same userId) — used for the
+ *  VIEWER_JOINED/LEFT_YOUR_STREAM sound cues (PRD 13.16). */
+function emitToUserPrimarySocket(
+    io: TypedIO,
+    userId: string,
+    serverId: string,
+    event: "VIEWER_JOINED_YOUR_STREAM" | "VIEWER_LEFT_YOUR_STREAM",
+): void {
+    for (const [, s] of io.sockets.sockets) {
+        if (s.data.userId === userId && s.data.serverId === serverId && s.data.role === "primary") {
+            s.emit(event);
+        }
+    }
+}
+
 /**
  * Registers WebRTC voice signaling handlers on each socket connection.
  */
@@ -593,6 +609,7 @@ export function registerVoiceHandlers(
                 // which would touch presence/rooms/broadcasts this viewer
                 // socket must stay invisible to.
                 socket.data.currentChannelId = channelId;
+                socket.data.watchingUserId = targetUserId;
 
                 const targetPresence = await presence.getUserPresence(targetUserId);
 
@@ -603,6 +620,9 @@ export function registerVoiceHandlers(
                     screenAudioProducerId: targetSession.screenAudioProducer?.id,
                     streamName: targetPresence?.screenShareName || undefined,
                 });
+
+                // Sound-cue only (PRD 13.16).
+                emitToUserPrimarySocket(io, targetUserId, socket.data.serverId, "VIEWER_JOINED_YOUR_STREAM");
 
                 app.log.info(
                     { socketId: socket.id, role: "viewer", targetUserId, channelId },
@@ -626,6 +646,12 @@ export function registerVoiceHandlers(
                 const { channelId } = payload;
                 mediasoup.cleanupUserSession(channelId, getMediasoupSessionKey(socket));
                 socket.data.currentChannelId = null;
+                // Sound-cue only (PRD 13.16) — mirrors the same cleanup this
+                // handler's own doc comment describes for the disconnect path.
+                if (socket.data.watchingUserId) {
+                    emitToUserPrimarySocket(io, socket.data.watchingUserId, socket.data.serverId, "VIEWER_LEFT_YOUR_STREAM");
+                    socket.data.watchingUserId = undefined;
+                }
                 ack({ success: true });
             } catch (err) {
                 app.log.error({ err }, "Error in STOP_WATCHING_SCREEN_SHARE");

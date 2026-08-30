@@ -193,6 +193,10 @@ export interface ICustomEmoji {
     uploadedByNickname?: string;
     status: "PENDING" | "APPROVED";
     createdAt: string;
+    /** True for an animated-GIF emoji (PRD 13.13) — uploaded via the
+     *  crop-free path, rendered identically to a static emoji since GIFs
+     *  animate natively in an `<img>`. */
+    isAnimated: boolean;
 }
 
 // ---------------------------------------------------------------------------

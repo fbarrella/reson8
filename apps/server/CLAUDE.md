@@ -23,10 +23,10 @@ Requires `.env` (copy from `.env.example`) and `docker compose -f docker-compose
 
 - `src/handlers/*.handler.ts` — one file per Socket.io event domain (connection, voice, channel, message, dm, admin, moderation, reaction). This is where new client↔server events get wired up after being added to `packages/shared-types/src/socket-events.ts`.
 - `src/services/` — stateful business logic consumed by handlers: `mediasoup.service.ts` (SFU worker/router/transport lifecycle, AudioLevelObserver), `presence.service.ts` (Redis-backed online/channel tracking), `permissions.service.ts` (bitwise role aggregation), `channel-tree.service.ts` (flat rows → nested tree).
-- `src/middleware/permissions.middleware.ts` — `requirePermission()` guard used to gate handlers by `PermissionFlags`.
+- `src/middleware/permissions.middleware.ts` — `requirePermission()` guard used to gate handlers by `PermissionFlags`; `requireAnyPermission()` for a handler shared by more than one permission (e.g. `GET_ALL_USERS`, needed by both `MANAGE_ROLES` and `BAN_USER` holders for the User Management tab).
 - `src/plugins/` — Fastify plugins registering Prisma and Redis clients on the `app` instance.
 - `src/config/mediasoup.config.ts` — Worker/Router/Transport settings, including the public/private dual-announce-IP logic for LAN/WAN NAT traversal.
-- `src/routes/upload.route.ts` — REST (not Socket.io) endpoint for image uploads; dual-backend (local disk vs Cloudinary) selected by presence of `CLOUDINARY_*` env vars.
+- `src/routes/upload.route.ts` — REST (not Socket.io) endpoints for image uploads (`/api/upload`, `/api/upload/emoji`) and animated-GIF custom emoji (`/api/upload/emoji-animated`, its own larger size cap + GIF-only MIME allowlist); dual-backend (local disk vs Cloudinary) selected by presence of `CLOUDINARY_*` env vars.
 - `prisma/schema.prisma` — source of truth for the data model; `prisma/seed.ts` creates the default server/channels/roles (idempotent, upsert-based).
 - `src/__tests__/` — vitest unit tests (currently `channel-tree.test.ts`, `permissions.test.ts`) — pure-logic tests of the tree-building and bitwise permission algorithms, no DB/Redis required.
 

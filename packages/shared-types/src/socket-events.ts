@@ -161,12 +161,13 @@ export interface ClientToServerEvents {
 
     // ── Admin / Role Management ──────────────────────────────────────────────
 
-    /** Admin requests list of all known users on the server. */
+    /** Requests list of all known users on the server. Requires MANAGE_ROLES
+     *  or BAN_USER (PRD 13.17) — serves the User Management tab. */
     GET_ALL_USERS: (
         payload: { serverId: string },
         ack: (response: {
             success: boolean;
-            users?: Array<IUser & { roles: IRole[] }>;
+            users?: Array<IUser & { roles: IRole[]; isBanned: boolean }>;
             error?: string;
         }) => void,
     ) => void;
@@ -302,9 +303,10 @@ export interface ClientToServerEvents {
 
     // ── Custom Emoji ─────────────────────────────────────────────────────
 
-    /** Submits an uploaded (already-cropped) emoji image for admin review. */
+    /** Submits an uploaded emoji image for admin review — already-cropped
+     *  for a static emoji, or a raw GIF buffer when `isAnimated` (PRD 13.13). */
     CREATE_CUSTOM_EMOJI: (
-        payload: { name: string; imageUrl: string; imagePublicId?: string },
+        payload: { name: string; imageUrl: string; imagePublicId?: string; isAnimated?: boolean },
         ack: (response: { success: boolean; emojiId?: string; error?: string }) => void,
     ) => void;
 
@@ -550,6 +552,12 @@ export interface ServerToClientEvents {
         producerId: string;
     }) => void;
 
+    /** Delivered to a sharer's primary socket when a viewer opens/closes the
+     *  Viewer window on their share (PRD 13.16) — sound-cue only, so the
+     *  sharer has some awareness of watchers without an explicit UI. */
+    VIEWER_JOINED_YOUR_STREAM: () => void;
+    VIEWER_LEFT_YOUR_STREAM: () => void;
+
     /**
      * Sent to a client joining a voice channel with existing producers.
      * The client should consume each one.
@@ -651,4 +659,10 @@ export interface SocketData {
      * query string, before any handler can run.
      */
     role: "primary" | "viewer";
+    /** Set on a viewer socket while `WATCH_SCREEN_SHARE` is active — the
+     *  userId of the sharer it's currently watching, so
+     *  `STOP_WATCHING_SCREEN_SHARE`/disconnect cleanup can deliver
+     *  `VIEWER_LEFT_YOUR_STREAM` (PRD 13.16) without needing the client to
+     *  resend it. */
+    watchingUserId?: string;
 }
