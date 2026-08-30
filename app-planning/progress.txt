@@ -517,3 +517,95 @@ Feature/Fix: v2.2.1 patch release — version bump, combined release notes, mac 
   What's New modal shows the combined v2.2.0+v2.2.1 notes correctly on
   update.
 
+--- Entry: 30/08/2026 ---
+
+Feature/Fix: Noise Cancelling still failed after the v2.2.1 CSP fix — two more real bugs found and fixed via live end-to-end reproduction
+
+  Problem: User rebuilt with the v2.2.1 CSP fix (`connect-src ... file:`)
+  and reported the *exact same* "Couldn't enable noise cancelling" error
+  on both Windows and Linux, unchanged. The previous fix was necessary
+  but nowhere near sufficient — it addressed one real bug (blocked
+  fetch() to local assets) but two more, unrelated bugs were hiding
+  behind the identical generic error toast, since `setNoiseCancelEnabled()`
+  catches every failure mode in `ensureNoiseCancelInitialized()` /
+  `createNoiseCancelNode()` and surfaces them all as the same message —
+  impossible to tell apart without an actual stack trace.
+
+  Investigation: rather than guess again, built a series of minimal
+  real-Electron repros (plain `electron main.js` harnesses, some packed
+  into real `.asar` archives via the `asar` CLI) to isolate each stage of
+  `ensureNoiseCancelInitialized()`/`createNoiseCancelNode()`, then did a
+  full live end-to-end run of the actual app: started the real dev server
+  (docker Postgres/Redis + `npm run dev`), built the client, launched it
+  with `--remote-debugging-port`, and drove it over the Chrome DevTools
+  Protocol (a small `ws`-based script — fill the connect form, click
+  Connect, join a real voice channel, flip the Noise Cancelling checkbox)
+  while capturing `Runtime.consoleAPICalled`/`Runtime.exceptionThrown`
+  events, since the UI only ever shows the generic toast. This surfaced
+  the real underlying errors directly instead of guessing from code
+  alone. Found two bugs stacked on top of each other:
+
+  Bug 1 — bare-specifier dynamic import never worked, in ANY environment:
+  `dynamicImport("deepfilternet3-noise-filter")` (the indirect-eval
+  `Function("specifier", "return import(specifier)")` trick used to dodge
+  the ESM-only-package preload crash, PRD 13.6) throws "Failed to resolve
+  module specifier 'deepfilternet3-noise-filter'. Relative references
+  must start with either '/', './', or '../'." when called from a real
+  (non-sandboxed) Electron preload context. Confirmed via a minimal repro
+  with a fake ESM package: Blink's module resolution (used for dynamic
+  import() issued this way, unlike Node's own CLI/`node -e`, which is
+  what the original incident's "verified via direct node -e tests" only
+  actually exercised) has no concept of bare specifiers or node_modules
+  resolution — it needs an actual URL. This is NOT an asar-packaging
+  issue — it fails identically unpacked and packed into a real `.asar`.
+  Fix (`voice.service.ts`): resolve the bare specifier to an absolute
+  `file://` URL ourselves first — `require.resolve("deepfilternet3-noise-
+  filter")` (follows the package's "require" export condition to
+  `dist/index.js`, but only computes the path, doesn't execute the file,
+  so it's safe even though that specific file would itself crash if
+  require()'d — see PRD 13.6) then derive the sibling `dist/index.esm.js`
+  path and `pathToFileURL().href` it before passing to `dynamicImport()`.
+  Verified with the REAL vendored package (not just the fake repro), both
+  unpacked and packed into a real `.asar`: import succeeds and
+  `DeepFilterNet3Core` constructs correctly.
+
+  Bug 2 — AudioWorklet module blocked by CSP: once bug 1 was fixed and
+  the WASM/model fetch succeeded (yesterday's CSP fix), a *third* bug
+  surfaced: `AbortError: Unable to load a worklet's module.` The vendored
+  package builds its AudioWorkletProcessor from an inline string via
+  `Blob` + `URL.createObjectURL()` + `audioContext.audioWorklet.
+  addModule(blobUrl)` — loading a `blob:` URL as a worklet module is
+  governed by the CSP `script-src`/`script-src-elem` directive (confirmed
+  via the exact console message: "Refused to load the script 'blob:...'
+  ... Note that 'script-src-elem' was not explicitly set, so 'default-src'
+  is used as a fallback"), and `index.html`'s CSP had no explicit
+  `script-src` at all, so `default-src 'self'` applied and rejected the
+  blob: source. Fix: added an explicit `script-src 'self' blob:;`
+  directive to the CSP meta tag in `apps/client/src/renderer/index.html`
+  (purely additive — 'self' preserved for all normal same-origin
+  scripts, only blob: newly allowed).
+
+  End-to-end verification: with both fixes applied, rebuilt and re-ran
+  the full live CDP-driven flow (connect → join a real voice channel →
+  toggle Noise Cancelling off then on from a completely fresh graph) —
+  zero console errors, zero "Couldn't enable noise cancelling" log
+  entries, versus the identical flow reliably reproducing the error
+  before each fix. This is the first time this feature has actually been
+  confirmed working end-to-end in a real running app, dev or packaged —
+  PRD 13.1's own Verification section had explicitly left this pending.
+
+  Key Files Modified:
+    apps/client/src/services/voice.service.ts
+    apps/client/src/renderer/index.html
+
+  Verification:
+    npx tsc --noEmit (client) — clean; full live end-to-end reproduction
+    via a real dev server + a CDP-driven real Electron client, described
+    above — both before (reproduced the exact reported error) and after
+    (zero errors) the fix. All test harnesses, temp scripts, and
+    background processes (server, mediasoup workers, electron) were
+    cleaned up afterward; nothing test-related was committed.
+
+  Next Step: user to rebuild v2.2.1 (or cut a v2.2.2 if it's already been
+  published) with both fixes and do a final real-world confirmation on
+  their own Windows/Linux/macOS machines.
