@@ -5,12 +5,21 @@
  * platform reachable from that host. See
  * app-planning/Reson8_Phase12_PRD.md (PRD 12.5) for the full design.
  *
- * Explicit limitation (by design, not a bug to fix later): this cannot
- * make a Linux-only machine produce macOS artifacts — Apple's toolchain
- * and codesigning can't be cross-compiled from Linux. To cut a full
- * 3-platform release, run this once per host OS you have access to; the
- * summary table at the end reports exactly what this run did and didn't
- * produce, with a reason for every gap.
+ * Update (v2.2.1): now that the client ships unsigned (no code-signing
+ * certificate — see the "Code Signing" section in the root README), a
+ * Linux host CAN produce a macOS artifact too: electron-builder skips
+ * mac code signing entirely when the build host isn't actually macOS
+ * ("skipped macOS application code signing  reason=supported only on
+ * macOS"), so the `mac.target: "zip"` in apps/client/package.json builds
+ * cleanly cross-platform with no macOS-only tooling (`codesign`,
+ * `hdiutil`, notarization) ever invoked — verified for real on this
+ * Linux machine, producing a genuine `Reson8-<version>-mac.zip`. This is
+ * still an *unsigned* mac build (Gatekeeper will warn on first launch,
+ * same as a real macOS host would produce without a paid Developer ID),
+ * and it hasn't been verified from a Windows host, so mac stays skipped
+ * there. To cut a full 3-platform release, run this once per Linux/macOS
+ * host you have access to; the summary table at the end reports exactly
+ * what this run did and didn't produce, with a reason for every gap.
  *
  * Usage:
  *   npm run release:all            # build + package everything reachable
@@ -152,17 +161,17 @@ const electronBuilderTargets = [];
 if (process.platform === "linux") {
   electronBuilderTargets.push({ flag: "--linux", label: "electron-builder: linux (native)" });
   electronBuilderTargets.push({ flag: "--win", label: "electron-builder: win (cross via bundled Wine)" });
-  skip(
-    "electron-builder: mac",
-    "macOS artifacts require running this script on macOS hardware — Apple's toolchain/codesigning cannot be cross-compiled from Linux",
-  );
+  electronBuilderTargets.push({ flag: "--mac", label: "electron-builder: mac (cross, unsigned)" });
 } else if (process.platform === "darwin") {
   electronBuilderTargets.push({ flag: "--mac", label: "electron-builder: mac (native)" });
   electronBuilderTargets.push({ flag: "--linux", label: "electron-builder: linux (cross)" });
   electronBuilderTargets.push({ flag: "--win", label: "electron-builder: win (cross via bundled Wine)" });
 } else if (process.platform === "win32") {
   electronBuilderTargets.push({ flag: "--win", label: "electron-builder: win (native)" });
-  skip("electron-builder: mac", "macOS artifacts require running this script on macOS hardware");
+  skip(
+    "electron-builder: mac",
+    "not attempted from a Windows host — the unsigned mac cross-build has only been verified from Linux in this project; run this script from Linux or macOS for a mac artifact",
+  );
   skip(
     "electron-builder: linux",
     "not attempted from a Windows host — electron-builder's Linux cross-build story from Windows is far less reliable than from Linux/macOS; run this script from one of those for a Linux artifact",
