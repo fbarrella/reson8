@@ -12,6 +12,27 @@ import { autoUpdater } from "electron-updater";
 import { startCapture, resolvePidForWindowSourceId, listAudioProducingApps, platformSupportsCapture } from "@reson8/native-audio";
 import type { CaptureHandle } from "@reson8/native-audio";
 
+// ── Single-instance lock (PRD 13.18) ────────────────────────────────────
+// Requested as early as possible, before any other startup work. Opening
+// the app again while one instance is already running should just focus
+// the existing window rather than spawning a second, fully-independent
+// instance (its own server connection, tray icon, global shortcuts, etc.
+// all competing with the first). If this process didn't get the lock, an
+// instance is already running elsewhere; quit immediately — calling
+// app.quit() this early prevents app.whenReady() from ever resolving, so
+// none of the window/tray/IPC setup further down actually runs.
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+    app.quit();
+} else {
+    app.on("second-instance", () => {
+        if (!mainWindow) return;
+        if (mainWindow.isMinimized()) mainWindow.restore();
+        if (!mainWindow.isVisible()) mainWindow.show();
+        mainWindow.focus();
+    });
+}
+
 // ── Link Preview (metascraper) ───────────────────────────────────────────
 // @ts-ignore — metascraper packages lack type declarations
 import metascraperModule from "metascraper";

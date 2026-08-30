@@ -3156,3 +3156,49 @@ Feature/Fix: Phase 13.14 — Final Size Correction for User Management Buttons (
 
   Next Step: PRD 13.18 (single-instance Electron lock) — the final item
   per app-planning/Reson8_Phase13_PRD.md's recommended order.
+
+--- Entry: 29/08/2026 ---
+
+Feature/Fix: Phase 13.15 (PRD 13.18) — Single-Instance Electron Lock
+
+  Problem: Opening Reson8 again while it was already running (even
+  minimized to tray) always spawned a brand new, fully independent
+  instance instead of focusing the existing one.
+
+  Solution: Standard Electron single-instance-lock pattern.
+  `app.requestSingleInstanceLock()` is requested as early as possible —
+  right after imports, before any other startup work (metascraper setup,
+  auto-updater, window/tray creation). If the lock isn't obtained, another
+  instance is already running: call `app.quit()` immediately. Calling it
+  this early means `app.whenReady()` never resolves for this process, so
+  none of the window/tray/IPC setup further down the file actually
+  executes — no need to wrap the rest of this large file in an
+  `if (gotLock) { ... }` block, which would have been a much riskier,
+  more invasive change for equivalent effect.
+
+  If the lock *is* obtained, a `"second-instance"` listener is registered:
+  when a later launch attempt is detected, it restores the window if
+  minimized, shows it if hidden (to tray), and focuses it — covering both
+  ways the window could be non-visible when someone tries to open the app
+  again.
+
+  Key Files Modified:
+    apps/client/src/main.ts — `requestSingleInstanceLock()`/
+      `"second-instance"` handler, added right after the import block
+
+  Verification:
+    - npx tsc --noEmit and --build (client) — clean
+    - Real end-to-end test: launched one instance, confirmed it running,
+      then launched a second `electron .` process — confirmed via its
+      log that it exited within seconds with *no* window/DevTools/console
+      activity at all (never reached `whenReady()`), while the first
+      instance remained alive and unaffected throughout.
+    - Focus-on-second-launch itself (the visible "restore + focus"
+      behavior) is pending the user's own hands-on test, since verifying
+      window focus state isn't observable from this sandboxed
+      environment the way the process-level behavior above was.
+
+  Next Step: This was the last item in Phase 13
+  (app-planning/Reson8_Phase13_PRD.md) — pending the user's final
+  confirmation, the phase is complete and ready for the version bump
+  (bump-version skill), release notes, and CLAUDE.md/README updates.
