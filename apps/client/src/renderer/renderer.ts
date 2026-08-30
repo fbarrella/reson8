@@ -702,7 +702,7 @@ interface Reson8Api {
     downloadUpdate(): Promise<void>;
     quitAndInstall(): void;
     getAppVersion(): Promise<string>;
-    fetchReleaseNotes(version: string): Promise<{ name: string; body: string; htmlUrl: string } | null>;
+    fetchReleaseNotes(version: string): Promise<{ name: string; bodyHtml: string; htmlUrl: string } | null>;
     createChannel(
         serverId: string,
         name: string,
@@ -1824,9 +1824,11 @@ async function handleChannelClick(node: TreeNode): Promise<void> {
                     if (micSensitivityEnabled) {
                         const threshold = parseInt(micSensitivitySlider.value, 10);
                         api.setMicSensitivity(true, threshold);
-                        startMicLevelMeter();
                     }
                 }
+                // Mic level meter runs regardless of gate/PTT state — it now
+                // reflects live input at all times, not just while gating.
+                startMicLevelMeter();
 
                 // Sync mute/deafen state to the server so other occupants' icons
                 // aren't left showing a stale state from a previous session.
@@ -3872,11 +3874,13 @@ async function openSettingsPanel(): Promise<void> {
     // Populate audio devices
     await populateAudioDevices();
 
-    // Start mic preview for meter if sensitivity is enabled and not already in voice
-    if (micSensitivityEnabled && !isInVoice) {
+    // Mic level meter is always visible now, independent of the noise gate
+    // — start a preview capture if not already in a voice channel (a live
+    // call already has its own mic pipeline for the meter to read from).
+    if (!isInVoice) {
         api.startMicPreview();
-        startMicLevelMeter();
     }
+    startMicLevelMeter();
 
     if (isConnected) {
         // Live re-check, in case permissions changed since connect (e.g. an
@@ -4028,15 +4032,23 @@ btnSaveMaxMessageLength.addEventListener("click", async () => {
     }
 });
 
-btnAdminClose.addEventListener("click", () => {
+/** Stops the mic level meter's RAF loop and (if not in a call) the preview
+ *  capture it was reading from — otherwise both would keep running
+ *  invisibly in the background after the modal that displays them closes. */
+function closeSettingsPanel(): void {
     adminModal.classList.remove("visible");
     activeShortcutSlot = null;
+    stopMicLevelMeter();
+    api.stopMicPreview();
+}
+
+btnAdminClose.addEventListener("click", () => {
+    closeSettingsPanel();
 });
 
 adminModal.addEventListener("click", (e) => {
     if (e.target === adminModal) {
-        adminModal.classList.remove("visible");
-        activeShortcutSlot = null;
+        closeSettingsPanel();
     }
 });
 
@@ -4332,7 +4344,6 @@ btnVoiceActivation.addEventListener("click", () => {
         if (micSensitivityEnabled) {
             const threshold = parseInt(micSensitivitySlider.value, 10);
             api.setMicSensitivity(true, threshold);
-            startMicLevelMeter();
         }
     }
     log("Voice input mode: Voice Activation", "info");
@@ -4347,7 +4358,6 @@ btnPttMode.addEventListener("click", () => {
     // Disable noise gate if active
     if (micSensitivityEnabled && isInVoice) {
         api.setMicSensitivity(false, 0);
-        stopMicLevelMeter();
     }
     // If currently in voice, mute mic (PTT resting state) but don't lock
     if (isInVoice) {
@@ -5872,7 +5882,9 @@ async function checkForWhatsNew(currentVersion: string): Promise<void> {
     pendingWhatsNewVersion = currentVersion;
     pendingWhatsNewUrl = notes.htmlUrl;
     whatsNewTitle.textContent = `🎉 What's New in ${notes.name || `v${currentVersion}`}`;
-    whatsNewBody.textContent = notes.body.trim() || "No release notes were provided for this version.";
+    // Already-rendered HTML (see main.ts's ReleaseNotes doc comment) — not
+    // raw markdown, so this no longer shows literal "#"/"**"/"-" syntax.
+    whatsNewBody.innerHTML = notes.bodyHtml || "<p>No release notes were provided for this version.</p>";
     whatsNewModal.classList.add("visible");
 }
 
@@ -5999,6 +6011,9 @@ function stopMicLevelMeter(): void {
 }
 
 chkMicSensitivity?.addEventListener("change", () => {
+    // The mic level meter no longer starts/stops with this toggle — it's
+    // always running independently (see openSettingsPanel()/join handler)
+    // — this only controls the gate itself now.
     micSensitivityEnabled = chkMicSensitivity.checked;
     if (micSensitivityEnabled) {
         localStorage.setItem("reson8-mic-sensitivity-enabled", "true");
@@ -6006,17 +6021,11 @@ chkMicSensitivity?.addEventListener("change", () => {
         if (isInVoice && !pttModeEnabled) {
             const threshold = parseInt(micSensitivitySlider.value, 10);
             api.setMicSensitivity(true, threshold);
-        } else if (!isInVoice) {
-            // Start preview so the meter works outside a voice channel
-            api.startMicPreview();
         }
-        startMicLevelMeter();
     } else {
         localStorage.removeItem("reson8-mic-sensitivity-enabled");
         micSensitivitySliderWrap.style.display = "none";
         api.setMicSensitivity(false, 0);
-        api.stopMicPreview();
-        stopMicLevelMeter();
     }
 });
 

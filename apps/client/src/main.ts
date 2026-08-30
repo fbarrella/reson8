@@ -11,6 +11,7 @@ import { getInstanceId, hasExistingInstanceId } from "./instance-id.js";
 import { autoUpdater } from "electron-updater";
 import { startCapture, resolvePidForWindowSourceId, listAudioProducingApps, platformSupportsCapture } from "@reson8/native-audio";
 import type { CaptureHandle } from "@reson8/native-audio";
+import MarkdownIt from "markdown-it";
 
 // ── Single-instance lock (PRD 13.18) ────────────────────────────────────
 // Requested as early as possible, before any other startup work. Opening
@@ -98,9 +99,36 @@ function extractOgTags(html: string): Record<string, string> {
 
 interface ReleaseNotes {
     name: string;
-    body: string;
+    /** Rendered HTML, not raw markdown — the "What's New" modal used to
+     *  display GitHub's raw markdown body verbatim (literal "#"/"**"/"-"
+     *  syntax visible to the user); rendered here, in the main process,
+     *  since markdown-it is an ordinary CommonJS package the main process
+     *  can just require() directly, unlike the renderer (a plain <script>-
+     *  loaded page with no module bundler to resolve a bare import into). */
+    bodyHtml: string;
     htmlUrl: string;
 }
+
+const markdownRenderer = new MarkdownIt({
+    html: false, // never pass through raw HTML from the release notes source
+    linkify: true, // auto-link bare URLs (release notes often have them)
+    breaks: true,
+});
+
+// A plain rendered <a href> without target="_blank" would navigate the
+// main window itself away to that URL on click — the existing
+// setWindowOpenHandler below only intercepts new-window-style navigation
+// (target="_blank"/window.open()), not a same-window link click. Force
+// every rendered link through that path instead, same as chat's own
+// linkifyContent() already does for message links.
+const defaultLinkOpenRenderer = markdownRenderer.renderer.rules.link_open ?? (
+    (tokens, idx, options, _env, self) => self.renderToken(tokens, idx, options)
+);
+markdownRenderer.renderer.rules.link_open = (tokens, idx, options, env, self) => {
+    tokens[idx].attrSet("target", "_blank");
+    tokens[idx].attrSet("rel", "noopener noreferrer");
+    return defaultLinkOpenRenderer(tokens, idx, options, env, self);
+};
 
 /**
  * Fetches the published GitHub release notes for a given app version (PRD
@@ -128,9 +156,10 @@ async function fetchReleaseNotes(version: string): Promise<ReleaseNotes | null> 
         if (!response.ok) return null;
 
         const data = await response.json();
+        const rawBody = typeof data.body === "string" ? data.body : "";
         return {
             name: typeof data.name === "string" && data.name ? data.name : `v${version}`,
-            body: typeof data.body === "string" ? data.body : "",
+            bodyHtml: rawBody.trim() ? markdownRenderer.render(rawBody) : "",
             htmlUrl:
                 typeof data.html_url === "string"
                     ? data.html_url

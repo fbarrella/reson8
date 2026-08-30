@@ -1478,8 +1478,74 @@
       font-size: 13px;
       line-height: 1.6;
       color: var(--text-secondary);
-      white-space: pre-wrap;
       word-break: break-word;
+    }
+
+    /* Rendered markdown (PRD 13 follow-up) — GitHub release notes body,
+       rendered to HTML in the main process rather than shown as raw
+       markdown syntax. */
+    #whats-new-modal .whats-new-body h1,
+    #whats-new-modal .whats-new-body h2,
+    #whats-new-modal .whats-new-body h3 {
+      color: var(--text-primary);
+      font-size: 14px;
+      font-weight: 600;
+      margin: 14px 0 6px;
+    }
+
+    #whats-new-modal .whats-new-body h1:first-child,
+    #whats-new-modal .whats-new-body h2:first-child,
+    #whats-new-modal .whats-new-body h3:first-child {
+      margin-top: 0;
+    }
+
+    #whats-new-modal .whats-new-body p {
+      margin: 0 0 10px;
+    }
+
+    #whats-new-modal .whats-new-body ul,
+    #whats-new-modal .whats-new-body ol {
+      margin: 0 0 10px;
+      padding-left: 20px;
+    }
+
+    #whats-new-modal .whats-new-body li {
+      margin-bottom: 4px;
+    }
+
+    #whats-new-modal .whats-new-body strong {
+      color: var(--text-primary);
+      font-weight: 600;
+    }
+
+    #whats-new-modal .whats-new-body a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+
+    #whats-new-modal .whats-new-body a:hover {
+      text-decoration: underline;
+    }
+
+    #whats-new-modal .whats-new-body code {
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      padding: 1px 4px;
+      font-size: 12px;
+    }
+
+    #whats-new-modal .whats-new-body hr {
+      border: none;
+      border-top: 1px solid var(--border);
+      margin: 12px 0;
+    }
+
+    #whats-new-modal .whats-new-body blockquote {
+      margin: 0 0 10px;
+      padding-left: 10px;
+      border-left: 2px solid var(--border);
+      color: var(--text-muted);
     }
 
     #update-modal .update-progress-wrap {
@@ -3330,6 +3396,17 @@
           <button class="btn" id="btn-ptt-mode" style="flex:1; font-size:11px; padding:5px 0; border:1px solid var(--border); background:var(--bg-input); color:var(--text-secondary); border-radius:var(--radius); cursor:pointer; transition:all 0.15s;">🔘 Push-To-Talk</button>
         </div>
 
+        <!-- Microphone Level Meter — always visible, independent of the noise
+             gate (previously only shown while the gate was enabled) so any
+             change to mic volume, noise cancelling, or the gate threshold is
+             reflected live. -->
+        <div id="mic-level-section" style="margin-bottom:14px;">
+          <label style="display:block; margin-bottom:6px;">Microphone Level</label>
+          <div class="mic-level-meter">
+            <div class="mic-level-meter-bar" id="mic-level-bar"></div>
+          </div>
+        </div>
+
         <!-- Mic Sensitivity / Noise Gate -->
         <div id="mic-sensitivity-section">
           <div class="toggle-row" id="mic-sensitivity-toggle-row">
@@ -3356,9 +3433,6 @@
             <div class="sensitivity-labels">
               <span>-60 dB (more sensitive)</span>
               <span>0 dB (less sensitive)</span>
-            </div>
-            <div class="mic-level-meter">
-              <div class="mic-level-meter-bar" id="mic-level-bar"></div>
             </div>
           </div>
         </div>

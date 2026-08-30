@@ -1131,8 +1131,10 @@ const api = {
         return ipcRenderer.invoke("get-app-version");
     },
 
-    /** Fetches the GitHub release notes for a given app version (PRD 11.4). */
-    async fetchReleaseNotes(version: string): Promise<{ name: string; body: string; htmlUrl: string } | null> {
+    /** Fetches the GitHub release notes for a given app version (PRD 11.4).
+     *  `bodyHtml` is already-rendered HTML, not raw markdown (rendered
+     *  main-process-side — see main.ts's ReleaseNotes doc comment). */
+    async fetchReleaseNotes(version: string): Promise<{ name: string; bodyHtml: string; htmlUrl: string } | null> {
         return ipcRenderer.invoke("fetch-release-notes", version);
     },
 

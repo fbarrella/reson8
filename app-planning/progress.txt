@@ -3202,3 +3202,105 @@ Feature/Fix: Phase 13.15 (PRD 13.18) — Single-Instance Electron Lock
   (app-planning/Reson8_Phase13_PRD.md) — pending the user's final
   confirmation, the phase is complete and ready for the version bump
   (bump-version skill), release notes, and CLAUDE.md/README updates.
+
+--- Entry: 30/08/2026 ---
+
+Feature/Fix: Phase 13.16 — Always-Visible Mic Level Meter + Rendered "What's New" Markdown (post-PRD additions, still v2.2.0)
+
+  Problem: Two rough edges noticed after Phase 13's PRD was otherwise
+  complete, both explicitly scoped as additions to the same unreleased
+  v2.2.0 rather than a version bump of their own:
+    1. The microphone level meter only appeared while the noise gate
+       toggle was enabled, hidden inside its slider's wrapper — so
+       adjusting mic volume or noise cancelling gave no live visual
+       feedback at all unless the (unrelated) gate happened to be on too.
+    2. The "What's New" modal displayed GitHub's raw release-notes
+       markdown verbatim — literal "#"/"**"/"-" syntax visible to the
+       user instead of rendered formatting.
+
+  Fix 1 — Detached Mic Meter: Moved the meter's markup out of
+  `#mic-sensitivity-slider-wrap` into its own always-visible
+  `#mic-level-section`, positioned above the Noise Gate section so it's
+  visible regardless of which mic-related control (gate, volume, noise
+  cancelling) is being adjusted. The underlying `VoiceService` analyser
+  already ran independently of the gate's enabled state since PRD 13.2's
+  refactor (confirmed, not a new change) — this was purely a renderer-side
+  UI/lifecycle decoupling:
+    - `openSettingsPanel()` now always starts the meter (and, if not in a
+      call, the preview capture it reads from) instead of gating on
+      `micSensitivityEnabled`.
+    - A new `closeSettingsPanel()` helper stops both on modal close (a
+      latent gap even before this — no such lifecycle cleanup existed
+      until now, so this also fixes what would otherwise become a much
+      more frequently-triggered background mic-preview leak).
+    - The voice-channel join handler starts the meter unconditionally
+      after a successful join, instead of only when the gate was on.
+    - Removed all `startMicLevelMeter()`/`stopMicLevelMeter()` calls from
+      the PTT-mode toggle handlers and the noise-gate checkbox's own
+      change handler — those now only touch the gate itself; the meter's
+      lifecycle is fully independent of both.
+
+  Fix 2 — Rendered Markdown in "What's New": Added `markdown-it` (a
+  properly dual-published CJS/ESM package — verified its package.json has
+  no top-level `"type": "module"` override before adding it, specifically
+  to avoid a repeat of this same phase's earlier
+  deepfilternet3-noise-filter ESM/CJS packaging incident) as a client
+  dependency. Rendering happens in `main.ts` (which, unlike the renderer —
+  a plain `<script>`-loaded page with no bundler — can `require()` an
+  ordinary CommonJS package directly), converting `fetchReleaseNotes()`'s
+  raw GitHub markdown `body` into HTML (`bodyHtml`) before it ever reaches
+  the renderer via IPC. `html: false` in the markdown-it config so no raw
+  HTML from the source ever passes through unescaped. Caught and fixed a
+  related Electron link-navigation gotcha before it could ship: a plain
+  rendered `<a href>` with no `target="_blank"` would navigate the main
+  window itself to that URL on click, rather than opening the user's
+  browser — added a `link_open` renderer-rule override forcing
+  `target="_blank" rel="noopener noreferrer"` on every rendered link, so
+  they route through the existing `setWindowOpenHandler`/
+  `shell.openExternal()` path already used elsewhere (chat's own
+  `linkifyContent()`). `whatsNewBody.textContent` became `.innerHTML`;
+  added CSS for headings/paragraphs/lists/bold/links/code/hr/blockquote
+  matching the app's dark theme.
+
+  Key Files Modified:
+    apps/client/package.json — new `markdown-it` dependency +
+      `@types/markdown-it`
+    apps/client/src/main.ts — `markdownRenderer` (markdown-it instance +
+      link_open override), `ReleaseNotes.body` renamed to `bodyHtml`
+      (now rendered HTML)
+    apps/client/src/preload.ts — `fetchReleaseNotes()` return type
+      updated to `bodyHtml`
+    apps/client/src/renderer/renderer.ts — `fetchReleaseNotes()` type,
+      `whatsNewBody.innerHTML` instead of `.textContent`; mic-meter
+      lifecycle decoupled from the noise gate across
+      `openSettingsPanel()`, the new `closeSettingsPanel()`, the voice
+      join handler, both PTT-mode handlers, and the gate's own checkbox
+      handler
+    apps/client/src/renderer/index.html — `#mic-level-section` extracted
+      as its own always-visible block; `#whats-new-modal .whats-new-body`
+      markdown-element styling, removed the now-inapplicable
+      `white-space: pre-wrap`
+
+  Verification:
+    - npx tsc --noEmit and --build (client) — clean
+    - Confirmed `markdown-it`'s compiled output uses a plain `require()`
+      (not the dynamic-import workaround this same phase's noise-
+      cancelling dependency needed) — verified directly in Node that it
+      loads and renders correctly
+    - Real end-to-end test via the actual Electron app's CDP debugging
+      port: called `fetchReleaseNotes("2.1.0")` against the real,
+      already-published GitHub release — confirmed the returned
+      `bodyHtml` contains real `<h1>`/`<p>`/`<ul>`/`<li>`/`<strong>` tags
+      and zero raw "# " markdown syntax
+    - Launched the dev build (ELECTRON_ENABLE_LOGGING=1) — no console
+      errors
+    - Manual in-app verification (mic meter visible and live while
+      adjusting mic volume/noise cancelling with the gate off, "What's
+      New" modal rendering cleanly, links opening in the external
+      browser rather than navigating the app window) is pending the
+      user's own hands-on test.
+
+  Next Step: once confirmed, proceed to the final wrap-up — updating the
+  CLAUDE.md files and README with the full Phase 13 feature set. No
+  further version bump needed; both additions ship as part of the
+  already-prepared v2.2.0.
