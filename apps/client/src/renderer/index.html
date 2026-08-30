@@ -1686,6 +1686,19 @@
       text-overflow: ellipsis;
     }
 
+    .user-banned-badge {
+      display: inline-block;
+      background: #e74c3c;
+      color: #fff;
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: 0.3px;
+      padding: 1px 5px;
+      border-radius: 4px;
+      margin-left: 6px;
+      vertical-align: middle;
+    }
+
     .admin-user-id {
       font-size: 9px;
       font-family: monospace;
@@ -2030,19 +2043,6 @@
       color: var(--text-muted);
       padding: 10px 10px 4px;
       user-select: none;
-    }
-
-    .online-users-separator.banned {
-      color: #e74c3c;
-    }
-
-    .online-user-dot.banned {
-      background: #e74c3c;
-    }
-
-    .online-user-nick.banned {
-      color: #e74c3c;
-      text-decoration: line-through;
     }
 
     .online-user-btns {
@@ -3195,7 +3195,7 @@
     <div class="modal-content wide">
       <h3>⚙ Settings</h3>
       <div class="settings-tab-bar">
-        <button class="settings-tab-btn active" data-settings-tab="roles" id="settings-tab-roles">👑 Roles</button>
+        <button class="settings-tab-btn active" data-settings-tab="roles" id="settings-tab-roles">🛡️ User Management</button>
         <button class="settings-tab-btn" data-settings-tab="emojis" id="settings-tab-emojis">😀 Emojis</button>
         <button class="settings-tab-btn" data-settings-tab="server" id="settings-tab-server">🔔 Server</button>
         <button class="settings-tab-btn" data-settings-tab="voice">🎤 Voice & Shortcuts</button>

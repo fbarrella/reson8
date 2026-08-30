@@ -2,7 +2,11 @@
  * Admin Handler — Socket.io event handlers for admin operations.
  *
  * Handles: GET_ALL_USERS, GET_ROLES, ASSIGN_ROLE.
- * All events are guarded by the MANAGE_ROLES or ADMIN permission.
+ * GET_ROLES/ASSIGN_ROLE are guarded by MANAGE_ROLES (or ADMIN). GET_ALL_USERS
+ * is guarded by MANAGE_ROLES *or* BAN_USER (PRD 13.17) — it backs the User
+ * Management tab, which serves both role assignment and ban/unban, and a
+ * BAN_USER-only holder still needs the full user list (including offline
+ * users) to know who to ban.
  */
 
 import type { Server as SocketIOServer, Socket } from "socket.io";
@@ -13,7 +17,7 @@ import type {
     InterServerEvents,
     SocketData,
 } from "@reson8/shared-types";
-import { requirePermission } from "../middleware/permissions.middleware.js";
+import { requirePermission, requireAnyPermission } from "../middleware/permissions.middleware.js";
 import { PermissionFlags } from "@reson8/shared-types";
 
 type TypedIO = SocketIOServer<
@@ -40,10 +44,11 @@ export function registerAdminHandlers(
     io.on("connection", (socket: TypedSocket) => {
         // ── GET_ALL_USERS ──────────────────────────────────────────────────
         socket.on("GET_ALL_USERS", async (payload, ack) => {
-            const allowed = await requirePermission(
+            const allowed = await requireAnyPermission(
                 app,
                 socket,
                 BigInt(PermissionFlags.MANAGE_ROLES),
+                BigInt(PermissionFlags.BAN_USER),
             );
             if (!allowed) {
                 ack({ success: false, error: "Permission denied" });
@@ -54,28 +59,36 @@ export function registerAdminHandlers(
                 const { serverId } = payload;
 
                 // Get all users that have at least one role on this server
-                const users = await app.prisma.user.findMany({
-                    where: {
-                        roles: {
-                            some: {
-                                role: { serverId },
+                const [users, bannedUsers] = await Promise.all([
+                    app.prisma.user.findMany({
+                        where: {
+                            roles: {
+                                some: {
+                                    role: { serverId },
+                                },
                             },
                         },
-                    },
-                    include: {
-                        roles: {
-                            include: { role: true },
-                            where: { role: { serverId } },
+                        include: {
+                            roles: {
+                                include: { role: true },
+                                where: { role: { serverId } },
+                            },
                         },
-                    },
-                    orderBy: { nickname: "asc" },
-                });
+                        orderBy: { nickname: "asc" },
+                    }),
+                    app.prisma.bannedUser.findMany({
+                        where: { serverId },
+                        select: { userId: true },
+                    }),
+                ]);
+                const bannedIds = new Set(bannedUsers.map((b) => b.userId));
 
                 const mapped = users.map((u) => ({
                     id: u.id,
                     username: u.username,
                     nickname: u.nickname,
                     createdAt: u.createdAt.toISOString(),
+                    isBanned: bannedIds.has(u.id),
                     roles: u.roles.map((ur) => ({
                         id: ur.role.id,
                         serverId: ur.role.serverId,

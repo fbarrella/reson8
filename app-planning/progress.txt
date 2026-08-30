@@ -2929,3 +2929,83 @@ Feature/Fix: Phase 13.10 (PRD 13.16) — Screen-Share Sound Alerts
   Next Step: PRD 13.17 (move Ban button to a renamed "User Management"
   tab) — the next item per app-planning/Reson8_Phase13_PRD.md's
   recommended order.
+
+--- Entry: 29/08/2026 ---
+
+Feature/Fix: Phase 13.11 (PRD 13.17) — Move Ban to "User Management" Tab
+
+  Problem: The Ban button only lived in the Online Users modal, which only
+  ever lists *online* users — an offline troublemaker couldn't be banned
+  at all, since their name never appears there.
+
+  Solution: Moved Ban/Unban into the Settings → "User Management" tab
+  (renamed from "Roles" 👑 → 🛡️), which already lists every user with a
+  role on the server — online or not — via the existing `GET_ALL_USERS`
+  handler, confirmed as exactly the right data source (no new listing
+  mechanism needed). Removed the Ban button and the separate "Banned
+  Users" list section from the Online Users modal entirely, including
+  their now-dead CSS.
+
+  Permission scoping (confirmed with the user before implementing): moving
+  Ban into a tab formerly gated by MANAGE_ROLES alone would have silently
+  revoked ban ability from any role holding BAN_USER without MANAGE_ROLES.
+  Fixed by:
+    - New `requireAnyPermission()` in `permissions.middleware.ts` (mirrors
+      `requirePermission()`, passes if the caller holds *any* of several
+      flags) — `GET_ALL_USERS` now accepts MANAGE_ROLES *or* BAN_USER,
+      since the tab now serves both roles.
+    - `GET_ALL_USERS`'s response gained `isBanned: boolean` per user
+      (cross-referenced against `BannedUser` in one extra query), so the
+      client can render Ban vs. Unban per row without a second round trip.
+    - Client-side, split the previously-conflated `isAdminUser` flag's
+      *use* from its *source*: `isAdminUser` now derives from `GET_ROLES`'s
+      own success (still MANAGE_ROLES-only, unchanged) rather than
+      `GET_ALL_USERS`'s (now ambiguous between the two permissions), and a
+      new `canBanUsers` derives from `GET_BANNED_USERS`'s success (still
+      BAN_USER-only, unchanged). The tab itself shows for
+      `isAdminUser || canBanUsers`; inside it, role-editing badges are
+      gated by `isAdminUser` alone and the Ban/Unban button by
+      `canBanUsers` alone — a BAN_USER-only holder now sees the tab with
+      only a working Ban/Unban control, no role badges that would just
+      403 on click.
+
+  Key Files Modified:
+    packages/shared-types/src/socket-events.ts — `GET_ALL_USERS` response
+      gains `isBanned`, doc comment updated
+    apps/server/src/middleware/permissions.middleware.ts —
+      `requireAnyPermission()`
+    apps/server/src/handlers/admin.handler.ts — `GET_ALL_USERS` uses
+      `requireAnyPermission(MANAGE_ROLES, BAN_USER)`, cross-references
+      `BannedUser` for `isBanned`
+    apps/client/src/renderer/index.html — tab label/icon, new
+      `.user-banned-badge` style, removed now-dead
+      `.online-users-separator.banned`/`.online-user-dot.banned`/
+      `.online-user-nick.banned`
+    apps/client/src/renderer/renderer.ts — `canBanUsers` flag,
+      `applySettingsTabVisibility()`/connect-time pre-check/
+      `openSettingsPanel()` updated to derive `isAdminUser`/`canBanUsers`
+      from their own dedicated calls, `renderAdminUsers()` gains a
+      "BANNED" badge + Ban/Unban button (individually gated), Ban button
+      and "Banned Users" section removed from the Online Users modal
+
+  Verification:
+    - npx tsc --build (shared-types) — clean
+    - npx tsc --noEmit and --build (server, client) — clean
+    - npm run test (server) — 19/19 passing, unchanged
+    - Launched the dev build (ELECTRON_ENABLE_LOGGING=1) — no console
+      errors
+    - Live server tests against a real running server: confirmed
+      `isBanned` correctly flips false → true → false through a real
+      ban/unban cycle via `GET_ALL_USERS`; confirmed a regular (no
+      MANAGE_ROLES/BAN_USER) user still gets "Permission denied" from
+      `GET_ALL_USERS`, i.e. the widened gate didn't accidentally open it
+      to everyone.
+    - Manual in-app verification (tab renders correctly for an
+      ADMIN/MANAGE_ROLES user, offline users are now bannable, a
+      BAN_USER-only role sees the tab with a working ban control but no
+      role badges) is pending the user's own hands-on test.
+
+  Next Step: PRD 13.18 (single-instance Electron lock) — the final item
+  per app-planning/Reson8_Phase13_PRD.md's recommended order. Once
+  confirmed, the whole Phase 13 PRD is complete and ready for version
+  bump + release notes.

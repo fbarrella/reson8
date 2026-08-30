@@ -2342,13 +2342,16 @@ api.on("connected", (data: { serverId: string; instanceId: string }) => {
     // Settings modal opens) so openSettingsPanel() already knows the answer
     // and can render the right tabs on the very first paint — see
     // applySettingsTabVisibility().
-    Promise.all([api.getAllUsers(data.serverId), api.getPendingEmojis()]).then(
-        ([usersRes, pendingEmojisRes]) => {
-            isAdminUser = usersRes.success;
-            canManageEmojis = pendingEmojisRes.success;
-            settingsTabRoles.disabled = !isAdminUser;
-        },
-    );
+    Promise.all([
+        api.getRoles(data.serverId),
+        api.getBannedUsers(),
+        api.getPendingEmojis(),
+    ]).then(([rolesRes, bannedRes, pendingEmojisRes]) => {
+        isAdminUser = rolesRes.success;
+        canBanUsers = bannedRes.success;
+        canManageEmojis = pendingEmojisRes.success;
+        settingsTabRoles.disabled = !(isAdminUser || canBanUsers);
+    });
 
     // Auto-open DM tabs for partners with unread messages
     api.getUnreadDmPartners().then((res) => {
@@ -2994,6 +2997,8 @@ function renderAdminUsers(users: any[]): void {
         return;
     }
 
+    const myId = api.getInstanceId();
+
     for (const user of users) {
         const row = document.createElement("div");
         row.className = "admin-user-row";
@@ -3003,52 +3008,81 @@ function renderAdminUsers(users: any[]): void {
         // User info
         const infoEl = document.createElement("div");
         infoEl.className = "admin-user-info";
+        const bannedBadge = user.isBanned ? ' <span class="user-banned-badge">BANNED</span>' : "";
         infoEl.innerHTML = `
-            <div class="admin-user-nickname">${escapeHtml(user.nickname)}</div>
+            <div class="admin-user-nickname">${escapeHtml(user.nickname)}${bannedBadge}</div>
             <div class="admin-user-id">${escapeHtml(user.id)}</div>
         `;
         row.appendChild(infoEl);
 
-        // Role toggles
-        const badgesEl = document.createElement("div");
-        badgesEl.className = "admin-role-badges";
+        // Role toggles — only for those who can actually manage roles; a
+        // BAN_USER-only holder would just get PERMISSION_DENIED on click
+        // (PRD 13.17), so don't show them as if they were usable.
+        if (isAdminUser) {
+            const badgesEl = document.createElement("div");
+            badgesEl.className = "admin-role-badges";
 
-        for (const role of allServerRoles) {
-            const badge = document.createElement("span");
-            badge.className = `role-badge${userRoleIds.has(role.id) ? " active" : ""}`;
-            badge.textContent = role.name;
-            if (role.color) {
-                badge.style.borderColor = role.color;
-                if (userRoleIds.has(role.id)) {
-                    badge.style.background = role.color;
-                    badge.style.color = "#fff";
+            for (const role of allServerRoles) {
+                const badge = document.createElement("span");
+                badge.className = `role-badge${userRoleIds.has(role.id) ? " active" : ""}`;
+                badge.textContent = role.name;
+                if (role.color) {
+                    badge.style.borderColor = role.color;
+                    if (userRoleIds.has(role.id)) {
+                        badge.style.background = role.color;
+                        badge.style.color = "#fff";
+                    }
                 }
+
+                badge.addEventListener("click", async () => {
+                    const hasRole = badge.classList.contains("active");
+                    const action = hasRole ? "remove" : "add";
+
+                    // Block admin from removing their own admin role
+                    if (action === "remove" && user.id === myId && role.name === "Server Admin") {
+                        log("You cannot remove your own admin role", "error");
+                        return;
+                    }
+
+                    const result = await api.assignRole(user.id, role.id, action);
+                    if (result.success) {
+                        // Refresh the panel
+                        openSettingsPanel();
+                    } else {
+                        log(`Failed to ${action} role: ${result.error}`, "error");
+                    }
+                });
+
+                badgesEl.appendChild(badge);
             }
 
-            badge.addEventListener("click", async () => {
-                const hasRole = badge.classList.contains("active");
-                const action = hasRole ? "remove" : "add";
-
-                // Block admin from removing their own admin role
-                const myId = api.getInstanceId();
-                if (action === "remove" && user.id === myId && role.name === "Server Admin") {
-                    log("You cannot remove your own admin role", "error");
-                    return;
-                }
-
-                const result = await api.assignRole(user.id, role.id, action);
-                if (result.success) {
-                    // Refresh the panel
-                    openSettingsPanel();
-                } else {
-                    log(`Failed to ${action} role: ${result.error}`, "error");
-                }
-            });
-
-            badgesEl.appendChild(badge);
+            row.appendChild(badgesEl);
         }
 
-        row.appendChild(badgesEl);
+        // Ban / Unban — only for those who hold BAN_USER, never for yourself
+        // (PRD 13.17). Works for offline users too, unlike the old Online
+        // Users modal button this replaces — GET_ALL_USERS lists every user
+        // with a role on this server regardless of online status.
+        if (canBanUsers && user.id !== myId) {
+            const banBtn = document.createElement("button");
+            banBtn.className = user.isBanned ? "btn-unban" : "btn-ban";
+            banBtn.textContent = user.isBanned ? "Unban" : "Ban";
+            banBtn.addEventListener("click", async () => {
+                const res = user.isBanned
+                    ? await api.unbanUser(user.id)
+                    : await api.banUser(user.id);
+                if (res.success) {
+                    log(`${user.isBanned ? "Unbanned" : "Banned"} ${escapeHtml(user.nickname)}`, "success");
+                    SoundAlert.play(user.isBanned ? "user_unbanned_from_server.mp3" : "user_banned_from_server.mp3");
+                    openSettingsPanel(); // refresh to reflect the new banned state
+                } else {
+                    log(`Failed to ${user.isBanned ? "unban" : "ban"}: ${res.error}`, "error");
+                    if (res.error && /permission|denied/i.test(res.error)) SoundAlert.play("insufficient_perms.mp3");
+                }
+            });
+            row.appendChild(banBtn);
+        }
+
         adminUserList.appendChild(row);
     }
 }
@@ -3630,50 +3664,6 @@ btnOnlineUsers.addEventListener("click", async () => {
     } else {
         onlineUserList.innerHTML = '<div class="admin-empty">Failed to load users.</div>';
     }
-
-    // Append banned users section (admin only)
-    if (isAdminUser) {
-        const bannedResult = await api.getBannedUsers();
-        if (bannedResult.success && bannedResult.users && bannedResult.users.length > 0) {
-            const separator = document.createElement("div");
-            separator.className = "online-users-separator banned";
-            separator.textContent = "Banned Users";
-            onlineUserList.appendChild(separator);
-
-            for (const banned of bannedResult.users) {
-                const row = document.createElement("div");
-                row.className = "online-user-row";
-
-                const info = document.createElement("div");
-                info.className = "online-user-info";
-                info.innerHTML = `<span class="online-user-dot banned"></span><span class="online-user-nick banned">${escapeHtml(banned.nickname)}</span>`;
-                row.appendChild(info);
-
-                const unbanBtn = document.createElement("button");
-                unbanBtn.className = "btn-unban";
-                unbanBtn.textContent = "Unban";
-                unbanBtn.addEventListener("click", async () => {
-                    const res = await api.unbanUser(banned.userId);
-                    if (res.success) {
-                        log(`Unbanned ${escapeHtml(banned.nickname)}`, "success");
-                        SoundAlert.play("user_unbanned_from_server.mp3");
-                        row.remove();
-                        // Remove separator if no more banned users
-                        const remaining = onlineUserList.querySelectorAll(".btn-unban");
-                        if (remaining.length === 0) {
-                            separator.remove();
-                        }
-                    } else {
-                        log(`Failed to unban: ${res.error}`, "error");
-                        if (res.error && /permission|denied/i.test(res.error)) SoundAlert.play("insufficient_perms.mp3");
-                    }
-                });
-                row.appendChild(unbanBtn);
-
-                onlineUserList.appendChild(row);
-            }
-        }
-    }
 });
 
 btnOnlineClose.addEventListener("click", () => {
@@ -3795,24 +3785,8 @@ function createUserRow(user: { userId: string; nickname: string; isOnline: boole
         btnGroup.appendChild(nudgeBtn);
     }
 
-    // Admin-only ban button (don't show for self)
-    if (isAdminUser && user.userId !== myId) {
-        const banBtn = document.createElement("button");
-        banBtn.className = "btn-ban";
-        banBtn.textContent = "Ban";
-        banBtn.addEventListener("click", async () => {
-            const res = await api.banUser(user.userId);
-            if (res.success) {
-                log(`Banned ${escapeHtml(user.nickname)} from server`, "success");
-                SoundAlert.play("user_banned_from_server.mp3");
-                row.remove();
-            } else {
-                log(`Failed to ban: ${res.error}`, "error");
-                if (res.error && /permission|denied/i.test(res.error)) SoundAlert.play("insufficient_perms.mp3");
-            }
-        });
-        btnGroup.appendChild(banBtn);
-    }
+    // Ban moved to the User Management settings tab (PRD 13.17) — it
+    // now also works for offline users, which this modal never could.
 
     row.appendChild(btnGroup);
     return row;
@@ -3834,8 +3808,14 @@ async function updateOnlineDot(): Promise<void> {
 
 // ── Unified Settings Modal (Tabs) ─────────────────────────────────────
 
+// `isAdminUser` reflects MANAGE_ROLES specifically (despite the name — kept
+// as-is since it's also relied on for the Server tab's literal-ADMIN gate).
+// `canBanUsers` reflects BAN_USER specifically — separate flags so the User
+// Management tab (PRD 13.17) can open to either holder while still gating
+// role-editing vs. ban/unban controls individually within it.
 let isAdminUser = false;
 let canManageEmojis = false;
+let canBanUsers = false;
 
 // Settings tab switching
 const settingsTabBtns = document.querySelectorAll(".settings-tab-btn");
@@ -3858,7 +3838,9 @@ settingsTabBtns.forEach((btn) => {
  * shown (using state cached at connect time) and again after a live re-check
  * resolves, without ever flashing the wrong tabs on screen in between. */
 function applySettingsTabVisibility(): void {
-    settingsTabRoles.style.display = isConnected && isAdminUser ? "" : "none";
+    // User Management (PRD 13.17) opens to either MANAGE_ROLES or BAN_USER —
+    // the controls inside are individually gated by each flag separately.
+    settingsTabRoles.style.display = isConnected && (isAdminUser || canBanUsers) ? "" : "none";
     settingsTabEmojis.style.display = isConnected && canManageEmojis ? "" : "none";
     settingsTabServer.style.display = isConnected && isAdminUser ? "" : "none";
 
@@ -3894,27 +3876,30 @@ async function openSettingsPanel(): Promise<void> {
     if (isConnected) {
         // Live re-check, in case permissions changed since connect (e.g. an
         // admin promoted/demoted this user mid-session). Fetch users, roles,
-        // and the pending-emoji queue concurrently. The Emojis tab's
-        // visibility is decided by whether GET_PENDING_EMOJIS actually
-        // succeeds (i.e. the server confirms MANAGE_EMOJIS) rather than
-        // reusing the isAdminUser heuristic — MANAGE_EMOJIS is a distinct
-        // permission bit, even though in practice only the Admin role (via
-        // its ADMIN bypass) holds it today.
-        const [usersRes, rolesRes, pendingEmojisRes] = await Promise.all([
+        // banned users, and the pending-emoji queue concurrently. Each tab's
+        // visibility is decided by whether its own permission-gated call
+        // actually succeeds, rather than a shared heuristic — GET_ROLES
+        // stays MANAGE_ROLES-only and GET_BANNED_USERS stays BAN_USER-only,
+        // so `isAdminUser`/`canBanUsers` reflect exactly those two
+        // permissions even though GET_ALL_USERS itself now accepts either
+        // one (PRD 13.17, since the tab serves both).
+        const [usersRes, rolesRes, bannedRes, pendingEmojisRes] = await Promise.all([
             api.getAllUsers(currentServerId),
             api.getRoles(currentServerId),
+            api.getBannedUsers(),
             api.getPendingEmojis(),
         ]);
 
-        isAdminUser = usersRes.success;
+        isAdminUser = rolesRes.success;
+        canBanUsers = bannedRes.success;
         canManageEmojis = pendingEmojisRes.success;
         applySettingsTabVisibility();
 
-        if (isAdminUser) {
+        if (usersRes.success) {
             allServerRoles = rolesRes.roles ?? [];
             renderAdminUsers(usersRes.users ?? []);
         } else {
-            adminUserList.innerHTML = '<div class="admin-empty">You don\'t have permission to manage roles.</div>';
+            adminUserList.innerHTML = '<div class="admin-empty">You don\'t have permission to manage users.</div>';
         }
 
         if (canManageEmojis) {

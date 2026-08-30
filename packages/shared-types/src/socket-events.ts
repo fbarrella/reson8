@@ -161,12 +161,13 @@ export interface ClientToServerEvents {
 
     // ── Admin / Role Management ──────────────────────────────────────────────
 
-    /** Admin requests list of all known users on the server. */
+    /** Requests list of all known users on the server. Requires MANAGE_ROLES
+     *  or BAN_USER (PRD 13.17) — serves the User Management tab. */
     GET_ALL_USERS: (
         payload: { serverId: string },
         ack: (response: {
             success: boolean;
-            users?: Array<IUser & { roles: IRole[] }>;
+            users?: Array<IUser & { roles: IRole[]; isBanned: boolean }>;
             error?: string;
         }) => void,
     ) => void;
