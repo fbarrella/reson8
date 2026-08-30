@@ -587,6 +587,17 @@ export function registerConnectionHandlers(
                             getMediasoupSessionKey(socket),
                         );
                     }
+                    // Sound-cue only (PRD 13.16) — the Viewer window's own
+                    // native close button (or a crash) never fires
+                    // STOP_WATCHING_SCREEN_SHARE, so this is the only place
+                    // that path gets a VIEWER_LEFT_YOUR_STREAM at all.
+                    if (socket.data.watchingUserId) {
+                        for (const [, s] of io.sockets.sockets) {
+                            if (s.data.userId === socket.data.watchingUserId && s.data.serverId === socket.data.serverId && s.data.role === "primary") {
+                                s.emit("VIEWER_LEFT_YOUR_STREAM");
+                            }
+                        }
+                    }
                     app.log.info(
                         { socketId: socket.id, role: "viewer", reason },
                         "Viewer socket disconnected",

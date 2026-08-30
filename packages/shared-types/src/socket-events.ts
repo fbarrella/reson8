@@ -551,6 +551,12 @@ export interface ServerToClientEvents {
         producerId: string;
     }) => void;
 
+    /** Delivered to a sharer's primary socket when a viewer opens/closes the
+     *  Viewer window on their share (PRD 13.16) — sound-cue only, so the
+     *  sharer has some awareness of watchers without an explicit UI. */
+    VIEWER_JOINED_YOUR_STREAM: () => void;
+    VIEWER_LEFT_YOUR_STREAM: () => void;
+
     /**
      * Sent to a client joining a voice channel with existing producers.
      * The client should consume each one.
@@ -652,4 +658,10 @@ export interface SocketData {
      * query string, before any handler can run.
      */
     role: "primary" | "viewer";
+    /** Set on a viewer socket while `WATCH_SCREEN_SHARE` is active — the
+     *  userId of the sharer it's currently watching, so
+     *  `STOP_WATCHING_SCREEN_SHARE`/disconnect cleanup can deliver
+     *  `VIEWER_LEFT_YOUR_STREAM` (PRD 13.16) without needing the client to
+     *  resend it. */
+    watchingUserId?: string;
 }

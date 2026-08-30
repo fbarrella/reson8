@@ -2847,3 +2847,85 @@ Feature/Fix: Phase 13.9 — Fix Stale Online Presence After Quitting the App
   continue with PRD 13.16 (screen-share sound alerts) per
   app-planning/Reson8_Phase13_PRD.md — the four sound files for that item
   are already in place (user added them directly).
+
+--- Entry: 29/08/2026 ---
+
+Feature/Fix: Phase 13.10 (PRD 13.16) — Screen-Share Sound Alerts
+
+  Problem: When someone starts/stops sharing their screen, other voice
+  channel participants have no audible cue if the app is minimized (only
+  the visual LIVE badge shows it). Symmetrically, a sharer has no idea
+  whether anyone is actually watching their stream.
+
+  Solution: Four new sound alerts, all routed through the existing
+  `SoundAlert.play()` dispatcher (`apps/client/assets/sound-alerts/`,
+  already respects the "mute sound alerts" toggle and the Sound Alerts
+  Volume slider automatically — no per-sound wiring needed for either).
+
+  Start/stop sharing (`user_started_sharing.mp3`/`user_stopped_sharing.mp3`):
+  purely client-side, no new server signaling needed. Extended the exact
+  existing pattern used for occupant join/leave sounds — a
+  `previousOccupantIds` diff inside the `PRESENCE_UPDATE` ("presence")
+  handler — with a parallel `previousSharingIds` diff computed via a new
+  `sharingIdsOf(occupants)` helper (filters occupants by `isSharingScreen`,
+  already present on the occupant DTO from prior phases). Reset alongside
+  `previousOccupantIds` at every one of its own reset points (join,
+  leave, disconnect, reconnect, kick) — six call sites in total, since
+  they describe the same voice channel and must never drift out of sync
+  with each other.
+
+  Viewer joined/exited your stream
+  (`user_joined_your_stream.mp3`/`user_exited_your_stream.mp3`): needed
+  genuinely new server signaling — confirmed there was no existing
+  broadcast to a sharer when someone starts/stops watching. Added two
+  new no-payload `ServerToClientEvents`
+  (`VIEWER_JOINED_YOUR_STREAM`/`VIEWER_LEFT_YOUR_STREAM`), delivered only
+  to the sharer's *primary* socket (a viewer socket shares the same
+  userId, so `socket.data.role === "primary"` is the filter — same
+  iterate-`io.sockets.sockets` pattern already used by nudge/dm/moderation
+  handlers for "deliver to a specific user" elsewhere in this codebase).
+
+  A new `SocketData.watchingUserId` field (set on a viewer socket by
+  `WATCH_SCREEN_SHARE`, read/cleared by whichever cleanup path runs first)
+  was needed because `STOP_WATCHING_SCREEN_SHARE`'s payload never carried
+  the sharer's userId, only the channelId — without it, there'd be no way
+  to know who to notify on stop. Wired into *both* cleanup paths: the
+  explicit `STOP_WATCHING_SCREEN_SHARE` call ("Leave Stream" / clean
+  window close) and the viewer-socket branch of the primary `disconnect`
+  handler (Viewer window closed via its native X button, or a crash) —
+  the existing code comment on that disconnect branch already noted it's
+  the *only* path some cleanups take if the window never gets to fire
+  STOP_WATCHING_SCREEN_SHARE, and this needed the same treatment.
+
+  Key Files Modified:
+    packages/shared-types/src/socket-events.ts —
+      `VIEWER_JOINED_YOUR_STREAM`/`VIEWER_LEFT_YOUR_STREAM` events,
+      `SocketData.watchingUserId`
+    apps/server/src/handlers/voice.handler.ts — `emitToUserPrimarySocket()`
+      helper, `watchingUserId` set in `WATCH_SCREEN_SHARE`, both new
+      events emitted from `WATCH_SCREEN_SHARE`/`STOP_WATCHING_SCREEN_SHARE`
+    apps/server/src/handlers/connection.handler.ts — viewer-socket
+      disconnect branch also emits `VIEWER_LEFT_YOUR_STREAM` when
+      `watchingUserId` was set
+    apps/client/src/preload.ts — bridges both new events to the renderer
+    apps/client/src/renderer/renderer.ts — `previousSharingIds`/
+      `sharingIdsOf()`, start/stop-sharing diff in the `presence` handler,
+      `viewer-joined-your-stream`/`viewer-left-your-stream` listeners
+
+  Verification:
+    - npx tsc --build (shared-types) — clean
+    - npx tsc --noEmit and --build (server, client) — clean
+    - npm run test (server) — 19/19 passing, unchanged
+    - Launched the dev build (ELECTRON_ENABLE_LOGGING=1) — no console
+      errors
+    - Manual in-app verification (start/stop sharing sounds for other
+      occupants, viewer-joined/exited sounds for the sharer — including
+      via the Viewer window's native close button, not just "Leave
+      Stream" — and that mute/volume settings apply to all four) is
+      pending the user's own hands-on test, per this phase's established
+      workflow. The four sound files were already in place, added by the
+      user ahead of this item.
+
+  Next Step: PRD 13.17 (move Ban button to a renamed "User Management"
+  tab) — the next item per app-planning/Reson8_Phase13_PRD.md's
+  recommended order.

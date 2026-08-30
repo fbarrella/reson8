@@ -413,6 +413,11 @@ const api = {
             voiceService?.removeConsumer(payload.producerId);
         });
 
+        // Sound-cue only (PRD 13.16) — a viewer opened/closed the Viewer
+        // window on this client's own screen share.
+        socket.on("VIEWER_JOINED_YOUR_STREAM", () => emit("viewer-joined-your-stream", null));
+        socket.on("VIEWER_LEFT_YOUR_STREAM", () => emit("viewer-left-your-stream", null));
+
         socket.on("EXISTING_PRODUCERS", (payload) => {
             for (const p of payload.producers) {
                 voiceService?.queueConsumeProducer(p.producerId, p.userId);

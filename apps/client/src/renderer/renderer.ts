@@ -857,6 +857,13 @@ const speakerHoldTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 // Track previous occupants per voice channel for join/leave sound detection
 let previousOccupantIds: Set<string> = new Set();
+// Track which occupants were sharing their screen, for start/stop sharing
+// sound detection (PRD 13.16) — reset alongside previousOccupantIds
+// everywhere that gets reset, since both describe the same voice channel.
+let previousSharingIds: Set<string> = new Set();
+function sharingIdsOf(occupants: { userId: string; isSharingScreen?: boolean }[]): Set<string> {
+    return new Set(occupants.filter((o) => o.isSharingScreen).map((o) => o.userId));
+}
 
 // Suppress presence-based join/leave sounds after a kick (avoids double sound)
 let suppressNextPresenceSound = false;
@@ -1804,6 +1811,7 @@ async function handleChannelClick(node: TreeNode): Promise<void> {
 
                 // Initialize previous occupants for join/leave sound detection
                 previousOccupantIds = new Set(node.occupants.map((o: any) => o.userId));
+                previousSharingIds = sharingIdsOf(node.occupants);
 
                 // In PTT mode, mic starts muted (resting state) but isMuted=false
                 // so PTT key can activate it. isMuted=true means "PTT locked".
@@ -1967,6 +1975,7 @@ function leaveVoiceAndNotify(): void {
     isInVoice = false;
     currentChannelId = null;
     previousOccupantIds = new Set();
+    previousSharingIds = new Set();
     stopMicLevelMeter();
     updateVoiceUI();
     log("Left voice channel", "info");
@@ -2391,6 +2400,7 @@ api.on("disconnected", () => {
     currentTree = [];
     customEmojis = [];
     previousOccupantIds = new Set();
+    previousSharingIds = new Set();
     connectedServerName = null;
     updateWindowTitle();
     activeSpeakers.clear();
@@ -2459,6 +2469,7 @@ api.on("voice-reconnected", (data: { channelId: string }) => {
     api.setNoiseCancelEnabled(noiseCancelEnabled);
     api.setVoiceState(isMuted, isDeafened);
     previousOccupantIds = new Set((node?.occupants ?? []).map((o) => o.userId));
+    previousSharingIds = sharingIdsOf(node?.occupants ?? []);
 
     log(`Reconnected to voice channel${node ? `: ${node.name}` : ""}`, "success");
     if (currentTree.length > 0) renderTree(currentTree);
@@ -2470,6 +2481,7 @@ api.on("voice-rejoin-failed", (data: { channelId: string; error?: string }) => {
         isInVoice = false;
         currentChannelId = null;
         previousOccupantIds = new Set();
+        previousSharingIds = new Set();
         updateVoiceUI();
     }
     log(`Couldn't reconnect to voice: ${data.error ?? "unknown error"}. Please rejoin manually.`, "error");
@@ -2496,6 +2508,7 @@ api.on("user-kicked", (data: { channelId: string }) => {
         isInVoice = false;
         currentChannelId = null;
         previousOccupantIds = new Set();
+        previousSharingIds = new Set();
         voiceChannelName.textContent = "";
         voicePanel.classList.remove("in-voice");
     }
@@ -2552,11 +2565,13 @@ api.on("presence", (data: { channelId: string; occupants: any[]; sessionStartedA
     if (isInVoice && data.channelId === currentChannelId) {
         const myId = api.getInstanceId();
         const newIds = new Set(data.occupants.map((o: any) => o.userId));
+        const newSharingIds = sharingIdsOf(data.occupants);
 
         // Skip sounds if a kick just occurred (avoids double sound)
         if (suppressNextPresenceSound) {
             suppressNextPresenceSound = false;
             previousOccupantIds = newIds;
+            previousSharingIds = newSharingIds;
             return;
         }
 
@@ -2574,7 +2589,21 @@ api.on("presence", (data: { channelId: string; occupants: any[]; sessionStartedA
                 break;
             }
         }
+        // Detect screen-share start/stop among other occupants (PRD 13.16)
+        for (const uid of newSharingIds) {
+            if (!previousSharingIds.has(uid) && uid !== myId) {
+                SoundAlert.play("user_started_sharing.mp3");
+                break;
+            }
+        }
+        for (const uid of previousSharingIds) {
+            if (!newSharingIds.has(uid) && uid !== myId) {
+                SoundAlert.play("user_stopped_sharing.mp3");
+                break;
+            }
+        }
         previousOccupantIds = newIds;
+        previousSharingIds = newSharingIds;
     }
 });
 
@@ -5153,6 +5182,16 @@ api.on("nudge-received", async (data: { fromUserId: string; fromNickname: string
     if (!isFocused) {
         api.flashWindow();
     }
+});
+
+// A viewer opened/closed the Viewer window on this client's own screen
+// share (PRD 13.16) — sound-cue only, no visible UI.
+api.on("viewer-joined-your-stream", () => {
+    SoundAlert.play("user_joined_your_stream.mp3");
+});
+
+api.on("viewer-left-your-stream", () => {
+    SoundAlert.play("user_exited_your_stream.mp3");
 });
 
 // ── Emoji Picker ──────────────────────────────────────────────────────────
