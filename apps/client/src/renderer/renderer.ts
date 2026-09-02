@@ -1172,7 +1172,6 @@ api.setGlobalVoiceVolume(voiceVolume);
 
 // Mic sensitivity DOM refs
 const chkMicSensitivity = document.getElementById("chk-mic-sensitivity") as HTMLInputElement;
-const micSensitivitySliderWrap = document.getElementById("mic-sensitivity-slider-wrap") as HTMLDivElement;
 const micSensitivitySlider = document.getElementById("mic-sensitivity-slider") as HTMLInputElement;
 const micSensitivityValue = document.getElementById("mic-sensitivity-value") as HTMLSpanElement;
 const micLevelBar = document.getElementById("mic-level-bar") as HTMLDivElement;
@@ -1180,11 +1179,9 @@ const micSensitivitySection = document.getElementById("mic-sensitivity-section")
 const micVolumeSlider = document.getElementById("mic-volume-slider") as HTMLInputElement;
 const micVolumeValue = document.getElementById("mic-volume-value") as HTMLSpanElement;
 const chkNoiseCancel = document.getElementById("chk-noise-cancel") as HTMLInputElement;
-const noiseCancelStrengthWrap = document.getElementById("noise-cancel-strength-wrap") as HTMLDivElement;
 const noiseCancelStrengthSlider = document.getElementById("noise-cancel-strength-slider") as HTMLInputElement;
 const noiseCancelStrengthValue = document.getElementById("noise-cancel-strength-value") as HTMLSpanElement;
 const chkSelfHear = document.getElementById("chk-self-hear") as HTMLInputElement;
-const selfHearVolumeWrap = document.getElementById("self-hear-volume-wrap") as HTMLDivElement;
 const selfHearVolumeSlider = document.getElementById("self-hear-volume-slider") as HTMLInputElement;
 const selfHearVolumeValue = document.getElementById("self-hear-volume-value") as HTMLSpanElement;
 const selfHearBanner = document.getElementById("self-hear-banner") as HTMLDivElement;
@@ -2187,8 +2184,9 @@ function updateSelfHearBanner(): void {
  *  checkbox, the banner's "Stop Previewing" button, and leaving voice. */
 function setSelfHearEnabledAndNotify(enabled: boolean): void {
     selfHearEnabled = enabled;
+    // The card's expand/collapse is driven purely by this checkbox's own
+    // :checked state via CSS :has() — no separate visibility toggle needed.
     if (chkSelfHear) chkSelfHear.checked = enabled;
-    if (selfHearVolumeWrap) selfHearVolumeWrap.style.display = enabled ? "block" : "none";
 
     if (enabled) {
         applySelfHearMuteDeafenForcing();
@@ -2221,7 +2219,6 @@ function leaveVoiceAndNotify(): void {
         selfHearEnabled = false;
         selfHearForcedDeafen = false;
         if (chkSelfHear) chkSelfHear.checked = false;
-        if (selfHearVolumeWrap) selfHearVolumeWrap.style.display = "none";
         updateSelfHearBanner();
     }
     updateVoiceUI();
@@ -7006,9 +7003,8 @@ function stopMicLevelMeter(): void {
     if (chkMicSensitivity) {
         chkMicSensitivity.checked = micSensitivityEnabled;
     }
-    if (micSensitivitySliderWrap) {
-        micSensitivitySliderWrap.style.display = micSensitivityEnabled ? "block" : "none";
-    }
+    // The card's expand/collapse is driven purely by this checkbox's own
+    // :checked state via CSS :has() — no separate visibility toggle needed.
     // Hide noise gate section if PTT mode is active
     if (pttModeEnabled && micSensitivitySection) {
         micSensitivitySection.style.display = "none";
@@ -7022,14 +7018,12 @@ chkMicSensitivity?.addEventListener("change", () => {
     micSensitivityEnabled = chkMicSensitivity.checked;
     if (micSensitivityEnabled) {
         localStorage.setItem("reson8-mic-sensitivity-enabled", "true");
-        micSensitivitySliderWrap.style.display = "block";
         if (isInVoice && !pttModeEnabled) {
             const threshold = parseInt(micSensitivitySlider.value, 10);
             api.setMicSensitivity(true, threshold);
         }
     } else {
         localStorage.removeItem("reson8-mic-sensitivity-enabled");
-        micSensitivitySliderWrap.style.display = "none";
         api.setMicSensitivity(false, 0);
     }
 });
@@ -7058,7 +7052,6 @@ micVolumeSlider?.addEventListener("input", () => {
 // ── Noise Cancelling (PRD 13.1) ──────────────────────────────────────────────
 
 if (chkNoiseCancel) chkNoiseCancel.checked = noiseCancelEnabled;
-if (noiseCancelStrengthWrap) noiseCancelStrengthWrap.style.display = noiseCancelEnabled ? "block" : "none";
 if (noiseCancelStrengthSlider) noiseCancelStrengthSlider.value = String(noiseCancelStrength);
 if (noiseCancelStrengthValue) noiseCancelStrengthValue.textContent = String(noiseCancelStrength);
 
@@ -7069,7 +7062,8 @@ chkNoiseCancel?.addEventListener("change", () => {
     } else {
         localStorage.removeItem("reson8-noise-cancel-enabled");
     }
-    if (noiseCancelStrengthWrap) noiseCancelStrengthWrap.style.display = noiseCancelEnabled ? "block" : "none";
+    // The card's expand/collapse is driven purely by this checkbox's own
+    // :checked state via CSS :has() — no separate visibility toggle needed.
     // The very first enable this session fetches/compiles the vendored WASM
     // engine — no UI blocking needed, it applies whenever it resolves.
     api.setNoiseCancelEnabled(noiseCancelEnabled);

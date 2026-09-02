@@ -1342,3 +1342,75 @@ Feature/Fix: PRD 14.10 — Self-hear mic monitor (Phase 14, item 10)
   Only PRD 14.8 (link preview fix) remains — pending user confirmation to
   proceed. After that, the full PRD is implemented and ready for the
   version bump / release notes / documentation update steps.
+
+--- Entry: 02/09/2026 ---
+
+Feature/Fix: UI cleanup — reorganize and declutter the Voice & Shortcuts
+settings tab (user-requested follow-up polish after Phase 14's voice items
+landed)
+
+  Problem: after PRD 14.9-14.12 added the self-hear toggle+slider and the
+  noise-cancelling-strength toggle+slider, the Voice & Shortcuts tab became
+  cluttered — related controls were scattered (mic volume slider sat
+  between noise gate and noise cancelling instead of near the other input
+  controls), each switch+slider pair rendered as two visually disconnected
+  boxes (the toggle row's own bordered card, then a bare unstyled div below
+  it for the slider), the live mic meter bar was only 4px tall, and the
+  "Keyboard Shortcuts" section used the same small label style as every
+  individual field, so it didn't read as a section boundary.
+
+  Solution:
+  - Reordered the tab to: Microphone (Input) → Speaker (Output) → Save
+    Devices → Microphone Volume → Microphone Level meter → Hear Yourself →
+    Noise Gate → Noise Cancelling → Voice Input Mode → Keyboard Shortcuts.
+    Voice Input Mode's new position (moved to just before Keyboard
+    Shortcuts) was confirmed with the user, since their reorder request's
+    list omitted it entirely.
+  - Unified each of the three switch+slider pairs (Hear Yourself, Noise
+    Gate, Noise Cancelling) into one bordered card (new
+    `.settings-toggle-card`) that subtly grows to reveal its slider section
+    while the switch is on, instead of two disconnected boxes. Expand/
+    collapse is driven purely by CSS — a new `.settings-toggle-card-expand`
+    uses a `grid-template-rows` 0fr/1fr transition (the modern
+    no-JS-measurement way to animate to auto height), toggled via `:has()`
+    reacting directly to each checkbox's own `:checked` state (e.g.
+    `#self-hear-toggle-row:has(#chk-self-hear:checked) +
+    .settings-toggle-card-expand`) — no JS visibility toggling needed at
+    all, so the equivalent `style.display` assignments in `renderer.ts`
+    (for all three sliders, at init and in each checkbox's change handler)
+    were removed along with the now-unused wrap DOM-ref variables.
+  - Increased `.mic-level-meter`'s height from 4px to 10px (and its
+    `border-radius` from 2px to 5px to match) so it's actually visible as a
+    level meter rather than a hairline.
+  - Added a new `.settings-section-title` style (14px, bold, primary-color
+    text, top border + extra margin) and applied it to "Keyboard Shortcuts"
+    so it reads as a distinct section boundary instead of blending in with
+    the regular 11px field labels.
+  - Two bugs found during the user's own hands-on testing pass and fixed:
+    1. Noise Gate's card showed a fixed-size empty box even while
+       collapsed — caused by a leftover legacy CSS rule
+       (`#mic-sensitivity-slider-wrap { background, border, padding: 12px }`)
+       from before the unified-card refactor, styling that div directly
+       regardless of the new grid-collapse state (only Noise Gate had this
+       stale rule, which is why only its card showed the artifact). Removed
+       entirely now that `.settings-toggle-card`/
+       `.settings-toggle-card-expand-inner` own that styling.
+    2. The right-side scrollbar sat flush against the toggle switches/
+       sliders with no breathing room, once Voice & Shortcuts became tall
+       enough to actually need scrolling inside PRD 14.9's fixed-height
+       Settings modal. Fixed by adding `padding-right: 10px` to
+       `.settings-panel`.
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html
+    apps/client/src/renderer/renderer.ts
+
+  Verification:
+    `npx tsc --noEmit` in `apps/client` — clean, checked after each round
+    of changes (initial reorder/unify, and again after the two bug fixes).
+    Manually verified by the user across two testing passes, who confirmed
+    everything now looks good.
+
+  Next Step: Phase 14 PRD status — only PRD 14.8 (link preview fix)
+  remains before the full PRD is complete and ready for the version bump /
+  release notes / documentation update steps.

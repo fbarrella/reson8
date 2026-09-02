@@ -2026,6 +2026,11 @@
       display: none;
       flex: 1;
       overflow-y: auto;
+      /* Breathing room between the content and the scrollbar (PRD 14.9's
+         fixed-height Settings modal made some tabs, like Voice & Shortcuts,
+         tall enough to actually scroll for the first time — without this,
+         the thumb sits flush against toggle switches/sliders). */
+      padding-right: 10px;
     }
 
     .settings-panel.active {
@@ -2677,6 +2682,70 @@
       background: #fff;
     }
 
+    /* ── Unified switch+slider settings card (Voice & Shortcuts) ─────────
+       A toggle row that reveals an extra slider while enabled used to be
+       two visually disconnected boxes (the toggle-row's own bordered card,
+       then a bare, unstyled div below it). This wraps both in one shared
+       card — the row is its always-visible header, the slider section is
+       a nested area that the card subtly grows to reveal, rather than a
+       separate floating control. Whether it's expanded is driven purely by
+       the checkbox's own :checked state via :has() (Chromium 105+, well
+       within Electron's baseline) — no JS visibility toggling needed. */
+    .settings-toggle-card {
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--bg-input);
+      margin-bottom: 10px;
+      transition: border-color 0.2s;
+    }
+
+    .settings-toggle-card:hover {
+      border-color: var(--accent-dim);
+    }
+
+    .settings-toggle-card .toggle-row {
+      border: none;
+      background: transparent;
+      margin-bottom: 0;
+    }
+
+    .settings-toggle-card-expand {
+      display: grid;
+      grid-template-rows: 0fr;
+      transition: grid-template-rows 0.25s ease;
+    }
+
+    .settings-toggle-card-expand-inner {
+      overflow: hidden;
+      padding: 0 12px;
+    }
+
+    #self-hear-toggle-row:has(#chk-self-hear:checked) + .settings-toggle-card-expand,
+    #mic-sensitivity-toggle-row:has(#chk-mic-sensitivity:checked) + .settings-toggle-card-expand,
+    #noise-cancel-toggle-row:has(#chk-noise-cancel:checked) + .settings-toggle-card-expand {
+      grid-template-rows: 1fr;
+    }
+
+    #self-hear-toggle-row:has(#chk-self-hear:checked) + .settings-toggle-card-expand .settings-toggle-card-expand-inner,
+    #mic-sensitivity-toggle-row:has(#chk-mic-sensitivity:checked) + .settings-toggle-card-expand .settings-toggle-card-expand-inner,
+    #noise-cancel-toggle-row:has(#chk-noise-cancel:checked) + .settings-toggle-card-expand .settings-toggle-card-expand-inner {
+      padding: 10px 12px 12px;
+      border-top: 1px solid var(--border);
+    }
+
+    /* A prominent divider for a standalone settings section (currently just
+       "Keyboard Shortcuts") — visually distinct from the small per-field
+       11px labels used everywhere else in this modal. */
+    .settings-section-title {
+      display: block;
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--text-primary);
+      margin: 20px 0 10px;
+      padding-top: 14px;
+      border-top: 1px solid var(--border);
+    }
+
     /* ── Emoji Picker ────────────────────────────────────────────── */
     #btn-emoji {
       padding: 7px 10px;
@@ -3009,15 +3078,6 @@
       margin-bottom: 8px;
     }
 
-    /* ── Mic Sensitivity Slider & Meter ─────────────────────── */
-    #mic-sensitivity-slider-wrap {
-      background: var(--bg-input);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 12px;
-      margin-bottom: 14px;
-    }
-
     .sensitivity-slider-row {
       display: flex;
       align-items: center;
@@ -3069,9 +3129,9 @@
     }
 
     .mic-level-meter {
-      height: 4px;
+      height: 10px;
       background: var(--bg-tertiary);
-      border-radius: 2px;
+      border-radius: 5px;
       overflow: hidden;
       margin-top: 10px;
     }
@@ -3080,7 +3140,7 @@
       height: 100%;
       width: 0%;
       background: linear-gradient(90deg, var(--accent), #4caf50);
-      border-radius: 2px;
+      border-radius: 5px;
       transition: width 0.05s linear;
     }
 
@@ -3632,10 +3692,16 @@
 
         <button class="btn btn-create" id="btn-save-devices" style="width:100%; margin-bottom:14px; display:none;">💾 Save Audio Devices</button>
 
-        <label style="margin-bottom:4px; display:block;">Voice Input Mode</label>
-        <div style="display:flex; gap:8px; margin-bottom:14px;">
-          <button class="btn" id="btn-voice-activation" style="flex:1; font-size:11px; padding:5px 0; border:1px solid var(--border); background:var(--bg-input); color:var(--text-secondary); border-radius:var(--radius); cursor:pointer; transition:all 0.15s;">🎤 Voice Activation</button>
-          <button class="btn" id="btn-ptt-mode" style="flex:1; font-size:11px; padding:5px 0; border:1px solid var(--border); background:var(--bg-input); color:var(--text-secondary); border-radius:var(--radius); cursor:pointer; transition:all 0.15s;">🔘 Push-To-Talk</button>
+        <!-- Mic Volume (PRD 13.3) -->
+        <div id="mic-volume-wrap" style="margin-bottom:14px;">
+          <label style="display:block; margin-bottom:6px;">Microphone Volume</label>
+          <div class="sensitivity-slider-row">
+            <input type="range" id="mic-volume-slider" min="0" max="200" value="100" step="5">
+            <span class="sensitivity-value" id="mic-volume-value">100%</span>
+          </div>
+          <div class="sensitivity-labels">
+            <span>Scales your outgoing mic signal — 100% is your unprocessed input level</span>
+          </div>
         </div>
 
         <!-- Microphone Level Meter — always visible, independent of the noise
@@ -3649,33 +3715,38 @@
           </div>
         </div>
 
-        <!-- Self-Hear Mic Monitor (PRD 14.10) -->
-        <div class="toggle-row" id="self-hear-toggle-row" style="margin-bottom:14px;">
-          <div class="toggle-row-info">
-            <div class="toggle-row-icon">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></svg>
+        <!-- Self-Hear Mic Monitor (PRD 14.10) — switch + slider unified into
+             one card that subtly expands to reveal the slider while enabled,
+             rather than two visually disconnected boxes. -->
+        <div class="settings-toggle-card">
+          <div class="toggle-row" id="self-hear-toggle-row">
+            <div class="toggle-row-info">
+              <div class="toggle-row-icon">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></svg>
+              </div>
+              <div class="toggle-row-text">
+                <span class="toggle-row-title">Hear Yourself</span>
+                <span class="toggle-row-desc">Temporarily monitor your own mic with every adjustment above applied live — mutes &amp; deafens you in a voice channel while active</span>
+              </div>
             </div>
-            <div class="toggle-row-text">
-              <span class="toggle-row-title">Hear Yourself</span>
-              <span class="toggle-row-desc">Temporarily monitor your own mic with every adjustment above applied live — mutes &amp; deafens you in a voice channel while active</span>
-            </div>
+            <label class="toggle-switch">
+              <input type="checkbox" id="chk-self-hear">
+              <span class="toggle-slider"></span>
+            </label>
           </div>
-          <label class="toggle-switch">
-            <input type="checkbox" id="chk-self-hear">
-            <span class="toggle-slider"></span>
-          </label>
-        </div>
-
-        <div id="self-hear-volume-wrap" style="display:none; margin-bottom:14px;">
-          <label style="display:block; margin-bottom:6px;">Self-Hear Volume</label>
-          <div class="sensitivity-slider-row">
-            <input type="range" id="self-hear-volume-slider" min="0" max="100" value="100" step="5">
-            <span class="sensitivity-value" id="self-hear-volume-value">100%</span>
+          <div class="settings-toggle-card-expand" id="self-hear-volume-wrap">
+            <div class="settings-toggle-card-expand-inner">
+              <label style="display:block; margin-bottom:6px;">Self-Hear Volume</label>
+              <div class="sensitivity-slider-row">
+                <input type="range" id="self-hear-volume-slider" min="0" max="100" value="100" step="5">
+                <span class="sensitivity-value" id="self-hear-volume-value">100%</span>
+              </div>
+            </div>
           </div>
         </div>
 
         <!-- Mic Sensitivity / Noise Gate -->
-        <div id="mic-sensitivity-section">
+        <div class="settings-toggle-card" id="mic-sensitivity-section">
           <div class="toggle-row" id="mic-sensitivity-toggle-row">
             <div class="toggle-row-info">
               <div class="toggle-row-icon">
@@ -3692,60 +3763,60 @@
             </label>
           </div>
 
-          <div id="mic-sensitivity-slider-wrap" style="display:none;">
-            <div class="sensitivity-slider-row">
-              <input type="range" id="mic-sensitivity-slider" min="-60" max="0" value="-40" step="1">
-              <span class="sensitivity-value" id="mic-sensitivity-value">-40 dB</span>
+          <div class="settings-toggle-card-expand" id="mic-sensitivity-slider-wrap">
+            <div class="settings-toggle-card-expand-inner">
+              <div class="sensitivity-slider-row">
+                <input type="range" id="mic-sensitivity-slider" min="-60" max="0" value="-40" step="1">
+                <span class="sensitivity-value" id="mic-sensitivity-value">-40 dB</span>
+              </div>
+              <div class="sensitivity-labels">
+                <span>-60 dB (more sensitive)</span>
+                <span>0 dB (less sensitive)</span>
+              </div>
             </div>
-            <div class="sensitivity-labels">
-              <span>-60 dB (more sensitive)</span>
-              <span>0 dB (less sensitive)</span>
-            </div>
-          </div>
-        </div>
-
-        <!-- Mic Volume (PRD 13.3) -->
-        <div id="mic-volume-wrap" style="margin-bottom:14px; margin-top:14px;">
-          <label style="display:block; margin-bottom:6px;">Microphone Volume</label>
-          <div class="sensitivity-slider-row">
-            <input type="range" id="mic-volume-slider" min="0" max="200" value="100" step="5">
-            <span class="sensitivity-value" id="mic-volume-value">100%</span>
-          </div>
-          <div class="sensitivity-labels">
-            <span>Scales your outgoing mic signal — 100% is your unprocessed input level</span>
           </div>
         </div>
 
         <!-- Noise Cancelling (PRD 13.1) -->
-        <div class="toggle-row" id="noise-cancel-toggle-row" style="margin-bottom:14px;">
-          <div class="toggle-row-info">
-            <div class="toggle-row-icon">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        <div class="settings-toggle-card">
+          <div class="toggle-row" id="noise-cancel-toggle-row">
+            <div class="toggle-row-info">
+              <div class="toggle-row-icon">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+              </div>
+              <div class="toggle-row-text">
+                <span class="toggle-row-title">Noise Cancelling</span>
+                <span class="toggle-row-desc">AI-powered suppression of keyboard clicks, fan noise, and other background sound</span>
+              </div>
             </div>
-            <div class="toggle-row-text">
-              <span class="toggle-row-title">Noise Cancelling</span>
-              <span class="toggle-row-desc">AI-powered suppression of keyboard clicks, fan noise, and other background sound</span>
+            <label class="toggle-switch">
+              <input type="checkbox" id="chk-noise-cancel">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+
+          <!-- Noise Cancelling Strength (PRD 14.12) -->
+          <div class="settings-toggle-card-expand" id="noise-cancel-strength-wrap">
+            <div class="settings-toggle-card-expand-inner">
+              <label style="display:block; margin-bottom:6px;">Noise Cancelling Strength</label>
+              <div class="sensitivity-slider-row">
+                <input type="range" id="noise-cancel-strength-slider" min="0" max="100" value="60" step="5">
+                <span class="sensitivity-value" id="noise-cancel-strength-value">60</span>
+              </div>
+              <div class="sensitivity-labels">
+                <span>Lower if your voice fades during quiet moments — higher in noisier environments</span>
+              </div>
             </div>
           </div>
-          <label class="toggle-switch">
-            <input type="checkbox" id="chk-noise-cancel">
-            <span class="toggle-slider"></span>
-          </label>
         </div>
 
-        <!-- Noise Cancelling Strength (PRD 14.12) -->
-        <div id="noise-cancel-strength-wrap" style="display:none; margin-bottom:14px;">
-          <label style="display:block; margin-bottom:6px;">Noise Cancelling Strength</label>
-          <div class="sensitivity-slider-row">
-            <input type="range" id="noise-cancel-strength-slider" min="0" max="100" value="60" step="5">
-            <span class="sensitivity-value" id="noise-cancel-strength-value">60</span>
-          </div>
-          <div class="sensitivity-labels">
-            <span>Lower if your voice fades during quiet moments — higher in noisier environments</span>
-          </div>
+        <label style="margin-bottom:4px; display:block;">Voice Input Mode</label>
+        <div style="display:flex; gap:8px; margin-bottom:14px;">
+          <button class="btn" id="btn-voice-activation" style="flex:1; font-size:11px; padding:5px 0; border:1px solid var(--border); background:var(--bg-input); color:var(--text-secondary); border-radius:var(--radius); cursor:pointer; transition:all 0.15s;">🎤 Voice Activation</button>
+          <button class="btn" id="btn-ptt-mode" style="flex:1; font-size:11px; padding:5px 0; border:1px solid var(--border); background:var(--bg-input); color:var(--text-secondary); border-radius:var(--radius); cursor:pointer; transition:all 0.15s;">🔘 Push-To-Talk</button>
         </div>
 
-        <label style="margin-bottom:8px; display:block; margin-top:6px;">Keyboard Shortcuts</label>
+        <label class="settings-section-title">Keyboard Shortcuts</label>
         <div class="shortcut-row">
           <label>Push-to-Talk</label>
           <input type="text" class="shortcut-input" id="shortcut-ptt" readonly placeholder="Not set">
