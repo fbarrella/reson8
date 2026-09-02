@@ -712,7 +712,14 @@ interface Reson8Api {
     ): Promise<{ success: boolean; channelId?: string; error?: string }>;
     updateChannel(
         channelId: string,
-        changes: { name?: string; position?: number; isNsfw?: boolean },
+        changes: {
+            name?: string;
+            position?: number;
+            isNsfw?: boolean;
+            iconEmoji?: string | null;
+            iconUrl?: string | null;
+            iconPublicId?: string | null;
+        },
     ): Promise<{ success: boolean; error?: string }>;
     reorderChannels(
         parentId: string | null,
@@ -759,6 +766,7 @@ interface Reson8Api {
     toggleReaction(messageId: string, emoji: string, isDm: boolean): Promise<{ success: boolean; error?: string }>;
     uploadEmojiFile(fileBuffer: ArrayBuffer, fileName: string, mimeType: string): Promise<{ url: string; publicId?: string }>;
     uploadAnimatedEmojiFile(fileBuffer: ArrayBuffer, fileName: string, mimeType: string): Promise<{ url: string; publicId?: string }>;
+    uploadChannelIcon(fileBuffer: ArrayBuffer, fileName: string, mimeType: string): Promise<{ url: string; publicId?: string }>;
     createCustomEmoji(name: string, imageUrl: string, imagePublicId?: string, isAnimated?: boolean): Promise<{ success: boolean; emojiId?: string; error?: string }>;
     getApprovedEmojis(): Promise<{ success: boolean; emojis?: CustomEmoji[]; error?: string }>;
     getPendingEmojis(): Promise<{ success: boolean; emojis?: CustomEmoji[]; error?: string }>;
@@ -1265,6 +1273,44 @@ const ANIMATED_EMOJI_MAX_UPLOAD_SIZE = 2 * 1024 * 1024; // 2MB, uploaded as-is
 let emojiAnimatedFile: File | null = null;
 let emojiAnimatedPreviewObjectUrl: string | null = null;
 
+// ── Channel Icon Modal (PRD 14.7, text channels only) ───────────────────────
+const channelIconModal = document.getElementById("channel-icon-modal") as HTMLDivElement;
+const channelIconStepSelect = document.getElementById("channel-icon-step-select") as HTMLDivElement;
+const channelIconStepEmoji = document.getElementById("channel-icon-step-emoji") as HTMLDivElement;
+const channelIconStepCrop = document.getElementById("channel-icon-step-crop") as HTMLDivElement;
+const channelIconEmojiGrid = document.getElementById("channel-icon-emoji-grid") as HTMLDivElement;
+const channelIconFileInput = document.getElementById("channel-icon-file-input") as HTMLInputElement;
+const btnChannelIconChooseEmoji = document.getElementById("btn-channel-icon-choose-emoji") as HTMLButtonElement;
+const btnChannelIconChooseImage = document.getElementById("btn-channel-icon-choose-image") as HTMLButtonElement;
+const btnChannelIconReset = document.getElementById("btn-channel-icon-reset") as HTMLButtonElement;
+const btnChannelIconCancelSelect = document.getElementById("btn-channel-icon-cancel-select") as HTMLButtonElement;
+const btnChannelIconBackFromEmoji = document.getElementById("btn-channel-icon-back-from-emoji") as HTMLButtonElement;
+const channelIconCropViewport = document.getElementById("channel-icon-crop-viewport") as HTMLDivElement;
+const channelIconCropImg = document.getElementById("channel-icon-crop-img") as HTMLImageElement;
+const channelIconCropZoom = document.getElementById("channel-icon-crop-zoom") as HTMLInputElement;
+const btnChannelIconUploadCancel = document.getElementById("btn-channel-icon-upload-cancel") as HTMLButtonElement;
+const btnChannelIconUploadConfirm = document.getElementById("btn-channel-icon-upload-confirm") as HTMLButtonElement;
+
+const CHANNEL_ICON_CROP_VIEWPORT_SIZE = 220;
+const CHANNEL_ICON_MAX_UPLOAD_SIZE = 512 * 1024; // 512KB, pre-crop (PRD 14.7's own cap, not the emoji one)
+const CHANNEL_ICON_ALLOWED_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+
+let pendingChannelIconId: string | null = null;
+
+// State for the channel-icon crop tool — a separate set of variables from
+// the emoji crop tool's own (duplicated, not shared, per this feature's
+// design decision), since both modals could in principle be reasoned about
+// independently and neither is ever open while the other is mid-crop.
+let channelIconCropNaturalWidth = 0;
+let channelIconCropNaturalHeight = 0;
+let channelIconCropBaseScale = 1;
+let channelIconCropZoomFactor = 1;
+let channelIconCropOffsetX = 0;
+let channelIconCropOffsetY = 0;
+let channelIconCropObjectUrl: string | null = null;
+let channelIconCropDragging = false;
+let channelIconCropDragStart = { x: 0, y: 0, offsetX: 0, offsetY: 0 };
+
 // State for the crop tool
 let emojiCropNaturalWidth = 0;
 let emojiCropNaturalHeight = 0;
@@ -1417,6 +1463,11 @@ interface TreeNode {
     parentId: string | null;
     isNsfw?: boolean;
     hasUnread?: boolean;
+    /** Custom tree icon (PRD 14.7, text channels only) — mutually
+     *  exclusive with `iconUrl`; falls back to the default 💬 icon when
+     *  both are null/undefined. */
+    iconEmoji?: string | null;
+    iconUrl?: string | null;
     children: TreeNode[];
     occupants: { userId: string; nickname: string; isMuted?: boolean; isDeafened?: boolean; isSharingScreen?: boolean }[];
 }
@@ -1566,7 +1617,23 @@ function renderChannel(node: TreeNode, siblings: TreeNode[]): HTMLDivElement {
 
     const isVoice = node.type === "VOICE";
     const iconClass = isVoice ? "voice" : "text";
-    const icon = isVoice ? "🔊" : "💬";
+
+    // Custom text-channel icon (PRD 14.7): an uploaded image takes priority
+    // over a custom emoji, which takes priority over the default 💬 — the
+    // two are mutually exclusive server-side, so at most one is ever set.
+    let icon = isVoice ? "🔊" : "💬";
+    let iconIsImage = false;
+    if (!isVoice) {
+        if (node.iconUrl) {
+            icon = node.iconUrl;
+            iconIsImage = true;
+        } else if (node.iconEmoji) {
+            icon = node.iconEmoji;
+        }
+    }
+    const iconHtml = iconIsImage
+        ? `<span class="ch-icon ${iconClass} custom-image"><img src="${escapeHtml(icon)}" alt=""></span>`
+        : `<span class="ch-icon ${iconClass}">${icon}</span>`;
 
     const count = node.occupants.length;
     const countBadge = count > 0 ? `<span class="ch-count">${count}</span>` : "";
@@ -1596,7 +1663,7 @@ function renderChannel(node: TreeNode, siblings: TreeNode[]): HTMLDivElement {
     const unreadDot = !isVoice && unreadChannelIds.has(node.id) ? `<span class="unread-dot"></span>` : "";
 
     channel.innerHTML = `
-        <span class="ch-icon ${iconClass}">${icon}</span>
+        ${iconHtml}
         <span class="ch-name">${escapeHtml(node.name)}</span>
         ${unreadDot}
         ${nsfwBadge}
@@ -1638,6 +1705,7 @@ function attachChannelContextMenu(el: HTMLElement, node: TreeNode): void {
         menu.innerHTML = `
             <button class="channel-ctx-menu-item ctx-rename-btn">✏️ Rename</button>
             <button class="channel-ctx-menu-item ctx-move-btn">📁 Move to…</button>
+            ${!isVoice ? `<button class="channel-ctx-menu-item ctx-icon-btn">🖼️ Set Icon</button>` : ""}
             ${!isVoice ? `<button class="channel-ctx-menu-item ctx-nsfw-toggle-btn">🔞 ${node.isNsfw ? "Unmark" : "Mark"} as NSFW</button>` : ""}
             <button class="ctx-delete-channel-btn">🗑️ Delete Channel</button>
         `;
@@ -1650,6 +1718,11 @@ function attachChannelContextMenu(el: HTMLElement, node: TreeNode): void {
         menu.querySelector(".ctx-move-btn")?.addEventListener("click", () => {
             menu.remove();
             showMoveModal(node.id, node.name);
+        });
+
+        menu.querySelector(".ctx-icon-btn")?.addEventListener("click", () => {
+            menu.remove();
+            showChannelIconModal(node.id);
         });
 
         menu.querySelector(".ctx-nsfw-toggle-btn")?.addEventListener("click", async () => {
@@ -6168,6 +6241,241 @@ btnEmojiAnimatedUploadConfirm.addEventListener("click", async () => {
         log(`Emoji upload failed: ${err.message}`, "error");
     } finally {
         btnEmojiAnimatedUploadConfirm.disabled = false;
+    }
+});
+
+// ── Channel Icon Modal (PRD 14.7, text channels only) ───────────────────────
+//
+// Same "cover + pan + zoom" cropper as the custom-emoji upload tool above —
+// duplicated rather than shared (this codebase's convention: duplication
+// over a premature shared abstraction for what's only the second use of
+// this exact pattern) — plus a "choose a default emoji instead" step that
+// reuses the full built-in 552-entry emoji set (not a curated subset).
+
+function showChannelIconModal(channelId: string): void {
+    pendingChannelIconId = channelId;
+    channelIconStepSelect.style.display = "block";
+    channelIconStepEmoji.style.display = "none";
+    channelIconStepCrop.style.display = "none";
+    channelIconModal.classList.add("visible");
+}
+
+function closeChannelIconModal(): void {
+    channelIconModal.classList.remove("visible");
+    pendingChannelIconId = null;
+    if (channelIconCropObjectUrl) {
+        URL.revokeObjectURL(channelIconCropObjectUrl);
+        channelIconCropObjectUrl = null;
+    }
+    channelIconCropImg.removeAttribute("src");
+    channelIconCropNaturalWidth = 0;
+    channelIconCropNaturalHeight = 0;
+}
+
+/** Builds a simple category-grouped emoji grid inside the modal — a
+ *  smaller, self-contained instance rather than reusing the chat input's
+ *  floating emoji-picker widget, which is purpose-built for that different
+ *  UI context (search, custom-emoji tab, cursor insertion). */
+function renderChannelIconEmojiGrid(): void {
+    channelIconEmojiGrid.innerHTML = "";
+
+    for (const cat of EMOJI_CATEGORIES) {
+        const entries = EMOJI_DATA.filter((e) => e.category === cat);
+        if (entries.length === 0) continue;
+
+        const header = document.createElement("div");
+        header.className = "emoji-category-header";
+        header.textContent = `${EMOJI_CATEGORY_ICONS[cat] ?? ""} ${cat}`;
+        channelIconEmojiGrid.appendChild(header);
+
+        const grid = document.createElement("div");
+        grid.className = "emoji-grid";
+        for (const entry of entries) {
+            const item = document.createElement("div");
+            item.className = "emoji-item";
+            item.textContent = entry.emoji;
+            item.title = entry.name;
+            item.addEventListener("click", () => selectChannelIconEmoji(entry.emoji));
+            grid.appendChild(item);
+        }
+        channelIconEmojiGrid.appendChild(grid);
+    }
+}
+
+async function selectChannelIconEmoji(emoji: string): Promise<void> {
+    if (!pendingChannelIconId) return;
+    const channelId = pendingChannelIconId;
+    closeChannelIconModal();
+
+    const result = await api.updateChannel(channelId, { iconEmoji: emoji });
+    if (result.success) {
+        log("Channel icon updated", "success");
+    } else {
+        log(`Failed to update channel icon: ${result.error}`, "error");
+        if (result.error && /permission|denied/i.test(result.error)) SoundAlert.play("insufficient_perms.mp3");
+    }
+}
+
+btnChannelIconChooseEmoji.addEventListener("click", () => {
+    channelIconStepSelect.style.display = "none";
+    channelIconStepEmoji.style.display = "block";
+    renderChannelIconEmojiGrid();
+});
+
+btnChannelIconBackFromEmoji.addEventListener("click", () => {
+    channelIconStepEmoji.style.display = "none";
+    channelIconStepSelect.style.display = "block";
+});
+
+btnChannelIconChooseImage.addEventListener("click", () => channelIconFileInput.click());
+btnChannelIconCancelSelect.addEventListener("click", () => closeChannelIconModal());
+btnChannelIconUploadCancel.addEventListener("click", () => closeChannelIconModal());
+
+channelIconModal.addEventListener("click", (e) => {
+    if (e.target === channelIconModal) closeChannelIconModal();
+});
+
+btnChannelIconReset.addEventListener("click", async () => {
+    if (!pendingChannelIconId) return;
+    const channelId = pendingChannelIconId;
+    closeChannelIconModal();
+
+    const result = await api.updateChannel(channelId, { iconEmoji: null });
+    if (result.success) {
+        log("Channel icon reset to default", "success");
+    } else {
+        log(`Failed to reset channel icon: ${result.error}`, "error");
+        if (result.error && /permission|denied/i.test(result.error)) SoundAlert.play("insufficient_perms.mp3");
+    }
+});
+
+channelIconFileInput.addEventListener("change", () => {
+    const file = channelIconFileInput.files?.[0];
+    channelIconFileInput.value = ""; // allow re-selecting the same file later
+    if (!file) return;
+
+    if (file.size > CHANNEL_ICON_MAX_UPLOAD_SIZE) {
+        log(`Image too large (max ${Math.round(CHANNEL_ICON_MAX_UPLOAD_SIZE / 1024)}KB)`, "error");
+        return;
+    }
+    if (!CHANNEL_ICON_ALLOWED_TYPES.has(file.type)) {
+        log("Unsupported image type", "error");
+        return;
+    }
+
+    if (channelIconCropObjectUrl) URL.revokeObjectURL(channelIconCropObjectUrl);
+    channelIconCropObjectUrl = URL.createObjectURL(file);
+    channelIconCropImg.src = channelIconCropObjectUrl;
+});
+
+function applyChannelIconCropTransform(): void {
+    const scale = channelIconCropBaseScale * channelIconCropZoomFactor;
+    channelIconCropImg.style.width = `${channelIconCropNaturalWidth}px`;
+    channelIconCropImg.style.height = `${channelIconCropNaturalHeight}px`;
+    channelIconCropImg.style.transform = `translate(${channelIconCropOffsetX}px, ${channelIconCropOffsetY}px) scale(${scale})`;
+}
+
+/** Keeps the image fully covering the viewport — offsets can't drift so far that a gap would show. */
+function clampChannelIconCropOffsets(): void {
+    const scale = channelIconCropBaseScale * channelIconCropZoomFactor;
+    const displayedW = channelIconCropNaturalWidth * scale;
+    const displayedH = channelIconCropNaturalHeight * scale;
+    const minX = CHANNEL_ICON_CROP_VIEWPORT_SIZE - displayedW;
+    const minY = CHANNEL_ICON_CROP_VIEWPORT_SIZE - displayedH;
+    channelIconCropOffsetX = Math.min(0, Math.max(minX, channelIconCropOffsetX));
+    channelIconCropOffsetY = Math.min(0, Math.max(minY, channelIconCropOffsetY));
+}
+
+channelIconCropImg.addEventListener("load", () => {
+    channelIconCropNaturalWidth = channelIconCropImg.naturalWidth;
+    channelIconCropNaturalHeight = channelIconCropImg.naturalHeight;
+    if (!channelIconCropNaturalWidth || !channelIconCropNaturalHeight) return;
+
+    channelIconCropBaseScale = Math.max(
+        CHANNEL_ICON_CROP_VIEWPORT_SIZE / channelIconCropNaturalWidth,
+        CHANNEL_ICON_CROP_VIEWPORT_SIZE / channelIconCropNaturalHeight,
+    );
+    channelIconCropZoomFactor = 1;
+    channelIconCropZoom.value = "1";
+
+    const displayedW = channelIconCropNaturalWidth * channelIconCropBaseScale;
+    const displayedH = channelIconCropNaturalHeight * channelIconCropBaseScale;
+    channelIconCropOffsetX = (CHANNEL_ICON_CROP_VIEWPORT_SIZE - displayedW) / 2;
+    channelIconCropOffsetY = (CHANNEL_ICON_CROP_VIEWPORT_SIZE - displayedH) / 2;
+    applyChannelIconCropTransform();
+
+    channelIconStepSelect.style.display = "none";
+    channelIconStepCrop.style.display = "block";
+});
+
+channelIconCropViewport.addEventListener("mousedown", (e) => {
+    channelIconCropDragging = true;
+    channelIconCropViewport.classList.add("dragging");
+    channelIconCropDragStart = { x: e.clientX, y: e.clientY, offsetX: channelIconCropOffsetX, offsetY: channelIconCropOffsetY };
+    e.preventDefault();
+});
+
+document.addEventListener("mousemove", (e) => {
+    if (!channelIconCropDragging) return;
+    channelIconCropOffsetX = channelIconCropDragStart.offsetX + (e.clientX - channelIconCropDragStart.x);
+    channelIconCropOffsetY = channelIconCropDragStart.offsetY + (e.clientY - channelIconCropDragStart.y);
+    clampChannelIconCropOffsets();
+    applyChannelIconCropTransform();
+});
+
+document.addEventListener("mouseup", () => {
+    if (channelIconCropDragging) {
+        channelIconCropDragging = false;
+        channelIconCropViewport.classList.remove("dragging");
+    }
+});
+
+channelIconCropZoom.addEventListener("input", () => {
+    channelIconCropZoomFactor = parseFloat(channelIconCropZoom.value);
+    clampChannelIconCropOffsets();
+    applyChannelIconCropTransform();
+});
+
+btnChannelIconUploadConfirm.addEventListener("click", async () => {
+    if (!pendingChannelIconId) return;
+    if (!channelIconCropNaturalWidth || !channelIconCropNaturalHeight) return;
+    const channelId = pendingChannelIconId;
+
+    btnChannelIconUploadConfirm.disabled = true;
+    try {
+        const scale = channelIconCropBaseScale * channelIconCropZoomFactor;
+        const srcX = -channelIconCropOffsetX / scale;
+        const srcY = -channelIconCropOffsetY / scale;
+        const srcSize = CHANNEL_ICON_CROP_VIEWPORT_SIZE / scale;
+
+        const canvas = document.createElement("canvas");
+        canvas.width = 128;
+        canvas.height = 128;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) throw new Error("Canvas not supported");
+        ctx.drawImage(channelIconCropImg, srcX, srcY, srcSize, srcSize, 0, 0, 128, 128);
+
+        const blob: Blob | null = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+        if (!blob) throw new Error("Failed to crop image");
+
+        const buffer = await blob.arrayBuffer();
+        const uploadResult = await api.uploadChannelIcon(buffer, "channel-icon.png", "image/png");
+        const updateResult = await api.updateChannel(channelId, {
+            iconUrl: uploadResult.url,
+            iconPublicId: uploadResult.publicId ?? null,
+        });
+
+        if (updateResult.success) {
+            log("Channel icon updated", "success");
+            closeChannelIconModal();
+        } else {
+            log(`Failed to update channel icon: ${updateResult.error}`, "error");
+            if (updateResult.error && /permission|denied/i.test(updateResult.error)) SoundAlert.play("insufficient_perms.mp3");
+        }
+    } catch (err: any) {
+        log(`Channel icon upload failed: ${err.message}`, "error");
+    } finally {
+        btnChannelIconUploadConfirm.disabled = false;
     }
 });
 

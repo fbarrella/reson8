@@ -8,7 +8,10 @@
  * POST /api/upload/emoji-animated — animated GIF custom emoji (PRD 13.13),
  *                                   uploaded as-is with no crop/resize, up
  *                                   to 2MB.
- * All three accept multipart form data with a single image file and support
+ * POST /api/upload/channel-icon   — custom text-channel tree icons (PRD
+ *                                   14.7), already cropped client-side to
+ *                                   128x128, up to 512KB.
+ * All four accept multipart form data with a single image file and support
  * the same dual storage backend:
  *   1. Local filesystem (default) — saves to ./uploads/
  *   2. Cloudinary CDN — activated when CLOUDINARY_* env vars are present.
@@ -188,6 +191,20 @@ export async function registerUploadRoute(app: FastifyInstance): Promise<void> {
             await handleUpload(app, request, reply, MAX_ANIMATED_EMOJI_FILE_SIZE, ANIMATED_EMOJI_MIME_TYPES);
         } catch (err) {
             app.log.error({ err }, "Error in /api/upload/emoji-animated");
+            reply.status(500).send({ error: "Upload failed" });
+        }
+    });
+
+    // Custom text-channel icon (PRD 14.7) — already cropped client-side to
+    // 128x128 just like /api/upload/emoji, sharing its 512KB cap. No
+    // approval-queue gating here (unlike custom emoji): channel icons are
+    // admin-only via the UPDATE_CHANNEL socket event's own MANAGE_CHANNELS
+    // check, so this endpoint only needs to accept and store the file.
+    app.post("/api/upload/channel-icon", async (request, reply) => {
+        try {
+            await handleUpload(app, request, reply, MAX_EMOJI_FILE_SIZE);
+        } catch (err) {
+            app.log.error({ err }, "Error in /api/upload/channel-icon");
             reply.status(500).send({ error: "Upload failed" });
         }
     });

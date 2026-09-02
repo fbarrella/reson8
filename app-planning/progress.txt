@@ -927,3 +927,113 @@ Feature/Fix: PRD 14.5 — Enable re-parenting an existing channel
 
   Next Step: PRD 14.7 (custom icons for text channels) — pending user
   confirmation to proceed.
+
+--- Entry: 02/09/2026 ---
+
+Feature/Fix: PRD 14.7 — Custom icons for text channels (emoji or
+uploaded/cropped image) (Phase 14, item 7)
+
+  Problem: Text channels always showed the hardcoded 💬 emoji in the
+  channel tree, with no way to customize it per channel.
+
+  Solution: Admins can now set a custom icon for any text channel via a
+  new "Set Icon" context-menu item — either picking a default emoji from
+  the full existing 552-entry emoji set, or uploading a PNG/JPEG/GIF/WebP
+  image (max 512KB) through a cover+pan+zoom crop tool that outputs a
+  128x128 square, exactly like the existing custom-emoji upload flow.
+  Voice channels can't have icons (server- and client-enforced).
+
+  Database Changes:
+    `apps/server/prisma/schema.prisma`: added nullable
+    `Channel.iconEmoji`, `iconUrl`, `iconPublicId` (mutually exclusive —
+    emoji mode vs upload mode; `iconPublicId` is the Cloudinary
+    `public_id`, null for local-disk storage). Migration
+    `20260902024258_add_channel_icon` applied via `npx prisma migrate dev`
+    against the real dev database (Postgres/Redis already running via
+    docker compose).
+
+  Shared Types Changes:
+    - `packages/shared-types/src/models.ts`: `IChannel` gained
+      `iconEmoji`/`iconUrl` (`iconPublicId` deliberately not exposed to
+      clients, matching how `ICustomEmoji` already omits
+      `imagePublicId` — it's a server-only Cloudinary implementation
+      detail).
+    - `packages/shared-types/src/socket-events.ts`: `UPDATE_CHANNEL`'s
+      payload gained `iconEmoji?`/`iconUrl?`/`iconPublicId?`
+      (`string | null`), documented as mutually exclusive with "both
+      null/omitted resets to default."
+
+  Server Changes:
+    - `apps/server/src/handlers/channel.handler.ts`: `UPDATE_CHANNEL` now
+      handles icon changes alongside the existing `isNsfw` handling,
+      reusing the same "look up current type, silently ignore on
+      non-TEXT channels" guard. Setting `iconEmoji` clears
+      `iconUrl`/`iconPublicId` and vice versa; sending neither (both
+      falsy) resets to default. Cleans up an orphaned previous upload via
+      the existing `deleteAttachment()` (`storage.service.ts`) whenever a
+      prior uploaded icon is replaced or cleared — never blocks the ack.
+    - `apps/server/src/handlers/connection.handler.ts`: the join-time
+      channel-tree DTO mapping now includes `iconEmoji`/`iconUrl`
+      (previously an explicit field-by-field mapping that would have
+      silently dropped the new columns).
+    - `apps/server/src/routes/upload.route.ts`: new
+      `POST /api/upload/channel-icon`, reusing the existing
+      `handleUpload()` helper and the emoji route's 512KB cap
+      (`MAX_EMOJI_FILE_SIZE`) — no new gating needed since channel icons
+      are already admin-only via `UPDATE_CHANNEL`'s `MANAGE_CHANNELS`
+      check (unlike custom emoji, which needed its own approval queue
+      since any member can upload).
+
+  Client Changes:
+    - `apps/client/src/preload.ts` + `renderer.ts` (`api` interface): new
+      `uploadChannelIcon()` method; `updateChannel()`'s type signature
+      extended to match the new payload fields.
+    - `apps/client/src/renderer/renderer.ts`: `attachChannelContextMenu()`
+      gained a "Set Icon" item (TEXT channels only, alongside the NSFW
+      toggle). New `showChannelIconModal()` and its full wiring — a
+      "choose emoji vs upload image vs reset to default" first step, an
+      emoji-grid step (iterating the existing
+      `EMOJI_DATA`/`EMOJI_CATEGORIES` directly — the full built-in set,
+      not a curated subset, in a purpose-built grid rather than
+      repurposing the chat input's floating emoji-picker widget), and a
+      crop-tool step that's a deliberate duplicate of the existing
+      custom-emoji crop tool (separate state variables, separate DOM
+      refs) per this codebase's duplication-over-premature-abstraction
+      convention. `TreeNode` gained `iconEmoji`/`iconUrl`;
+      `renderChannel()` now shows an uploaded icon (as a small `<img>`)
+      or a custom emoji ahead of the default 💬, for text channels only.
+    - `apps/client/src/renderer/index.html`: new `#channel-icon-modal`
+      (three-step shell: select / emoji grid / crop), added to the shared
+      modal-shell CSS selector list; new CSS for the crop viewport/img
+      (duplicated from the emoji crop modal's own rules) and the small
+      in-tree custom-icon `<img>`.
+
+  Key Files Modified:
+    apps/server/prisma/schema.prisma
+    apps/server/prisma/migrations/20260902024258_add_channel_icon/migration.sql (NEW)
+    packages/shared-types/src/models.ts
+    packages/shared-types/src/socket-events.ts
+    apps/server/src/handlers/channel.handler.ts
+    apps/server/src/handlers/connection.handler.ts
+    apps/server/src/routes/upload.route.ts
+    apps/client/src/preload.ts
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/renderer/index.html
+    apps/server/tsconfig.tsbuildinfo (regenerated)
+    packages/shared-types/tsconfig.tsbuildinfo (regenerated)
+
+  Verification:
+    `npx prisma migrate dev` applied cleanly against the real running dev
+    database; `npx tsc --build` in `packages/shared-types`, then
+    `npx tsc --noEmit` in both `apps/server` and `apps/client` (checked
+    with explicit exit codes) — all clean. Manual verification (set an
+    icon via emoji, then via image upload, confirm
+    crop/512KB-rejection/voice-channel-exclusion behave correctly,
+    confirm the icon renders in the tree for all connected clients,
+    confirm replacing/resetting an uploaded icon doesn't leave orphaned
+    files) is pending the user's own hands-on pass.
+
+  Next Step: this completes every feature/fix item in the Phase 14 PRD
+  except PRD 14.8-14.12 (link preview fix, settings modal height,
+  self-hear monitor, own-voice latency, noise-cancelling tuning) —
+  pending user confirmation to proceed to PRD 14.8.

@@ -66,6 +66,12 @@ export interface IChannel {
     createdAt: string;
     /** The channel's single pinned message (text channels only), or null/undefined if none. */
     pinnedMessage?: IPinnedMessage | null;
+    /** Custom tree icon (PRD 14.7, text channels only) — mutually exclusive
+     *  with `iconUrl`; falls back to the default 💬 icon when both are null. */
+    iconEmoji?: string | null;
+    /** Custom uploaded tree icon URL (PRD 14.7, text channels only) —
+     *  mutually exclusive with `iconEmoji`. */
+    iconUrl?: string | null;
 }
 
 /** A cropped preview of a text channel's pinned message. */

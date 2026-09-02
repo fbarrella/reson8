@@ -605,7 +605,14 @@ const api = {
 
     updateChannel(
         channelId: string,
-        changes: { name?: string; position?: number; isNsfw?: boolean },
+        changes: {
+            name?: string;
+            position?: number;
+            isNsfw?: boolean;
+            iconEmoji?: string | null;
+            iconUrl?: string | null;
+            iconPublicId?: string | null;
+        },
     ): Promise<{ success: boolean; error?: string }> {
         return new Promise((resolve) => {
             if (!socket?.connected) {
@@ -925,6 +932,14 @@ const api = {
         mimeType: string,
     ): Promise<{ url: string; publicId?: string }> {
         return uploadTo("/api/upload/emoji-animated", fileBuffer, fileName, mimeType);
+    },
+
+    async uploadChannelIcon(
+        fileBuffer: ArrayBuffer,
+        fileName: string,
+        mimeType: string,
+    ): Promise<{ url: string; publicId?: string }> {
+        return uploadTo("/api/upload/channel-icon", fileBuffer, fileName, mimeType);
     },
 
     // ── Image Download ───────────────────────────────────────────────────

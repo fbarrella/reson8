@@ -59,6 +59,9 @@ model Channel {
   maxUsers        Int? // null = unlimited
   isNsfw          Boolean     @default(false) // text channels only — client prompts before opening
   pinnedMessageId String? @unique // text channels only — one pinned message per channel
+  iconEmoji       String? // text channels only — custom tree icon (PRD 14.7), mutually exclusive with iconUrl
+  iconUrl         String? // text channels only — uploaded custom icon image, mutually exclusive with iconEmoji
+  iconPublicId    String? // Cloudinary public_id for iconUrl — null for local-disk storage
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

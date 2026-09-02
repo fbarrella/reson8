@@ -80,9 +80,24 @@ export interface ClientToServerEvents {
         ack: (response: { success: boolean; error?: string }) => void,
     ) => void;
 
-    /** Client requests an update to a channel's properties. */
+    /**
+     * Client requests an update to a channel's properties. `iconEmoji`/
+     * `iconUrl` (text channels only, PRD 14.7) are mutually exclusive —
+     * setting one clears the other server-side; sending either as `null`
+     * (with the other omitted) resets the channel back to its default
+     * icon. `iconPublicId` only applies alongside a non-null `iconUrl`
+     * uploaded to Cloudinary (omit/null for a local-disk upload).
+     */
     UPDATE_CHANNEL: (
-        payload: { channelId: string; name?: string; position?: number; isNsfw?: boolean },
+        payload: {
+            channelId: string;
+            name?: string;
+            position?: number;
+            isNsfw?: boolean;
+            iconEmoji?: string | null;
+            iconUrl?: string | null;
+            iconPublicId?: string | null;
+        },
         ack: (response: { success: boolean; error?: string }) => void,
     ) => void;
 
