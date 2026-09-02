@@ -1756,6 +1756,21 @@
       flex-direction: column;
     }
 
+    /* PRD 14.9 — Settings is the only one of the four modals sharing
+       .modal-content.wide (Screen Share picker, "What's New", Settings,
+       Online Users) that should have a FIXED height rather than a cap: the
+       other three are meant to size-to-content (e.g. a short "What's New"
+       post shouldn't force a tall empty box). Without this, each Settings
+       tab reflowed the whole modal's height to fit its own content, since
+       .settings-panel's flex:1 had no definite parent height to fill —
+       only a cap that a short tab's content never reached. Scoped to
+       #admin-modal specifically so the shared rule above stays untouched
+       for the other three modals. */
+    #admin-modal .modal-content.wide {
+      height: 70vh;
+      max-height: none;
+    }
+
     .admin-user-list {
       flex: 1;
       overflow-y: auto;

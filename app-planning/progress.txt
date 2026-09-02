@@ -1037,3 +1037,50 @@ uploaded/cropped image) (Phase 14, item 7)
   except PRD 14.8-14.12 (link preview fix, settings modal height,
   self-hear monitor, own-voice latency, noise-cancelling tuning) —
   pending user confirmation to proceed to PRD 14.8.
+
+--- Entry: 02/09/2026 ---
+
+Feature/Fix: PRD 14.9 — Fix the Settings modal changing height per tab
+(Phase 14, item 9)
+
+  Problem: Every Settings tab gave the modal a different height depending
+  on its own content — a short tab (e.g. About) shrunk the whole modal to
+  fit-content while a long tab (e.g. User Management's list) expanded it
+  up toward a cap, so switching tabs constantly resized the modal.
+
+  Root cause (confirmed, one CSS rule): `.modal-content.wide` sets
+  `max-height: 70vh` — a cap, not a fixed height — with
+  `display: flex; flex-direction: column`. `.settings-panel` already had
+  `flex: 1; overflow-y: auto`, but a flex child's `flex: 1` only has
+  something to fill when its flex-container parent has a definite height;
+  a max-height cap only kicks in once content overflows it, so a short
+  tab's content simply shrunk the whole modal instead of leaving empty
+  space.
+
+  Solution: `apps/client/src/renderer/index.html` — added a new, more
+  specific `#admin-modal .modal-content.wide` rule setting
+  `height: 70vh; max-height: none`, scoped only to the Settings modal
+  (`#admin-modal`). `.modal-content.wide` is shared by three other modals
+  (Screen Share source picker, "What's New", Online Users) that are meant
+  to size-to-content, so the original shared rule was left untouched —
+  only Settings gets the fixed height. With a real fixed parent height now
+  in place, `.settings-panel`'s existing `flex: 1; overflow-y: auto`
+  finally does what it always intended: a short tab shows empty space
+  below its content, a long tab scrolls internally, and the modal's outer
+  height never changes when switching tabs.
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html
+
+  Verification:
+    `npx tsc --noEmit` in `apps/client` — clean (CSS/markup-only change,
+    included for completeness). Manual verification (switch through every
+    Settings tab and confirm the modal's outer height stays fixed, confirm
+    the other three modals sharing `.modal-content.wide` are visually
+    unaffected) is pending the user's own hands-on pass.
+
+  Next Step: PRD 14.12 (AI noise cancelling too aggressive), the first of
+  the three voice-graph items in the PRD's recommended build order
+  (14.12 → 14.11 → 14.10, simplest to most complex) — pending user
+  confirmation to proceed. PRD 14.8 (link preview fix) also remains
+  available independently at any time.
