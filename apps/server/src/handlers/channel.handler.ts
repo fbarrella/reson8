@@ -287,6 +287,90 @@ export function registerChannelHandlers(
             }
         });
 
+        // ── CHANNEL_MOVED ───────────────────────────────────────────────────
+        socket.on("CHANNEL_MOVED", async (payload, ack) => {
+            try {
+                const { channelId, newParentId } = payload;
+
+                const allowed = await requirePermission(
+                    app, socket, BigInt(PermissionFlags.MANAGE_CHANNELS),
+                );
+                if (!allowed) {
+                    ack({ success: false, error: "Permission denied" });
+                    return;
+                }
+
+                const serverId = socket.data.serverId;
+                if (!serverId) {
+                    ack({ success: false, error: "Not connected to a server" });
+                    return;
+                }
+
+                if (newParentId === channelId) {
+                    ack({ success: false, error: "A channel cannot be its own parent" });
+                    return;
+                }
+
+                const channel = await app.prisma.channel.findUnique({ where: { id: channelId } });
+                if (!channel || channel.serverId !== serverId) {
+                    ack({ success: false, error: "Channel not found" });
+                    return;
+                }
+
+                if (newParentId !== null) {
+                    const newParent = await app.prisma.channel.findUnique({ where: { id: newParentId } });
+                    if (!newParent || newParent.serverId !== serverId) {
+                        ack({ success: false, error: "Target parent channel not found" });
+                        return;
+                    }
+
+                    // Cycle check: walk up from newParentId toward the root —
+                    // if this ever reaches channelId, newParentId is a
+                    // descendant of channelId, and moving channelId under it
+                    // would create a cycle.
+                    let cursor: string | null = newParentId;
+                    while (cursor !== null) {
+                        if (cursor === channelId) {
+                            ack({ success: false, error: "Cannot move a channel into its own descendant" });
+                            return;
+                        }
+                        const cursorNode: { parentId: string | null } | null = await app.prisma.channel.findUnique({
+                            where: { id: cursor },
+                            select: { parentId: true },
+                        });
+                        cursor = cursorNode?.parentId ?? null;
+                    }
+                }
+
+                // Position is always recomputed server-side (append to the
+                // end of the new parent's siblings) rather than trusting the
+                // client's newPosition — there's no UI yet for picking a
+                // specific slot on move, and computing it fresh here avoids
+                // staleness against concurrent edits. Reordering within a
+                // parent afterward is handled separately by REORDER_CHANNELS.
+                const newSiblingsCount = await app.prisma.channel.count({
+                    where: { serverId, parentId: newParentId },
+                });
+
+                await app.prisma.channel.update({
+                    where: { id: channelId },
+                    data: { parentId: newParentId, position: newSiblingsCount },
+                });
+
+                ack({ success: true });
+
+                await broadcastTreeUpdate(app, io, serverId);
+
+                app.log.info(
+                    { socketId: socket.id, channelId, newParentId },
+                    "Channel moved",
+                );
+            } catch (err) {
+                app.log.error({ err }, "Error in CHANNEL_MOVED");
+                ack({ success: false, error: "Failed to move channel" });
+            }
+        });
+
         // ── PIN_MESSAGE ─────────────────────────────────────────────────────
         socket.on("PIN_MESSAGE", async (payload, ack) => {
             try {

@@ -849,3 +849,81 @@ channel; badge non-joinable voice categories (Phase 14, item 6)
   already-declared-but-unwired `CHANNEL_MOVED` event), which extends this
   same context menu with a "Move to…" item. Pending user confirmation to
   proceed.
+
+--- Entry: 01/09/2026 ---
+
+Feature/Fix: PRD 14.5 — Enable re-parenting an existing channel
+(implements the already-declared-but-unwired `CHANNEL_MOVED` event)
+(Phase 14, item 5)
+
+  Problem: After creation, a channel could not be moved to a different
+  parent (or detached to top-level) — the only way to reorganize the tree
+  that way was deleting the channel (and its history) and recreating it
+  from scratch in the desired location.
+
+  Solution: Admins can now move an existing channel to a different parent
+  via a new "Move to…" context-menu item.
+
+  Shared Types Changes:
+    `packages/shared-types/src/socket-events.ts`: `CHANNEL_MOVED` already
+    existed in `ClientToServerEvents` (`{channelId, newParentId,
+    newPosition}`) but had zero implementation anywhere (no server
+    handler, no client emit) and no `ack` callback. Added an
+    `ack: (response: {success, error?}) => void` to match every other
+    channel-mutation event's pattern, since nothing used the old
+    fire-and-forget shape yet (confirmed via a repo-wide grep before
+    changing it).
+
+  Server Changes:
+    `apps/server/src/handlers/channel.handler.ts`: new `CHANNEL_MOVED`
+    handler, `MANAGE_CHANNELS`-gated like other channel mutations. Rejects
+    `newParentId === channelId` outright, verifies both the channel and
+    the target parent exist and belong to the caller's server, and
+    prevents cycles by walking up the parent chain from `newParentId`
+    toward the root — if that walk ever reaches `channelId`, the target is
+    a descendant of the channel being moved and the move is rejected
+    ("Cannot move a channel into its own descendant"). Position in the new
+    parent is always recomputed server-side as "append to the end of the
+    current siblings" (a fresh count query) rather than trusting the
+    client's `newPosition` field, avoiding staleness against concurrent
+    edits — reordering within a parent afterward is still handled
+    separately by the existing `REORDER_CHANNELS`. Broadcasts
+    `CHANNEL_TREE_UPDATE` on success, same as every other channel
+    mutation.
+
+  Client Changes:
+    - `apps/client/src/preload.ts`: new `moveChannel(channelId,
+      newParentId)` method emitting `CHANNEL_MOVED` (`newPosition` always
+      sent as a placeholder `0` since the server ignores it).
+    - `apps/client/src/renderer/renderer.ts`: `attachChannelContextMenu()`
+      (shared by regular channels and categories since PRD 14.6) gained a
+      "Move to…" item between Rename and the NSFW toggle. New
+      `showMoveModal()`/`populateMoveChannelSelect()` build a flattened,
+      indented parent picker (mirroring the existing channel-creation
+      parent-select pattern) that excludes the channel itself and all of
+      its descendants from the option list — filtering out choices the
+      server would reject anyway as a cycle, rather than letting the user
+      pick one only to see an error.
+    - `apps/client/src/renderer/index.html`: new `#move-channel-modal`
+      (mirrors the existing `#rename-channel-modal` shell/CSS classes,
+      just swapping the text input for a `<select>`).
+
+  Key Files Modified:
+    packages/shared-types/src/socket-events.ts
+    apps/server/src/handlers/channel.handler.ts
+    apps/client/src/preload.ts
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/renderer/index.html
+    apps/server/tsconfig.tsbuildinfo (regenerated)
+    packages/shared-types/tsconfig.tsbuildinfo (regenerated)
+
+  Verification:
+    npx tsc --build in packages/shared-types, then npx tsc --noEmit in
+    both apps/server and apps/client — all clean. Manual verification
+    (move a channel between parents, move to top-level and back, attempt
+    to move a channel into its own descendant and confirm it's rejected
+    with a clear error toast, confirm the live tree updates on all
+    connected clients) is pending the user's own hands-on pass.
+
+  Next Step: PRD 14.7 (custom icons for text channels) — pending user
+  confirmation to proceed.

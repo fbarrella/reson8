@@ -629,6 +629,21 @@ const api = {
         });
     },
 
+    moveChannel(
+        channelId: string,
+        newParentId: string | null,
+    ): Promise<{ success: boolean; error?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            // newPosition is a required field on the wire (PRD 14.5) but is
+            // always recomputed server-side — 0 is just a harmless placeholder.
+            socket.emit("CHANNEL_MOVED", { channelId, newParentId, newPosition: 0 }, resolve);
+        });
+    },
+
     deleteChannel(
         channelId: string,
     ): Promise<{ success: boolean; error?: string }> {

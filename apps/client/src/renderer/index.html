@@ -1445,6 +1445,7 @@
     #create-channel-modal,
     #delete-channel-modal,
     #rename-channel-modal,
+    #move-channel-modal,
     #nsfw-confirm-modal,
     #delete-message-modal,
     #emoji-upload-modal,
@@ -1473,6 +1474,7 @@
     #create-channel-modal.visible,
     #delete-channel-modal.visible,
     #rename-channel-modal.visible,
+    #move-channel-modal.visible,
     #nsfw-confirm-modal.visible,
     #delete-message-modal.visible,
     #emoji-upload-modal.visible,
@@ -3200,6 +3202,19 @@
       <div class="modal-actions">
         <button class="btn btn-cancel" id="btn-rename-cancel">Cancel</button>
         <button class="btn btn-create" id="btn-rename-confirm">Rename</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Move Channel Modal (PRD 14.5) ───────────────────────────────────── -->
+  <div id="move-channel-modal">
+    <div class="modal-content">
+      <h3>Move Channel</h3>
+      <label for="move-channel-select">New Parent</label>
+      <select id="move-channel-select"></select>
+      <div class="modal-actions">
+        <button class="btn btn-cancel" id="btn-move-cancel">Cancel</button>
+        <button class="btn btn-create" id="btn-move-confirm">Move</button>
       </div>
     </div>
   </div>

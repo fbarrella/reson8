@@ -48,12 +48,19 @@ export interface ClientToServerEvents {
     /** Client leaves their current channel. */
     USER_LEAVE_CHANNEL: (payload: { channelId: string }) => void;
 
-    /** Client requests a channel to be repositioned in the tree. */
-    CHANNEL_MOVED: (payload: {
-        channelId: string;
-        newParentId: string | null;
-        newPosition: number;
-    }) => void;
+    /**
+     * Client requests moving a channel to a different parent (or to
+     * top-level with `newParentId: null`) — the "Move to…" context-menu
+     * action (PRD 14.5). `newPosition` is currently ignored server-side
+     * (the channel is always appended to the end of its new parent's
+     * siblings); kept in the payload for API stability in case per-slot
+     * placement on move is added later. Reordering within a parent is
+     * handled separately by `REORDER_CHANNELS`.
+     */
+    CHANNEL_MOVED: (
+        payload: { channelId: string; newParentId: string | null; newPosition: number },
+        ack: (response: { success: boolean; error?: string }) => void,
+    ) => void;
 
     /** Client requests creation of a new channel. */
     CREATE_CHANNEL: (

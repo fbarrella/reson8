@@ -718,6 +718,7 @@ interface Reson8Api {
         parentId: string | null,
         orderedChannelIds: string[],
     ): Promise<{ success: boolean; error?: string }>;
+    moveChannel(channelId: string, newParentId: string | null): Promise<{ success: boolean; error?: string }>;
     deleteChannel(channelId: string): Promise<{ success: boolean; error?: string }>;
     sendMessage(channelId: string, content: string, attachmentUrl?: string, attachmentPublicId?: string): Promise<{ success: boolean; messageId?: string; error?: string }>;
     deleteMessage(messageId: string): Promise<{ success: boolean; error?: string }>;
@@ -1171,6 +1172,13 @@ const renameChannelInput = document.getElementById("rename-channel-input") as HT
 const btnRenameCancel = document.getElementById("btn-rename-cancel") as HTMLButtonElement;
 const btnRenameConfirm = document.getElementById("btn-rename-confirm") as HTMLButtonElement;
 let pendingRenameChannelId: string | null = null;
+
+// ── Move Channel Modal (PRD 14.5) ───────────────────────────────────────────
+const moveChannelModal = document.getElementById("move-channel-modal") as HTMLDivElement;
+const moveChannelSelect = document.getElementById("move-channel-select") as HTMLSelectElement;
+const btnMoveCancel = document.getElementById("btn-move-cancel") as HTMLButtonElement;
+const btnMoveConfirm = document.getElementById("btn-move-confirm") as HTMLButtonElement;
+let pendingMoveChannelId: string | null = null;
 
 // ── NSFW Channel Confirmation Modal (PRD 4.7) ───────────────────────────────
 const nsfwConfirmModal = document.getElementById("nsfw-confirm-modal") as HTMLDivElement;
@@ -1629,6 +1637,7 @@ function attachChannelContextMenu(el: HTMLElement, node: TreeNode): void {
 
         menu.innerHTML = `
             <button class="channel-ctx-menu-item ctx-rename-btn">✏️ Rename</button>
+            <button class="channel-ctx-menu-item ctx-move-btn">📁 Move to…</button>
             ${!isVoice ? `<button class="channel-ctx-menu-item ctx-nsfw-toggle-btn">🔞 ${node.isNsfw ? "Unmark" : "Mark"} as NSFW</button>` : ""}
             <button class="ctx-delete-channel-btn">🗑️ Delete Channel</button>
         `;
@@ -1636,6 +1645,11 @@ function attachChannelContextMenu(el: HTMLElement, node: TreeNode): void {
         menu.querySelector(".ctx-rename-btn")?.addEventListener("click", () => {
             menu.remove();
             showRenameModal(node.id, node.name);
+        });
+
+        menu.querySelector(".ctx-move-btn")?.addEventListener("click", () => {
+            menu.remove();
+            showMoveModal(node.id, node.name);
         });
 
         menu.querySelector(".ctx-nsfw-toggle-btn")?.addEventListener("click", async () => {
@@ -2297,6 +2311,83 @@ btnRenameConfirm.addEventListener("click", async () => {
         log(`Channel renamed to "${name}"`, "success");
     } else {
         log(`Failed to rename channel: ${result.error}`, "error");
+        if (result.error && /permission|denied/i.test(result.error)) SoundAlert.play("insufficient_perms.mp3");
+    }
+});
+
+// ── Move Channel Modal (PRD 14.5) ───────────────────────────────────────────
+
+/** Marks every descendant of `node` (not `node` itself) as an invalid move
+ *  target, so the picker can't offer a choice the server would reject
+ *  anyway as a cycle. */
+function collectDescendantIds(node: TreeNode, into: Set<string>): void {
+    for (const child of node.children) {
+        into.add(child.id);
+        collectDescendantIds(child, into);
+    }
+}
+
+/** Populates the "Move to…" select with every channel except the one being
+ *  moved and its own descendants (moving into either would be rejected
+ *  server-side as a no-op or a cycle — filtering them out here avoids
+ *  offering a choice that can only ever fail). */
+function populateMoveChannelSelect(tree: TreeNode[], channelId: string): void {
+    const selfNode = findTreeNode(tree, channelId);
+    const invalidIds = new Set<string>([channelId]);
+    if (selfNode) collectDescendantIds(selfNode, invalidIds);
+
+    moveChannelSelect.innerHTML = '<option value="">— None (top-level) —</option>';
+
+    const addOptions = (nodes: TreeNode[], depth: number) => {
+        for (const node of nodes) {
+            // Skip (and don't recurse into) an invalid node — it and
+            // everything beneath it are all invalid targets too.
+            if (invalidIds.has(node.id)) continue;
+
+            const indent = "  ".repeat(depth);
+            const option = document.createElement("option");
+            option.value = node.id;
+            option.textContent = `${indent}${node.name}`;
+            moveChannelSelect.appendChild(option);
+
+            if (node.children.length > 0) {
+                addOptions(node.children, depth + 1);
+            }
+        }
+    };
+    addOptions(tree, 0);
+}
+
+function showMoveModal(channelId: string, channelName: string): void {
+    pendingMoveChannelId = channelId;
+    populateMoveChannelSelect(currentTree, channelId);
+    moveChannelModal.classList.add("visible");
+}
+
+btnMoveCancel.addEventListener("click", () => {
+    moveChannelModal.classList.remove("visible");
+    pendingMoveChannelId = null;
+});
+
+moveChannelModal.addEventListener("click", (e) => {
+    if (e.target === moveChannelModal) {
+        moveChannelModal.classList.remove("visible");
+        pendingMoveChannelId = null;
+    }
+});
+
+btnMoveConfirm.addEventListener("click", async () => {
+    if (!pendingMoveChannelId) return;
+    const channelId = pendingMoveChannelId;
+    const newParentId = moveChannelSelect.value || null;
+    moveChannelModal.classList.remove("visible");
+    pendingMoveChannelId = null;
+
+    const result = await api.moveChannel(channelId, newParentId);
+    if (result.success) {
+        log("Channel moved", "success");
+    } else {
+        log(`Failed to move channel: ${result.error}`, "error");
         if (result.error && /permission|denied/i.test(result.error)) SoundAlert.play("insufficient_perms.mp3");
     }
 });
