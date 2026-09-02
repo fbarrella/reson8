@@ -748,3 +748,52 @@ Feature/Fix: PRD 14.3 — "Jump to Most Recent Message" floating button
 
   Next Step: PRD 14.4 (DM "wake up" sound alert intermittent bug fix) —
   pending user confirmation to proceed.
+
+--- Entry: 01/09/2026 ---
+
+Feature/Fix: PRD 14.4 — Fix the intermittent DM "wake up" sound alert not
+playing (Phase 14, item 4)
+
+  Problem: The `hey_wake_up.mp3` DM notification sound intermittently
+  failed to play. Root cause found via static code reading (no live
+  reproduction needed): in the `dm-received` handler
+  (`apps/client/src/renderer/renderer.ts`), when the DM tab didn't already
+  exist (a new or previously-closed conversation), the code called
+  `openDmTab(partnerId, partnerNick)` — which synchronously calls
+  `switchTab(tabKey)`, setting `activeTabId` to the new tab — *before* the
+  sound-alert logic further down checked
+  `const isTabActive = activeTabId === tabKey`. That check therefore always
+  evaluated to true in exactly this case, regardless of whether the user
+  was actually looking at a different tab a moment earlier. Net effect: the
+  sound was silently suppressed only in the narrow combination of (a) a
+  new/reopened DM conversation AND (b) the window being OS-focused (on some
+  other tab) — every other case (already-open tab, or window unfocused) was
+  already correct, which is exactly why it read as "intermittent" rather
+  than "always broken."
+
+  Solution: Captured `wasTabActive = activeTabId === tabKey` at the very
+  top of the handler, immediately after computing `tabKey` and before the
+  tab-exists/auto-open branch runs — i.e. before `openDmTab()`'s side
+  effect can change `activeTabId`. The sound-alert check below now uses
+  this captured `wasTabActive` instead of re-reading `activeTabId` after
+  the fact.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts
+
+  Verification:
+    npx tsc --noEmit in apps/client — clean. This was a straightforward
+    variable-capture-order bug found by reading the code directly
+    (confirmed root cause, no live reproduction needed); `SoundAlert.play`
+    itself and the ~20 other call sites that share it were untouched, and
+    the unrelated `nudge-received` handler (which has its own independent
+    `isFocused` check with no auto-switch side effect) was not touched
+    either. Manual confirmation that the sound now plays reliably in the
+    previously-failing scenario (partner DMs you while you're focused on a
+    different tab, for a new or reopened conversation) is pending the
+    user's own hands-on pass.
+
+  Next Step: PRD 14.6 (rename a parent/category channel), per the PRD's
+  recommended build order — implemented before PRD 14.5 (re-parent
+  channel) since it establishes the context-menu-on-category pattern that
+  14.5 then extends. Pending user confirmation to proceed.

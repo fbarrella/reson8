@@ -4008,6 +4008,16 @@ api.on("dm-received", async (msg: DirectMessage) => {
     const partnerNick = msg.senderNickname; // sender nickname for display purposes
     const tabKey = `dm:${partnerId}`;
 
+    // Captured before any auto-open side effect below (PRD 14.4) — when the
+    // tab doesn't exist yet, openDmTab() calls switchTab() synchronously,
+    // which flips activeTabId to this tab *before* the old code below ever
+    // checked it. That made a brand-new/reopened DM conversation always
+    // read as "already active" even when the user was looking at something
+    // else entirely — the actual root cause of the sound alert's reported
+    // intermittency (it only ever failed for this specific combination:
+    // auto-opened tab + window still focused elsewhere).
+    const wasTabActive = activeTabId === tabKey;
+
     const tab = chatTabs.get(tabKey);
     if (tab) {
         renderDmMessage(tab, msg);
@@ -4025,11 +4035,10 @@ api.on("dm-received", async (msg: DirectMessage) => {
     }
 
     // DM notification sound: play when message is from someone else AND
-    // the DM tab is not focused OR the window is not focused
+    // the DM tab was not already active OR the window is not focused
     if (msg.senderId !== myId) {
-        const isTabActive = activeTabId === tabKey;
         const isFocused = await api.isWindowFocused();
-        if (!isTabActive || !isFocused) {
+        if (!wasTabActive || !isFocused) {
             SoundAlert.play("hey_wake_up.mp3");
         }
     }
