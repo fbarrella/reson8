@@ -1414,3 +1414,71 @@ landed)
   Next Step: Phase 14 PRD status — only PRD 14.8 (link preview fix)
   remains before the full PRD is complete and ready for the version bump /
   release notes / documentation update steps.
+
+--- Entry: 02/09/2026 ---
+
+Feature/Fix: PRD 14.8 — Fix rich link preview failing on bot-walled sites
+(e.g. the OLX example link) (Phase 14, item 8)
+
+  Problem: pasting certain links (e.g. an OLX product URL) produced no
+  rich preview at all. Prior investigation (logged separately) confirmed
+  this specific case is a Cloudflare bot-management wall — a plain
+  `fetch()` gets a 403 even with a full realistic browser User-Agent, so
+  no header/plugin change could ever fix it; it's an IP-reputation/
+  TLS-fingerprint block, not a missing-metadata gap.
+
+  Solution: `apps/client/src/main.ts` — added a second-tier fallback for
+  exactly this case, using a real hidden Electron `BrowserWindow` (no new
+  dependency — Electron already ships a full Chromium) to navigate to the
+  URL like an actual browser and extract its title/OG/Twitter-card
+  metadata via `executeJavaScript`, only when the existing fast
+  `fetch()`+metascraper+OG-fallback path (`fetchLinkPreviewFast`, renamed
+  from the previous `fetchLinkPreview`, now returns null without caching
+  on any failure instead of caching immediately) comes back empty. The
+  new orchestrating `fetchLinkPreview()` tries the fast path first, falls
+  back to `fetchLinkPreviewViaHiddenWindow()` only if that returns null,
+  then caches whichever result — a real hidden `BrowserWindow`'s TLS/JA3
+  fingerprint and full JS execution get past the same bot wall a bare
+  HTTP client can't, and it doesn't expose `navigator.webdriver` the way
+  a CDP-automated browser normally would.
+
+  Edge Cases Handled:
+    - Concurrency cap: at most 2 hidden-window fallbacks run at once
+      (`activeHiddenWindowFallbacks` counter) — a full Chromium renderer
+      per invocation is genuinely expensive and must not become an
+      unbounded resource sink if several blocked links get pasted around
+      the same time; any request over the cap just skips straight to
+      returning null (no preview) rather than queuing indefinitely.
+    - Hard 15s timeout via `Promise.race` resolving to null (not
+      rejecting) on either branch, so a hung navigation can never leave
+      the caller waiting forever.
+    - `win.destroy()` always runs in a `finally` block regardless of
+      which branch of the race wins, so a timed-out or failed attempt
+      never leaks a renderer process.
+    - No architectural change was needed to how the renderer applies the
+      result — `fetchLinkPreview` was already invoked asynchronously with
+      the preview card attached whenever the promise resolves
+      (`injectLinkPreview`'s existing `.then()` pattern), so the
+      fallback's extra ~5-10s latency is absorbed by that same
+      already-async flow; the chat message itself always posts
+      immediately regardless.
+
+  Key Files Modified:
+    apps/client/src/main.ts
+
+  Verification:
+    `npx tsc --noEmit` in `apps/client` — clean. Live end-to-end test (not
+    just typechecked): ran the actual new two-tier logic in a real
+    Electron process (repo's own Electron binary, under xvfb) against the
+    exact OLX URL from the original report — confirmed the fast path gets
+    a 403 as expected, then the hidden-window fallback successfully
+    extracts real metadata (title, description, image, domain, siteName)
+    in ~7.5s total round trip. Test harness was a throwaway script in the
+    scratchpad directory, deleted after use — nothing test-related
+    committed.
+
+  Next Step: this completes every item in the Phase 14 PRD. Ready for the
+  version bump (SemVer minor — feature-additive, backward compatible) via
+  `/bump-version`, release notes in `app-planning/releases/`, and updating
+  all three `CLAUDE.md` files plus `README.md` to reflect the final Phase
+  14 feature set — pending user confirmation to proceed.
