@@ -234,6 +234,24 @@
       transition: transform 0.15s;
     }
 
+    /* A voice channel that gained a child stays non-joinable — this badge
+       makes that explicit instead of its join affordance just silently
+       disappearing (PRD 14.6). Same outlined-badge shape as .nsfw-badge,
+       muted rather than red since it's informational, not a warning. */
+    .category-voice-badge {
+      display: inline-flex;
+      align-items: center;
+      font-size: 9px;
+      font-weight: 700;
+      color: var(--text-muted);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      padding: 0 4px;
+      margin-left: 6px;
+      letter-spacing: 0.3px;
+      text-transform: none;
+    }
+
     .tree-category.collapsed .arrow {
       transform: rotate(-90deg);
     }

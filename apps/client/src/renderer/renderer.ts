@@ -1515,13 +1515,22 @@ function renderCategory(node: TreeNode, siblings: TreeNode[]): HTMLDivElement {
     const category = document.createElement("div");
     category.className = "tree-category";
 
+    // A voice channel that gains a child stays non-joinable (its own
+    // occupant/join affordance never applied once it became a parent) —
+    // previously silent about this, so this badge makes it explicit
+    // instead of the join button just quietly disappearing (PRD 14.6).
+    const voiceBadge = node.type === "VOICE"
+        ? `<span class="category-voice-badge" title="Voice channels with sub-channels can't be joined directly">Category</span>`
+        : "";
+
     const label = document.createElement("div");
     label.className = "tree-category-label";
-    label.innerHTML = `<span class="arrow">▾</span> ${escapeHtml(node.name)}`;
+    label.innerHTML = `<span class="arrow">▾</span> ${escapeHtml(node.name)}${voiceBadge}`;
     label.addEventListener("click", () => {
         category.classList.toggle("collapsed");
     });
     attachChannelDragHandlers(label, node, siblings);
+    attachChannelContextMenu(label, node);
     category.appendChild(label);
 
     const children = document.createElement("div");
@@ -1535,9 +1544,6 @@ function renderCategory(node: TreeNode, siblings: TreeNode[]): HTMLDivElement {
             renderOccupants(children, child);
         }
     }
-
-    // Also render the category itself as a joinable channel if it's a voice channel
-    // (categories can also be voice channels that users can join)
 
     category.appendChild(children);
     return category;
@@ -1592,9 +1598,25 @@ function renderChannel(node: TreeNode, siblings: TreeNode[]): HTMLDivElement {
 
     channel.addEventListener("click", () => handleChannelClick(node));
     attachChannelDragHandlers(channel, node, siblings);
+    attachChannelContextMenu(channel, node);
 
-    // Right-click → Rename / Toggle NSFW (text only) / Delete
-    channel.addEventListener("contextmenu", (e) => {
+    return channel;
+}
+
+/**
+ * Right-click → Rename / Toggle NSFW (text only) / Delete. Shared by
+ * regular channel rows (`renderChannel`) and category/parent rows
+ * (`renderCategory`, PRD 14.6) — a category previously had no context menu
+ * attached at all once a channel gained a child, even though rename
+ * already worked unconditionally server-side via `UPDATE_CHANNEL`.
+ * Permission gating is server-side only (same as before this extraction) —
+ * the menu is shown to everyone and a rejected action surfaces via the
+ * existing "insufficient_perms.mp3" pattern.
+ */
+function attachChannelContextMenu(el: HTMLElement, node: TreeNode): void {
+    const isVoice = node.type === "VOICE";
+
+    el.addEventListener("contextmenu", (e) => {
         e.preventDefault();
         e.stopPropagation();
 
@@ -1640,8 +1662,6 @@ function renderChannel(node: TreeNode, siblings: TreeNode[]): HTMLDivElement {
         };
         setTimeout(() => document.addEventListener("click", closeCtx, true), 0);
     });
-
-    return channel;
 }
 
 // Inline SVGs shown next to an occupant's name when they've muted or deafened

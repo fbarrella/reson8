@@ -797,3 +797,55 @@ playing (Phase 14, item 4)
   recommended build order — implemented before PRD 14.5 (re-parent
   channel) since it establishes the context-menu-on-category pattern that
   14.5 then extends. Pending user confirmation to proceed.
+
+--- Entry: 01/09/2026 ---
+
+Feature/Fix: PRD 14.6 — Enable renaming (and deleting) a parent/category
+channel; badge non-joinable voice categories (Phase 14, item 6)
+
+  Problem: There's no distinct category/parent `ChannelType` in the schema
+  — a "parent channel" is simply any channel (text or voice) with children.
+  `renderCategory()` only wired collapse-toggle and drag-reorder, with no
+  context menu attached at all — so once a channel gained a child,
+  Rename/NSFW-toggle/Delete became unreachable via the UI even though
+  server-side `UPDATE_CHANNEL` rename already worked unconditionally for
+  any channel ID. Separately, a dead code comment ("categories can also be
+  voice channels users can join") described intent that was never
+  implemented — a voice channel that becomes a parent silently stops being
+  joinable, with nothing telling the user why.
+
+  Solution: No schema or server change needed — this was purely a
+  client-side UI gap.
+  - `apps/client/src/renderer/renderer.ts`: extracted the existing
+    right-click context menu (Rename / Toggle NSFW for text channels /
+    Delete) out of `renderChannel()` into a new shared
+    `attachChannelContextMenu(el, node)` function, unchanged in behavior
+    (still server-permission-gated only, same `insufficient_perms.mp3`
+    pattern on rejection). `renderCategory()` now calls this on its label
+    element too, and `renderChannel()` calls it instead of its old inline
+    block.
+  - Per the user's confirmed decision, a voice channel that gains a child
+    stays non-joinable (no scope expansion into restoring occupancy) but
+    `renderCategory()` now renders an explicit "Category" badge next to its
+    name when `node.type === "VOICE"`, so the loss of join affordance is
+    visible instead of silent.
+  - Deleting a category through this newly-exposed menu item reuses the
+    existing confirmation modal (`showDeleteModal`) and the server's
+    existing `onDelete: SetNull` cascade (children get reparented to
+    top-level, not deleted) — pre-existing server behavior, unchanged.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/renderer/index.html
+
+  Verification:
+    npx tsc --noEmit in apps/client — clean. Manual verification
+    (rename/delete a category via the new context menu, confirm the
+    voice-category badge appears/looks right, confirm regular leaf
+    channels' context menu still behaves identically after the
+    extraction) is pending the user's own hands-on pass.
+
+  Next Step: PRD 14.5 (re-parent an existing channel — implementing the
+  already-declared-but-unwired `CHANNEL_MOVED` event), which extends this
+  same context menu with a "Move to…" item. Pending user confirmation to
+  proceed.
