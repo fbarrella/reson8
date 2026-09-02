@@ -1171,3 +1171,69 @@ Feature/Fix: PRD 14.12 — Fix AI noise cancelling being too aggressive
   second of the three voice-graph items in the PRD's recommended build
   order — pending user confirmation to proceed. PRD 14.8 (link preview
   fix) also remains available independently at any time.
+
+--- Entry: 02/09/2026 ---
+
+Feature/Fix: PRD 14.11 — Fix own-voice active-speaker indicator latency
+(Phase 14, item 11)
+
+  Problem: the active-speaker halo for other participants is correctly
+  server-driven (their audio genuinely arrives via the server's
+  `AudioLevelObserver`), but the local user's own halo waited on that same
+  100ms-interval `ACTIVE_SPEAKERS` broadcast too, adding a needless
+  round-trip of perceived latency for feedback about your own voice.
+
+  Solution: `apps/client/src/renderer/renderer.ts` — reused the existing
+  mic-level-meter's `requestAnimationFrame` tick loop
+  (`startMicLevelMeter()`, which already reads `api.getMicLevel()` off the
+  post-noise-cancel analyser every frame) to also derive a local "is
+  speaking" boolean via a dB threshold, and toggle the `.speaking` class
+  directly on the local user's own `.tree-occupant` element(s),
+  client-side only, with no server round trip.
+
+  Details:
+  - New `isLocalSpeaking`/`localSpeakingHoldTimer` state and
+    `localSpeakingThreshold()`/`setLocalSpeakingClass()` helpers.
+    Threshold reuses the noise gate's own `sensitivityThreshold` when the
+    gate is enabled (consistent "gate-open = speaking" behavior), falling
+    back to a fixed -50dB otherwise (matching the server
+    `AudioLevelObserver`'s own threshold). A 300ms hold before clearing
+    mirrors the server's existing per-remote-user hold-timer behavior, so
+    brief pauses between words don't flicker the halo.
+  - The `active-speakers` socket handler now skips the local user's ID
+    entirely in both its "stopped speaking" and "started speaking" loops,
+    so the server-driven path never touches the local occupant's DOM class
+    anymore — the local override owns it exclusively, avoiding a fight
+    between an instant local update and a delayed server one.
+  - `renderOccupants()`'s initial per-occupant class-seeding check now
+    also considers `isLocalSpeaking` for the local user (previously only
+    `activeSpeakers`, which never includes the local ID after the above
+    change), so a tree re-render (channel update, mute/deafen toggle,
+    etc.) can't momentarily drop the halo until the next analyser tick
+    reapplies it.
+  - Fixed a real bug found while implementing this: `closeSettingsPanel()`
+    previously stopped the mic-level-meter's RAF loop unconditionally
+    whenever Settings closed — including while still actively in a voice
+    channel — which would have frozen the new local speaking indicator
+    (and silently stopped updating the meter) the moment the user closed
+    Settings mid-call. Now gated on `!isInVoice`, so the loop only stops on
+    an actual leave-voice, matching the feature's "always reflects live
+    input while in voice" intent that a prior Phase 13 change had already
+    stated but this code path didn't actually honor.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts
+
+  Verification:
+    `npx tsc --noEmit` in `apps/client` — clean. Manual verification
+    (speak and confirm your own halo appears with no perceptible delay
+    versus before, confirm other participants' halos remain unaffected
+    and still server-driven, confirm the halo keeps working correctly
+    after closing Settings mid-call, confirm behavior is consistent
+    whether or not the noise gate is enabled) is pending the user's own
+    hands-on pass.
+
+  Next Step: PRD 14.10 (self-hear mic monitor), the last and most complex
+  of the three voice-graph items in the PRD's recommended build order —
+  pending user confirmation to proceed. PRD 14.8 (link preview fix) also
+  remains available independently at any time.

@@ -1799,7 +1799,11 @@ function renderOccupants(container: HTMLElement, node: TreeNode): void {
     for (const occ of node.occupants) {
         const el = document.createElement("div");
         el.className = "tree-occupant";
-        if (activeSpeakers.has(occ.userId)) {
+        // The local user's own speaking state lives in `isLocalSpeaking`
+        // (PRD 14.11), not `activeSpeakers` — checked here too so a tree
+        // re-render (channel update, mute/deafen toggle, etc.) doesn't
+        // momentarily drop the halo until the next analyser tick reapplies it.
+        if (activeSpeakers.has(occ.userId) || (occ.userId === myId && isLocalSpeaking)) {
             el.classList.add("speaking");
         }
         el.setAttribute("data-user-id", occ.userId);
@@ -2854,10 +2858,16 @@ api.on("user-left", (data: { userId: string }) => {
 // ── Active Speaker Indicator ──────────────────────────────────────────────
 
 api.on("active-speakers", (data: { channelId: string; speakers: string[] }) => {
+    // The local user's own halo is now driven directly by the mic-level
+    // meter's analyser tap (PRD 14.11), not this server broadcast — skip
+    // it here entirely so the two paths never fight over the same DOM
+    // element (an instant local update vs. a 100ms-delayed server one).
+    const myId = api.getInstanceId();
     const newSpeakers = new Set(data.speakers);
 
     // Users who stopped speaking: start hold timer
     for (const userId of activeSpeakers) {
+        if (userId === myId) continue;
         if (!newSpeakers.has(userId)) {
             // Only start a hold timer if there isn't one already
             if (!speakerHoldTimers.has(userId)) {
@@ -2875,6 +2885,7 @@ api.on("active-speakers", (data: { channelId: string; speakers: string[] }) => {
 
     // Users who are speaking: add immediately (cancel any pending removal)
     for (const userId of newSpeakers) {
+        if (userId === myId) continue;
         const existingTimer = speakerHoldTimers.get(userId);
         if (existingTimer) {
             clearTimeout(existingTimer);
@@ -4614,12 +4625,17 @@ btnSaveMaxMessageLength.addEventListener("click", async () => {
 
 /** Stops the mic level meter's RAF loop and (if not in a call) the preview
  *  capture it was reading from — otherwise both would keep running
- *  invisibly in the background after the modal that displays them closes. */
+ *  invisibly in the background after the modal that displays them closes.
+ *  While actually in a voice channel, the loop must keep running after
+ *  Settings closes too (PRD 14.11) — it's what now drives the local
+ *  active-speaker halo directly, independent of whether Settings is open. */
 function closeSettingsPanel(): void {
     adminModal.classList.remove("visible");
     activeShortcutSlot = null;
-    stopMicLevelMeter();
-    api.stopMicPreview();
+    if (!isInVoice) {
+        stopMicLevelMeter();
+        api.stopMicPreview();
+    }
 }
 
 btnAdminClose.addEventListener("click", () => {
@@ -6801,6 +6817,33 @@ btnCheckUpdates.addEventListener("click", async () => {
 
 // ── Mic Sensitivity / Noise Gate ──────────────────────────────────────────
 
+// Local active-speaker indicator (PRD 14.11) — the local user's own halo is
+// computed straight from this same analyser tap instead of waiting for the
+// server's 100ms-interval ACTIVE_SPEAKERS broadcast. That round trip is
+// genuinely necessary for *other* users (their audio really does arrive via
+// the server), but for the local user it adds needless perceived latency —
+// the mic-level meter's own tick loop already reads this same signal every
+// animation frame, so it's reused here rather than building a second
+// analyser loop. A 300ms hold before clearing mirrors the server's own
+// active-speaker hold behavior, so brief pauses between words don't flicker
+// the halo on/off the way a raw instantaneous threshold check would.
+let isLocalSpeaking = false;
+let localSpeakingHoldTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Reuses the noise gate's own threshold when it's enabled (consistent
+ *  "gate-open = speaking" behavior); falls back to a fixed default when the
+ *  gate is off, matching the server-side AudioLevelObserver's own -50dB
+ *  threshold (mediasoup.service.ts). */
+function localSpeakingThreshold(): number {
+    return micSensitivityEnabled ? parseInt(micSensitivitySlider.value, 10) : -50;
+}
+
+function setLocalSpeakingClass(speaking: boolean): void {
+    const myId = api.getInstanceId();
+    document.querySelectorAll(`.tree-occupant[data-user-id="${myId}"]`)
+        .forEach((el) => el.classList.toggle("speaking", speaking));
+}
+
 function startMicLevelMeter(): void {
     stopMicLevelMeter(); // clear any previous
     function tick() {
@@ -6808,6 +6851,30 @@ function startMicLevelMeter(): void {
         // Map dB range [-60, 0] to [0%, 100%]
         const pct = Math.max(0, Math.min(100, ((dB + 60) / 60) * 100));
         if (micLevelBar) micLevelBar.style.width = `${pct}%`;
+
+        // Only meaningful while actually in a voice channel — outside one,
+        // this analyser is reading the settings-preview capture instead,
+        // and there's no local `.tree-occupant` row to update anyway.
+        if (isInVoice) {
+            const speaking = dB > localSpeakingThreshold();
+            if (speaking) {
+                if (localSpeakingHoldTimer) {
+                    clearTimeout(localSpeakingHoldTimer);
+                    localSpeakingHoldTimer = null;
+                }
+                if (!isLocalSpeaking) {
+                    isLocalSpeaking = true;
+                    setLocalSpeakingClass(true);
+                }
+            } else if (isLocalSpeaking && !localSpeakingHoldTimer) {
+                localSpeakingHoldTimer = setTimeout(() => {
+                    isLocalSpeaking = false;
+                    localSpeakingHoldTimer = null;
+                    setLocalSpeakingClass(false);
+                }, 300);
+            }
+        }
+
         micLevelAnimId = requestAnimationFrame(tick);
     }
     micLevelAnimId = requestAnimationFrame(tick);
@@ -6817,6 +6884,14 @@ function stopMicLevelMeter(): void {
     if (micLevelAnimId !== null) {
         cancelAnimationFrame(micLevelAnimId);
         micLevelAnimId = null;
+    }
+    if (localSpeakingHoldTimer) {
+        clearTimeout(localSpeakingHoldTimer);
+        localSpeakingHoldTimer = null;
+    }
+    if (isLocalSpeaking) {
+        isLocalSpeaking = false;
+        setLocalSpeakingClass(false);
     }
     if (micLevelBar) micLevelBar.style.width = "0%";
 }
