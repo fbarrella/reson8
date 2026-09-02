@@ -1237,3 +1237,108 @@ Feature/Fix: PRD 14.11 — Fix own-voice active-speaker indicator latency
   of the three voice-graph items in the PRD's recommended build order —
   pending user confirmation to proceed. PRD 14.8 (link preview fix) also
   remains available independently at any time.
+
+--- Entry: 02/09/2026 ---
+
+Feature/Fix: PRD 14.10 — Self-hear mic monitor (Phase 14, item 10)
+
+  Problem: There was no way to hear how your own mic actually sounds while
+  adjusting the noise gate, mic volume, or noise cancelling — only the
+  live level meter, which is purely visual and can't tell the user
+  whether the result actually sounds good.
+
+  Solution: A new "Hear Yourself" toggle in Voice & Shortcuts (next to the
+  live mic meter) lets the user monitor their own fully-processed
+  outgoing mic signal in real time, with a dedicated volume slider. If in
+  a voice channel when enabled, it forces mute+deafen together (reusing
+  the existing deafen-auto-mutes accumulation logic from PRD 10.4, so no
+  separate mute step was needed) and shows a banner in the voice panel;
+  disabling it restores exactly the prior mute/deafen state. Outside a
+  voice channel it just works standalone against the existing
+  mic-preview capture, with no consequential mute/deafen action needed.
+
+  Server Changes: none — entirely client-side.
+
+  Client Changes:
+  - `apps/client/src/services/voice.service.ts`: new
+    `selfHearMonitorGainNode`/`selfHearVolume` fields. `setSelfHearEnabled(enabled)`
+    connects/disconnects a `GainNode` tapping `volumeGainNode` (the fully
+    processed post noise-cancel/gate/volume signal) straight to the
+    send-side `audioContext`'s own destination — independent of deafen
+    (which only zeroes remote per-user `GainNode`s on the separate
+    `playbackAudioContext`) and of the mediasoup producer's paused state
+    (pausing it only stops the SFU forwarding RTP to others, it doesn't
+    touch this local graph), so it correctly keeps working regardless of
+    either. `setSelfHearVolume(percent)` controls its own independent
+    gain.
+  - Extracted a new shared `buildProcessingChain(stream)` from
+    `buildMicProcessingGraph()` (builds noiseCancel-if-enabled/analyser/
+    gate/volume against the already-created `audioContext`, mirroring
+    `enableSensitivity()`'s own "start the gate loop immediately if the
+    graph already exists" check) — reused by both the in-channel graph
+    (which additionally creates a produce destination on top) and a
+    rewritten `startPreview()`, which previously only built a bare
+    analyser tap and now builds the identical chain. This is what lets
+    self-hear (and, as a side effect, the mic meter and noise gate)
+    reflect live settings identically whether in a call or just
+    previewing in Settings. `stopPreview()` now reuses
+    `teardownMicProcessingGraph()` (extended to also clean up
+    `selfHearMonitorGainNode`) instead of manually closing the context.
+  - `apps/client/src/preload.ts` + `renderer.ts` (`api` interface): new
+    `setSelfHearEnabled(enabled)`/`setSelfHearVolume(percent)`
+    passthroughs.
+  - `apps/client/src/renderer/renderer.ts`: new
+    `selfHearEnabled`/`selfHearForcedDeafen`/`selfHearVolume` state (the
+    volume persists across restarts via localStorage; enabled/forced-deafen
+    deliberately do not — self-hear is a momentary tuning aid, not a
+    standing preference, so it always starts off). New
+    `applySelfHearMuteDeafenForcing()`/`setSelfHearEnabledAndNotify()`/
+    `updateSelfHearBanner()` helpers wired to a new checkbox, volume
+    slider, and the banner's "Stop Previewing" button. Reapplied at both
+    voice-join call sites (manual join and the auto-reconnect rejoin
+    path) alongside the existing mic-volume/noise-cancel reapplication,
+    since a fresh `VoiceService` is constructed per join — this also
+    handles the edge case of leaving self-hear on while previewing, then
+    joining a channel. Turned off automatically on leaving voice (the
+    underlying graph is already gone with the rest of the torn-down
+    session; this just resets the UI/flags to match, no mute/deafen
+    restore needed since leaving makes it moot).
+  - Found and fixed a related bug while implementing this:
+    `closeSettingsPanel()` already stopped the mic-level-meter/preview
+    unconditionally when not in a voice channel — extended that same
+    guard to also check `selfHearEnabled`, so closing Settings while
+    self-hearing outside a channel doesn't silently kill the monitor
+    while the toggle still reads "on".
+  - `apps/client/src/renderer/index.html`: new toggle row + volume slider
+    in Voice & Shortcuts (right after the mic level meter), and a new
+    `#self-hear-banner` in the voice panel — same shape as the existing
+    screen-share alert banner but styled with `--accent` rather than
+    `--danger`, since being muted/deafened here is an expected,
+    deliberate side effect of previewing, not a warning.
+
+  Key Files Modified:
+    apps/client/src/services/voice.service.ts
+    apps/client/src/preload.ts
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/renderer/index.html
+
+  localStorage Keys:
+    reson8-self-hear-volume (new) — 0-100, default 100.
+
+  Verification:
+    `npx tsc --noEmit` in `apps/client` — clean. Manual verification
+    (enable self-hear in a voice channel and confirm you hear your own
+    processed mic while showing muted+deafened to others, confirm other
+    participants' audio doesn't play through your speakers while
+    previewing, disable it and confirm your exact prior mute/deafen state
+    is restored including when already deafened beforehand, enable it
+    outside any voice channel and confirm it reflects live noise-gate/
+    mic-volume/noise-cancel adjustments, confirm it survives closing
+    Settings, confirm joining a channel while it was left on from a
+    pre-join preview correctly forces mute+deafen) is pending the user's
+    own hands-on pass.
+
+  Next Step: this completes every voice-graph item in the Phase 14 PRD.
+  Only PRD 14.8 (link preview fix) remains — pending user confirmation to
+  proceed. After that, the full PRD is implemented and ready for the
+  version bump / release notes / documentation update steps.

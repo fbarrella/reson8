@@ -568,6 +568,14 @@ const api = {
         voiceService?.setNoiseCancelStrength(level);
     },
 
+    setSelfHearEnabled(enabled: boolean): void {
+        voiceService?.setSelfHearEnabled(enabled);
+    },
+
+    setSelfHearVolume(percent: number): void {
+        voiceService?.setSelfHearVolume(percent);
+    },
+
     // ── Audio Settings ──────────────────────────────────────────────────────
 
     async enumerateAudioDevices(): Promise<{ inputs: { deviceId: string; label: string }[]; outputs: { deviceId: string; label: string }[] }> {

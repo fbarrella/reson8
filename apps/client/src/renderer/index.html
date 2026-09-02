@@ -457,6 +457,45 @@
       background: rgba(255, 255, 255, 0.85);
     }
 
+    /* Self-hear mic monitor banner (PRD 14.10) — same shape as the
+       screen-share alert above, but --accent rather than --danger: being
+       muted/deafened here is a deliberate, expected side effect of
+       previewing your own mic, not a warning. */
+    #self-hear-banner {
+      display: none;
+      flex-direction: column;
+      gap: 6px;
+      background: var(--accent);
+      border-radius: var(--radius);
+      padding: 8px 10px;
+    }
+
+    #self-hear-banner.visible {
+      display: flex;
+    }
+
+    #self-hear-banner .self-hear-banner-text {
+      color: #072b3a;
+      font-weight: 700;
+      font-size: 12px;
+      text-align: center;
+    }
+
+    #self-hear-banner button {
+      background: #fff;
+      color: var(--accent-hover);
+      border: none;
+      border-radius: var(--radius);
+      padding: 7px 0;
+      font-weight: 700;
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    #self-hear-banner button:hover {
+      background: rgba(255, 255, 255, 0.85);
+    }
+
     #voice-panel .voice-info {
       font-size: 11px;
       color: var(--success);
@@ -3132,6 +3171,10 @@
           <span class="screen-share-alert-text">You are sharing your screen</span>
           <button id="btn-stop-share-alert">Stop Sharing</button>
         </div>
+        <div id="self-hear-banner">
+          <span class="self-hear-banner-text">🎧 Previewing your mic — muted &amp; deafened</span>
+          <button id="btn-stop-self-hear">Stop Previewing</button>
+        </div>
         <div class="voice-info">
           <span class="dot"></span>
           <div style="display:flex; flex-direction:column;">
@@ -3603,6 +3646,31 @@
           <label style="display:block; margin-bottom:6px;">Microphone Level</label>
           <div class="mic-level-meter">
             <div class="mic-level-meter-bar" id="mic-level-bar"></div>
+          </div>
+        </div>
+
+        <!-- Self-Hear Mic Monitor (PRD 14.10) -->
+        <div class="toggle-row" id="self-hear-toggle-row" style="margin-bottom:14px;">
+          <div class="toggle-row-info">
+            <div class="toggle-row-icon">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></svg>
+            </div>
+            <div class="toggle-row-text">
+              <span class="toggle-row-title">Hear Yourself</span>
+              <span class="toggle-row-desc">Temporarily monitor your own mic with every adjustment above applied live — mutes &amp; deafens you in a voice channel while active</span>
+            </div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="chk-self-hear">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+
+        <div id="self-hear-volume-wrap" style="display:none; margin-bottom:14px;">
+          <label style="display:block; margin-bottom:6px;">Self-Hear Volume</label>
+          <div class="sensitivity-slider-row">
+            <input type="range" id="self-hear-volume-slider" min="0" max="100" value="100" step="5">
+            <span class="sensitivity-value" id="self-hear-volume-value">100%</span>
           </div>
         </div>
 

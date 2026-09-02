@@ -699,6 +699,8 @@ interface Reson8Api {
     setMicVolume(percent: number): void;
     setNoiseCancelEnabled(enabled: boolean): Promise<void>;
     setNoiseCancelStrength(level: number): void;
+    setSelfHearEnabled(enabled: boolean): void;
+    setSelfHearVolume(percent: number): void;
     checkForUpdates(): Promise<{ status: "available" | "not-available" | "error"; message?: string }>;
     downloadUpdate(): Promise<void>;
     quitAndInstall(): void;
@@ -1148,6 +1150,16 @@ let noiseCancelEnabled = localStorage.getItem("reson8-noise-cancel-enabled") ===
 // which caused a quiet/paused voice to fade toward silence; 60 is a more
 // moderate default.
 let noiseCancelStrength = Number(localStorage.getItem("reson8-noise-cancel-strength") ?? "60");
+// Self-hear mic monitor (PRD 14.10) — deliberately NOT persisted across
+// restarts like the other voice settings above; this is a momentary
+// tuning/preview aid, not a standing preference, so it always starts off.
+// The playback volume is a genuine preference though, so that alone persists.
+let selfHearEnabled = false;
+let selfHearVolume = Number(localStorage.getItem("reson8-self-hear-volume") ?? "100");
+/** True only when enabling self-hear had to deafen (it wasn't already
+ *  deafened going in) — so disabling it later undoes only what it itself
+ *  forced, mirroring `_deafenAutoMuted`'s own remember/restore pattern. */
+let selfHearForcedDeafen = false;
 const audioNudgeVolumeSlider = document.getElementById("audio-nudge-volume-slider") as HTMLInputElement;
 const audioNudgeVolumeValue = document.getElementById("audio-nudge-volume-value") as HTMLSpanElement;
 const audioAlertVolumeSlider = document.getElementById("audio-alert-volume-slider") as HTMLInputElement;
@@ -1171,6 +1183,12 @@ const chkNoiseCancel = document.getElementById("chk-noise-cancel") as HTMLInputE
 const noiseCancelStrengthWrap = document.getElementById("noise-cancel-strength-wrap") as HTMLDivElement;
 const noiseCancelStrengthSlider = document.getElementById("noise-cancel-strength-slider") as HTMLInputElement;
 const noiseCancelStrengthValue = document.getElementById("noise-cancel-strength-value") as HTMLSpanElement;
+const chkSelfHear = document.getElementById("chk-self-hear") as HTMLInputElement;
+const selfHearVolumeWrap = document.getElementById("self-hear-volume-wrap") as HTMLDivElement;
+const selfHearVolumeSlider = document.getElementById("self-hear-volume-slider") as HTMLInputElement;
+const selfHearVolumeValue = document.getElementById("self-hear-volume-value") as HTMLSpanElement;
+const selfHearBanner = document.getElementById("self-hear-banner") as HTMLDivElement;
+const btnStopSelfHear = document.getElementById("btn-stop-self-hear") as HTMLButtonElement;
 
 // Apply the saved mic volume before the user ever joins a channel (mirrors
 // setGlobalVoiceVolume above — a no-op until a VoiceService instance
@@ -1985,6 +2003,18 @@ async function handleChannelClick(node: TreeNode): Promise<void> {
                 // reflects live input at all times, not just while gating.
                 startMicLevelMeter();
 
+                // Self-hear (PRD 14.10): if left on from before this join
+                // (e.g. was previewing pre-join), rebuild the monitor
+                // against this join's fresh graph and reapply the same
+                // forced mute+deafen the toggle always implies — must run
+                // after the PTT/gate block above, which otherwise
+                // overwrites `isMuted` back to false.
+                if (selfHearEnabled) {
+                    applySelfHearMuteDeafenForcing();
+                    api.setSelfHearEnabled(true);
+                    updateSelfHearBanner();
+                }
+
                 // Sync mute/deafen state to the server so other occupants' icons
                 // aren't left showing a stale state from a previous session.
                 api.setVoiceState(isMuted, isDeafened);
@@ -2127,6 +2157,55 @@ function toggleDeafenAndNotify(): void {
     }
 }
 
+// ── Self-Hear Mic Monitor (PRD 14.10) ────────────────────────────────────────
+
+/**
+ * Forces mute+deafen together when self-hear turns on while actually in a
+ * voice channel — deafening already auto-mutes the mic if it wasn't already
+ * paused (the existing accumulation logic, PRD 10.4), so a single
+ * `toggleDeafenAndNotify()` call covers both at once with no separate mute
+ * step needed. Only acts (and only remembers having forced anything) if not
+ * already deafened going in, so disabling self-hear later never undoes a
+ * deafen the user had already set themselves. Called both from the toggle
+ * handler and, since a fresh `VoiceService` is constructed per join, from
+ * both places a voice session (re)starts.
+ */
+function applySelfHearMuteDeafenForcing(): void {
+    if (isInVoice && !isDeafened) {
+        selfHearForcedDeafen = true;
+        toggleDeafenAndNotify();
+    } else {
+        selfHearForcedDeafen = false;
+    }
+}
+
+function updateSelfHearBanner(): void {
+    selfHearBanner?.classList.toggle("visible", selfHearEnabled && isInVoice);
+}
+
+/** Single entry point for turning self-hear on/off — used by the Settings
+ *  checkbox, the banner's "Stop Previewing" button, and leaving voice. */
+function setSelfHearEnabledAndNotify(enabled: boolean): void {
+    selfHearEnabled = enabled;
+    if (chkSelfHear) chkSelfHear.checked = enabled;
+    if (selfHearVolumeWrap) selfHearVolumeWrap.style.display = enabled ? "block" : "none";
+
+    if (enabled) {
+        applySelfHearMuteDeafenForcing();
+        api.setSelfHearEnabled(true);
+    } else {
+        api.setSelfHearEnabled(false);
+        // Restore exactly what self-hear itself forced — if the user has
+        // since manually undeafened some other way, there's nothing left
+        // to restore.
+        if (selfHearForcedDeafen && isDeafened) {
+            toggleDeafenAndNotify();
+        }
+        selfHearForcedDeafen = false;
+    }
+    updateSelfHearBanner();
+}
+
 function leaveVoiceAndNotify(): void {
     api.leaveVoiceChannel();
     isInVoice = false;
@@ -2134,6 +2213,17 @@ function leaveVoiceAndNotify(): void {
     previousOccupantIds = new Set();
     previousSharingIds = new Set();
     stopMicLevelMeter();
+    // Self-hear (PRD 14.10) doesn't carry over into an unrelated future
+    // join — the monitor graph itself is already gone with the rest of the
+    // torn-down session, so just resets the UI/flags to match. No need to
+    // restore mute/deafen here: leaving the channel makes that moot.
+    if (selfHearEnabled) {
+        selfHearEnabled = false;
+        selfHearForcedDeafen = false;
+        if (chkSelfHear) chkSelfHear.checked = false;
+        if (selfHearVolumeWrap) selfHearVolumeWrap.style.display = "none";
+        updateSelfHearBanner();
+    }
     updateVoiceUI();
     log("Left voice channel", "info");
     SoundAlert.play("leaving-channel.mp3");
@@ -2705,6 +2795,11 @@ api.on("voice-reconnected", (data: { channelId: string }) => {
     api.setMicVolume(micVolume);
     api.setNoiseCancelEnabled(noiseCancelEnabled);
     api.setNoiseCancelStrength(noiseCancelStrength);
+    if (selfHearEnabled) {
+        applySelfHearMuteDeafenForcing();
+        api.setSelfHearEnabled(true);
+        updateSelfHearBanner();
+    }
     api.setVoiceState(isMuted, isDeafened);
     previousOccupantIds = new Set((node?.occupants ?? []).map((o) => o.userId));
     previousSharingIds = sharingIdsOf(node?.occupants ?? []);
@@ -4632,7 +4727,10 @@ btnSaveMaxMessageLength.addEventListener("click", async () => {
 function closeSettingsPanel(): void {
     adminModal.classList.remove("visible");
     activeShortcutSlot = null;
-    if (!isInVoice) {
+    // Also kept alive while self-hearing out of a channel (PRD 14.10) — the
+    // preview capture is what the monitor is actually routing, so closing
+    // Settings must not silently kill it while the toggle still reads "on".
+    if (!isInVoice && !selfHearEnabled) {
         stopMicLevelMeter();
         api.stopMicPreview();
     }
@@ -6984,4 +7082,24 @@ noiseCancelStrengthSlider?.addEventListener("input", () => {
     noiseCancelStrengthValue.textContent = String(noiseCancelStrength);
     localStorage.setItem("reson8-noise-cancel-strength", String(noiseCancelStrength));
     api.setNoiseCancelStrength(noiseCancelStrength);
+});
+
+// ── Self-Hear Mic Monitor (PRD 14.10) ────────────────────────────────────────
+
+if (selfHearVolumeSlider) selfHearVolumeSlider.value = String(selfHearVolume);
+if (selfHearVolumeValue) selfHearVolumeValue.textContent = `${selfHearVolume}%`;
+
+chkSelfHear?.addEventListener("change", () => {
+    setSelfHearEnabledAndNotify(chkSelfHear.checked);
+});
+
+btnStopSelfHear?.addEventListener("click", () => {
+    setSelfHearEnabledAndNotify(false);
+});
+
+selfHearVolumeSlider?.addEventListener("input", () => {
+    selfHearVolume = Number(selfHearVolumeSlider.value);
+    if (selfHearVolumeValue) selfHearVolumeValue.textContent = `${selfHearVolume}%`;
+    localStorage.setItem("reson8-self-hear-volume", String(selfHearVolume));
+    api.setSelfHearVolume(selfHearVolume);
 });

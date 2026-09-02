@@ -262,6 +262,18 @@ export class VoiceService {
      *  channel is applied the instant the graph is built (PRD 13.3). */
     private micVolume: number = 1.0;
 
+    // ── Self-hear mic monitor (PRD 14.10) ────────────────────────────────────
+    // Taps `volumeGainNode` — the fully processed "how you'll actually sound
+    // to others" signal, post noise-cancel/gate/volume — straight to this
+    // same send-side `audioContext`'s own destination. Entirely independent
+    // of deafen (which only zeroes remote per-user GainNodes on the separate
+    // `playbackAudioContext`) and of the mediasoup producer's paused state
+    // (pausing it only stops the SFU from forwarding RTP to others; it
+    // doesn't touch this local Web Audio graph at all), so it keeps working
+    // correctly regardless of either.
+    private selfHearMonitorGainNode: GainNode | null = null;
+    private selfHearVolume: number = 1.0;
+
     // ── Noise cancelling (PRD 13.1) ──────────────────────────────────────────
     private noiseCancelNode: AudioWorkletNode | null = null;
     /** Kept even without a live graph, mirroring `sensitivityEnabled`, so a
@@ -970,7 +982,30 @@ export class VoiceService {
         if (!this.localStream) throw new Error("No local stream to build mic graph from");
 
         this.audioContext = new AudioContext({ sampleRate: 48000 });
-        this.micSourceNode = this.audioContext.createMediaStreamSource(this.localStream);
+        await this.buildProcessingChain(this.localStream);
+        if (!this.volumeGainNode) throw new Error("Mic processing chain failed to build");
+
+        this.micDestinationNode = this.audioContext.createMediaStreamDestination();
+        this.volumeGainNode.connect(this.micDestinationNode);
+
+        return this.micDestinationNode.stream.getAudioTracks()[0];
+    }
+
+    /**
+     * Builds the noiseCancel(optional)/analyser/gate/volume chain from a
+     * given source stream against the already-created `this.audioContext` —
+     * shared by the in-channel send graph (`buildMicProcessingGraph`, which
+     * additionally creates a produce destination on top) and the
+     * out-of-channel preview graph (`startPreview`, which has no
+     * destination — nothing is ever produced from preview audio). This is
+     * what lets the self-hear monitor (PRD 14.10) reflect live noise-gate/
+     * mic-volume/noise-cancelling adjustments identically whether the user
+     * is in a call or just previewing in Settings.
+     */
+    private async buildProcessingChain(stream: MediaStream): Promise<void> {
+        if (!this.audioContext) throw new Error("No audio context to build the processing chain in");
+
+        this.micSourceNode = this.audioContext.createMediaStreamSource(stream);
 
         let tapSource: AudioNode = this.micSourceNode;
         if (this.noiseCancelEnabled) {
@@ -1000,16 +1035,22 @@ export class VoiceService {
         this.volumeGainNode.gain.value = this.micVolume;
         this.gateGainNode.connect(this.volumeGainNode);
 
-        this.micDestinationNode = this.audioContext.createMediaStreamDestination();
-        this.volumeGainNode.connect(this.micDestinationNode);
-
-        return this.micDestinationNode.stream.getAudioTracks()[0];
+        // Mirrors `enableSensitivity()`'s own "graph already exists, start
+        // the loop immediately" check — a noise-gate setting persisted from
+        // before now applies live in preview mode too, not just in a call.
+        if (this.sensitivityEnabled) {
+            this.startGateLoop();
+        }
     }
 
     /** Tears down the send-side graph entirely — only ever on full cleanup or
      *  before rebuilding it, never on a mere gate/noise-cancel toggle. */
     private teardownMicProcessingGraph(): void {
         this.stopGateLoop(false);
+        if (this.selfHearMonitorGainNode) {
+            this.selfHearMonitorGainNode.disconnect();
+            this.selfHearMonitorGainNode = null;
+        }
         if (this.noiseCancelNode) {
             this.noiseCancelNode.disconnect();
             this.noiseCancelNode = null;
@@ -1152,6 +1193,41 @@ export class VoiceService {
         }
     }
 
+    // ── Self-Hear Mic Monitor (PRD 14.10) ────────────────────────────────────
+
+    /**
+     * Routes (or stops routing) the fully-processed outgoing mic signal to
+     * this same send-side context's own speaker output, so the user can
+     * hear exactly how they'll sound to others — including live noise-gate/
+     * mic-volume/noise-cancelling adjustments — without needing a second
+     * client to confirm. A no-op if no processing graph exists yet (neither
+     * a call nor a preview has been started) — the caller is expected to
+     * have started one first (`startProducing()` or `startPreview()`).
+     */
+    setSelfHearEnabled(enabled: boolean): void {
+        if (enabled) {
+            if (!this.audioContext || !this.volumeGainNode) return;
+            if (this.selfHearMonitorGainNode) return; // already routed
+            this.selfHearMonitorGainNode = this.audioContext.createGain();
+            this.selfHearMonitorGainNode.gain.value = this.selfHearVolume;
+            this.volumeGainNode.connect(this.selfHearMonitorGainNode);
+            this.selfHearMonitorGainNode.connect(this.audioContext.destination);
+        } else if (this.selfHearMonitorGainNode) {
+            this.selfHearMonitorGainNode.disconnect();
+            this.selfHearMonitorGainNode = null;
+        }
+    }
+
+    /** 0-100 — independent of mic input volume/global voice volume, purely
+     *  how loud the self-hear monitor plays back locally. */
+    setSelfHearVolume(percent: number): void {
+        const clamped = Math.max(0, Math.min(100, percent));
+        this.selfHearVolume = clamped / 100;
+        if (this.selfHearMonitorGainNode) {
+            this.selfHearMonitorGainNode.gain.value = this.selfHearVolume;
+        }
+    }
+
     // ── Noise Cancelling (PRD 13.1) ──────────────────────────────────────────
 
     /** Waits for the shared engine to be ready, then spins up a fresh
@@ -1281,16 +1357,15 @@ export class VoiceService {
             audio: audioConstraints,
         });
 
-        // Set up analyser from preview stream
         const track = this._previewStream.getAudioTracks()[0];
         if (!track) { this.stopPreview(); return; }
 
+        // Builds the same noiseCancel/gate/volume chain a real call would
+        // (PRD 14.10) — not just the bare analyser tap this used to be —
+        // so the mic meter, the noise gate, and the self-hear monitor all
+        // reflect live settings identically whether previewing or in a call.
         this.audioContext = new AudioContext();
-        this.analyser = this.audioContext.createAnalyser();
-        this.analyser.fftSize = 2048;
-
-        const source = this.audioContext.createMediaStreamSource(this._previewStream);
-        source.connect(this.analyser);
+        await this.buildProcessingChain(this._previewStream);
     }
 
     /** Stop the preview mic capture. */
@@ -1301,14 +1376,13 @@ export class VoiceService {
             }
             this._previewStream = null;
         }
-        // Only tear down AudioContext if we're in preview mode (no localStream)
-        // If localStream exists, the mic processing graph owns the AudioContext
+        // Only tear down the graph if we're in preview mode (no localStream)
+        // — if localStream exists, the mic processing graph owns the
+        // AudioContext and must not be torn down here. Reuses the same
+        // teardown as a real call's graph now that preview builds the same
+        // noiseCancel/gate/volume/self-hear-monitor chain (PRD 14.10).
         if (!this.localStream) {
-            if (this.audioContext) {
-                this.audioContext.close().catch(() => {});
-                this.audioContext = null;
-                this.analyser = null;
-            }
+            this.teardownMicProcessingGraph();
         }
     }
 
