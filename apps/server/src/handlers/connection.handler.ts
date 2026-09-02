@@ -326,6 +326,8 @@ export function registerConnectionHandlers(
                     maxUsers: number | null;
                     isNsfw: boolean;
                     createdAt: Date;
+                    iconEmoji: string | null;
+                    iconUrl: string | null;
                 }) => ({
                     id: ch.id,
                     serverId: ch.serverId,
@@ -336,6 +338,8 @@ export function registerConnectionHandlers(
                     maxUsers: ch.maxUsers,
                     isNsfw: ch.isNsfw,
                     createdAt: ch.createdAt.toISOString(),
+                    iconEmoji: ch.iconEmoji,
+                    iconUrl: ch.iconUrl,
                 }));
 
                 const tree = buildChannelTree(channelDtos);

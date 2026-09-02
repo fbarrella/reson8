@@ -609,3 +609,964 @@ Feature/Fix: Noise Cancelling still failed after the v2.2.1 CSP fix — two more
   Next Step: user to rebuild v2.2.1 (or cut a v2.2.2 if it's already been
   published) with both fixes and do a final real-world confirmation on
   their own Windows/Linux/macOS machines.
+
+--- Entry: 01/09/2026 ---
+
+Feature/Fix: PRD 14.1 + PRD 14.2 — Chat/DM opens at the most recent message;
+cursor-paginated chat history with infinite-scroll-up (Phase 14, items 1-2)
+
+  Problem: Text chats and DMs sometimes opened scrolled to a stale position
+  — "a day behind or even a few days behind" — instead of the true latest
+  message. Separately, every channel/DM tab fetched its entire message
+  history in one unbounded request on open; the server's FETCH_MESSAGES/
+  FETCH_DIRECT_MESSAGES handlers already supported before/limit cursor
+  pagination (confirmed via a fresh audit, not just progress.txt's earlier
+  Phase 4 claim), but nothing client-side ever used it — a from-scratch
+  client feature, not a wiring gap.
+
+  Solution:
+  Root cause of the scroll bug: attachment <img> elements had no `load`
+  listener to re-correct scrollTop once async image decode grew
+  scrollHeight (only the link-preview path re-corrected scroll before), and
+  revisiting an already-loaded tab never re-scrolled to bottom at all —
+  both fixed together with the pagination work since they touch the same
+  rendering code.
+
+  Client Changes (apps/client/src/renderer/renderer.ts, index.html):
+  - `ChatTab` gained `topSentinelEl`/`scrollObserver`/`oldestLoadedTimestamp`/
+    `oldestRenderedDateKey`/`hasMoreOlder`/`loadingOlder`/`initialLoadDone`.
+    `openChatTab`/`openDmTab` create a permanent top sentinel (first child
+    of `messagesEl`) and attach a per-tab `IntersectionObserver` (root:
+    `messagesEl`) via new `setupInfiniteScroll()`; `closeTab` disconnects it.
+  - `loadChatHistory` now fetches only `CHAT_PAGE_SIZE` (20) messages
+    initially for channels. For DMs it uses `max(20, unreadCountHint)`
+    capped at the server's 100-message limit — `unreadCountHint` comes from
+    the existing `GET_UNREAD_DM_PARTNERS` per-partner `unreadCount`, now
+    threaded through `openDmTab`'s new optional third parameter — so the
+    pre-existing "Unread Messages" separator still lands correctly even
+    with a deep unread backlog, instead of silently breaking once the page
+    size shrank to 20.
+  - New `loadOlderMessages()` fires when the sentinel scrolls into view and
+    fetches the next page via the existing `before`/`limit` cursor contract
+    (zero server or shared-types changes needed). New
+    `prependOlderMessages()` inserts the batch right after the sentinel,
+    recomputing date-section dividers correctly — it removes whatever
+    divider previously marked the "start of loaded history" edge (no longer
+    valid once even-older content is inserted above it) and reseeds the
+    day-boundary lookback from `oldestRenderedDateKey`.
+  - Scroll-position preservation on prepend: records `scrollHeight` before/
+    after insertion and adjusts `scrollTop` by the exact delta (the
+    standard Slack/Discord/Teams anchor technique), so the user's reading
+    position never visibly jumps.
+  - `renderChatMessage`/`renderDmMessage` split into pure element builders
+    (`buildChatMessageElement`/`buildDmMessageElement`, shared by both the
+    forward-append and the new backward-prepend paths) plus thin render
+    wrappers that check `isNearBottom(messagesEl)` before appending and only
+    auto-stick to the bottom if the user was already there — applied
+    consistently to the new message itself, the attachment image's async
+    `load` event (the actual scroll-bug root cause), and the async
+    link-preview card's load (`injectLinkPreview`'s new `onLoaded` callback
+    replaces its old hardcoded unconditional scroll-to-bottom).
+  - `switchTab()` now forces scroll-to-bottom whenever a loaded chat tab is
+    (re)focused, so revisiting an already-open tab also always lands on the
+    latest message rather than resuming a stale remembered position.
+  - `jumpToPinnedMessage`'s full `messagesEl.innerHTML` wipe-and-rebuild
+    (which would otherwise destroy the sentinel and desync the new cursor
+    state) now explicitly rebuilds the sentinel and resets `hasMoreOlder` to
+    `true` (optimistic — a window-centered fetch never guarantees it hit
+    the true start of history), so the next scroll-up still works
+    correctly afterward.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/renderer/index.html
+
+  Verification:
+    npx tsc --noEmit in apps/client — clean. Manual verification of the
+    scrolling/pagination/jump-to-pinned behavior is pending the user's own
+    hands-on pass, per this project's established practice for UI/UX
+    testing.
+
+  Next Step: PRD 14.3 ("Jump to Most Recent Message" floating button),
+  which builds directly on this pagination/sentinel infrastructure —
+  pending user confirmation to proceed to the next Phase 14 item.
+
+--- Entry: 01/09/2026 ---
+
+Feature/Fix: PRD 14.3 — "Jump to Most Recent Message" floating button
+(Phase 14, item 3)
+
+  Problem: When scrolled up reading history in a channel/DM, there was no
+  quick way back down to the latest message short of scrolling the whole
+  way or closing and reopening the tab.
+
+  Solution: A bottom-centered floating pill button ("Jump to Most Recent
+  Message" + down arrow) now appears once the true latest message scrolls
+  out of view, and jumps back to it on click — built directly on top of
+  PRD 14.2's per-tab pagination/sentinel infrastructure rather than adding
+  separate scroll-event listeners.
+
+  Client Changes (apps/client/src/renderer/renderer.ts, index.html):
+  - `ChatTab` gained `bottomSentinelEl` (always the last child of
+    `messagesEl` — every message insertion now goes through
+    `bottomSentinelEl.insertAdjacentElement("beforebegin", el)` instead of
+    a plain `appendChild`, which keeps the sentinel pinned as the last
+    child automatically with no extra bookkeeping needed on every append),
+    `jumpToRecentBtn`, and `atTrueLatest` (true unless
+    `jumpToPinnedMessage`'s window-rebuild might not reach the channel's
+    true latest message — resolved back to `true` by a live incoming
+    message or a fresh rebuild).
+  - `setupInfiniteScroll`'s single per-tab `IntersectionObserver` now also
+    watches `bottomSentinelEl` (branching on `entry.target`) and toggles
+    the button's `.visible` class based on whether it's scrolled out of
+    view — reusing the exact same observer/root as PRD 14.2's top-sentinel
+    infinite-scroll.
+  - New `createJumpToRecentControls()` builds the sentinel+button pair per
+    tab. New `rebuildTabAtLatest()` — sharing a newly-extracted
+    `fetchAndRenderLatestPage()` with the initial `loadChatHistory` — does
+    a fresh latest-page fetch when `atTrueLatest` is false, mirroring
+    `jumpToPinnedMessage`'s own wipe-and-rebuild shape rather than trying
+    to scroll through a potentially huge unloaded gap. `scrollToMostRecent()`
+    is the click handler: rebuilds first only if needed, then smooth-scrolls
+    to the bottom and calls `markChannelRead()` — landing at the bottom
+    this way clears unread state exactly like a natural scroll-to-bottom or
+    tab switch already does.
+  - `jumpToPinnedMessage`'s wipe-and-rebuild now also restores
+    `bottomSentinelEl` (alongside `topSentinelEl` from PRD 14.2) and
+    explicitly sets `atTrueLatest = false`, since a window-centered fetch
+    around an old pin never guarantees it reached the present.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/renderer/index.html
+
+  Verification:
+    npx tsc --noEmit in apps/client — clean. Manual verification (button
+    appears/disappears at the right scroll moments, jumps correctly
+    including after a pinned-message rebuild) is pending the user's own
+    hands-on pass.
+
+  Next Step: PRD 14.4 (DM "wake up" sound alert intermittent bug fix) —
+  pending user confirmation to proceed.
+
+--- Entry: 01/09/2026 ---
+
+Feature/Fix: PRD 14.4 — Fix the intermittent DM "wake up" sound alert not
+playing (Phase 14, item 4)
+
+  Problem: The `hey_wake_up.mp3` DM notification sound intermittently
+  failed to play. Root cause found via static code reading (no live
+  reproduction needed): in the `dm-received` handler
+  (`apps/client/src/renderer/renderer.ts`), when the DM tab didn't already
+  exist (a new or previously-closed conversation), the code called
+  `openDmTab(partnerId, partnerNick)` — which synchronously calls
+  `switchTab(tabKey)`, setting `activeTabId` to the new tab — *before* the
+  sound-alert logic further down checked
+  `const isTabActive = activeTabId === tabKey`. That check therefore always
+  evaluated to true in exactly this case, regardless of whether the user
+  was actually looking at a different tab a moment earlier. Net effect: the
+  sound was silently suppressed only in the narrow combination of (a) a
+  new/reopened DM conversation AND (b) the window being OS-focused (on some
+  other tab) — every other case (already-open tab, or window unfocused) was
+  already correct, which is exactly why it read as "intermittent" rather
+  than "always broken."
+
+  Solution: Captured `wasTabActive = activeTabId === tabKey` at the very
+  top of the handler, immediately after computing `tabKey` and before the
+  tab-exists/auto-open branch runs — i.e. before `openDmTab()`'s side
+  effect can change `activeTabId`. The sound-alert check below now uses
+  this captured `wasTabActive` instead of re-reading `activeTabId` after
+  the fact.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts
+
+  Verification:
+    npx tsc --noEmit in apps/client — clean. This was a straightforward
+    variable-capture-order bug found by reading the code directly
+    (confirmed root cause, no live reproduction needed); `SoundAlert.play`
+    itself and the ~20 other call sites that share it were untouched, and
+    the unrelated `nudge-received` handler (which has its own independent
+    `isFocused` check with no auto-switch side effect) was not touched
+    either. Manual confirmation that the sound now plays reliably in the
+    previously-failing scenario (partner DMs you while you're focused on a
+    different tab, for a new or reopened conversation) is pending the
+    user's own hands-on pass.
+
+  Next Step: PRD 14.6 (rename a parent/category channel), per the PRD's
+  recommended build order — implemented before PRD 14.5 (re-parent
+  channel) since it establishes the context-menu-on-category pattern that
+  14.5 then extends. Pending user confirmation to proceed.
+
+--- Entry: 01/09/2026 ---
+
+Feature/Fix: PRD 14.6 — Enable renaming (and deleting) a parent/category
+channel; badge non-joinable voice categories (Phase 14, item 6)
+
+  Problem: There's no distinct category/parent `ChannelType` in the schema
+  — a "parent channel" is simply any channel (text or voice) with children.
+  `renderCategory()` only wired collapse-toggle and drag-reorder, with no
+  context menu attached at all — so once a channel gained a child,
+  Rename/NSFW-toggle/Delete became unreachable via the UI even though
+  server-side `UPDATE_CHANNEL` rename already worked unconditionally for
+  any channel ID. Separately, a dead code comment ("categories can also be
+  voice channels users can join") described intent that was never
+  implemented — a voice channel that becomes a parent silently stops being
+  joinable, with nothing telling the user why.
+
+  Solution: No schema or server change needed — this was purely a
+  client-side UI gap.
+  - `apps/client/src/renderer/renderer.ts`: extracted the existing
+    right-click context menu (Rename / Toggle NSFW for text channels /
+    Delete) out of `renderChannel()` into a new shared
+    `attachChannelContextMenu(el, node)` function, unchanged in behavior
+    (still server-permission-gated only, same `insufficient_perms.mp3`
+    pattern on rejection). `renderCategory()` now calls this on its label
+    element too, and `renderChannel()` calls it instead of its old inline
+    block.
+  - Per the user's confirmed decision, a voice channel that gains a child
+    stays non-joinable (no scope expansion into restoring occupancy) but
+    `renderCategory()` now renders an explicit "Category" badge next to its
+    name when `node.type === "VOICE"`, so the loss of join affordance is
+    visible instead of silent.
+  - Deleting a category through this newly-exposed menu item reuses the
+    existing confirmation modal (`showDeleteModal`) and the server's
+    existing `onDelete: SetNull` cascade (children get reparented to
+    top-level, not deleted) — pre-existing server behavior, unchanged.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/renderer/index.html
+
+  Verification:
+    npx tsc --noEmit in apps/client — clean. Manual verification
+    (rename/delete a category via the new context menu, confirm the
+    voice-category badge appears/looks right, confirm regular leaf
+    channels' context menu still behaves identically after the
+    extraction) is pending the user's own hands-on pass.
+
+  Next Step: PRD 14.5 (re-parent an existing channel — implementing the
+  already-declared-but-unwired `CHANNEL_MOVED` event), which extends this
+  same context menu with a "Move to…" item. Pending user confirmation to
+  proceed.
+
+--- Entry: 01/09/2026 ---
+
+Feature/Fix: PRD 14.5 — Enable re-parenting an existing channel
+(implements the already-declared-but-unwired `CHANNEL_MOVED` event)
+(Phase 14, item 5)
+
+  Problem: After creation, a channel could not be moved to a different
+  parent (or detached to top-level) — the only way to reorganize the tree
+  that way was deleting the channel (and its history) and recreating it
+  from scratch in the desired location.
+
+  Solution: Admins can now move an existing channel to a different parent
+  via a new "Move to…" context-menu item.
+
+  Shared Types Changes:
+    `packages/shared-types/src/socket-events.ts`: `CHANNEL_MOVED` already
+    existed in `ClientToServerEvents` (`{channelId, newParentId,
+    newPosition}`) but had zero implementation anywhere (no server
+    handler, no client emit) and no `ack` callback. Added an
+    `ack: (response: {success, error?}) => void` to match every other
+    channel-mutation event's pattern, since nothing used the old
+    fire-and-forget shape yet (confirmed via a repo-wide grep before
+    changing it).
+
+  Server Changes:
+    `apps/server/src/handlers/channel.handler.ts`: new `CHANNEL_MOVED`
+    handler, `MANAGE_CHANNELS`-gated like other channel mutations. Rejects
+    `newParentId === channelId` outright, verifies both the channel and
+    the target parent exist and belong to the caller's server, and
+    prevents cycles by walking up the parent chain from `newParentId`
+    toward the root — if that walk ever reaches `channelId`, the target is
+    a descendant of the channel being moved and the move is rejected
+    ("Cannot move a channel into its own descendant"). Position in the new
+    parent is always recomputed server-side as "append to the end of the
+    current siblings" (a fresh count query) rather than trusting the
+    client's `newPosition` field, avoiding staleness against concurrent
+    edits — reordering within a parent afterward is still handled
+    separately by the existing `REORDER_CHANNELS`. Broadcasts
+    `CHANNEL_TREE_UPDATE` on success, same as every other channel
+    mutation.
+
+  Client Changes:
+    - `apps/client/src/preload.ts`: new `moveChannel(channelId,
+      newParentId)` method emitting `CHANNEL_MOVED` (`newPosition` always
+      sent as a placeholder `0` since the server ignores it).
+    - `apps/client/src/renderer/renderer.ts`: `attachChannelContextMenu()`
+      (shared by regular channels and categories since PRD 14.6) gained a
+      "Move to…" item between Rename and the NSFW toggle. New
+      `showMoveModal()`/`populateMoveChannelSelect()` build a flattened,
+      indented parent picker (mirroring the existing channel-creation
+      parent-select pattern) that excludes the channel itself and all of
+      its descendants from the option list — filtering out choices the
+      server would reject anyway as a cycle, rather than letting the user
+      pick one only to see an error.
+    - `apps/client/src/renderer/index.html`: new `#move-channel-modal`
+      (mirrors the existing `#rename-channel-modal` shell/CSS classes,
+      just swapping the text input for a `<select>`).
+
+  Key Files Modified:
+    packages/shared-types/src/socket-events.ts
+    apps/server/src/handlers/channel.handler.ts
+    apps/client/src/preload.ts
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/renderer/index.html
+    apps/server/tsconfig.tsbuildinfo (regenerated)
+    packages/shared-types/tsconfig.tsbuildinfo (regenerated)
+
+  Verification:
+    npx tsc --build in packages/shared-types, then npx tsc --noEmit in
+    both apps/server and apps/client — all clean. Manual verification
+    (move a channel between parents, move to top-level and back, attempt
+    to move a channel into its own descendant and confirm it's rejected
+    with a clear error toast, confirm the live tree updates on all
+    connected clients) is pending the user's own hands-on pass.
+
+  Next Step: PRD 14.7 (custom icons for text channels) — pending user
+  confirmation to proceed.
+
+--- Entry: 02/09/2026 ---
+
+Feature/Fix: PRD 14.7 — Custom icons for text channels (emoji or
+uploaded/cropped image) (Phase 14, item 7)
+
+  Problem: Text channels always showed the hardcoded 💬 emoji in the
+  channel tree, with no way to customize it per channel.
+
+  Solution: Admins can now set a custom icon for any text channel via a
+  new "Set Icon" context-menu item — either picking a default emoji from
+  the full existing 552-entry emoji set, or uploading a PNG/JPEG/GIF/WebP
+  image (max 512KB) through a cover+pan+zoom crop tool that outputs a
+  128x128 square, exactly like the existing custom-emoji upload flow.
+  Voice channels can't have icons (server- and client-enforced).
+
+  Database Changes:
+    `apps/server/prisma/schema.prisma`: added nullable
+    `Channel.iconEmoji`, `iconUrl`, `iconPublicId` (mutually exclusive —
+    emoji mode vs upload mode; `iconPublicId` is the Cloudinary
+    `public_id`, null for local-disk storage). Migration
+    `20260902024258_add_channel_icon` applied via `npx prisma migrate dev`
+    against the real dev database (Postgres/Redis already running via
+    docker compose).
+
+  Shared Types Changes:
+    - `packages/shared-types/src/models.ts`: `IChannel` gained
+      `iconEmoji`/`iconUrl` (`iconPublicId` deliberately not exposed to
+      clients, matching how `ICustomEmoji` already omits
+      `imagePublicId` — it's a server-only Cloudinary implementation
+      detail).
+    - `packages/shared-types/src/socket-events.ts`: `UPDATE_CHANNEL`'s
+      payload gained `iconEmoji?`/`iconUrl?`/`iconPublicId?`
+      (`string | null`), documented as mutually exclusive with "both
+      null/omitted resets to default."
+
+  Server Changes:
+    - `apps/server/src/handlers/channel.handler.ts`: `UPDATE_CHANNEL` now
+      handles icon changes alongside the existing `isNsfw` handling,
+      reusing the same "look up current type, silently ignore on
+      non-TEXT channels" guard. Setting `iconEmoji` clears
+      `iconUrl`/`iconPublicId` and vice versa; sending neither (both
+      falsy) resets to default. Cleans up an orphaned previous upload via
+      the existing `deleteAttachment()` (`storage.service.ts`) whenever a
+      prior uploaded icon is replaced or cleared — never blocks the ack.
+    - `apps/server/src/handlers/connection.handler.ts`: the join-time
+      channel-tree DTO mapping now includes `iconEmoji`/`iconUrl`
+      (previously an explicit field-by-field mapping that would have
+      silently dropped the new columns).
+    - `apps/server/src/routes/upload.route.ts`: new
+      `POST /api/upload/channel-icon`, reusing the existing
+      `handleUpload()` helper and the emoji route's 512KB cap
+      (`MAX_EMOJI_FILE_SIZE`) — no new gating needed since channel icons
+      are already admin-only via `UPDATE_CHANNEL`'s `MANAGE_CHANNELS`
+      check (unlike custom emoji, which needed its own approval queue
+      since any member can upload).
+
+  Client Changes:
+    - `apps/client/src/preload.ts` + `renderer.ts` (`api` interface): new
+      `uploadChannelIcon()` method; `updateChannel()`'s type signature
+      extended to match the new payload fields.
+    - `apps/client/src/renderer/renderer.ts`: `attachChannelContextMenu()`
+      gained a "Set Icon" item (TEXT channels only, alongside the NSFW
+      toggle). New `showChannelIconModal()` and its full wiring — a
+      "choose emoji vs upload image vs reset to default" first step, an
+      emoji-grid step (iterating the existing
+      `EMOJI_DATA`/`EMOJI_CATEGORIES` directly — the full built-in set,
+      not a curated subset, in a purpose-built grid rather than
+      repurposing the chat input's floating emoji-picker widget), and a
+      crop-tool step that's a deliberate duplicate of the existing
+      custom-emoji crop tool (separate state variables, separate DOM
+      refs) per this codebase's duplication-over-premature-abstraction
+      convention. `TreeNode` gained `iconEmoji`/`iconUrl`;
+      `renderChannel()` now shows an uploaded icon (as a small `<img>`)
+      or a custom emoji ahead of the default 💬, for text channels only.
+    - `apps/client/src/renderer/index.html`: new `#channel-icon-modal`
+      (three-step shell: select / emoji grid / crop), added to the shared
+      modal-shell CSS selector list; new CSS for the crop viewport/img
+      (duplicated from the emoji crop modal's own rules) and the small
+      in-tree custom-icon `<img>`.
+
+  Key Files Modified:
+    apps/server/prisma/schema.prisma
+    apps/server/prisma/migrations/20260902024258_add_channel_icon/migration.sql (NEW)
+    packages/shared-types/src/models.ts
+    packages/shared-types/src/socket-events.ts
+    apps/server/src/handlers/channel.handler.ts
+    apps/server/src/handlers/connection.handler.ts
+    apps/server/src/routes/upload.route.ts
+    apps/client/src/preload.ts
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/renderer/index.html
+    apps/server/tsconfig.tsbuildinfo (regenerated)
+    packages/shared-types/tsconfig.tsbuildinfo (regenerated)
+
+  Verification:
+    `npx prisma migrate dev` applied cleanly against the real running dev
+    database; `npx tsc --build` in `packages/shared-types`, then
+    `npx tsc --noEmit` in both `apps/server` and `apps/client` (checked
+    with explicit exit codes) — all clean. Manual verification (set an
+    icon via emoji, then via image upload, confirm
+    crop/512KB-rejection/voice-channel-exclusion behave correctly,
+    confirm the icon renders in the tree for all connected clients,
+    confirm replacing/resetting an uploaded icon doesn't leave orphaned
+    files) is pending the user's own hands-on pass.
+
+  Next Step: this completes every feature/fix item in the Phase 14 PRD
+  except PRD 14.8-14.12 (link preview fix, settings modal height,
+  self-hear monitor, own-voice latency, noise-cancelling tuning) —
+  pending user confirmation to proceed to PRD 14.8.
+
+--- Entry: 02/09/2026 ---
+
+Feature/Fix: PRD 14.9 — Fix the Settings modal changing height per tab
+(Phase 14, item 9)
+
+  Problem: Every Settings tab gave the modal a different height depending
+  on its own content — a short tab (e.g. About) shrunk the whole modal to
+  fit-content while a long tab (e.g. User Management's list) expanded it
+  up toward a cap, so switching tabs constantly resized the modal.
+
+  Root cause (confirmed, one CSS rule): `.modal-content.wide` sets
+  `max-height: 70vh` — a cap, not a fixed height — with
+  `display: flex; flex-direction: column`. `.settings-panel` already had
+  `flex: 1; overflow-y: auto`, but a flex child's `flex: 1` only has
+  something to fill when its flex-container parent has a definite height;
+  a max-height cap only kicks in once content overflows it, so a short
+  tab's content simply shrunk the whole modal instead of leaving empty
+  space.
+
+  Solution: `apps/client/src/renderer/index.html` — added a new, more
+  specific `#admin-modal .modal-content.wide` rule setting
+  `height: 70vh; max-height: none`, scoped only to the Settings modal
+  (`#admin-modal`). `.modal-content.wide` is shared by three other modals
+  (Screen Share source picker, "What's New", Online Users) that are meant
+  to size-to-content, so the original shared rule was left untouched —
+  only Settings gets the fixed height. With a real fixed parent height now
+  in place, `.settings-panel`'s existing `flex: 1; overflow-y: auto`
+  finally does what it always intended: a short tab shows empty space
+  below its content, a long tab scrolls internally, and the modal's outer
+  height never changes when switching tabs.
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html
+
+  Verification:
+    `npx tsc --noEmit` in `apps/client` — clean (CSS/markup-only change,
+    included for completeness). Manual verification (switch through every
+    Settings tab and confirm the modal's outer height stays fixed, confirm
+    the other three modals sharing `.modal-content.wide` are visually
+    unaffected) is pending the user's own hands-on pass.
+
+  Next Step: PRD 14.12 (AI noise cancelling too aggressive), the first of
+  the three voice-graph items in the PRD's recommended build order
+  (14.12 → 14.11 → 14.10, simplest to most complex) — pending user
+  confirmation to proceed. PRD 14.8 (link preview fix) also remains
+  available independently at any time.
+
+--- Entry: 02/09/2026 ---
+
+Feature/Fix: PRD 14.12 — Fix AI noise cancelling being too aggressive
+(voice fading during quiet moments) (Phase 14, item 12)
+
+  Problem: DeepFilterNet3 noise cancelling worked well most of the time,
+  but the user's voice would fade to near-silence during quiet moments
+  (e.g. after going quiet for a while), and seemed to somewhat suppress an
+  already-quiet mic more generally.
+
+  Root cause (confirmed by reading the vendored package's actual compiled
+  implementation, not guessed): `voice.service.ts` constructs
+  `DeepFilterNet3Core` with `noiseReductionLevel` hardcoded to 100 (the
+  maximum) — the package's own internal default (if omitted) is 50.
+  Traced this value all the way through: it becomes the WASM model's
+  `atten_lim` (attenuation limit in dB) via
+  `df_create()`/`df_set_atten_lim()`, so 100 is genuinely "maximum
+  possible suppression," which has no way to distinguish quiet speech
+  from silence. The package does expose a public
+  `setSuppressionLevel(level: number)` (0-100) for exactly this, which
+  nothing in this codebase ever called.
+
+  A second, subtler bug was also found and fixed while implementing this:
+  `DeepFilterNet3Core.createAudioWorkletNode()` only ever seeds a
+  brand-new node's initial suppression level from the config snapshot
+  captured once at construction time (the one instance shared for the
+  whole app session) — `setSuppressionLevel()` posts a live message to
+  the current worklet but never writes back into that snapshot. Without a
+  fix, adjusting the new slider mid-session and then leaving+rejoining a
+  voice channel (which creates a fresh `AudioWorkletNode`) would have
+  silently reset back to whatever level was in effect the first time the
+  engine was ever initialized this session, undoing the user's
+  adjustment.
+
+  Solution:
+  - `apps/client/src/services/voice.service.ts`: replaced the hardcoded
+    `noiseReductionLevel: 100` with a module-level `noiseCancelStrength`
+    variable (default 60, a more moderate value than both the old 100 and
+    the package's own 50 default). New public
+    `setNoiseCancelStrength(level)` method updates that shared variable
+    and calls `noiseCancelCore.setSuppressionLevel(level)` live if a node
+    already exists — a plain runtime call, not a graph rewire, so it
+    doesn't touch the fragile ESM/`dynamicImport` interop at all.
+    `createNoiseCancelNode()` (the single private method both the
+    graph-build-at-join and enable-mid-session paths funnel through) now
+    reasserts `noiseCancelCore.setSuppressionLevel(noiseCancelStrength)`
+    immediately after creating every new node, fixing the
+    stale-snapshot-on-rejoin bug above.
+  - `apps/client/src/preload.ts` + `renderer.ts` (`api` interface): new
+    `setNoiseCancelStrength(level)` passthrough to `voiceService`.
+  - `apps/client/src/renderer/renderer.ts`: new "Noise Cancelling
+    Strength" slider (0-100, step 5) in Voice & Shortcuts, shown/hidden
+    alongside the existing Noise Cancelling toggle (mirroring the
+    mic-sensitivity slider's own show/hide pattern). Persisted to
+    localStorage (`reson8-noise-cancel-strength`, default 60) and
+    reapplied at both voice-join call sites (manual join and the
+    auto-reconnect rejoin path) alongside the existing
+    mic-volume/noise-cancel-enabled reapplication, since
+    `joinVoiceChannel()` constructs a fresh `VoiceService` instance per
+    session.
+  - `apps/client/src/renderer/index.html`: new slider markup right after
+    the Noise Cancelling toggle row, reusing the existing
+    `.sensitivity-slider-row`/`.sensitivity-labels` styling (no new CSS
+    needed).
+
+  localStorage Keys:
+    reson8-noise-cancel-strength (new) — 0-100, default 60.
+
+  Key Files Modified:
+    apps/client/src/services/voice.service.ts
+    apps/client/src/preload.ts
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/renderer/index.html
+
+  Verification:
+    `npx tsc --noEmit` in `apps/client` — clean. Manual verification
+    (confirm the slider audibly changes suppression strength live,
+    confirm a moderate default no longer fades a paused/quiet voice to
+    silence the way 100 did, confirm the value persists across restarts
+    and survives leaving/rejoining a voice channel) is pending the user's
+    own hands-on pass.
+
+  Next Step: PRD 14.11 (own-voice active-speaker indicator latency), the
+  second of the three voice-graph items in the PRD's recommended build
+  order — pending user confirmation to proceed. PRD 14.8 (link preview
+  fix) also remains available independently at any time.
+
+--- Entry: 02/09/2026 ---
+
+Feature/Fix: PRD 14.11 — Fix own-voice active-speaker indicator latency
+(Phase 14, item 11)
+
+  Problem: the active-speaker halo for other participants is correctly
+  server-driven (their audio genuinely arrives via the server's
+  `AudioLevelObserver`), but the local user's own halo waited on that same
+  100ms-interval `ACTIVE_SPEAKERS` broadcast too, adding a needless
+  round-trip of perceived latency for feedback about your own voice.
+
+  Solution: `apps/client/src/renderer/renderer.ts` — reused the existing
+  mic-level-meter's `requestAnimationFrame` tick loop
+  (`startMicLevelMeter()`, which already reads `api.getMicLevel()` off the
+  post-noise-cancel analyser every frame) to also derive a local "is
+  speaking" boolean via a dB threshold, and toggle the `.speaking` class
+  directly on the local user's own `.tree-occupant` element(s),
+  client-side only, with no server round trip.
+
+  Details:
+  - New `isLocalSpeaking`/`localSpeakingHoldTimer` state and
+    `localSpeakingThreshold()`/`setLocalSpeakingClass()` helpers.
+    Threshold reuses the noise gate's own `sensitivityThreshold` when the
+    gate is enabled (consistent "gate-open = speaking" behavior), falling
+    back to a fixed -50dB otherwise (matching the server
+    `AudioLevelObserver`'s own threshold). A 300ms hold before clearing
+    mirrors the server's existing per-remote-user hold-timer behavior, so
+    brief pauses between words don't flicker the halo.
+  - The `active-speakers` socket handler now skips the local user's ID
+    entirely in both its "stopped speaking" and "started speaking" loops,
+    so the server-driven path never touches the local occupant's DOM class
+    anymore — the local override owns it exclusively, avoiding a fight
+    between an instant local update and a delayed server one.
+  - `renderOccupants()`'s initial per-occupant class-seeding check now
+    also considers `isLocalSpeaking` for the local user (previously only
+    `activeSpeakers`, which never includes the local ID after the above
+    change), so a tree re-render (channel update, mute/deafen toggle,
+    etc.) can't momentarily drop the halo until the next analyser tick
+    reapplies it.
+  - Fixed a real bug found while implementing this: `closeSettingsPanel()`
+    previously stopped the mic-level-meter's RAF loop unconditionally
+    whenever Settings closed — including while still actively in a voice
+    channel — which would have frozen the new local speaking indicator
+    (and silently stopped updating the meter) the moment the user closed
+    Settings mid-call. Now gated on `!isInVoice`, so the loop only stops on
+    an actual leave-voice, matching the feature's "always reflects live
+    input while in voice" intent that a prior Phase 13 change had already
+    stated but this code path didn't actually honor.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts
+
+  Verification:
+    `npx tsc --noEmit` in `apps/client` — clean. Manual verification
+    (speak and confirm your own halo appears with no perceptible delay
+    versus before, confirm other participants' halos remain unaffected
+    and still server-driven, confirm the halo keeps working correctly
+    after closing Settings mid-call, confirm behavior is consistent
+    whether or not the noise gate is enabled) is pending the user's own
+    hands-on pass.
+
+  Next Step: PRD 14.10 (self-hear mic monitor), the last and most complex
+  of the three voice-graph items in the PRD's recommended build order —
+  pending user confirmation to proceed. PRD 14.8 (link preview fix) also
+  remains available independently at any time.
+
+--- Entry: 02/09/2026 ---
+
+Feature/Fix: PRD 14.10 — Self-hear mic monitor (Phase 14, item 10)
+
+  Problem: There was no way to hear how your own mic actually sounds while
+  adjusting the noise gate, mic volume, or noise cancelling — only the
+  live level meter, which is purely visual and can't tell the user
+  whether the result actually sounds good.
+
+  Solution: A new "Hear Yourself" toggle in Voice & Shortcuts (next to the
+  live mic meter) lets the user monitor their own fully-processed
+  outgoing mic signal in real time, with a dedicated volume slider. If in
+  a voice channel when enabled, it forces mute+deafen together (reusing
+  the existing deafen-auto-mutes accumulation logic from PRD 10.4, so no
+  separate mute step was needed) and shows a banner in the voice panel;
+  disabling it restores exactly the prior mute/deafen state. Outside a
+  voice channel it just works standalone against the existing
+  mic-preview capture, with no consequential mute/deafen action needed.
+
+  Server Changes: none — entirely client-side.
+
+  Client Changes:
+  - `apps/client/src/services/voice.service.ts`: new
+    `selfHearMonitorGainNode`/`selfHearVolume` fields. `setSelfHearEnabled(enabled)`
+    connects/disconnects a `GainNode` tapping `volumeGainNode` (the fully
+    processed post noise-cancel/gate/volume signal) straight to the
+    send-side `audioContext`'s own destination — independent of deafen
+    (which only zeroes remote per-user `GainNode`s on the separate
+    `playbackAudioContext`) and of the mediasoup producer's paused state
+    (pausing it only stops the SFU forwarding RTP to others, it doesn't
+    touch this local graph), so it correctly keeps working regardless of
+    either. `setSelfHearVolume(percent)` controls its own independent
+    gain.
+  - Extracted a new shared `buildProcessingChain(stream)` from
+    `buildMicProcessingGraph()` (builds noiseCancel-if-enabled/analyser/
+    gate/volume against the already-created `audioContext`, mirroring
+    `enableSensitivity()`'s own "start the gate loop immediately if the
+    graph already exists" check) — reused by both the in-channel graph
+    (which additionally creates a produce destination on top) and a
+    rewritten `startPreview()`, which previously only built a bare
+    analyser tap and now builds the identical chain. This is what lets
+    self-hear (and, as a side effect, the mic meter and noise gate)
+    reflect live settings identically whether in a call or just
+    previewing in Settings. `stopPreview()` now reuses
+    `teardownMicProcessingGraph()` (extended to also clean up
+    `selfHearMonitorGainNode`) instead of manually closing the context.
+  - `apps/client/src/preload.ts` + `renderer.ts` (`api` interface): new
+    `setSelfHearEnabled(enabled)`/`setSelfHearVolume(percent)`
+    passthroughs.
+  - `apps/client/src/renderer/renderer.ts`: new
+    `selfHearEnabled`/`selfHearForcedDeafen`/`selfHearVolume` state (the
+    volume persists across restarts via localStorage; enabled/forced-deafen
+    deliberately do not — self-hear is a momentary tuning aid, not a
+    standing preference, so it always starts off). New
+    `applySelfHearMuteDeafenForcing()`/`setSelfHearEnabledAndNotify()`/
+    `updateSelfHearBanner()` helpers wired to a new checkbox, volume
+    slider, and the banner's "Stop Previewing" button. Reapplied at both
+    voice-join call sites (manual join and the auto-reconnect rejoin
+    path) alongside the existing mic-volume/noise-cancel reapplication,
+    since a fresh `VoiceService` is constructed per join — this also
+    handles the edge case of leaving self-hear on while previewing, then
+    joining a channel. Turned off automatically on leaving voice (the
+    underlying graph is already gone with the rest of the torn-down
+    session; this just resets the UI/flags to match, no mute/deafen
+    restore needed since leaving makes it moot).
+  - Found and fixed a related bug while implementing this:
+    `closeSettingsPanel()` already stopped the mic-level-meter/preview
+    unconditionally when not in a voice channel — extended that same
+    guard to also check `selfHearEnabled`, so closing Settings while
+    self-hearing outside a channel doesn't silently kill the monitor
+    while the toggle still reads "on".
+  - `apps/client/src/renderer/index.html`: new toggle row + volume slider
+    in Voice & Shortcuts (right after the mic level meter), and a new
+    `#self-hear-banner` in the voice panel — same shape as the existing
+    screen-share alert banner but styled with `--accent` rather than
+    `--danger`, since being muted/deafened here is an expected,
+    deliberate side effect of previewing, not a warning.
+
+  Key Files Modified:
+    apps/client/src/services/voice.service.ts
+    apps/client/src/preload.ts
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/renderer/index.html
+
+  localStorage Keys:
+    reson8-self-hear-volume (new) — 0-100, default 100.
+
+  Verification:
+    `npx tsc --noEmit` in `apps/client` — clean. Manual verification
+    (enable self-hear in a voice channel and confirm you hear your own
+    processed mic while showing muted+deafened to others, confirm other
+    participants' audio doesn't play through your speakers while
+    previewing, disable it and confirm your exact prior mute/deafen state
+    is restored including when already deafened beforehand, enable it
+    outside any voice channel and confirm it reflects live noise-gate/
+    mic-volume/noise-cancel adjustments, confirm it survives closing
+    Settings, confirm joining a channel while it was left on from a
+    pre-join preview correctly forces mute+deafen) is pending the user's
+    own hands-on pass.
+
+  Next Step: this completes every voice-graph item in the Phase 14 PRD.
+  Only PRD 14.8 (link preview fix) remains — pending user confirmation to
+  proceed. After that, the full PRD is implemented and ready for the
+  version bump / release notes / documentation update steps.
+
+--- Entry: 02/09/2026 ---
+
+Feature/Fix: UI cleanup — reorganize and declutter the Voice & Shortcuts
+settings tab (user-requested follow-up polish after Phase 14's voice items
+landed)
+
+  Problem: after PRD 14.9-14.12 added the self-hear toggle+slider and the
+  noise-cancelling-strength toggle+slider, the Voice & Shortcuts tab became
+  cluttered — related controls were scattered (mic volume slider sat
+  between noise gate and noise cancelling instead of near the other input
+  controls), each switch+slider pair rendered as two visually disconnected
+  boxes (the toggle row's own bordered card, then a bare unstyled div below
+  it for the slider), the live mic meter bar was only 4px tall, and the
+  "Keyboard Shortcuts" section used the same small label style as every
+  individual field, so it didn't read as a section boundary.
+
+  Solution:
+  - Reordered the tab to: Microphone (Input) → Speaker (Output) → Save
+    Devices → Microphone Volume → Microphone Level meter → Hear Yourself →
+    Noise Gate → Noise Cancelling → Voice Input Mode → Keyboard Shortcuts.
+    Voice Input Mode's new position (moved to just before Keyboard
+    Shortcuts) was confirmed with the user, since their reorder request's
+    list omitted it entirely.
+  - Unified each of the three switch+slider pairs (Hear Yourself, Noise
+    Gate, Noise Cancelling) into one bordered card (new
+    `.settings-toggle-card`) that subtly grows to reveal its slider section
+    while the switch is on, instead of two disconnected boxes. Expand/
+    collapse is driven purely by CSS — a new `.settings-toggle-card-expand`
+    uses a `grid-template-rows` 0fr/1fr transition (the modern
+    no-JS-measurement way to animate to auto height), toggled via `:has()`
+    reacting directly to each checkbox's own `:checked` state (e.g.
+    `#self-hear-toggle-row:has(#chk-self-hear:checked) +
+    .settings-toggle-card-expand`) — no JS visibility toggling needed at
+    all, so the equivalent `style.display` assignments in `renderer.ts`
+    (for all three sliders, at init and in each checkbox's change handler)
+    were removed along with the now-unused wrap DOM-ref variables.
+  - Increased `.mic-level-meter`'s height from 4px to 10px (and its
+    `border-radius` from 2px to 5px to match) so it's actually visible as a
+    level meter rather than a hairline.
+  - Added a new `.settings-section-title` style (14px, bold, primary-color
+    text, top border + extra margin) and applied it to "Keyboard Shortcuts"
+    so it reads as a distinct section boundary instead of blending in with
+    the regular 11px field labels.
+  - Two bugs found during the user's own hands-on testing pass and fixed:
+    1. Noise Gate's card showed a fixed-size empty box even while
+       collapsed — caused by a leftover legacy CSS rule
+       (`#mic-sensitivity-slider-wrap { background, border, padding: 12px }`)
+       from before the unified-card refactor, styling that div directly
+       regardless of the new grid-collapse state (only Noise Gate had this
+       stale rule, which is why only its card showed the artifact). Removed
+       entirely now that `.settings-toggle-card`/
+       `.settings-toggle-card-expand-inner` own that styling.
+    2. The right-side scrollbar sat flush against the toggle switches/
+       sliders with no breathing room, once Voice & Shortcuts became tall
+       enough to actually need scrolling inside PRD 14.9's fixed-height
+       Settings modal. Fixed by adding `padding-right: 10px` to
+       `.settings-panel`.
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html
+    apps/client/src/renderer/renderer.ts
+
+  Verification:
+    `npx tsc --noEmit` in `apps/client` — clean, checked after each round
+    of changes (initial reorder/unify, and again after the two bug fixes).
+    Manually verified by the user across two testing passes, who confirmed
+    everything now looks good.
+
+  Next Step: Phase 14 PRD status — only PRD 14.8 (link preview fix)
+  remains before the full PRD is complete and ready for the version bump /
+  release notes / documentation update steps.
+
+--- Entry: 02/09/2026 ---
+
+Feature/Fix: PRD 14.8 — Fix rich link preview failing on bot-walled sites
+(e.g. the OLX example link) (Phase 14, item 8)
+
+  Problem: pasting certain links (e.g. an OLX product URL) produced no
+  rich preview at all. Prior investigation (logged separately) confirmed
+  this specific case is a Cloudflare bot-management wall — a plain
+  `fetch()` gets a 403 even with a full realistic browser User-Agent, so
+  no header/plugin change could ever fix it; it's an IP-reputation/
+  TLS-fingerprint block, not a missing-metadata gap.
+
+  Solution: `apps/client/src/main.ts` — added a second-tier fallback for
+  exactly this case, using a real hidden Electron `BrowserWindow` (no new
+  dependency — Electron already ships a full Chromium) to navigate to the
+  URL like an actual browser and extract its title/OG/Twitter-card
+  metadata via `executeJavaScript`, only when the existing fast
+  `fetch()`+metascraper+OG-fallback path (`fetchLinkPreviewFast`, renamed
+  from the previous `fetchLinkPreview`, now returns null without caching
+  on any failure instead of caching immediately) comes back empty. The
+  new orchestrating `fetchLinkPreview()` tries the fast path first, falls
+  back to `fetchLinkPreviewViaHiddenWindow()` only if that returns null,
+  then caches whichever result — a real hidden `BrowserWindow`'s TLS/JA3
+  fingerprint and full JS execution get past the same bot wall a bare
+  HTTP client can't, and it doesn't expose `navigator.webdriver` the way
+  a CDP-automated browser normally would.
+
+  Edge Cases Handled:
+    - Concurrency cap: at most 2 hidden-window fallbacks run at once
+      (`activeHiddenWindowFallbacks` counter) — a full Chromium renderer
+      per invocation is genuinely expensive and must not become an
+      unbounded resource sink if several blocked links get pasted around
+      the same time; any request over the cap just skips straight to
+      returning null (no preview) rather than queuing indefinitely.
+    - Hard 15s timeout via `Promise.race` resolving to null (not
+      rejecting) on either branch, so a hung navigation can never leave
+      the caller waiting forever.
+    - `win.destroy()` always runs in a `finally` block regardless of
+      which branch of the race wins, so a timed-out or failed attempt
+      never leaks a renderer process.
+    - No architectural change was needed to how the renderer applies the
+      result — `fetchLinkPreview` was already invoked asynchronously with
+      the preview card attached whenever the promise resolves
+      (`injectLinkPreview`'s existing `.then()` pattern), so the
+      fallback's extra ~5-10s latency is absorbed by that same
+      already-async flow; the chat message itself always posts
+      immediately regardless.
+
+  Key Files Modified:
+    apps/client/src/main.ts
+
+  Verification:
+    `npx tsc --noEmit` in `apps/client` — clean. Live end-to-end test (not
+    just typechecked): ran the actual new two-tier logic in a real
+    Electron process (repo's own Electron binary, under xvfb) against the
+    exact OLX URL from the original report — confirmed the fast path gets
+    a 403 as expected, then the hidden-window fallback successfully
+    extracts real metadata (title, description, image, domain, siteName)
+    in ~7.5s total round trip. Test harness was a throwaway script in the
+    scratchpad directory, deleted after use — nothing test-related
+    committed.
+
+  Next Step: this completes every item in the Phase 14 PRD. Ready for the
+  version bump (SemVer minor — feature-additive, backward compatible) via
+  `/bump-version`, release notes in `app-planning/releases/`, and updating
+  all three `CLAUDE.md` files plus `README.md` to reflect the final Phase
+  14 feature set — pending user confirmation to proceed.
+
+--- Entry: 02/09/2026 ---
+
+Feature/Fix: Phase 14 wrap-up — version bump to v2.3.0, release notes, and
+CLAUDE.md/README documentation updates
+
+  Problem: With every Phase 14 PRD item implemented and verified (chat
+  pagination, jump-to-recent, channel re-parenting/renaming, custom channel
+  icons, self-hear monitor, noise-cancelling strength, the Voice &
+  Shortcuts UI cleanup, and six bug fixes), the phase needed its standard
+  wrap-up: version bump, release notes, and bringing the project's own
+  documentation back in sync with what was actually built — following the
+  same process used for every previous phase.
+
+  Solution:
+  - Used `/bump-version` for a minor bump (2.2.1 → 2.3.0 — feature-additive,
+    backward compatible, no breaking protocol changes): `package.json`,
+    `apps/client/package.json`, `apps/server/package.json`, README's
+    version badge, CLAUDE.md's "Current version" line and phase count
+    (1–13 → 1–14). `packages/shared-types/package.json` left untouched
+    (independently versioned on its own 0.x scheme, per established
+    convention). `package-lock.json` regenerated via
+    `npm install --package-lock-only` (workspace entries only; verified no
+    unrelated third-party dependency versions were touched).
+  - Archived the completed Phase 14 PRD: `git mv
+    app-planning/Reson8_Phase14_PRD.md` into `app-planning/archive/`,
+    matching every previous phase's pattern.
+  - Wrote `app-planning/releases/v2.3.0.md` following the established
+    format (intro paragraph, New Features & Improvements, Bug Fixes,
+    Installation table), sourced entirely from the actual progress.txt
+    entries logged during Phase 14 — no invented or embellished features.
+  - Updated root `CLAUDE.md`: the "Project history" paragraph now lists
+    `Reson8_Phase14_PRD.md` among the archived PRDs (with its 12-item
+    summary) and correctly describes progress.txt's current structure
+    (three condensed summary blocks followed by Phase 14's
+    still-ongoing-log entries, not yet condensed). Added three new
+    Architecture entries: chat pagination (cursor-based
+    `FETCH_MESSAGES`/`FETCH_DIRECT_MESSAGES`, `IntersectionObserver`-driven
+    infinite scroll), link preview (the two-tier `fetch()`-then-hidden-
+    `BrowserWindow` fallback), and extended the existing Voice paragraph to
+    cover the local own-voice speaking indicator, the self-hear monitor,
+    and adjustable noise-cancelling strength. Extended the Data model
+    bullet to mention `Channel.iconEmoji`/`iconUrl` and re-parenting via
+    `CHANNEL_MOVED`.
+  - Updated `apps/client/CLAUDE.md`: `main.ts`'s structure bullet now
+    describes the link-preview fallback; `voice.service.ts`'s bullet
+    mentions adjustable noise-cancelling strength and the self-hear
+    monitor; the preview-mode convention note was corrected to reflect
+    that preview mode now builds the full noise-gate/mic-volume/
+    noise-cancelling chain via a shared `buildProcessingChain()` helper,
+    not just a bare analyser tap (a real change in behavior this phase,
+    not just new prose).
+  - Updated `apps/server/CLAUDE.md`: `upload.route.ts`'s structure bullet
+    now lists the new `/api/upload/channel-icon` route alongside the
+    existing image/emoji upload endpoints.
+  - Updated `README.md`: five feature bullets updated/added under Voice &
+    Audio (own-voice-halo latency note, adjustable noise-cancelling
+    strength, new "Hear Yourself" bullet), Channels & Presence (channel
+    re-parenting, new "Custom Text Channel Icons" bullet), and Text &
+    Messaging (paginated/auto-scroll-to-latest chat history, new "Jump to
+    Most Recent Message" bullet, link-preview bot-wall fallback note).
+    Added a Phase 14 row to the Roadmap table.
+
+  Key Files Modified:
+    package.json
+    apps/client/package.json
+    apps/server/package.json
+    package-lock.json
+    README.md
+    CLAUDE.md
+    apps/client/CLAUDE.md
+    apps/server/CLAUDE.md
+    app-planning/releases/v2.3.0.md (NEW)
+    app-planning/Reson8_Phase14_PRD.md → app-planning/archive/Reson8_Phase14_PRD.md (moved)
+
+  Verification:
+    `npx tsc --noEmit` in `apps/client` and `apps/server` — both clean
+    (re-confirmed after the package.json version bumps, before the
+    doc-only changes that followed). All version-string references
+    cross-checked with a repo-wide grep excluding
+    node_modules/dist/release/.git — remaining historical mentions (two
+    "v2.2.1 incident" references in CLAUDE.md's Electron gotchas list, and
+    all `app-planning/` historical records) deliberately left untouched as
+    frozen history, not live pointers.
+
+  Next Step: none — this closes out Phase 14 entirely. The user will push
+  the branch manually. The next phase PRD will be drafted from a future
+  `app-planning/nextsteps.txt` when new requirements come in.

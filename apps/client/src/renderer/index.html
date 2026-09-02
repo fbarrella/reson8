@@ -234,6 +234,24 @@
       transition: transform 0.15s;
     }
 
+    /* A voice channel that gained a child stays non-joinable — this badge
+       makes that explicit instead of its join affordance just silently
+       disappearing (PRD 14.6). Same outlined-badge shape as .nsfw-badge,
+       muted rather than red since it's informational, not a warning. */
+    .category-voice-badge {
+      display: inline-flex;
+      align-items: center;
+      font-size: 9px;
+      font-weight: 700;
+      color: var(--text-muted);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      padding: 0 4px;
+      margin-left: 6px;
+      letter-spacing: 0.3px;
+      text-transform: none;
+    }
+
     .tree-category.collapsed .arrow {
       transform: rotate(-90deg);
     }
@@ -286,6 +304,21 @@
 
     .tree-channel .ch-icon.text {
       color: var(--text-icon);
+    }
+
+    /* Custom uploaded text-channel icon (PRD 14.7) — same footprint as the
+       14px emoji icon it replaces. */
+    .tree-channel .ch-icon.custom-image {
+      display: inline-flex;
+      width: 14px;
+      height: 14px;
+    }
+
+    .tree-channel .ch-icon.custom-image img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      border-radius: 3px;
     }
 
     .tree-channel .ch-name {
@@ -421,6 +454,45 @@
     }
 
     #screen-share-alert-banner button:hover {
+      background: rgba(255, 255, 255, 0.85);
+    }
+
+    /* Self-hear mic monitor banner (PRD 14.10) — same shape as the
+       screen-share alert above, but --accent rather than --danger: being
+       muted/deafened here is a deliberate, expected side effect of
+       previewing your own mic, not a warning. */
+    #self-hear-banner {
+      display: none;
+      flex-direction: column;
+      gap: 6px;
+      background: var(--accent);
+      border-radius: var(--radius);
+      padding: 8px 10px;
+    }
+
+    #self-hear-banner.visible {
+      display: flex;
+    }
+
+    #self-hear-banner .self-hear-banner-text {
+      color: #072b3a;
+      font-weight: 700;
+      font-size: 12px;
+      text-align: center;
+    }
+
+    #self-hear-banner button {
+      background: #fff;
+      color: var(--accent-hover);
+      border: none;
+      border-radius: var(--radius);
+      padding: 7px 0;
+      font-weight: 700;
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    #self-hear-banner button:hover {
       background: rgba(255, 255, 255, 0.85);
     }
 
@@ -1427,10 +1499,12 @@
     #create-channel-modal,
     #delete-channel-modal,
     #rename-channel-modal,
+    #move-channel-modal,
     #nsfw-confirm-modal,
     #delete-message-modal,
     #emoji-upload-modal,
     #emoji-upload-animated-modal,
+    #channel-icon-modal,
     #admin-modal,
     #update-modal,
     #whats-new-modal,
@@ -1455,10 +1529,12 @@
     #create-channel-modal.visible,
     #delete-channel-modal.visible,
     #rename-channel-modal.visible,
+    #move-channel-modal.visible,
     #nsfw-confirm-modal.visible,
     #delete-message-modal.visible,
     #emoji-upload-modal.visible,
     #emoji-upload-animated-modal.visible,
+    #channel-icon-modal.visible,
     #admin-modal.visible,
     #update-modal.visible,
     #whats-new-modal.visible,
@@ -1719,6 +1795,21 @@
       flex-direction: column;
     }
 
+    /* PRD 14.9 — Settings is the only one of the four modals sharing
+       .modal-content.wide (Screen Share picker, "What's New", Settings,
+       Online Users) that should have a FIXED height rather than a cap: the
+       other three are meant to size-to-content (e.g. a short "What's New"
+       post shouldn't force a tall empty box). Without this, each Settings
+       tab reflowed the whole modal's height to fit its own content, since
+       .settings-panel's flex:1 had no definite parent height to fill —
+       only a cap that a short tab's content never reached. Scoped to
+       #admin-modal specifically so the shared rule above stays untouched
+       for the other three modals. */
+    #admin-modal .modal-content.wide {
+      height: 70vh;
+      max-height: none;
+    }
+
     .admin-user-list {
       flex: 1;
       overflow-y: auto;
@@ -1935,6 +2026,11 @@
       display: none;
       flex: 1;
       overflow-y: auto;
+      /* Breathing room between the content and the scrollbar (PRD 14.9's
+         fixed-height Settings modal made some tabs, like Voice & Shortcuts,
+         tall enough to actually scroll for the first time — without this,
+         the thumb sits flush against toggle switches/sliders). */
+      padding-right: 10px;
     }
 
     .settings-panel.active {
@@ -2429,6 +2525,61 @@
       white-space: nowrap;
     }
 
+    /* ── Infinite-Scroll Top Sentinel (PRD 14.2) ─────────────────────── */
+    .chat-top-sentinel {
+      flex-shrink: 0;
+      min-height: 1px;
+      text-align: center;
+      font-size: 10px;
+      color: var(--text-muted);
+      user-select: none;
+    }
+
+    .chat-top-sentinel.loading {
+      padding: 8px 0;
+    }
+
+    /* ── "Jump to Most Recent Message" Sentinel + Button (PRD 14.3) ──── */
+    .chat-bottom-sentinel {
+      flex-shrink: 0;
+      min-height: 1px;
+    }
+
+    .jump-to-recent-btn {
+      position: absolute;
+      left: 50%;
+      bottom: 12px;
+      transform: translateX(-50%) translateY(8px);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 6px 14px;
+      color: var(--accent);
+      font-size: 11px;
+      font-family: var(--font);
+      font-weight: 600;
+      cursor: pointer;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.15s ease, transform 0.15s ease;
+      z-index: 5;
+    }
+
+    .jump-to-recent-btn.visible {
+      opacity: 1;
+      pointer-events: auto;
+      transform: translateX(-50%) translateY(0);
+    }
+
+    .jump-to-recent-btn:hover {
+      background: rgba(255, 255, 255, 0.1);
+      border-color: var(--accent);
+    }
+
     /* ── Toggle Switch ────────────────────────────────────────────── */
     .toggle-row {
       display: flex;
@@ -2529,6 +2680,70 @@
     .toggle-switch input:checked + .toggle-slider::before {
       transform: translateX(16px);
       background: #fff;
+    }
+
+    /* ── Unified switch+slider settings card (Voice & Shortcuts) ─────────
+       A toggle row that reveals an extra slider while enabled used to be
+       two visually disconnected boxes (the toggle-row's own bordered card,
+       then a bare, unstyled div below it). This wraps both in one shared
+       card — the row is its always-visible header, the slider section is
+       a nested area that the card subtly grows to reveal, rather than a
+       separate floating control. Whether it's expanded is driven purely by
+       the checkbox's own :checked state via :has() (Chromium 105+, well
+       within Electron's baseline) — no JS visibility toggling needed. */
+    .settings-toggle-card {
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--bg-input);
+      margin-bottom: 10px;
+      transition: border-color 0.2s;
+    }
+
+    .settings-toggle-card:hover {
+      border-color: var(--accent-dim);
+    }
+
+    .settings-toggle-card .toggle-row {
+      border: none;
+      background: transparent;
+      margin-bottom: 0;
+    }
+
+    .settings-toggle-card-expand {
+      display: grid;
+      grid-template-rows: 0fr;
+      transition: grid-template-rows 0.25s ease;
+    }
+
+    .settings-toggle-card-expand-inner {
+      overflow: hidden;
+      padding: 0 12px;
+    }
+
+    #self-hear-toggle-row:has(#chk-self-hear:checked) + .settings-toggle-card-expand,
+    #mic-sensitivity-toggle-row:has(#chk-mic-sensitivity:checked) + .settings-toggle-card-expand,
+    #noise-cancel-toggle-row:has(#chk-noise-cancel:checked) + .settings-toggle-card-expand {
+      grid-template-rows: 1fr;
+    }
+
+    #self-hear-toggle-row:has(#chk-self-hear:checked) + .settings-toggle-card-expand .settings-toggle-card-expand-inner,
+    #mic-sensitivity-toggle-row:has(#chk-mic-sensitivity:checked) + .settings-toggle-card-expand .settings-toggle-card-expand-inner,
+    #noise-cancel-toggle-row:has(#chk-noise-cancel:checked) + .settings-toggle-card-expand .settings-toggle-card-expand-inner {
+      padding: 10px 12px 12px;
+      border-top: 1px solid var(--border);
+    }
+
+    /* A prominent divider for a standalone settings section (currently just
+       "Keyboard Shortcuts") — visually distinct from the small per-field
+       11px labels used everywhere else in this modal. */
+    .settings-section-title {
+      display: block;
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--text-primary);
+      margin: 20px 0 10px;
+      padding-top: 14px;
+      border-top: 1px solid var(--border);
     }
 
     /* ── Emoji Picker ────────────────────────────────────────────── */
@@ -2822,13 +3037,45 @@
       margin-bottom: 12px;
     }
 
-    /* ── Mic Sensitivity Slider & Meter ─────────────────────── */
-    #mic-sensitivity-slider-wrap {
-      background: var(--bg-input);
+    /* ── Channel Icon Modal (PRD 14.7) — duplicated, not shared, from the
+       emoji crop modal above (this codebase's convention: duplication over
+       a premature shared abstraction for a second, slightly different use). */
+    #channel-icon-crop-viewport {
+      width: 220px;
+      height: 220px;
+      margin: 10px auto;
+      overflow: hidden;
+      position: relative;
+      border-radius: 8px;
       border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 12px;
-      margin-bottom: 14px;
+      background: repeating-conic-gradient(#2a2a35 0% 25%, #232330 0% 50%) 50% / 16px 16px;
+      cursor: grab;
+    }
+
+    #channel-icon-crop-viewport.dragging {
+      cursor: grabbing;
+    }
+
+    #channel-icon-crop-img {
+      position: absolute;
+      top: 0;
+      left: 0;
+      transform-origin: 0 0;
+      user-select: none;
+      -webkit-user-drag: none;
+      pointer-events: none;
+    }
+
+    #channel-icon-crop-zoom {
+      width: 100%;
+      accent-color: var(--accent);
+      margin-bottom: 12px;
+    }
+
+    #channel-icon-emoji-grid {
+      max-height: 320px;
+      overflow-y: auto;
+      margin-bottom: 8px;
     }
 
     .sensitivity-slider-row {
@@ -2882,9 +3129,9 @@
     }
 
     .mic-level-meter {
-      height: 4px;
+      height: 10px;
       background: var(--bg-tertiary);
-      border-radius: 2px;
+      border-radius: 5px;
       overflow: hidden;
       margin-top: 10px;
     }
@@ -2893,7 +3140,7 @@
       height: 100%;
       width: 0%;
       background: linear-gradient(90deg, var(--accent), #4caf50);
-      border-radius: 2px;
+      border-radius: 5px;
       transition: width 0.05s linear;
     }
 
@@ -2983,6 +3230,10 @@
         <div id="screen-share-alert-banner">
           <span class="screen-share-alert-text">You are sharing your screen</span>
           <button id="btn-stop-share-alert">Stop Sharing</button>
+        </div>
+        <div id="self-hear-banner">
+          <span class="self-hear-banner-text">🎧 Previewing your mic — muted &amp; deafened</span>
+          <button id="btn-stop-self-hear">Stop Previewing</button>
         </div>
         <div class="voice-info">
           <span class="dot"></span>
@@ -3127,6 +3378,19 @@
       <div class="modal-actions">
         <button class="btn btn-cancel" id="btn-rename-cancel">Cancel</button>
         <button class="btn btn-create" id="btn-rename-confirm">Rename</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Move Channel Modal (PRD 14.5) ───────────────────────────────────── -->
+  <div id="move-channel-modal">
+    <div class="modal-content">
+      <h3>Move Channel</h3>
+      <label for="move-channel-select">New Parent</label>
+      <select id="move-channel-select"></select>
+      <div class="modal-actions">
+        <button class="btn btn-cancel" id="btn-move-cancel">Cancel</button>
+        <button class="btn btn-create" id="btn-move-confirm">Move</button>
       </div>
     </div>
   </div>
@@ -3308,6 +3572,44 @@
     </div>
   </div>
 
+  <!-- ── Channel Icon Modal (PRD 14.7, text channels only) ───────────── -->
+  <div id="channel-icon-modal">
+    <div class="modal-content">
+      <h3>Channel Icon</h3>
+
+      <div id="channel-icon-step-select">
+        <input type="file" id="channel-icon-file-input" accept="image/png,image/jpeg,image/gif,image/webp" style="display:none;">
+        <div class="modal-actions" style="justify-content:center; gap:10px; margin-bottom:8px;">
+          <button class="btn btn-create" id="btn-channel-icon-choose-emoji">😀 Choose Emoji</button>
+          <button class="btn btn-create" id="btn-channel-icon-choose-image">🖼️ Upload Image</button>
+        </div>
+        <p class="emoji-upload-hint">Images: max 512KB, PNG/JPEG/GIF/WebP — cropped to a square next.</p>
+        <div class="modal-actions">
+          <button class="btn btn-disconnect" id="btn-channel-icon-reset">Reset to Default</button>
+          <button class="btn btn-cancel" id="btn-channel-icon-cancel-select">Cancel</button>
+        </div>
+      </div>
+
+      <div id="channel-icon-step-emoji" style="display:none;">
+        <div id="channel-icon-emoji-grid"></div>
+        <div class="modal-actions">
+          <button class="btn btn-cancel" id="btn-channel-icon-back-from-emoji">Back</button>
+        </div>
+      </div>
+
+      <div id="channel-icon-step-crop" style="display:none;">
+        <div id="channel-icon-crop-viewport">
+          <img id="channel-icon-crop-img" alt="">
+        </div>
+        <input type="range" id="channel-icon-crop-zoom" min="1" max="3" step="0.01" value="1">
+        <div class="modal-actions">
+          <button class="btn btn-cancel" id="btn-channel-icon-upload-cancel">Cancel</button>
+          <button class="btn btn-create" id="btn-channel-icon-upload-confirm">Upload</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- ── Unified Settings Modal ───────────────────────────────────── -->
   <div id="admin-modal">
     <div class="modal-content wide">
@@ -3390,10 +3692,16 @@
 
         <button class="btn btn-create" id="btn-save-devices" style="width:100%; margin-bottom:14px; display:none;">💾 Save Audio Devices</button>
 
-        <label style="margin-bottom:4px; display:block;">Voice Input Mode</label>
-        <div style="display:flex; gap:8px; margin-bottom:14px;">
-          <button class="btn" id="btn-voice-activation" style="flex:1; font-size:11px; padding:5px 0; border:1px solid var(--border); background:var(--bg-input); color:var(--text-secondary); border-radius:var(--radius); cursor:pointer; transition:all 0.15s;">🎤 Voice Activation</button>
-          <button class="btn" id="btn-ptt-mode" style="flex:1; font-size:11px; padding:5px 0; border:1px solid var(--border); background:var(--bg-input); color:var(--text-secondary); border-radius:var(--radius); cursor:pointer; transition:all 0.15s;">🔘 Push-To-Talk</button>
+        <!-- Mic Volume (PRD 13.3) -->
+        <div id="mic-volume-wrap" style="margin-bottom:14px;">
+          <label style="display:block; margin-bottom:6px;">Microphone Volume</label>
+          <div class="sensitivity-slider-row">
+            <input type="range" id="mic-volume-slider" min="0" max="200" value="100" step="5">
+            <span class="sensitivity-value" id="mic-volume-value">100%</span>
+          </div>
+          <div class="sensitivity-labels">
+            <span>Scales your outgoing mic signal — 100% is your unprocessed input level</span>
+          </div>
         </div>
 
         <!-- Microphone Level Meter — always visible, independent of the noise
@@ -3407,8 +3715,38 @@
           </div>
         </div>
 
+        <!-- Self-Hear Mic Monitor (PRD 14.10) — switch + slider unified into
+             one card that subtly expands to reveal the slider while enabled,
+             rather than two visually disconnected boxes. -->
+        <div class="settings-toggle-card">
+          <div class="toggle-row" id="self-hear-toggle-row">
+            <div class="toggle-row-info">
+              <div class="toggle-row-icon">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></svg>
+              </div>
+              <div class="toggle-row-text">
+                <span class="toggle-row-title">Hear Yourself</span>
+                <span class="toggle-row-desc">Temporarily monitor your own mic with every adjustment above applied live — mutes &amp; deafens you in a voice channel while active</span>
+              </div>
+            </div>
+            <label class="toggle-switch">
+              <input type="checkbox" id="chk-self-hear">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div class="settings-toggle-card-expand" id="self-hear-volume-wrap">
+            <div class="settings-toggle-card-expand-inner">
+              <label style="display:block; margin-bottom:6px;">Self-Hear Volume</label>
+              <div class="sensitivity-slider-row">
+                <input type="range" id="self-hear-volume-slider" min="0" max="100" value="100" step="5">
+                <span class="sensitivity-value" id="self-hear-volume-value">100%</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <!-- Mic Sensitivity / Noise Gate -->
-        <div id="mic-sensitivity-section">
+        <div class="settings-toggle-card" id="mic-sensitivity-section">
           <div class="toggle-row" id="mic-sensitivity-toggle-row">
             <div class="toggle-row-info">
               <div class="toggle-row-icon">
@@ -3425,48 +3763,60 @@
             </label>
           </div>
 
-          <div id="mic-sensitivity-slider-wrap" style="display:none;">
-            <div class="sensitivity-slider-row">
-              <input type="range" id="mic-sensitivity-slider" min="-60" max="0" value="-40" step="1">
-              <span class="sensitivity-value" id="mic-sensitivity-value">-40 dB</span>
+          <div class="settings-toggle-card-expand" id="mic-sensitivity-slider-wrap">
+            <div class="settings-toggle-card-expand-inner">
+              <div class="sensitivity-slider-row">
+                <input type="range" id="mic-sensitivity-slider" min="-60" max="0" value="-40" step="1">
+                <span class="sensitivity-value" id="mic-sensitivity-value">-40 dB</span>
+              </div>
+              <div class="sensitivity-labels">
+                <span>-60 dB (more sensitive)</span>
+                <span>0 dB (less sensitive)</span>
+              </div>
             </div>
-            <div class="sensitivity-labels">
-              <span>-60 dB (more sensitive)</span>
-              <span>0 dB (less sensitive)</span>
-            </div>
-          </div>
-        </div>
-
-        <!-- Mic Volume (PRD 13.3) -->
-        <div id="mic-volume-wrap" style="margin-bottom:14px; margin-top:14px;">
-          <label style="display:block; margin-bottom:6px;">Microphone Volume</label>
-          <div class="sensitivity-slider-row">
-            <input type="range" id="mic-volume-slider" min="0" max="200" value="100" step="5">
-            <span class="sensitivity-value" id="mic-volume-value">100%</span>
-          </div>
-          <div class="sensitivity-labels">
-            <span>Scales your outgoing mic signal — 100% is your unprocessed input level</span>
           </div>
         </div>
 
         <!-- Noise Cancelling (PRD 13.1) -->
-        <div class="toggle-row" id="noise-cancel-toggle-row" style="margin-bottom:14px;">
-          <div class="toggle-row-info">
-            <div class="toggle-row-icon">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        <div class="settings-toggle-card">
+          <div class="toggle-row" id="noise-cancel-toggle-row">
+            <div class="toggle-row-info">
+              <div class="toggle-row-icon">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+              </div>
+              <div class="toggle-row-text">
+                <span class="toggle-row-title">Noise Cancelling</span>
+                <span class="toggle-row-desc">AI-powered suppression of keyboard clicks, fan noise, and other background sound</span>
+              </div>
             </div>
-            <div class="toggle-row-text">
-              <span class="toggle-row-title">Noise Cancelling</span>
-              <span class="toggle-row-desc">AI-powered suppression of keyboard clicks, fan noise, and other background sound</span>
+            <label class="toggle-switch">
+              <input type="checkbox" id="chk-noise-cancel">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+
+          <!-- Noise Cancelling Strength (PRD 14.12) -->
+          <div class="settings-toggle-card-expand" id="noise-cancel-strength-wrap">
+            <div class="settings-toggle-card-expand-inner">
+              <label style="display:block; margin-bottom:6px;">Noise Cancelling Strength</label>
+              <div class="sensitivity-slider-row">
+                <input type="range" id="noise-cancel-strength-slider" min="0" max="100" value="60" step="5">
+                <span class="sensitivity-value" id="noise-cancel-strength-value">60</span>
+              </div>
+              <div class="sensitivity-labels">
+                <span>Lower if your voice fades during quiet moments — higher in noisier environments</span>
+              </div>
             </div>
           </div>
-          <label class="toggle-switch">
-            <input type="checkbox" id="chk-noise-cancel">
-            <span class="toggle-slider"></span>
-          </label>
         </div>
 
-        <label style="margin-bottom:8px; display:block; margin-top:6px;">Keyboard Shortcuts</label>
+        <label style="margin-bottom:4px; display:block;">Voice Input Mode</label>
+        <div style="display:flex; gap:8px; margin-bottom:14px;">
+          <button class="btn" id="btn-voice-activation" style="flex:1; font-size:11px; padding:5px 0; border:1px solid var(--border); background:var(--bg-input); color:var(--text-secondary); border-radius:var(--radius); cursor:pointer; transition:all 0.15s;">🎤 Voice Activation</button>
+          <button class="btn" id="btn-ptt-mode" style="flex:1; font-size:11px; padding:5px 0; border:1px solid var(--border); background:var(--bg-input); color:var(--text-secondary); border-radius:var(--radius); cursor:pointer; transition:all 0.15s;">🔘 Push-To-Talk</button>
+        </div>
+
+        <label class="settings-section-title">Keyboard Shortcuts</label>
         <div class="shortcut-row">
           <label>Push-to-Talk</label>
           <input type="text" class="shortcut-input" id="shortcut-ptt" readonly placeholder="Not set">

@@ -170,12 +170,106 @@ async function fetchReleaseNotes(version: string): Promise<ReleaseNotes | null> 
     }
 }
 
-async function fetchLinkPreview(url: string): Promise<LinkPreviewData | null> {
-    // Check cache first
-    if (linkPreviewCache.has(url)) {
-        return linkPreviewCache.get(url) ?? null;
-    }
+/** Real Chromium renderer instances currently fetching a fallback preview
+ *  (PRD 14.8) — capped since each is a genuinely expensive full renderer
+ *  process, and must never become an unbounded resource sink if several
+ *  blocked links get pasted around the same time. */
+const MAX_HIDDEN_WINDOW_FALLBACKS = 2;
+let activeHiddenWindowFallbacks = 0;
 
+/**
+ * Fallback for sites whose plain `fetch()` gets blocked outright by
+ * IP-reputation/TLS-fingerprint bot management (confirmed live against a
+ * real Cloudflare-walled URL: a bot User-Agent, and even a full realistic
+ * browser User-Agent, both got a 403 — this isn't a header/plugin gap,
+ * it's the network layer itself being fingerprinted, which a bare HTTP
+ * client can't replicate). A genuine hidden Electron `BrowserWindow` gets
+ * past this "for free" — real TLS/JA3 fingerprint, real JS execution, and
+ * (confirmed via the same live test) it does not expose `navigator.webdriver`
+ * the way a CDP-automated browser normally would. Needs no new dependency
+ * since Electron already ships a full Chromium.
+ */
+async function fetchLinkPreviewViaHiddenWindow(url: string): Promise<LinkPreviewData | null> {
+    if (activeHiddenWindowFallbacks >= MAX_HIDDEN_WINDOW_FALLBACKS) return null;
+    activeHiddenWindowFallbacks++;
+
+    let win: BrowserWindow | null = null;
+    try {
+        win = new BrowserWindow({
+            show: false,
+            webPreferences: {
+                sandbox: true,
+                contextIsolation: true,
+            },
+        });
+
+        const run = async (): Promise<LinkPreviewData | null> => {
+            await win!.loadURL(url);
+
+            // A short settle delay — some bot-management challenges resolve
+            // client-side just after the initial navigation completes, even
+            // though none actually appeared in the live test this fallback
+            // is based on.
+            await new Promise((resolve) => setTimeout(resolve, 3000));
+
+            const extracted: {
+                title?: string;
+                ogTitle?: string;
+                ogDescription?: string;
+                ogImage?: string;
+                ogSiteName?: string;
+                ogUrl?: string;
+            } = await win!.webContents.executeJavaScript(`(() => {
+                const getMeta = (selector) => document.querySelector(selector)?.getAttribute("content") || undefined;
+                return {
+                    title: document.title || undefined,
+                    ogTitle: getMeta('meta[property="og:title"]') || getMeta('meta[name="twitter:title"]'),
+                    ogDescription: getMeta('meta[property="og:description"]') || getMeta('meta[name="twitter:description"]'),
+                    ogImage: getMeta('meta[property="og:image"]') || getMeta('meta[name="twitter:image"]') || getMeta('meta[name="twitter:image:src"]'),
+                    ogSiteName: getMeta('meta[property="og:site_name"]'),
+                    ogUrl: getMeta('meta[property="og:url"]'),
+                };
+            })()`);
+
+            const title = sanitizeText(extracted?.ogTitle || extracted?.title);
+            const rawDesc = sanitizeText(extracted?.ogDescription);
+            const image = isValidImageUrl(extracted?.ogImage) ? extracted!.ogImage : undefined;
+            const description = rawDesc && rawDesc.length > 200 ? rawDesc.slice(0, 200) + "…" : rawDesc;
+            const siteName = sanitizeText(extracted?.ogSiteName) || undefined;
+
+            if (!title && !image) return null;
+
+            let domain: string | undefined;
+            try {
+                domain = new URL(url).hostname.replace(/^www\./, "");
+            } catch { /* ignore */ }
+
+            return { title, description, image, url: extracted?.ogUrl || url, domain, siteName };
+        };
+
+        // Resolves to null on timeout rather than rejecting — either way
+        // the caller just gets "no fallback preview available," and the
+        // finally block below always destroys the window regardless of
+        // which branch of the race actually settles first.
+        const timeout = new Promise<null>((resolve) => {
+            setTimeout(() => resolve(null), 15000);
+        });
+
+        return await Promise.race([run(), timeout]);
+    } catch (err) {
+        console.error("[link-preview] Hidden-window fallback failed:", err);
+        return null;
+    } finally {
+        win?.destroy();
+        activeHiddenWindowFallbacks--;
+    }
+}
+
+/** The original plain-`fetch()` + metascraper + OG-fallback path — fast,
+ *  and works for the vast majority of links. Returns null (never caches)
+ *  on any failure, including a blocked/non-2xx response, so the caller can
+ *  decide whether to escalate to the heavier hidden-window fallback. */
+async function fetchLinkPreviewFast(url: string): Promise<LinkPreviewData | null> {
     try {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 5000);
@@ -190,7 +284,6 @@ async function fetchLinkPreview(url: string): Promise<LinkPreviewData | null> {
         clearTimeout(timeout);
 
         if (!response.ok) {
-            linkPreviewCache.set(url, null);
             return null;
         }
 
@@ -233,18 +326,31 @@ async function fetchLinkPreview(url: string): Promise<LinkPreviewData | null> {
 
         const result: LinkPreviewData = { title, description, image, video, videoType, url: metadata.url || url, domain, siteName };
 
-        // Cache if we got at least a title or image
-        if (title || image) {
-            linkPreviewCache.set(url, result);
-            return result;
-        }
-
-        linkPreviewCache.set(url, null);
-        return null;
+        // Only a genuine result if we got at least a title or image
+        return title || image ? result : null;
     } catch {
-        linkPreviewCache.set(url, null);
         return null;
     }
+}
+
+/**
+ * Orchestrates the two-tier link-preview fetch (PRD 14.8): the fast plain-
+ * `fetch()` path first (works for the vast majority of links), falling
+ * back to a hidden real-browser navigation only when that path is blocked
+ * or finds nothing — the fast path already handles most sites, and the
+ * fallback is expensive enough (a full Chromium renderer, ~5-15s) that it
+ * should never run for a link the fast path already resolved.
+ */
+async function fetchLinkPreview(url: string): Promise<LinkPreviewData | null> {
+    if (linkPreviewCache.has(url)) {
+        return linkPreviewCache.get(url) ?? null;
+    }
+
+    const fastResult = await fetchLinkPreviewFast(url);
+    const result = fastResult ?? await fetchLinkPreviewViaHiddenWindow(url);
+
+    linkPreviewCache.set(url, result);
+    return result;
 }
 
 let mainWindow: BrowserWindow | null = null;

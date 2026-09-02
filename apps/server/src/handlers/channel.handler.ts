@@ -17,6 +17,7 @@ import type {
 import { PermissionFlags } from "@reson8/shared-types";
 import { buildChannelTree } from "../services/channel-tree.service.js";
 import { requirePermission } from "../middleware/permissions.middleware.js";
+import { deleteAttachment } from "../services/storage.service.js";
 
 type TypedIO = SocketIOServer<
     ClientToServerEvents,
@@ -56,6 +57,8 @@ async function broadcastTreeUpdate(
             maxUsers: ch.maxUsers,
             isNsfw: ch.isNsfw,
             createdAt: ch.createdAt.toISOString(),
+            iconEmoji: ch.iconEmoji,
+            iconUrl: ch.iconUrl,
         })),
     );
 
@@ -171,7 +174,7 @@ export function registerChannelHandlers(
         // ── UPDATE_CHANNEL ──────────────────────────────────────────────────
         socket.on("UPDATE_CHANNEL", async (payload, ack) => {
             try {
-                const { channelId, name, position, isNsfw } = payload;
+                const { channelId, name, position, isNsfw, iconEmoji, iconUrl, iconPublicId } = payload;
 
                 // Permission check: MANAGE_CHANNELS
                 const allowed = await requirePermission(
@@ -191,16 +194,45 @@ export function registerChannelHandlers(
                 if (name !== undefined) data.name = name.trim();
                 if (position !== undefined) data.position = position;
 
-                // isNsfw only makes sense on text channels — look up type when
-                // it's part of this update so a stray value on a voice channel
-                // is silently ignored rather than stored.
-                if (isNsfw !== undefined) {
+                // isNsfw and the icon fields only make sense on text channels
+                // — look up type (plus the current icon, for cleanup) when
+                // either is part of this update, so a stray value on a voice
+                // channel is silently ignored rather than stored.
+                const isIconUpdate = iconEmoji !== undefined || iconUrl !== undefined;
+                let previousIconUrl: string | null = null;
+                let previousIconPublicId: string | null = null;
+                let newIconUrl: string | null = null;
+
+                if (isNsfw !== undefined || isIconUpdate) {
                     const existing = await app.prisma.channel.findUnique({
                         where: { id: channelId },
-                        select: { type: true },
+                        select: { type: true, iconUrl: true, iconPublicId: true },
                     });
                     if (existing?.type === "TEXT") {
-                        data.isNsfw = isNsfw;
+                        if (isNsfw !== undefined) data.isNsfw = isNsfw;
+
+                        if (isIconUpdate) {
+                            previousIconUrl = existing.iconUrl;
+                            previousIconPublicId = existing.iconPublicId;
+
+                            // iconEmoji and iconUrl are mutually exclusive —
+                            // setting one always clears the other. Neither
+                            // set (both null/omitted) resets to the default icon.
+                            if (iconEmoji) {
+                                data.iconEmoji = iconEmoji;
+                                data.iconUrl = null;
+                                data.iconPublicId = null;
+                            } else if (iconUrl) {
+                                data.iconUrl = iconUrl;
+                                data.iconPublicId = iconPublicId ?? null;
+                                data.iconEmoji = null;
+                                newIconUrl = iconUrl;
+                            } else {
+                                data.iconEmoji = null;
+                                data.iconUrl = null;
+                                data.iconPublicId = null;
+                            }
+                        }
                     }
                 }
 
@@ -215,6 +247,13 @@ export function registerChannelHandlers(
                 });
 
                 ack({ success: true });
+
+                // Clean up an orphaned previous upload if this update
+                // replaced or cleared it (switching to emoji, uploading a
+                // new image, or resetting to default) — never blocks the ack.
+                if (isIconUpdate && previousIconUrl && previousIconUrl !== newIconUrl) {
+                    await deleteAttachment(previousIconUrl, previousIconPublicId ?? undefined).catch(() => {});
+                }
 
                 await broadcastTreeUpdate(app, io, channel.serverId);
 
@@ -284,6 +323,90 @@ export function registerChannelHandlers(
             } catch (err) {
                 app.log.error({ err }, "Error in REORDER_CHANNELS");
                 ack({ success: false, error: "Failed to reorder channels" });
+            }
+        });
+
+        // ── CHANNEL_MOVED ───────────────────────────────────────────────────
+        socket.on("CHANNEL_MOVED", async (payload, ack) => {
+            try {
+                const { channelId, newParentId } = payload;
+
+                const allowed = await requirePermission(
+                    app, socket, BigInt(PermissionFlags.MANAGE_CHANNELS),
+                );
+                if (!allowed) {
+                    ack({ success: false, error: "Permission denied" });
+                    return;
+                }
+
+                const serverId = socket.data.serverId;
+                if (!serverId) {
+                    ack({ success: false, error: "Not connected to a server" });
+                    return;
+                }
+
+                if (newParentId === channelId) {
+                    ack({ success: false, error: "A channel cannot be its own parent" });
+                    return;
+                }
+
+                const channel = await app.prisma.channel.findUnique({ where: { id: channelId } });
+                if (!channel || channel.serverId !== serverId) {
+                    ack({ success: false, error: "Channel not found" });
+                    return;
+                }
+
+                if (newParentId !== null) {
+                    const newParent = await app.prisma.channel.findUnique({ where: { id: newParentId } });
+                    if (!newParent || newParent.serverId !== serverId) {
+                        ack({ success: false, error: "Target parent channel not found" });
+                        return;
+                    }
+
+                    // Cycle check: walk up from newParentId toward the root —
+                    // if this ever reaches channelId, newParentId is a
+                    // descendant of channelId, and moving channelId under it
+                    // would create a cycle.
+                    let cursor: string | null = newParentId;
+                    while (cursor !== null) {
+                        if (cursor === channelId) {
+                            ack({ success: false, error: "Cannot move a channel into its own descendant" });
+                            return;
+                        }
+                        const cursorNode: { parentId: string | null } | null = await app.prisma.channel.findUnique({
+                            where: { id: cursor },
+                            select: { parentId: true },
+                        });
+                        cursor = cursorNode?.parentId ?? null;
+                    }
+                }
+
+                // Position is always recomputed server-side (append to the
+                // end of the new parent's siblings) rather than trusting the
+                // client's newPosition — there's no UI yet for picking a
+                // specific slot on move, and computing it fresh here avoids
+                // staleness against concurrent edits. Reordering within a
+                // parent afterward is handled separately by REORDER_CHANNELS.
+                const newSiblingsCount = await app.prisma.channel.count({
+                    where: { serverId, parentId: newParentId },
+                });
+
+                await app.prisma.channel.update({
+                    where: { id: channelId },
+                    data: { parentId: newParentId, position: newSiblingsCount },
+                });
+
+                ack({ success: true });
+
+                await broadcastTreeUpdate(app, io, serverId);
+
+                app.log.info(
+                    { socketId: socket.id, channelId, newParentId },
+                    "Channel moved",
+                );
+            } catch (err) {
+                app.log.error({ err }, "Error in CHANNEL_MOVED");
+                ack({ success: false, error: "Failed to move channel" });
             }
         });
 

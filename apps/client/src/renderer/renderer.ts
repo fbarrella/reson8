@@ -698,6 +698,9 @@ interface Reson8Api {
     setGlobalVoiceVolume(percent: number): void;
     setMicVolume(percent: number): void;
     setNoiseCancelEnabled(enabled: boolean): Promise<void>;
+    setNoiseCancelStrength(level: number): void;
+    setSelfHearEnabled(enabled: boolean): void;
+    setSelfHearVolume(percent: number): void;
     checkForUpdates(): Promise<{ status: "available" | "not-available" | "error"; message?: string }>;
     downloadUpdate(): Promise<void>;
     quitAndInstall(): void;
@@ -712,12 +715,20 @@ interface Reson8Api {
     ): Promise<{ success: boolean; channelId?: string; error?: string }>;
     updateChannel(
         channelId: string,
-        changes: { name?: string; position?: number; isNsfw?: boolean },
+        changes: {
+            name?: string;
+            position?: number;
+            isNsfw?: boolean;
+            iconEmoji?: string | null;
+            iconUrl?: string | null;
+            iconPublicId?: string | null;
+        },
     ): Promise<{ success: boolean; error?: string }>;
     reorderChannels(
         parentId: string | null,
         orderedChannelIds: string[],
     ): Promise<{ success: boolean; error?: string }>;
+    moveChannel(channelId: string, newParentId: string | null): Promise<{ success: boolean; error?: string }>;
     deleteChannel(channelId: string): Promise<{ success: boolean; error?: string }>;
     sendMessage(channelId: string, content: string, attachmentUrl?: string, attachmentPublicId?: string): Promise<{ success: boolean; messageId?: string; error?: string }>;
     deleteMessage(messageId: string): Promise<{ success: boolean; error?: string }>;
@@ -758,6 +769,7 @@ interface Reson8Api {
     toggleReaction(messageId: string, emoji: string, isDm: boolean): Promise<{ success: boolean; error?: string }>;
     uploadEmojiFile(fileBuffer: ArrayBuffer, fileName: string, mimeType: string): Promise<{ url: string; publicId?: string }>;
     uploadAnimatedEmojiFile(fileBuffer: ArrayBuffer, fileName: string, mimeType: string): Promise<{ url: string; publicId?: string }>;
+    uploadChannelIcon(fileBuffer: ArrayBuffer, fileName: string, mimeType: string): Promise<{ url: string; publicId?: string }>;
     createCustomEmoji(name: string, imageUrl: string, imagePublicId?: string, isAnimated?: boolean): Promise<{ success: boolean; emojiId?: string; error?: string }>;
     getApprovedEmojis(): Promise<{ success: boolean; emojis?: CustomEmoji[]; error?: string }>;
     getPendingEmojis(): Promise<{ success: boolean; emojis?: CustomEmoji[]; error?: string }>;
@@ -1134,6 +1146,20 @@ let micVolume = Number(localStorage.getItem("reson8-mic-volume") ?? "100");
 // AI noise cancelling (PRD 13.1) — off by default (a real CPU/latency cost),
 // persisted like the noise gate's own enabled flag.
 let noiseCancelEnabled = localStorage.getItem("reson8-noise-cancel-enabled") === "true";
+// Noise cancelling strength (PRD 14.12) — 0-100, was hardcoded to 100 (max)
+// which caused a quiet/paused voice to fade toward silence; 60 is a more
+// moderate default.
+let noiseCancelStrength = Number(localStorage.getItem("reson8-noise-cancel-strength") ?? "60");
+// Self-hear mic monitor (PRD 14.10) — deliberately NOT persisted across
+// restarts like the other voice settings above; this is a momentary
+// tuning/preview aid, not a standing preference, so it always starts off.
+// The playback volume is a genuine preference though, so that alone persists.
+let selfHearEnabled = false;
+let selfHearVolume = Number(localStorage.getItem("reson8-self-hear-volume") ?? "100");
+/** True only when enabling self-hear had to deafen (it wasn't already
+ *  deafened going in) — so disabling it later undoes only what it itself
+ *  forced, mirroring `_deafenAutoMuted`'s own remember/restore pattern. */
+let selfHearForcedDeafen = false;
 const audioNudgeVolumeSlider = document.getElementById("audio-nudge-volume-slider") as HTMLInputElement;
 const audioNudgeVolumeValue = document.getElementById("audio-nudge-volume-value") as HTMLSpanElement;
 const audioAlertVolumeSlider = document.getElementById("audio-alert-volume-slider") as HTMLInputElement;
@@ -1146,7 +1172,6 @@ api.setGlobalVoiceVolume(voiceVolume);
 
 // Mic sensitivity DOM refs
 const chkMicSensitivity = document.getElementById("chk-mic-sensitivity") as HTMLInputElement;
-const micSensitivitySliderWrap = document.getElementById("mic-sensitivity-slider-wrap") as HTMLDivElement;
 const micSensitivitySlider = document.getElementById("mic-sensitivity-slider") as HTMLInputElement;
 const micSensitivityValue = document.getElementById("mic-sensitivity-value") as HTMLSpanElement;
 const micLevelBar = document.getElementById("mic-level-bar") as HTMLDivElement;
@@ -1154,6 +1179,13 @@ const micSensitivitySection = document.getElementById("mic-sensitivity-section")
 const micVolumeSlider = document.getElementById("mic-volume-slider") as HTMLInputElement;
 const micVolumeValue = document.getElementById("mic-volume-value") as HTMLSpanElement;
 const chkNoiseCancel = document.getElementById("chk-noise-cancel") as HTMLInputElement;
+const noiseCancelStrengthSlider = document.getElementById("noise-cancel-strength-slider") as HTMLInputElement;
+const noiseCancelStrengthValue = document.getElementById("noise-cancel-strength-value") as HTMLSpanElement;
+const chkSelfHear = document.getElementById("chk-self-hear") as HTMLInputElement;
+const selfHearVolumeSlider = document.getElementById("self-hear-volume-slider") as HTMLInputElement;
+const selfHearVolumeValue = document.getElementById("self-hear-volume-value") as HTMLSpanElement;
+const selfHearBanner = document.getElementById("self-hear-banner") as HTMLDivElement;
+const btnStopSelfHear = document.getElementById("btn-stop-self-hear") as HTMLButtonElement;
 
 // Apply the saved mic volume before the user ever joins a channel (mirrors
 // setGlobalVoiceVolume above — a no-op until a VoiceService instance
@@ -1171,6 +1203,13 @@ const renameChannelInput = document.getElementById("rename-channel-input") as HT
 const btnRenameCancel = document.getElementById("btn-rename-cancel") as HTMLButtonElement;
 const btnRenameConfirm = document.getElementById("btn-rename-confirm") as HTMLButtonElement;
 let pendingRenameChannelId: string | null = null;
+
+// ── Move Channel Modal (PRD 14.5) ───────────────────────────────────────────
+const moveChannelModal = document.getElementById("move-channel-modal") as HTMLDivElement;
+const moveChannelSelect = document.getElementById("move-channel-select") as HTMLSelectElement;
+const btnMoveCancel = document.getElementById("btn-move-cancel") as HTMLButtonElement;
+const btnMoveConfirm = document.getElementById("btn-move-confirm") as HTMLButtonElement;
+let pendingMoveChannelId: string | null = null;
 
 // ── NSFW Channel Confirmation Modal (PRD 4.7) ───────────────────────────────
 const nsfwConfirmModal = document.getElementById("nsfw-confirm-modal") as HTMLDivElement;
@@ -1257,6 +1296,44 @@ const ANIMATED_EMOJI_MAX_UPLOAD_SIZE = 2 * 1024 * 1024; // 2MB, uploaded as-is
 let emojiAnimatedFile: File | null = null;
 let emojiAnimatedPreviewObjectUrl: string | null = null;
 
+// ── Channel Icon Modal (PRD 14.7, text channels only) ───────────────────────
+const channelIconModal = document.getElementById("channel-icon-modal") as HTMLDivElement;
+const channelIconStepSelect = document.getElementById("channel-icon-step-select") as HTMLDivElement;
+const channelIconStepEmoji = document.getElementById("channel-icon-step-emoji") as HTMLDivElement;
+const channelIconStepCrop = document.getElementById("channel-icon-step-crop") as HTMLDivElement;
+const channelIconEmojiGrid = document.getElementById("channel-icon-emoji-grid") as HTMLDivElement;
+const channelIconFileInput = document.getElementById("channel-icon-file-input") as HTMLInputElement;
+const btnChannelIconChooseEmoji = document.getElementById("btn-channel-icon-choose-emoji") as HTMLButtonElement;
+const btnChannelIconChooseImage = document.getElementById("btn-channel-icon-choose-image") as HTMLButtonElement;
+const btnChannelIconReset = document.getElementById("btn-channel-icon-reset") as HTMLButtonElement;
+const btnChannelIconCancelSelect = document.getElementById("btn-channel-icon-cancel-select") as HTMLButtonElement;
+const btnChannelIconBackFromEmoji = document.getElementById("btn-channel-icon-back-from-emoji") as HTMLButtonElement;
+const channelIconCropViewport = document.getElementById("channel-icon-crop-viewport") as HTMLDivElement;
+const channelIconCropImg = document.getElementById("channel-icon-crop-img") as HTMLImageElement;
+const channelIconCropZoom = document.getElementById("channel-icon-crop-zoom") as HTMLInputElement;
+const btnChannelIconUploadCancel = document.getElementById("btn-channel-icon-upload-cancel") as HTMLButtonElement;
+const btnChannelIconUploadConfirm = document.getElementById("btn-channel-icon-upload-confirm") as HTMLButtonElement;
+
+const CHANNEL_ICON_CROP_VIEWPORT_SIZE = 220;
+const CHANNEL_ICON_MAX_UPLOAD_SIZE = 512 * 1024; // 512KB, pre-crop (PRD 14.7's own cap, not the emoji one)
+const CHANNEL_ICON_ALLOWED_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+
+let pendingChannelIconId: string | null = null;
+
+// State for the channel-icon crop tool — a separate set of variables from
+// the emoji crop tool's own (duplicated, not shared, per this feature's
+// design decision), since both modals could in principle be reasoned about
+// independently and neither is ever open while the other is mid-crop.
+let channelIconCropNaturalWidth = 0;
+let channelIconCropNaturalHeight = 0;
+let channelIconCropBaseScale = 1;
+let channelIconCropZoomFactor = 1;
+let channelIconCropOffsetX = 0;
+let channelIconCropOffsetY = 0;
+let channelIconCropObjectUrl: string | null = null;
+let channelIconCropDragging = false;
+let channelIconCropDragStart = { x: 0, y: 0, offsetX: 0, offsetY: 0 };
+
 // State for the crop tool
 let emojiCropNaturalWidth = 0;
 let emojiCropNaturalHeight = 0;
@@ -1284,8 +1361,43 @@ interface ChatTab {
      *  the first message renders; reset to undefined wherever `messagesEl`
      *  is cleared and re-rendered from scratch. */
     lastRenderedDateKey?: string;
+    /** Pinned to the very top of `messagesEl` at all times (PRD 14.2) — the
+     *  `IntersectionObserver` target that triggers loading the next older
+     *  page when scrolled into view. Also doubles as the "Loading older
+     *  messages…" indicator via its `.loading` class/text content. */
+    topSentinelEl: HTMLDivElement;
+    scrollObserver?: IntersectionObserver;
+    /** `createdAt` of the oldest message currently rendered — the cursor
+     *  passed as `before` on the next "load older" fetch. */
+    oldestLoadedTimestamp?: string;
+    /** Day-key (`YYYY-M-D`) of the oldest currently-rendered message — the
+     *  seed for the prepend path's date-divider lookback (PRD 14.2). */
+    oldestRenderedDateKey?: string;
+    /** Optimistic: true until a "load older" fetch returns fewer than a
+     *  full page, at which point real history is known to be exhausted. */
+    hasMoreOlder: boolean;
+    /** Guards against overlapping "load older" fetches from rapid scroll. */
+    loadingOlder: boolean;
+    /** True once the initial page has actually finished loading — guards
+     *  the `IntersectionObserver` from firing a premature "load older"
+     *  fetch before `oldestLoadedTimestamp`/`hasMoreOlder` are real. */
+    initialLoadDone: boolean;
+    /** Always the last child of `messagesEl` (PRD 14.3) — the
+     *  `IntersectionObserver` target that shows/hides the floating
+     *  "Jump to Most Recent Message" button. */
+    bottomSentinelEl: HTMLDivElement;
+    jumpToRecentBtn: HTMLButtonElement;
+    /** False only after `jumpToPinnedMessage` loads a window that might not
+     *  reach the channel's true latest message — set back to true once a
+     *  live message arrives or a fresh latest-page fetch confirms it (PRD
+     *  14.3). Everywhere else (initial load, normal live appends) the last
+     *  rendered message is by definition the true latest, so this stays
+     *  true throughout ordinary use. */
+    atTrueLatest: boolean;
 }
 const chatTabs = new Map<string, ChatTab>();
+/** Initial + "load older" page size for both channel and DM history (PRD 14.2). */
+const CHAT_PAGE_SIZE = 20;
 let activeTabId = "server-log"; // default active tab
 let allServerRoles: any[] = []; // cached roles for the admin panel
 
@@ -1374,6 +1486,11 @@ interface TreeNode {
     parentId: string | null;
     isNsfw?: boolean;
     hasUnread?: boolean;
+    /** Custom tree icon (PRD 14.7, text channels only) — mutually
+     *  exclusive with `iconUrl`; falls back to the default 💬 icon when
+     *  both are null/undefined. */
+    iconEmoji?: string | null;
+    iconUrl?: string | null;
     children: TreeNode[];
     occupants: { userId: string; nickname: string; isMuted?: boolean; isDeafened?: boolean; isSharingScreen?: boolean }[];
 }
@@ -1480,13 +1597,22 @@ function renderCategory(node: TreeNode, siblings: TreeNode[]): HTMLDivElement {
     const category = document.createElement("div");
     category.className = "tree-category";
 
+    // A voice channel that gains a child stays non-joinable (its own
+    // occupant/join affordance never applied once it became a parent) —
+    // previously silent about this, so this badge makes it explicit
+    // instead of the join button just quietly disappearing (PRD 14.6).
+    const voiceBadge = node.type === "VOICE"
+        ? `<span class="category-voice-badge" title="Voice channels with sub-channels can't be joined directly">Category</span>`
+        : "";
+
     const label = document.createElement("div");
     label.className = "tree-category-label";
-    label.innerHTML = `<span class="arrow">▾</span> ${escapeHtml(node.name)}`;
+    label.innerHTML = `<span class="arrow">▾</span> ${escapeHtml(node.name)}${voiceBadge}`;
     label.addEventListener("click", () => {
         category.classList.toggle("collapsed");
     });
     attachChannelDragHandlers(label, node, siblings);
+    attachChannelContextMenu(label, node);
     category.appendChild(label);
 
     const children = document.createElement("div");
@@ -1501,9 +1627,6 @@ function renderCategory(node: TreeNode, siblings: TreeNode[]): HTMLDivElement {
         }
     }
 
-    // Also render the category itself as a joinable channel if it's a voice channel
-    // (categories can also be voice channels that users can join)
-
     category.appendChild(children);
     return category;
 }
@@ -1517,7 +1640,23 @@ function renderChannel(node: TreeNode, siblings: TreeNode[]): HTMLDivElement {
 
     const isVoice = node.type === "VOICE";
     const iconClass = isVoice ? "voice" : "text";
-    const icon = isVoice ? "🔊" : "💬";
+
+    // Custom text-channel icon (PRD 14.7): an uploaded image takes priority
+    // over a custom emoji, which takes priority over the default 💬 — the
+    // two are mutually exclusive server-side, so at most one is ever set.
+    let icon = isVoice ? "🔊" : "💬";
+    let iconIsImage = false;
+    if (!isVoice) {
+        if (node.iconUrl) {
+            icon = node.iconUrl;
+            iconIsImage = true;
+        } else if (node.iconEmoji) {
+            icon = node.iconEmoji;
+        }
+    }
+    const iconHtml = iconIsImage
+        ? `<span class="ch-icon ${iconClass} custom-image"><img src="${escapeHtml(icon)}" alt=""></span>`
+        : `<span class="ch-icon ${iconClass}">${icon}</span>`;
 
     const count = node.occupants.length;
     const countBadge = count > 0 ? `<span class="ch-count">${count}</span>` : "";
@@ -1547,7 +1686,7 @@ function renderChannel(node: TreeNode, siblings: TreeNode[]): HTMLDivElement {
     const unreadDot = !isVoice && unreadChannelIds.has(node.id) ? `<span class="unread-dot"></span>` : "";
 
     channel.innerHTML = `
-        <span class="ch-icon ${iconClass}">${icon}</span>
+        ${iconHtml}
         <span class="ch-name">${escapeHtml(node.name)}</span>
         ${unreadDot}
         ${nsfwBadge}
@@ -1557,9 +1696,25 @@ function renderChannel(node: TreeNode, siblings: TreeNode[]): HTMLDivElement {
 
     channel.addEventListener("click", () => handleChannelClick(node));
     attachChannelDragHandlers(channel, node, siblings);
+    attachChannelContextMenu(channel, node);
 
-    // Right-click → Rename / Toggle NSFW (text only) / Delete
-    channel.addEventListener("contextmenu", (e) => {
+    return channel;
+}
+
+/**
+ * Right-click → Rename / Toggle NSFW (text only) / Delete. Shared by
+ * regular channel rows (`renderChannel`) and category/parent rows
+ * (`renderCategory`, PRD 14.6) — a category previously had no context menu
+ * attached at all once a channel gained a child, even though rename
+ * already worked unconditionally server-side via `UPDATE_CHANNEL`.
+ * Permission gating is server-side only (same as before this extraction) —
+ * the menu is shown to everyone and a rejected action surfaces via the
+ * existing "insufficient_perms.mp3" pattern.
+ */
+function attachChannelContextMenu(el: HTMLElement, node: TreeNode): void {
+    const isVoice = node.type === "VOICE";
+
+    el.addEventListener("contextmenu", (e) => {
         e.preventDefault();
         e.stopPropagation();
 
@@ -1572,6 +1727,8 @@ function renderChannel(node: TreeNode, siblings: TreeNode[]): HTMLDivElement {
 
         menu.innerHTML = `
             <button class="channel-ctx-menu-item ctx-rename-btn">✏️ Rename</button>
+            <button class="channel-ctx-menu-item ctx-move-btn">📁 Move to…</button>
+            ${!isVoice ? `<button class="channel-ctx-menu-item ctx-icon-btn">🖼️ Set Icon</button>` : ""}
             ${!isVoice ? `<button class="channel-ctx-menu-item ctx-nsfw-toggle-btn">🔞 ${node.isNsfw ? "Unmark" : "Mark"} as NSFW</button>` : ""}
             <button class="ctx-delete-channel-btn">🗑️ Delete Channel</button>
         `;
@@ -1579,6 +1736,16 @@ function renderChannel(node: TreeNode, siblings: TreeNode[]): HTMLDivElement {
         menu.querySelector(".ctx-rename-btn")?.addEventListener("click", () => {
             menu.remove();
             showRenameModal(node.id, node.name);
+        });
+
+        menu.querySelector(".ctx-move-btn")?.addEventListener("click", () => {
+            menu.remove();
+            showMoveModal(node.id, node.name);
+        });
+
+        menu.querySelector(".ctx-icon-btn")?.addEventListener("click", () => {
+            menu.remove();
+            showChannelIconModal(node.id);
         });
 
         menu.querySelector(".ctx-nsfw-toggle-btn")?.addEventListener("click", async () => {
@@ -1605,8 +1772,6 @@ function renderChannel(node: TreeNode, siblings: TreeNode[]): HTMLDivElement {
         };
         setTimeout(() => document.addEventListener("click", closeCtx, true), 0);
     });
-
-    return channel;
 }
 
 // Inline SVGs shown next to an occupant's name when they've muted or deafened
@@ -1649,7 +1814,11 @@ function renderOccupants(container: HTMLElement, node: TreeNode): void {
     for (const occ of node.occupants) {
         const el = document.createElement("div");
         el.className = "tree-occupant";
-        if (activeSpeakers.has(occ.userId)) {
+        // The local user's own speaking state lives in `isLocalSpeaking`
+        // (PRD 14.11), not `activeSpeakers` — checked here too so a tree
+        // re-render (channel update, mute/deafen toggle, etc.) doesn't
+        // momentarily drop the halo until the next analyser tick reapplies it.
+        if (activeSpeakers.has(occ.userId) || (occ.userId === myId && isLocalSpeaking)) {
             el.classList.add("speaking");
         }
         el.setAttribute("data-user-id", occ.userId);
@@ -1808,6 +1977,7 @@ async function handleChannelClick(node: TreeNode): Promise<void> {
                 api.setGlobalVoiceVolume(voiceVolume);
                 api.setMicVolume(micVolume);
                 api.setNoiseCancelEnabled(noiseCancelEnabled);
+                api.setNoiseCancelStrength(noiseCancelStrength);
 
                 // Initialize previous occupants for join/leave sound detection
                 previousOccupantIds = new Set(node.occupants.map((o: any) => o.userId));
@@ -1829,6 +1999,18 @@ async function handleChannelClick(node: TreeNode): Promise<void> {
                 // Mic level meter runs regardless of gate/PTT state — it now
                 // reflects live input at all times, not just while gating.
                 startMicLevelMeter();
+
+                // Self-hear (PRD 14.10): if left on from before this join
+                // (e.g. was previewing pre-join), rebuild the monitor
+                // against this join's fresh graph and reapply the same
+                // forced mute+deafen the toggle always implies — must run
+                // after the PTT/gate block above, which otherwise
+                // overwrites `isMuted` back to false.
+                if (selfHearEnabled) {
+                    applySelfHearMuteDeafenForcing();
+                    api.setSelfHearEnabled(true);
+                    updateSelfHearBanner();
+                }
 
                 // Sync mute/deafen state to the server so other occupants' icons
                 // aren't left showing a stale state from a previous session.
@@ -1972,6 +2154,56 @@ function toggleDeafenAndNotify(): void {
     }
 }
 
+// ── Self-Hear Mic Monitor (PRD 14.10) ────────────────────────────────────────
+
+/**
+ * Forces mute+deafen together when self-hear turns on while actually in a
+ * voice channel — deafening already auto-mutes the mic if it wasn't already
+ * paused (the existing accumulation logic, PRD 10.4), so a single
+ * `toggleDeafenAndNotify()` call covers both at once with no separate mute
+ * step needed. Only acts (and only remembers having forced anything) if not
+ * already deafened going in, so disabling self-hear later never undoes a
+ * deafen the user had already set themselves. Called both from the toggle
+ * handler and, since a fresh `VoiceService` is constructed per join, from
+ * both places a voice session (re)starts.
+ */
+function applySelfHearMuteDeafenForcing(): void {
+    if (isInVoice && !isDeafened) {
+        selfHearForcedDeafen = true;
+        toggleDeafenAndNotify();
+    } else {
+        selfHearForcedDeafen = false;
+    }
+}
+
+function updateSelfHearBanner(): void {
+    selfHearBanner?.classList.toggle("visible", selfHearEnabled && isInVoice);
+}
+
+/** Single entry point for turning self-hear on/off — used by the Settings
+ *  checkbox, the banner's "Stop Previewing" button, and leaving voice. */
+function setSelfHearEnabledAndNotify(enabled: boolean): void {
+    selfHearEnabled = enabled;
+    // The card's expand/collapse is driven purely by this checkbox's own
+    // :checked state via CSS :has() — no separate visibility toggle needed.
+    if (chkSelfHear) chkSelfHear.checked = enabled;
+
+    if (enabled) {
+        applySelfHearMuteDeafenForcing();
+        api.setSelfHearEnabled(true);
+    } else {
+        api.setSelfHearEnabled(false);
+        // Restore exactly what self-hear itself forced — if the user has
+        // since manually undeafened some other way, there's nothing left
+        // to restore.
+        if (selfHearForcedDeafen && isDeafened) {
+            toggleDeafenAndNotify();
+        }
+        selfHearForcedDeafen = false;
+    }
+    updateSelfHearBanner();
+}
+
 function leaveVoiceAndNotify(): void {
     api.leaveVoiceChannel();
     isInVoice = false;
@@ -1979,6 +2211,16 @@ function leaveVoiceAndNotify(): void {
     previousOccupantIds = new Set();
     previousSharingIds = new Set();
     stopMicLevelMeter();
+    // Self-hear (PRD 14.10) doesn't carry over into an unrelated future
+    // join — the monitor graph itself is already gone with the rest of the
+    // torn-down session, so just resets the UI/flags to match. No need to
+    // restore mute/deafen here: leaving the channel makes that moot.
+    if (selfHearEnabled) {
+        selfHearEnabled = false;
+        selfHearForcedDeafen = false;
+        if (chkSelfHear) chkSelfHear.checked = false;
+        updateSelfHearBanner();
+    }
     updateVoiceUI();
     log("Left voice channel", "info");
     SoundAlert.play("leaving-channel.mp3");
@@ -2246,6 +2488,83 @@ btnRenameConfirm.addEventListener("click", async () => {
     }
 });
 
+// ── Move Channel Modal (PRD 14.5) ───────────────────────────────────────────
+
+/** Marks every descendant of `node` (not `node` itself) as an invalid move
+ *  target, so the picker can't offer a choice the server would reject
+ *  anyway as a cycle. */
+function collectDescendantIds(node: TreeNode, into: Set<string>): void {
+    for (const child of node.children) {
+        into.add(child.id);
+        collectDescendantIds(child, into);
+    }
+}
+
+/** Populates the "Move to…" select with every channel except the one being
+ *  moved and its own descendants (moving into either would be rejected
+ *  server-side as a no-op or a cycle — filtering them out here avoids
+ *  offering a choice that can only ever fail). */
+function populateMoveChannelSelect(tree: TreeNode[], channelId: string): void {
+    const selfNode = findTreeNode(tree, channelId);
+    const invalidIds = new Set<string>([channelId]);
+    if (selfNode) collectDescendantIds(selfNode, invalidIds);
+
+    moveChannelSelect.innerHTML = '<option value="">— None (top-level) —</option>';
+
+    const addOptions = (nodes: TreeNode[], depth: number) => {
+        for (const node of nodes) {
+            // Skip (and don't recurse into) an invalid node — it and
+            // everything beneath it are all invalid targets too.
+            if (invalidIds.has(node.id)) continue;
+
+            const indent = "  ".repeat(depth);
+            const option = document.createElement("option");
+            option.value = node.id;
+            option.textContent = `${indent}${node.name}`;
+            moveChannelSelect.appendChild(option);
+
+            if (node.children.length > 0) {
+                addOptions(node.children, depth + 1);
+            }
+        }
+    };
+    addOptions(tree, 0);
+}
+
+function showMoveModal(channelId: string, channelName: string): void {
+    pendingMoveChannelId = channelId;
+    populateMoveChannelSelect(currentTree, channelId);
+    moveChannelModal.classList.add("visible");
+}
+
+btnMoveCancel.addEventListener("click", () => {
+    moveChannelModal.classList.remove("visible");
+    pendingMoveChannelId = null;
+});
+
+moveChannelModal.addEventListener("click", (e) => {
+    if (e.target === moveChannelModal) {
+        moveChannelModal.classList.remove("visible");
+        pendingMoveChannelId = null;
+    }
+});
+
+btnMoveConfirm.addEventListener("click", async () => {
+    if (!pendingMoveChannelId) return;
+    const channelId = pendingMoveChannelId;
+    const newParentId = moveChannelSelect.value || null;
+    moveChannelModal.classList.remove("visible");
+    pendingMoveChannelId = null;
+
+    const result = await api.moveChannel(channelId, newParentId);
+    if (result.success) {
+        log("Channel moved", "success");
+    } else {
+        log(`Failed to move channel: ${result.error}`, "error");
+        if (result.error && /permission|denied/i.test(result.error)) SoundAlert.play("insufficient_perms.mp3");
+    }
+});
+
 // ── NSFW Channel Confirmation Modal (PRD 4.7) ───────────────────────────────
 
 btnNsfwCancel.addEventListener("click", () => {
@@ -2359,7 +2678,7 @@ api.on("connected", (data: { serverId: string; instanceId: string }) => {
     api.getUnreadDmPartners().then((res) => {
         if (res.success && res.partners && res.partners.length > 0) {
             for (const p of res.partners) {
-                openDmTab(p.partnerId, p.partnerNickname);
+                openDmTab(p.partnerId, p.partnerNickname, p.unreadCount);
             }
         }
     });
@@ -2472,6 +2791,12 @@ api.on("voice-reconnected", (data: { channelId: string }) => {
     api.setGlobalVoiceVolume(voiceVolume);
     api.setMicVolume(micVolume);
     api.setNoiseCancelEnabled(noiseCancelEnabled);
+    api.setNoiseCancelStrength(noiseCancelStrength);
+    if (selfHearEnabled) {
+        applySelfHearMuteDeafenForcing();
+        api.setSelfHearEnabled(true);
+        updateSelfHearBanner();
+    }
     api.setVoiceState(isMuted, isDeafened);
     previousOccupantIds = new Set((node?.occupants ?? []).map((o) => o.userId));
     previousSharingIds = sharingIdsOf(node?.occupants ?? []);
@@ -2625,10 +2950,16 @@ api.on("user-left", (data: { userId: string }) => {
 // ── Active Speaker Indicator ──────────────────────────────────────────────
 
 api.on("active-speakers", (data: { channelId: string; speakers: string[] }) => {
+    // The local user's own halo is now driven directly by the mic-level
+    // meter's analyser tap (PRD 14.11), not this server broadcast — skip
+    // it here entirely so the two paths never fight over the same DOM
+    // element (an instant local update vs. a 100ms-delayed server one).
+    const myId = api.getInstanceId();
     const newSpeakers = new Set(data.speakers);
 
     // Users who stopped speaking: start hold timer
     for (const userId of activeSpeakers) {
+        if (userId === myId) continue;
         if (!newSpeakers.has(userId)) {
             // Only start a hold timer if there isn't one already
             if (!speakerHoldTimers.has(userId)) {
@@ -2646,6 +2977,7 @@ api.on("active-speakers", (data: { channelId: string; speakers: string[] }) => {
 
     // Users who are speaking: add immediately (cancel any pending removal)
     for (const userId of newSpeakers) {
+        if (userId === myId) continue;
         const existingTimer = speakerHoldTimers.get(userId);
         if (existingTimer) {
             clearTimeout(existingTimer);
@@ -2965,13 +3297,20 @@ function createPreviewCard(data: LinkPreviewData): HTMLDivElement {
     return card;
 }
 
-function injectLinkPreview(messageEl: HTMLElement, messagesContainer: HTMLElement, url: string): void {
+/**
+ * `onLoaded` lets the caller decide whether a preview card finishing async
+ * load should stick the view to the bottom (PRD 14.1/14.2) — appending a
+ * new message the user was already at the bottom for, vs. revealing a
+ * historical message above the fold while prepending older pages, need
+ * opposite answers, so this can no longer hardcode "always scroll down."
+ */
+function injectLinkPreview(messageEl: HTMLElement, url: string, onLoaded?: () => void): void {
     // Check renderer-side cache first
     const cached = linkPreviewCache.get(url);
     if (cached !== undefined) {
         if (cached) {
             messageEl.appendChild(createPreviewCard(cached));
-            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+            onLoaded?.();
         }
         return;
     }
@@ -2983,7 +3322,7 @@ function injectLinkPreview(messageEl: HTMLElement, messagesContainer: HTMLElemen
         // Guard: ensure the message is still in the DOM (tab may have been closed)
         if (!messageEl.isConnected) return;
         messageEl.appendChild(createPreviewCard(data));
-        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        onLoaded?.();
     }).catch(() => {
         linkPreviewCache.set(url, null);
     });
@@ -3120,6 +3459,16 @@ function switchTab(tabId: string): void {
         chatInputBar.classList.add("visible");
         chatInput.focus();
     }
+
+    // A chat tab always opens/refocuses scrolled to the latest message
+    // (PRD 14.1) — never resume whatever scroll position was left over
+    // from a prior visit. Guarded on `initialLoadDone` so a brand-new tab
+    // (still mid-fetch, empty container) isn't force-scrolled prematurely —
+    // its own render loop already lands on the bottom once messages arrive.
+    const tab = chatTabs.get(tabId);
+    if (tab?.initialLoadDone) {
+        tab.messagesEl.scrollTop = tab.messagesEl.scrollHeight;
+    }
 }
 
 function openChatTab(channelId: string, channelName: string): void {
@@ -3167,7 +3516,14 @@ function openChatTab(channelId: string, channelName: string): void {
 
     const messagesEl = document.createElement("div");
     messagesEl.className = "chat-messages";
+    const topSentinelEl = document.createElement("div");
+    topSentinelEl.className = "chat-top-sentinel";
+    messagesEl.appendChild(topSentinelEl);
     contentEl.appendChild(messagesEl);
+    const { bottomSentinelEl, jumpToRecentBtn } = createJumpToRecentControls(contentEl, messagesEl, () => {
+        const t = chatTabs.get(channelId);
+        if (t) scrollToMostRecent(t);
+    });
 
     tabContentArea.appendChild(contentEl);
 
@@ -3181,8 +3537,16 @@ function openChatTab(channelId: string, channelName: string): void {
         loaded: false,
         pinBarEl,
         pinnedMessageId: null,
+        topSentinelEl,
+        hasMoreOlder: false,
+        loadingOlder: false,
+        initialLoadDone: false,
+        bottomSentinelEl,
+        jumpToRecentBtn,
+        atTrueLatest: true,
     };
     chatTabs.set(channelId, chatTab);
+    setupInfiniteScroll(chatTab);
 
     // Switch to the new tab
     switchTab(channelId);
@@ -3193,7 +3557,7 @@ function openChatTab(channelId: string, channelName: string): void {
 
 // ── DM Tab Management ─────────────────────────────────────────────────────
 
-function openDmTab(userId: string, nickname: string): void {
+function openDmTab(userId: string, nickname: string, unreadCountHint?: number): void {
     const tabKey = `dm:${userId}`;
 
     // If tab already exists, just switch to it
@@ -3225,7 +3589,14 @@ function openDmTab(userId: string, nickname: string): void {
 
     const messagesEl = document.createElement("div");
     messagesEl.className = "chat-messages";
+    const topSentinelEl = document.createElement("div");
+    topSentinelEl.className = "chat-top-sentinel";
+    messagesEl.appendChild(topSentinelEl);
     contentEl.appendChild(messagesEl);
+    const { bottomSentinelEl, jumpToRecentBtn } = createJumpToRecentControls(contentEl, messagesEl, () => {
+        const t = chatTabs.get(tabKey);
+        if (t) scrollToMostRecent(t);
+    });
 
     tabContentArea.appendChild(contentEl);
 
@@ -3238,20 +3609,29 @@ function openDmTab(userId: string, nickname: string): void {
         messagesEl,
         loaded: false,
         pinnedMessageId: null,
+        topSentinelEl,
+        hasMoreOlder: false,
+        loadingOlder: false,
+        initialLoadDone: false,
+        bottomSentinelEl,
+        jumpToRecentBtn,
+        atTrueLatest: true,
     };
     chatTabs.set(tabKey, chatTab);
+    setupInfiniteScroll(chatTab);
 
     // Switch to the new tab
     switchTab(tabKey);
 
     // Fetch DM history
-    loadChatHistory(chatTab);
+    loadChatHistory(chatTab, unreadCountHint);
 }
 
 function closeTab(channelId: string): void {
     const tab = chatTabs.get(channelId);
     if (!tab) return;
 
+    tab.scrollObserver?.disconnect();
     tab.tabEl.remove();
     tab.contentEl.remove();
     chatTabs.delete(channelId);
@@ -3262,15 +3642,35 @@ function closeTab(channelId: string): void {
     }
 }
 
-async function loadChatHistory(tab: ChatTab): Promise<void> {
+/**
+ * Loads a tab's initial page of history (PRD 14.2). `unreadCountHint`
+ * (DM tabs only, from `GET_UNREAD_DM_PARTNERS`'s per-partner count) widens
+ * the initial fetch past `CHAT_PAGE_SIZE` when there's a deeper unread
+ * backlog than one page — otherwise the "Unread Messages" separator below
+ * would miss the true first-unread message, silently regressing an
+ * existing feature just to shrink the common case's initial fetch size.
+ */
+async function loadChatHistory(tab: ChatTab, unreadCountHint?: number): Promise<void> {
     if (tab.loaded) return;
     tab.loaded = true;
 
+    await fetchAndRenderLatestPage(tab, unreadCountHint);
+    tab.initialLoadDone = true;
+}
+
+/**
+ * Fetches and renders the freshest page of a tab's history — shared by the
+ * initial load (`loadChatHistory`) and by "Jump to Most Recent Message"'s
+ * from-scratch rebuild (`rebuildTabAtLatest`, PRD 14.3) when the true
+ * latest message isn't currently loaded.
+ */
+async function fetchAndRenderLatestPage(tab: ChatTab, unreadCountHint?: number): Promise<void> {
     if (tab.channelId.startsWith("dm:")) {
         // DM tab — fetch direct messages
         const partnerId = tab.channelId.slice(3);
         const myId = api.getInstanceId();
-        const result = await api.fetchDirectMessages(partnerId);
+        const initialLimit = Math.min(Math.max(unreadCountHint ?? 0, CHAT_PAGE_SIZE), 100);
+        const result = await api.fetchDirectMessages(partnerId, undefined, initialLimit);
         if (result.success && result.messages) {
             // Find the first unread message (sent by the partner, not by us)
             const firstUnreadIndex = result.messages.findIndex(
@@ -3283,7 +3683,7 @@ async function loadChatHistory(tab: ChatTab): Promise<void> {
                     const separator = document.createElement("div");
                     separator.className = "unread-separator";
                     separator.innerHTML = "<span>Unread Messages</span>";
-                    tab.messagesEl.appendChild(separator);
+                    tab.bottomSentinelEl.insertAdjacentElement("beforebegin", separator);
                 }
                 renderDmMessage(tab, result.messages[i]);
             }
@@ -3292,10 +3692,12 @@ async function loadChatHistory(tab: ChatTab): Promise<void> {
             if (firstUnreadIndex !== -1) {
                 api.markDmsRead(partnerId);
             }
+
+            tab.hasMoreOlder = result.messages.length >= initialLimit;
         }
     } else {
         // Channel tab — fetch channel messages
-        const result = await api.fetchMessages(tab.channelId);
+        const result = await api.fetchMessages(tab.channelId, undefined, CHAT_PAGE_SIZE);
         if (result.success && result.messages) {
             // Set before rendering so each message's pin button (PRD 11.5)
             // reflects the correct active/inactive state on first paint.
@@ -3304,8 +3706,136 @@ async function loadChatHistory(tab: ChatTab): Promise<void> {
                 renderChatMessage(tab, msg);
             }
             updatePinBarUI(tab, result.pinnedMessage ?? null);
+            tab.hasMoreOlder = result.messages.length >= CHAT_PAGE_SIZE;
         }
     }
+}
+
+/**
+ * "Jump to Most Recent Message" (PRD 14.3): when the true latest message
+ * isn't currently loaded — the only case being after `jumpToPinnedMessage`
+ * showed a window that might not reach the present — rebuilds the tab from
+ * a fresh latest-page fetch, mirroring `jumpToPinnedMessage`'s own
+ * wipe-and-rebuild shape, rather than trying to scroll through a
+ * potentially huge unloaded gap.
+ */
+async function rebuildTabAtLatest(tab: ChatTab): Promise<void> {
+    tab.messagesEl.innerHTML = "";
+    tab.lastRenderedDateKey = undefined;
+    tab.oldestRenderedDateKey = undefined;
+    tab.oldestLoadedTimestamp = undefined;
+    tab.messagesEl.appendChild(tab.topSentinelEl);
+    tab.messagesEl.appendChild(tab.bottomSentinelEl);
+    tab.loadingOlder = false;
+
+    await fetchAndRenderLatestPage(tab);
+    tab.atTrueLatest = true;
+}
+
+/** Click handler for the floating "Jump to Most Recent Message" button
+ *  (PRD 14.3). */
+async function scrollToMostRecent(tab: ChatTab): Promise<void> {
+    if (!tab.atTrueLatest) {
+        await rebuildTabAtLatest(tab);
+    }
+    tab.messagesEl.scrollTo({ top: tab.messagesEl.scrollHeight, behavior: "smooth" });
+    // Landing at the bottom clears unread state, same as a natural
+    // scroll-to-bottom or tab switch already does.
+    markChannelRead(tab.channelId);
+}
+
+function setJumpToRecentVisible(tab: ChatTab, visible: boolean): void {
+    tab.jumpToRecentBtn.classList.toggle("visible", visible);
+}
+
+/** Builds the bottom sentinel + floating button pair for a new tab (PRD
+ *  14.3) — `bottomSentinelEl` must be appended to `messagesEl` immediately
+ *  by the caller (before any messages exist yet) so every later message
+ *  insertion via `bottomSentinelEl.insertAdjacentElement("beforebegin", …)`
+ *  keeps it pinned as the last child automatically. */
+function createJumpToRecentControls(
+    contentEl: HTMLDivElement,
+    messagesEl: HTMLDivElement,
+    onClick: () => void,
+): { bottomSentinelEl: HTMLDivElement; jumpToRecentBtn: HTMLButtonElement } {
+    const bottomSentinelEl = document.createElement("div");
+    bottomSentinelEl.className = "chat-bottom-sentinel";
+    messagesEl.appendChild(bottomSentinelEl);
+
+    const jumpToRecentBtn = document.createElement("button");
+    jumpToRecentBtn.type = "button";
+    jumpToRecentBtn.className = "jump-to-recent-btn";
+    jumpToRecentBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg><span>Jump to Most Recent Message</span>`;
+    jumpToRecentBtn.addEventListener("click", onClick);
+    contentEl.appendChild(jumpToRecentBtn);
+
+    return { bottomSentinelEl, jumpToRecentBtn };
+}
+
+/**
+ * Fetches and prepends the next older page once the top sentinel scrolls
+ * into view (PRD 14.2). Cursor is `tab.oldestLoadedTimestamp`, the
+ * `createdAt` of whatever message is currently the earliest rendered.
+ */
+async function loadOlderMessages(tab: ChatTab): Promise<void> {
+    if (!tab.initialLoadDone || tab.loadingOlder || !tab.hasMoreOlder) return;
+
+    tab.loadingOlder = true;
+    tab.topSentinelEl.classList.add("loading");
+    tab.topSentinelEl.textContent = "Loading older messages…";
+
+    const isDm = tab.channelId.startsWith("dm:");
+    const result = isDm
+        ? await api.fetchDirectMessages(tab.channelId.slice(3), tab.oldestLoadedTimestamp, CHAT_PAGE_SIZE)
+        : await api.fetchMessages(tab.channelId, tab.oldestLoadedTimestamp, CHAT_PAGE_SIZE);
+
+    tab.loadingOlder = false;
+    tab.topSentinelEl.classList.remove("loading");
+    tab.topSentinelEl.textContent = "";
+
+    if (!result.success || !result.messages || result.messages.length === 0) {
+        tab.hasMoreOlder = false;
+        return;
+    }
+
+    tab.hasMoreOlder = result.messages.length >= CHAT_PAGE_SIZE;
+
+    // Preserve the user's visual anchor across the prepend (Slack/Discord/
+    // Teams pattern) — record height before insert, then correct scrollTop
+    // by exactly the height the prepended content added.
+    const oldScrollHeight = tab.messagesEl.scrollHeight;
+    const oldScrollTop = tab.messagesEl.scrollTop;
+
+    if (isDm) {
+        prependOlderMessages(tab, result.messages as DirectMessage[], true);
+    } else {
+        prependOlderMessages(tab, result.messages as ChatMessage[], false);
+    }
+
+    const newScrollHeight = tab.messagesEl.scrollHeight;
+    tab.messagesEl.scrollTop = oldScrollTop + (newScrollHeight - oldScrollHeight);
+}
+
+/** One `IntersectionObserver` per tab, watching both the top sentinel
+ *  (PRD 14.2 — triggers loading older history) and the bottom sentinel
+ *  (PRD 14.3 — shows/hides "Jump to Most Recent Message"), against its own
+ *  scrollable `messagesEl` as root (not the window). */
+function setupInfiniteScroll(tab: ChatTab): void {
+    const observer = new IntersectionObserver(
+        (entries) => {
+            for (const entry of entries) {
+                if (entry.target === tab.topSentinelEl) {
+                    if (entry.isIntersecting) loadOlderMessages(tab);
+                } else if (entry.target === tab.bottomSentinelEl) {
+                    setJumpToRecentVisible(tab, !entry.isIntersecting);
+                }
+            }
+        },
+        { root: tab.messagesEl, threshold: 0 },
+    );
+    observer.observe(tab.topSentinelEl);
+    observer.observe(tab.bottomSentinelEl);
+    tab.scrollObserver = observer;
 }
 
 /** "13th", "1st", "22nd", etc. */
@@ -3332,6 +3862,12 @@ function formatDateSectionLabel(date: Date): string {
         : `${label}, ${date.getFullYear()}`;
 }
 
+/** `YYYY-M-D` local-date key used by both the forward (append) and
+ *  backward (prepend) date-divider logic. */
+function computeDayKey(date: Date): string {
+    return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+}
+
 /**
  * Inserts a "--- Month Day(th) ---" divider into `tab.messagesEl` whenever
  * `msgDate` falls on a different local day than the last message rendered
@@ -3340,17 +3876,41 @@ function formatDateSectionLabel(date: Date): string {
  * the same day.
  */
 function maybeInsertDateDivider(tab: ChatTab, msgDate: Date): void {
-    const dayKey = `${msgDate.getFullYear()}-${msgDate.getMonth()}-${msgDate.getDate()}`;
+    const dayKey = computeDayKey(msgDate);
     if (tab.lastRenderedDateKey === dayKey) return;
     tab.lastRenderedDateKey = dayKey;
 
     const divider = document.createElement("div");
     divider.className = "date-separator";
     divider.innerHTML = `<span>${escapeHtml(formatDateSectionLabel(msgDate))}</span>`;
-    tab.messagesEl.appendChild(divider);
+    tab.bottomSentinelEl.insertAdjacentElement("beforebegin", divider);
 }
 
-function renderChatMessage(tab: ChatTab, msg: ChatMessage): void {
+/** True when the container is scrolled at (or within `thresholdPx` of) its
+ *  own bottom — the "should new/async content auto-stick to the bottom"
+ *  check used throughout PRD 14.1/14.2, so a user reading scrolled-up
+ *  history never gets yanked down by something loading in the background. */
+function isNearBottom(el: HTMLElement, thresholdPx = 60): boolean {
+    return el.scrollHeight - el.scrollTop - el.clientHeight <= thresholdPx;
+}
+
+function stickToBottom(tab: ChatTab): void {
+    tab.messagesEl.scrollTop = tab.messagesEl.scrollHeight;
+}
+
+/** Records the oldest-loaded cursor/date-key the very first time a tab
+ *  receives content — a no-op on every append after that, since appends
+ *  only ever add newer messages (the oldest stays whatever was first). */
+function trackOldestOnFirstAppend(tab: ChatTab, createdAt: string): void {
+    if (tab.oldestLoadedTimestamp !== undefined) return;
+    tab.oldestLoadedTimestamp = createdAt;
+    tab.oldestRenderedDateKey = computeDayKey(new Date(createdAt));
+}
+
+/** Builds a channel message's DOM element without appending it or touching
+ *  scroll state — shared by the forward-append path (`renderChatMessage`)
+ *  and the backward-prepend path (`prependOlderMessages`, PRD 14.2). */
+function buildChatMessageElement(tab: ChatTab, msg: ChatMessage): HTMLDivElement {
     const el = document.createElement("div");
     el.className = "chat-msg";
     el.setAttribute("data-msg-id", msg.id);
@@ -3401,9 +3961,31 @@ function renderChatMessage(tab: ChatTab, msg: ChatMessage): void {
     attachEditButton(reactBar, msg, el);
     attachPinButton(reactBar, msg, tab);
 
+    return el;
+}
+
+function renderChatMessage(tab: ChatTab, msg: ChatMessage): void {
+    const wasNearBottom = isNearBottom(tab.messagesEl);
+
     maybeInsertDateDivider(tab, new Date(msg.createdAt));
-    tab.messagesEl.appendChild(el);
-    tab.messagesEl.scrollTop = tab.messagesEl.scrollHeight;
+    const el = buildChatMessageElement(tab, msg);
+    tab.bottomSentinelEl.insertAdjacentElement("beforebegin", el);
+    trackOldestOnFirstAppend(tab, msg.createdAt);
+
+    if (wasNearBottom) stickToBottom(tab);
+
+    // An attachment's image finishes decoding/laying out asynchronously,
+    // after this synchronous scroll-to-bottom already ran against a
+    // shorter `scrollHeight` — without this, a history with several images
+    // ends up visually short of the true bottom (PRD 14.1). Only re-stick
+    // if the user was already at the bottom when this message arrived —
+    // never yank someone reading older history.
+    if (msg.attachmentUrl) {
+        const img = el.querySelector<HTMLImageElement>(".msg-image");
+        img?.addEventListener("load", () => {
+            if (wasNearBottom) stickToBottom(tab);
+        });
+    }
 
     // Long-message truncation (Phase 12 sub-phase item 5) — must run after
     // appendChild, since scrollHeight/clientHeight need the element to
@@ -3417,9 +3999,73 @@ function renderChatMessage(tab: ChatTab, msg: ChatMessage): void {
     if (msg.content) {
         const url = extractFirstUrl(msg.content);
         if (url) {
-            injectLinkPreview(el, tab.messagesEl, url);
+            injectLinkPreview(el, url, () => {
+                if (wasNearBottom) stickToBottom(tab);
+            });
         }
     }
+}
+
+/**
+ * Prepends an older page (ascending order, as returned by the server) above
+ * whatever is currently the oldest-rendered content, immediately after the
+ * tab's permanent top sentinel (PRD 14.2). Never touches scroll position
+ * itself — the caller (`loadOlderMessages`) applies the anchor-preserving
+ * correction once for the whole batch.
+ */
+function prependOlderMessages(tab: ChatTab, messages: ChatMessage[] | DirectMessage[], isDm: boolean): void {
+    if (messages.length === 0) return;
+
+    // The divider currently sitting right after the sentinel (if any) marks
+    // a boundary against "nothing older was loaded yet" — no longer valid
+    // now that even-older content is about to be inserted above it. It gets
+    // recomputed correctly below instead.
+    const staleLeadingDivider = tab.topSentinelEl.nextElementSibling;
+    if (staleLeadingDivider?.classList.contains("date-separator")) {
+        staleLeadingDivider.remove();
+    }
+
+    // Compute each entry's divider need in forward (chronological) order,
+    // seeded from the day of whatever was previously the oldest-rendered
+    // message, then physically insert in reverse — each insertion goes
+    // immediately after the sentinel, so the last-inserted (oldest) entry
+    // ends up first, restoring correct ascending DOM order overall.
+    let previousDayKey = tab.oldestRenderedDateKey;
+    const entries = messages.map((msg) => {
+        const dayKey = computeDayKey(new Date(msg.createdAt));
+        const needsDivider = dayKey !== previousDayKey;
+        previousDayKey = dayKey;
+        return { msg, dayKey, needsDivider };
+    });
+
+    for (let i = entries.length - 1; i >= 0; i--) {
+        const { msg, dayKey, needsDivider } = entries[i];
+        const el = isDm
+            ? buildDmMessageElement(tab, msg as DirectMessage)
+            : buildChatMessageElement(tab, msg as ChatMessage);
+        tab.topSentinelEl.insertAdjacentElement("afterend", el);
+
+        if (!isDm && msg.content) {
+            const textEl = el.querySelector(".msg-text") as HTMLElement | null;
+            if (textEl) attachMessageTruncation(el, textEl);
+        }
+        if (msg.content) {
+            const url = extractFirstUrl(msg.content);
+            // No onLoaded callback — a historical message revealed above
+            // the fold has no reason to ever force a scroll correction.
+            if (url) injectLinkPreview(el, url);
+        }
+
+        if (needsDivider) {
+            const divider = document.createElement("div");
+            divider.className = "date-separator";
+            divider.innerHTML = `<span>${escapeHtml(formatDateSectionLabel(new Date(msg.createdAt)))}</span>`;
+            tab.topSentinelEl.insertAdjacentElement("afterend", divider);
+        }
+    }
+
+    tab.oldestRenderedDateKey = entries[0].dayKey;
+    tab.oldestLoadedTimestamp = messages[0].createdAt;
 }
 
 /**
@@ -3526,6 +4172,10 @@ api.on("message", (msg: ChatMessage) => {
     const tab = chatTabs.get(msg.channelId);
     if (tab) {
         renderChatMessage(tab, msg);
+        // A live message is by definition the channel's true latest right
+        // now — resolves any earlier "might be missing newer messages"
+        // state from a `jumpToPinnedMessage` window rebuild (PRD 14.3).
+        tab.atTrueLatest = true;
     }
 
     // Unread indicator (PRD 4.13): MESSAGE_RECEIVED already broadcasts to
@@ -3581,7 +4231,12 @@ function markChannelRead(channelId: string): void {
 
 // ── DM Event Listener ─────────────────────────────────────────────────────
 
-function renderDmMessage(tab: ChatTab, msg: DirectMessage): void {
+/** Builds a DM's DOM element without appending it or touching scroll state —
+ *  shared by the forward-append path (`renderDmMessage`) and the
+ *  backward-prepend path (`prependOlderMessages`, PRD 14.2). Note: DMs have
+ *  never had long-message truncation (unlike channel messages) — preserved
+ *  as-is here, not a gap introduced by this refactor. */
+function buildDmMessageElement(tab: ChatTab, msg: DirectMessage): HTMLDivElement {
     const el = document.createElement("div");
     el.className = "chat-msg";
     el.setAttribute("data-msg-id", msg.id);
@@ -3612,15 +4267,33 @@ function renderDmMessage(tab: ChatTab, msg: DirectMessage): void {
     const reactBar = buildReactionBar(msg.id, true, msg.senderId, msg.reactions);
     el.appendChild(reactBar);
 
+    return el;
+}
+
+function renderDmMessage(tab: ChatTab, msg: DirectMessage): void {
+    const wasNearBottom = isNearBottom(tab.messagesEl);
+
     maybeInsertDateDivider(tab, new Date(msg.createdAt));
-    tab.messagesEl.appendChild(el);
-    tab.messagesEl.scrollTop = tab.messagesEl.scrollHeight;
+    const el = buildDmMessageElement(tab, msg);
+    tab.bottomSentinelEl.insertAdjacentElement("beforebegin", el);
+    trackOldestOnFirstAppend(tab, msg.createdAt);
+
+    if (wasNearBottom) stickToBottom(tab);
+
+    if (msg.attachmentUrl) {
+        const img = el.querySelector<HTMLImageElement>(".msg-image");
+        img?.addEventListener("load", () => {
+            if (wasNearBottom) stickToBottom(tab);
+        });
+    }
 
     // Async link preview injection
     if (msg.content) {
         const url = extractFirstUrl(msg.content);
         if (url) {
-            injectLinkPreview(el, tab.messagesEl, url);
+            injectLinkPreview(el, url, () => {
+                if (wasNearBottom) stickToBottom(tab);
+            });
         }
     }
 }
@@ -3632,9 +4305,20 @@ api.on("dm-received", async (msg: DirectMessage) => {
     const partnerNick = msg.senderNickname; // sender nickname for display purposes
     const tabKey = `dm:${partnerId}`;
 
+    // Captured before any auto-open side effect below (PRD 14.4) — when the
+    // tab doesn't exist yet, openDmTab() calls switchTab() synchronously,
+    // which flips activeTabId to this tab *before* the old code below ever
+    // checked it. That made a brand-new/reopened DM conversation always
+    // read as "already active" even when the user was looking at something
+    // else entirely — the actual root cause of the sound alert's reported
+    // intermittency (it only ever failed for this specific combination:
+    // auto-opened tab + window still focused elsewhere).
+    const wasTabActive = activeTabId === tabKey;
+
     const tab = chatTabs.get(tabKey);
     if (tab) {
         renderDmMessage(tab, msg);
+        tab.atTrueLatest = true;
         // Mark as read immediately if the message is from someone else
         if (msg.senderId !== myId) {
             api.markDmsRead(partnerId);
@@ -3648,11 +4332,10 @@ api.on("dm-received", async (msg: DirectMessage) => {
     }
 
     // DM notification sound: play when message is from someone else AND
-    // the DM tab is not focused OR the window is not focused
+    // the DM tab was not already active OR the window is not focused
     if (msg.senderId !== myId) {
-        const isTabActive = activeTabId === tabKey;
         const isFocused = await api.isWindowFocused();
-        if (!isTabActive || !isFocused) {
+        if (!wasTabActive || !isFocused) {
             SoundAlert.play("hey_wake_up.mp3");
         }
     }
@@ -4034,12 +4717,20 @@ btnSaveMaxMessageLength.addEventListener("click", async () => {
 
 /** Stops the mic level meter's RAF loop and (if not in a call) the preview
  *  capture it was reading from — otherwise both would keep running
- *  invisibly in the background after the modal that displays them closes. */
+ *  invisibly in the background after the modal that displays them closes.
+ *  While actually in a voice channel, the loop must keep running after
+ *  Settings closes too (PRD 14.11) — it's what now drives the local
+ *  active-speaker halo directly, independent of whether Settings is open. */
 function closeSettingsPanel(): void {
     adminModal.classList.remove("visible");
     activeShortcutSlot = null;
-    stopMicLevelMeter();
-    api.stopMicPreview();
+    // Also kept alive while self-hearing out of a channel (PRD 14.10) — the
+    // preview capture is what the monitor is actually routing, so closing
+    // Settings must not silently kill it while the toggle still reads "on".
+    if (!isInVoice && !selfHearEnabled) {
+        stopMicLevelMeter();
+        api.stopMicPreview();
+    }
 }
 
 btnAdminClose.addEventListener("click", () => {
@@ -4773,9 +5464,26 @@ async function jumpToPinnedMessage(channelId: string, messageId: string): Promis
         }
         tab.messagesEl.innerHTML = "";
         tab.lastRenderedDateKey = undefined;
+
+        // The wipe above also destroyed both pagination sentinels (PRD
+        // 14.2/14.3) — rebuild them in order (top, then bottom) so
+        // messages inserted via `bottomSentinelEl.insertAdjacentElement
+        //("beforebegin", …)` land correctly between them. A window-
+        // centered fetch never guarantees this is truly the start (or
+        // end) of history, so hasMoreOlder stays optimistically true and
+        // atTrueLatest is explicitly false — a real "Jump to Most Recent"
+        // click or a live incoming message will resolve the latter.
+        tab.oldestRenderedDateKey = undefined;
+        tab.oldestLoadedTimestamp = undefined;
+        tab.messagesEl.appendChild(tab.topSentinelEl);
+        tab.messagesEl.appendChild(tab.bottomSentinelEl);
+        tab.hasMoreOlder = true;
+        tab.loadingOlder = false;
+
         for (const msg of result.messages) {
             renderChatMessage(tab, msg);
         }
+        tab.atTrueLatest = false;
         el = tab.messagesEl.querySelector(`[data-msg-id="${messageId}"]`) as HTMLDivElement | null;
     }
 
@@ -5657,6 +6365,241 @@ btnEmojiAnimatedUploadConfirm.addEventListener("click", async () => {
     }
 });
 
+// ── Channel Icon Modal (PRD 14.7, text channels only) ───────────────────────
+//
+// Same "cover + pan + zoom" cropper as the custom-emoji upload tool above —
+// duplicated rather than shared (this codebase's convention: duplication
+// over a premature shared abstraction for what's only the second use of
+// this exact pattern) — plus a "choose a default emoji instead" step that
+// reuses the full built-in 552-entry emoji set (not a curated subset).
+
+function showChannelIconModal(channelId: string): void {
+    pendingChannelIconId = channelId;
+    channelIconStepSelect.style.display = "block";
+    channelIconStepEmoji.style.display = "none";
+    channelIconStepCrop.style.display = "none";
+    channelIconModal.classList.add("visible");
+}
+
+function closeChannelIconModal(): void {
+    channelIconModal.classList.remove("visible");
+    pendingChannelIconId = null;
+    if (channelIconCropObjectUrl) {
+        URL.revokeObjectURL(channelIconCropObjectUrl);
+        channelIconCropObjectUrl = null;
+    }
+    channelIconCropImg.removeAttribute("src");
+    channelIconCropNaturalWidth = 0;
+    channelIconCropNaturalHeight = 0;
+}
+
+/** Builds a simple category-grouped emoji grid inside the modal — a
+ *  smaller, self-contained instance rather than reusing the chat input's
+ *  floating emoji-picker widget, which is purpose-built for that different
+ *  UI context (search, custom-emoji tab, cursor insertion). */
+function renderChannelIconEmojiGrid(): void {
+    channelIconEmojiGrid.innerHTML = "";
+
+    for (const cat of EMOJI_CATEGORIES) {
+        const entries = EMOJI_DATA.filter((e) => e.category === cat);
+        if (entries.length === 0) continue;
+
+        const header = document.createElement("div");
+        header.className = "emoji-category-header";
+        header.textContent = `${EMOJI_CATEGORY_ICONS[cat] ?? ""} ${cat}`;
+        channelIconEmojiGrid.appendChild(header);
+
+        const grid = document.createElement("div");
+        grid.className = "emoji-grid";
+        for (const entry of entries) {
+            const item = document.createElement("div");
+            item.className = "emoji-item";
+            item.textContent = entry.emoji;
+            item.title = entry.name;
+            item.addEventListener("click", () => selectChannelIconEmoji(entry.emoji));
+            grid.appendChild(item);
+        }
+        channelIconEmojiGrid.appendChild(grid);
+    }
+}
+
+async function selectChannelIconEmoji(emoji: string): Promise<void> {
+    if (!pendingChannelIconId) return;
+    const channelId = pendingChannelIconId;
+    closeChannelIconModal();
+
+    const result = await api.updateChannel(channelId, { iconEmoji: emoji });
+    if (result.success) {
+        log("Channel icon updated", "success");
+    } else {
+        log(`Failed to update channel icon: ${result.error}`, "error");
+        if (result.error && /permission|denied/i.test(result.error)) SoundAlert.play("insufficient_perms.mp3");
+    }
+}
+
+btnChannelIconChooseEmoji.addEventListener("click", () => {
+    channelIconStepSelect.style.display = "none";
+    channelIconStepEmoji.style.display = "block";
+    renderChannelIconEmojiGrid();
+});
+
+btnChannelIconBackFromEmoji.addEventListener("click", () => {
+    channelIconStepEmoji.style.display = "none";
+    channelIconStepSelect.style.display = "block";
+});
+
+btnChannelIconChooseImage.addEventListener("click", () => channelIconFileInput.click());
+btnChannelIconCancelSelect.addEventListener("click", () => closeChannelIconModal());
+btnChannelIconUploadCancel.addEventListener("click", () => closeChannelIconModal());
+
+channelIconModal.addEventListener("click", (e) => {
+    if (e.target === channelIconModal) closeChannelIconModal();
+});
+
+btnChannelIconReset.addEventListener("click", async () => {
+    if (!pendingChannelIconId) return;
+    const channelId = pendingChannelIconId;
+    closeChannelIconModal();
+
+    const result = await api.updateChannel(channelId, { iconEmoji: null });
+    if (result.success) {
+        log("Channel icon reset to default", "success");
+    } else {
+        log(`Failed to reset channel icon: ${result.error}`, "error");
+        if (result.error && /permission|denied/i.test(result.error)) SoundAlert.play("insufficient_perms.mp3");
+    }
+});
+
+channelIconFileInput.addEventListener("change", () => {
+    const file = channelIconFileInput.files?.[0];
+    channelIconFileInput.value = ""; // allow re-selecting the same file later
+    if (!file) return;
+
+    if (file.size > CHANNEL_ICON_MAX_UPLOAD_SIZE) {
+        log(`Image too large (max ${Math.round(CHANNEL_ICON_MAX_UPLOAD_SIZE / 1024)}KB)`, "error");
+        return;
+    }
+    if (!CHANNEL_ICON_ALLOWED_TYPES.has(file.type)) {
+        log("Unsupported image type", "error");
+        return;
+    }
+
+    if (channelIconCropObjectUrl) URL.revokeObjectURL(channelIconCropObjectUrl);
+    channelIconCropObjectUrl = URL.createObjectURL(file);
+    channelIconCropImg.src = channelIconCropObjectUrl;
+});
+
+function applyChannelIconCropTransform(): void {
+    const scale = channelIconCropBaseScale * channelIconCropZoomFactor;
+    channelIconCropImg.style.width = `${channelIconCropNaturalWidth}px`;
+    channelIconCropImg.style.height = `${channelIconCropNaturalHeight}px`;
+    channelIconCropImg.style.transform = `translate(${channelIconCropOffsetX}px, ${channelIconCropOffsetY}px) scale(${scale})`;
+}
+
+/** Keeps the image fully covering the viewport — offsets can't drift so far that a gap would show. */
+function clampChannelIconCropOffsets(): void {
+    const scale = channelIconCropBaseScale * channelIconCropZoomFactor;
+    const displayedW = channelIconCropNaturalWidth * scale;
+    const displayedH = channelIconCropNaturalHeight * scale;
+    const minX = CHANNEL_ICON_CROP_VIEWPORT_SIZE - displayedW;
+    const minY = CHANNEL_ICON_CROP_VIEWPORT_SIZE - displayedH;
+    channelIconCropOffsetX = Math.min(0, Math.max(minX, channelIconCropOffsetX));
+    channelIconCropOffsetY = Math.min(0, Math.max(minY, channelIconCropOffsetY));
+}
+
+channelIconCropImg.addEventListener("load", () => {
+    channelIconCropNaturalWidth = channelIconCropImg.naturalWidth;
+    channelIconCropNaturalHeight = channelIconCropImg.naturalHeight;
+    if (!channelIconCropNaturalWidth || !channelIconCropNaturalHeight) return;
+
+    channelIconCropBaseScale = Math.max(
+        CHANNEL_ICON_CROP_VIEWPORT_SIZE / channelIconCropNaturalWidth,
+        CHANNEL_ICON_CROP_VIEWPORT_SIZE / channelIconCropNaturalHeight,
+    );
+    channelIconCropZoomFactor = 1;
+    channelIconCropZoom.value = "1";
+
+    const displayedW = channelIconCropNaturalWidth * channelIconCropBaseScale;
+    const displayedH = channelIconCropNaturalHeight * channelIconCropBaseScale;
+    channelIconCropOffsetX = (CHANNEL_ICON_CROP_VIEWPORT_SIZE - displayedW) / 2;
+    channelIconCropOffsetY = (CHANNEL_ICON_CROP_VIEWPORT_SIZE - displayedH) / 2;
+    applyChannelIconCropTransform();
+
+    channelIconStepSelect.style.display = "none";
+    channelIconStepCrop.style.display = "block";
+});
+
+channelIconCropViewport.addEventListener("mousedown", (e) => {
+    channelIconCropDragging = true;
+    channelIconCropViewport.classList.add("dragging");
+    channelIconCropDragStart = { x: e.clientX, y: e.clientY, offsetX: channelIconCropOffsetX, offsetY: channelIconCropOffsetY };
+    e.preventDefault();
+});
+
+document.addEventListener("mousemove", (e) => {
+    if (!channelIconCropDragging) return;
+    channelIconCropOffsetX = channelIconCropDragStart.offsetX + (e.clientX - channelIconCropDragStart.x);
+    channelIconCropOffsetY = channelIconCropDragStart.offsetY + (e.clientY - channelIconCropDragStart.y);
+    clampChannelIconCropOffsets();
+    applyChannelIconCropTransform();
+});
+
+document.addEventListener("mouseup", () => {
+    if (channelIconCropDragging) {
+        channelIconCropDragging = false;
+        channelIconCropViewport.classList.remove("dragging");
+    }
+});
+
+channelIconCropZoom.addEventListener("input", () => {
+    channelIconCropZoomFactor = parseFloat(channelIconCropZoom.value);
+    clampChannelIconCropOffsets();
+    applyChannelIconCropTransform();
+});
+
+btnChannelIconUploadConfirm.addEventListener("click", async () => {
+    if (!pendingChannelIconId) return;
+    if (!channelIconCropNaturalWidth || !channelIconCropNaturalHeight) return;
+    const channelId = pendingChannelIconId;
+
+    btnChannelIconUploadConfirm.disabled = true;
+    try {
+        const scale = channelIconCropBaseScale * channelIconCropZoomFactor;
+        const srcX = -channelIconCropOffsetX / scale;
+        const srcY = -channelIconCropOffsetY / scale;
+        const srcSize = CHANNEL_ICON_CROP_VIEWPORT_SIZE / scale;
+
+        const canvas = document.createElement("canvas");
+        canvas.width = 128;
+        canvas.height = 128;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) throw new Error("Canvas not supported");
+        ctx.drawImage(channelIconCropImg, srcX, srcY, srcSize, srcSize, 0, 0, 128, 128);
+
+        const blob: Blob | null = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+        if (!blob) throw new Error("Failed to crop image");
+
+        const buffer = await blob.arrayBuffer();
+        const uploadResult = await api.uploadChannelIcon(buffer, "channel-icon.png", "image/png");
+        const updateResult = await api.updateChannel(channelId, {
+            iconUrl: uploadResult.url,
+            iconPublicId: uploadResult.publicId ?? null,
+        });
+
+        if (updateResult.success) {
+            log("Channel icon updated", "success");
+            closeChannelIconModal();
+        } else {
+            log(`Failed to update channel icon: ${updateResult.error}`, "error");
+            if (updateResult.error && /permission|denied/i.test(updateResult.error)) SoundAlert.play("insufficient_perms.mp3");
+        }
+    } catch (err: any) {
+        log(`Channel icon upload failed: ${err.message}`, "error");
+    } finally {
+        btnChannelIconUploadConfirm.disabled = false;
+    }
+});
+
 // Emoji button toggle
 btnEmoji.addEventListener("click", (e) => {
     e.stopPropagation();
@@ -5969,6 +6912,33 @@ btnCheckUpdates.addEventListener("click", async () => {
 
 // ── Mic Sensitivity / Noise Gate ──────────────────────────────────────────
 
+// Local active-speaker indicator (PRD 14.11) — the local user's own halo is
+// computed straight from this same analyser tap instead of waiting for the
+// server's 100ms-interval ACTIVE_SPEAKERS broadcast. That round trip is
+// genuinely necessary for *other* users (their audio really does arrive via
+// the server), but for the local user it adds needless perceived latency —
+// the mic-level meter's own tick loop already reads this same signal every
+// animation frame, so it's reused here rather than building a second
+// analyser loop. A 300ms hold before clearing mirrors the server's own
+// active-speaker hold behavior, so brief pauses between words don't flicker
+// the halo on/off the way a raw instantaneous threshold check would.
+let isLocalSpeaking = false;
+let localSpeakingHoldTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Reuses the noise gate's own threshold when it's enabled (consistent
+ *  "gate-open = speaking" behavior); falls back to a fixed default when the
+ *  gate is off, matching the server-side AudioLevelObserver's own -50dB
+ *  threshold (mediasoup.service.ts). */
+function localSpeakingThreshold(): number {
+    return micSensitivityEnabled ? parseInt(micSensitivitySlider.value, 10) : -50;
+}
+
+function setLocalSpeakingClass(speaking: boolean): void {
+    const myId = api.getInstanceId();
+    document.querySelectorAll(`.tree-occupant[data-user-id="${myId}"]`)
+        .forEach((el) => el.classList.toggle("speaking", speaking));
+}
+
 function startMicLevelMeter(): void {
     stopMicLevelMeter(); // clear any previous
     function tick() {
@@ -5976,6 +6946,30 @@ function startMicLevelMeter(): void {
         // Map dB range [-60, 0] to [0%, 100%]
         const pct = Math.max(0, Math.min(100, ((dB + 60) / 60) * 100));
         if (micLevelBar) micLevelBar.style.width = `${pct}%`;
+
+        // Only meaningful while actually in a voice channel — outside one,
+        // this analyser is reading the settings-preview capture instead,
+        // and there's no local `.tree-occupant` row to update anyway.
+        if (isInVoice) {
+            const speaking = dB > localSpeakingThreshold();
+            if (speaking) {
+                if (localSpeakingHoldTimer) {
+                    clearTimeout(localSpeakingHoldTimer);
+                    localSpeakingHoldTimer = null;
+                }
+                if (!isLocalSpeaking) {
+                    isLocalSpeaking = true;
+                    setLocalSpeakingClass(true);
+                }
+            } else if (isLocalSpeaking && !localSpeakingHoldTimer) {
+                localSpeakingHoldTimer = setTimeout(() => {
+                    isLocalSpeaking = false;
+                    localSpeakingHoldTimer = null;
+                    setLocalSpeakingClass(false);
+                }, 300);
+            }
+        }
+
         micLevelAnimId = requestAnimationFrame(tick);
     }
     micLevelAnimId = requestAnimationFrame(tick);
@@ -5985,6 +6979,14 @@ function stopMicLevelMeter(): void {
     if (micLevelAnimId !== null) {
         cancelAnimationFrame(micLevelAnimId);
         micLevelAnimId = null;
+    }
+    if (localSpeakingHoldTimer) {
+        clearTimeout(localSpeakingHoldTimer);
+        localSpeakingHoldTimer = null;
+    }
+    if (isLocalSpeaking) {
+        isLocalSpeaking = false;
+        setLocalSpeakingClass(false);
     }
     if (micLevelBar) micLevelBar.style.width = "0%";
 }
@@ -6001,9 +7003,8 @@ function stopMicLevelMeter(): void {
     if (chkMicSensitivity) {
         chkMicSensitivity.checked = micSensitivityEnabled;
     }
-    if (micSensitivitySliderWrap) {
-        micSensitivitySliderWrap.style.display = micSensitivityEnabled ? "block" : "none";
-    }
+    // The card's expand/collapse is driven purely by this checkbox's own
+    // :checked state via CSS :has() — no separate visibility toggle needed.
     // Hide noise gate section if PTT mode is active
     if (pttModeEnabled && micSensitivitySection) {
         micSensitivitySection.style.display = "none";
@@ -6017,14 +7018,12 @@ chkMicSensitivity?.addEventListener("change", () => {
     micSensitivityEnabled = chkMicSensitivity.checked;
     if (micSensitivityEnabled) {
         localStorage.setItem("reson8-mic-sensitivity-enabled", "true");
-        micSensitivitySliderWrap.style.display = "block";
         if (isInVoice && !pttModeEnabled) {
             const threshold = parseInt(micSensitivitySlider.value, 10);
             api.setMicSensitivity(true, threshold);
         }
     } else {
         localStorage.removeItem("reson8-mic-sensitivity-enabled");
-        micSensitivitySliderWrap.style.display = "none";
         api.setMicSensitivity(false, 0);
     }
 });
@@ -6053,6 +7052,8 @@ micVolumeSlider?.addEventListener("input", () => {
 // ── Noise Cancelling (PRD 13.1) ──────────────────────────────────────────────
 
 if (chkNoiseCancel) chkNoiseCancel.checked = noiseCancelEnabled;
+if (noiseCancelStrengthSlider) noiseCancelStrengthSlider.value = String(noiseCancelStrength);
+if (noiseCancelStrengthValue) noiseCancelStrengthValue.textContent = String(noiseCancelStrength);
 
 chkNoiseCancel?.addEventListener("change", () => {
     noiseCancelEnabled = chkNoiseCancel.checked;
@@ -6061,7 +7062,38 @@ chkNoiseCancel?.addEventListener("change", () => {
     } else {
         localStorage.removeItem("reson8-noise-cancel-enabled");
     }
+    // The card's expand/collapse is driven purely by this checkbox's own
+    // :checked state via CSS :has() — no separate visibility toggle needed.
     // The very first enable this session fetches/compiles the vendored WASM
     // engine — no UI blocking needed, it applies whenever it resolves.
     api.setNoiseCancelEnabled(noiseCancelEnabled);
+});
+
+// ── Noise Cancelling Strength (PRD 14.12) ────────────────────────────────────
+
+noiseCancelStrengthSlider?.addEventListener("input", () => {
+    noiseCancelStrength = Number(noiseCancelStrengthSlider.value);
+    noiseCancelStrengthValue.textContent = String(noiseCancelStrength);
+    localStorage.setItem("reson8-noise-cancel-strength", String(noiseCancelStrength));
+    api.setNoiseCancelStrength(noiseCancelStrength);
+});
+
+// ── Self-Hear Mic Monitor (PRD 14.10) ────────────────────────────────────────
+
+if (selfHearVolumeSlider) selfHearVolumeSlider.value = String(selfHearVolume);
+if (selfHearVolumeValue) selfHearVolumeValue.textContent = `${selfHearVolume}%`;
+
+chkSelfHear?.addEventListener("change", () => {
+    setSelfHearEnabledAndNotify(chkSelfHear.checked);
+});
+
+btnStopSelfHear?.addEventListener("click", () => {
+    setSelfHearEnabledAndNotify(false);
+});
+
+selfHearVolumeSlider?.addEventListener("input", () => {
+    selfHearVolume = Number(selfHearVolumeSlider.value);
+    if (selfHearVolumeValue) selfHearVolumeValue.textContent = `${selfHearVolume}%`;
+    localStorage.setItem("reson8-self-hear-volume", String(selfHearVolume));
+    api.setSelfHearVolume(selfHearVolume);
 });

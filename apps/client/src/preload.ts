@@ -564,6 +564,18 @@ const api = {
         await voiceService?.setNoiseCancelEnabled(enabled);
     },
 
+    setNoiseCancelStrength(level: number): void {
+        voiceService?.setNoiseCancelStrength(level);
+    },
+
+    setSelfHearEnabled(enabled: boolean): void {
+        voiceService?.setSelfHearEnabled(enabled);
+    },
+
+    setSelfHearVolume(percent: number): void {
+        voiceService?.setSelfHearVolume(percent);
+    },
+
     // ── Audio Settings ──────────────────────────────────────────────────────
 
     async enumerateAudioDevices(): Promise<{ inputs: { deviceId: string; label: string }[]; outputs: { deviceId: string; label: string }[] }> {
@@ -605,7 +617,14 @@ const api = {
 
     updateChannel(
         channelId: string,
-        changes: { name?: string; position?: number; isNsfw?: boolean },
+        changes: {
+            name?: string;
+            position?: number;
+            isNsfw?: boolean;
+            iconEmoji?: string | null;
+            iconUrl?: string | null;
+            iconPublicId?: string | null;
+        },
     ): Promise<{ success: boolean; error?: string }> {
         return new Promise((resolve) => {
             if (!socket?.connected) {
@@ -626,6 +645,21 @@ const api = {
                 return;
             }
             socket.emit("REORDER_CHANNELS", { parentId, orderedChannelIds }, resolve);
+        });
+    },
+
+    moveChannel(
+        channelId: string,
+        newParentId: string | null,
+    ): Promise<{ success: boolean; error?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            // newPosition is a required field on the wire (PRD 14.5) but is
+            // always recomputed server-side — 0 is just a harmless placeholder.
+            socket.emit("CHANNEL_MOVED", { channelId, newParentId, newPosition: 0 }, resolve);
         });
     },
 
@@ -910,6 +944,14 @@ const api = {
         mimeType: string,
     ): Promise<{ url: string; publicId?: string }> {
         return uploadTo("/api/upload/emoji-animated", fileBuffer, fileName, mimeType);
+    },
+
+    async uploadChannelIcon(
+        fileBuffer: ArrayBuffer,
+        fileName: string,
+        mimeType: string,
+    ): Promise<{ url: string; publicId?: string }> {
+        return uploadTo("/api/upload/channel-icon", fileBuffer, fileName, mimeType);
     },
 
     // ── Image Download ───────────────────────────────────────────────────
