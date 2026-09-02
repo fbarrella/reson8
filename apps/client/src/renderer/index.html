@@ -2443,6 +2443,47 @@
       padding: 8px 0;
     }
 
+    /* ── "Jump to Most Recent Message" Sentinel + Button (PRD 14.3) ──── */
+    .chat-bottom-sentinel {
+      flex-shrink: 0;
+      min-height: 1px;
+    }
+
+    .jump-to-recent-btn {
+      position: absolute;
+      left: 50%;
+      bottom: 12px;
+      transform: translateX(-50%) translateY(8px);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 6px 14px;
+      color: var(--accent);
+      font-size: 11px;
+      font-family: var(--font);
+      font-weight: 600;
+      cursor: pointer;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.15s ease, transform 0.15s ease;
+      z-index: 5;
+    }
+
+    .jump-to-recent-btn.visible {
+      opacity: 1;
+      pointer-events: auto;
+      transform: translateX(-50%) translateY(0);
+    }
+
+    .jump-to-recent-btn:hover {
+      background: rgba(255, 255, 255, 0.1);
+      border-color: var(--accent);
+    }
+
     /* ── Toggle Switch ────────────────────────────────────────────── */
     .toggle-row {
       display: flex;

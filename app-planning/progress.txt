@@ -690,3 +690,61 @@ cursor-paginated chat history with infinite-scroll-up (Phase 14, items 1-2)
   Next Step: PRD 14.3 ("Jump to Most Recent Message" floating button),
   which builds directly on this pagination/sentinel infrastructure —
   pending user confirmation to proceed to the next Phase 14 item.
+
+--- Entry: 01/09/2026 ---
+
+Feature/Fix: PRD 14.3 — "Jump to Most Recent Message" floating button
+(Phase 14, item 3)
+
+  Problem: When scrolled up reading history in a channel/DM, there was no
+  quick way back down to the latest message short of scrolling the whole
+  way or closing and reopening the tab.
+
+  Solution: A bottom-centered floating pill button ("Jump to Most Recent
+  Message" + down arrow) now appears once the true latest message scrolls
+  out of view, and jumps back to it on click — built directly on top of
+  PRD 14.2's per-tab pagination/sentinel infrastructure rather than adding
+  separate scroll-event listeners.
+
+  Client Changes (apps/client/src/renderer/renderer.ts, index.html):
+  - `ChatTab` gained `bottomSentinelEl` (always the last child of
+    `messagesEl` — every message insertion now goes through
+    `bottomSentinelEl.insertAdjacentElement("beforebegin", el)` instead of
+    a plain `appendChild`, which keeps the sentinel pinned as the last
+    child automatically with no extra bookkeeping needed on every append),
+    `jumpToRecentBtn`, and `atTrueLatest` (true unless
+    `jumpToPinnedMessage`'s window-rebuild might not reach the channel's
+    true latest message — resolved back to `true` by a live incoming
+    message or a fresh rebuild).
+  - `setupInfiniteScroll`'s single per-tab `IntersectionObserver` now also
+    watches `bottomSentinelEl` (branching on `entry.target`) and toggles
+    the button's `.visible` class based on whether it's scrolled out of
+    view — reusing the exact same observer/root as PRD 14.2's top-sentinel
+    infinite-scroll.
+  - New `createJumpToRecentControls()` builds the sentinel+button pair per
+    tab. New `rebuildTabAtLatest()` — sharing a newly-extracted
+    `fetchAndRenderLatestPage()` with the initial `loadChatHistory` — does
+    a fresh latest-page fetch when `atTrueLatest` is false, mirroring
+    `jumpToPinnedMessage`'s own wipe-and-rebuild shape rather than trying
+    to scroll through a potentially huge unloaded gap. `scrollToMostRecent()`
+    is the click handler: rebuilds first only if needed, then smooth-scrolls
+    to the bottom and calls `markChannelRead()` — landing at the bottom
+    this way clears unread state exactly like a natural scroll-to-bottom or
+    tab switch already does.
+  - `jumpToPinnedMessage`'s wipe-and-rebuild now also restores
+    `bottomSentinelEl` (alongside `topSentinelEl` from PRD 14.2) and
+    explicitly sets `atTrueLatest = false`, since a window-centered fetch
+    around an old pin never guarantees it reached the present.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/renderer/index.html
+
+  Verification:
+    npx tsc --noEmit in apps/client — clean. Manual verification (button
+    appears/disappears at the right scroll moments, jumps correctly
+    including after a pinned-message rebuild) is pending the user's own
+    hands-on pass.
+
+  Next Step: PRD 14.4 (DM "wake up" sound alert intermittent bug fix) —
+  pending user confirmation to proceed.
