@@ -609,3 +609,84 @@ Feature/Fix: Noise Cancelling still failed after the v2.2.1 CSP fix — two more
   Next Step: user to rebuild v2.2.1 (or cut a v2.2.2 if it's already been
   published) with both fixes and do a final real-world confirmation on
   their own Windows/Linux/macOS machines.
+
+--- Entry: 01/09/2026 ---
+
+Feature/Fix: PRD 14.1 + PRD 14.2 — Chat/DM opens at the most recent message;
+cursor-paginated chat history with infinite-scroll-up (Phase 14, items 1-2)
+
+  Problem: Text chats and DMs sometimes opened scrolled to a stale position
+  — "a day behind or even a few days behind" — instead of the true latest
+  message. Separately, every channel/DM tab fetched its entire message
+  history in one unbounded request on open; the server's FETCH_MESSAGES/
+  FETCH_DIRECT_MESSAGES handlers already supported before/limit cursor
+  pagination (confirmed via a fresh audit, not just progress.txt's earlier
+  Phase 4 claim), but nothing client-side ever used it — a from-scratch
+  client feature, not a wiring gap.
+
+  Solution:
+  Root cause of the scroll bug: attachment <img> elements had no `load`
+  listener to re-correct scrollTop once async image decode grew
+  scrollHeight (only the link-preview path re-corrected scroll before), and
+  revisiting an already-loaded tab never re-scrolled to bottom at all —
+  both fixed together with the pagination work since they touch the same
+  rendering code.
+
+  Client Changes (apps/client/src/renderer/renderer.ts, index.html):
+  - `ChatTab` gained `topSentinelEl`/`scrollObserver`/`oldestLoadedTimestamp`/
+    `oldestRenderedDateKey`/`hasMoreOlder`/`loadingOlder`/`initialLoadDone`.
+    `openChatTab`/`openDmTab` create a permanent top sentinel (first child
+    of `messagesEl`) and attach a per-tab `IntersectionObserver` (root:
+    `messagesEl`) via new `setupInfiniteScroll()`; `closeTab` disconnects it.
+  - `loadChatHistory` now fetches only `CHAT_PAGE_SIZE` (20) messages
+    initially for channels. For DMs it uses `max(20, unreadCountHint)`
+    capped at the server's 100-message limit — `unreadCountHint` comes from
+    the existing `GET_UNREAD_DM_PARTNERS` per-partner `unreadCount`, now
+    threaded through `openDmTab`'s new optional third parameter — so the
+    pre-existing "Unread Messages" separator still lands correctly even
+    with a deep unread backlog, instead of silently breaking once the page
+    size shrank to 20.
+  - New `loadOlderMessages()` fires when the sentinel scrolls into view and
+    fetches the next page via the existing `before`/`limit` cursor contract
+    (zero server or shared-types changes needed). New
+    `prependOlderMessages()` inserts the batch right after the sentinel,
+    recomputing date-section dividers correctly — it removes whatever
+    divider previously marked the "start of loaded history" edge (no longer
+    valid once even-older content is inserted above it) and reseeds the
+    day-boundary lookback from `oldestRenderedDateKey`.
+  - Scroll-position preservation on prepend: records `scrollHeight` before/
+    after insertion and adjusts `scrollTop` by the exact delta (the
+    standard Slack/Discord/Teams anchor technique), so the user's reading
+    position never visibly jumps.
+  - `renderChatMessage`/`renderDmMessage` split into pure element builders
+    (`buildChatMessageElement`/`buildDmMessageElement`, shared by both the
+    forward-append and the new backward-prepend paths) plus thin render
+    wrappers that check `isNearBottom(messagesEl)` before appending and only
+    auto-stick to the bottom if the user was already there — applied
+    consistently to the new message itself, the attachment image's async
+    `load` event (the actual scroll-bug root cause), and the async
+    link-preview card's load (`injectLinkPreview`'s new `onLoaded` callback
+    replaces its old hardcoded unconditional scroll-to-bottom).
+  - `switchTab()` now forces scroll-to-bottom whenever a loaded chat tab is
+    (re)focused, so revisiting an already-open tab also always lands on the
+    latest message rather than resuming a stale remembered position.
+  - `jumpToPinnedMessage`'s full `messagesEl.innerHTML` wipe-and-rebuild
+    (which would otherwise destroy the sentinel and desync the new cursor
+    state) now explicitly rebuilds the sentinel and resets `hasMoreOlder` to
+    `true` (optimistic — a window-centered fetch never guarantees it hit
+    the true start of history), so the next scroll-up still works
+    correctly afterward.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/renderer/index.html
+
+  Verification:
+    npx tsc --noEmit in apps/client — clean. Manual verification of the
+    scrolling/pagination/jump-to-pinned behavior is pending the user's own
+    hands-on pass, per this project's established practice for UI/UX
+    testing.
+
+  Next Step: PRD 14.3 ("Jump to Most Recent Message" floating button),
+  which builds directly on this pagination/sentinel infrastructure —
+  pending user confirmation to proceed to the next Phase 14 item.

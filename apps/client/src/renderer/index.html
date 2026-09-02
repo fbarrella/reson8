@@ -2429,6 +2429,20 @@
       white-space: nowrap;
     }
 
+    /* ── Infinite-Scroll Top Sentinel (PRD 14.2) ─────────────────────── */
+    .chat-top-sentinel {
+      flex-shrink: 0;
+      min-height: 1px;
+      text-align: center;
+      font-size: 10px;
+      color: var(--text-muted);
+      user-select: none;
+    }
+
+    .chat-top-sentinel.loading {
+      padding: 8px 0;
+    }
+
     /* ── Toggle Switch ────────────────────────────────────────────── */
     .toggle-row {
       display: flex;

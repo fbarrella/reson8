@@ -1284,8 +1284,31 @@ interface ChatTab {
      *  the first message renders; reset to undefined wherever `messagesEl`
      *  is cleared and re-rendered from scratch. */
     lastRenderedDateKey?: string;
+    /** Pinned to the very top of `messagesEl` at all times (PRD 14.2) — the
+     *  `IntersectionObserver` target that triggers loading the next older
+     *  page when scrolled into view. Also doubles as the "Loading older
+     *  messages…" indicator via its `.loading` class/text content. */
+    topSentinelEl: HTMLDivElement;
+    scrollObserver?: IntersectionObserver;
+    /** `createdAt` of the oldest message currently rendered — the cursor
+     *  passed as `before` on the next "load older" fetch. */
+    oldestLoadedTimestamp?: string;
+    /** Day-key (`YYYY-M-D`) of the oldest currently-rendered message — the
+     *  seed for the prepend path's date-divider lookback (PRD 14.2). */
+    oldestRenderedDateKey?: string;
+    /** Optimistic: true until a "load older" fetch returns fewer than a
+     *  full page, at which point real history is known to be exhausted. */
+    hasMoreOlder: boolean;
+    /** Guards against overlapping "load older" fetches from rapid scroll. */
+    loadingOlder: boolean;
+    /** True once the initial page has actually finished loading — guards
+     *  the `IntersectionObserver` from firing a premature "load older"
+     *  fetch before `oldestLoadedTimestamp`/`hasMoreOlder` are real. */
+    initialLoadDone: boolean;
 }
 const chatTabs = new Map<string, ChatTab>();
+/** Initial + "load older" page size for both channel and DM history (PRD 14.2). */
+const CHAT_PAGE_SIZE = 20;
 let activeTabId = "server-log"; // default active tab
 let allServerRoles: any[] = []; // cached roles for the admin panel
 
@@ -2359,7 +2382,7 @@ api.on("connected", (data: { serverId: string; instanceId: string }) => {
     api.getUnreadDmPartners().then((res) => {
         if (res.success && res.partners && res.partners.length > 0) {
             for (const p of res.partners) {
-                openDmTab(p.partnerId, p.partnerNickname);
+                openDmTab(p.partnerId, p.partnerNickname, p.unreadCount);
             }
         }
     });
@@ -2965,13 +2988,20 @@ function createPreviewCard(data: LinkPreviewData): HTMLDivElement {
     return card;
 }
 
-function injectLinkPreview(messageEl: HTMLElement, messagesContainer: HTMLElement, url: string): void {
+/**
+ * `onLoaded` lets the caller decide whether a preview card finishing async
+ * load should stick the view to the bottom (PRD 14.1/14.2) — appending a
+ * new message the user was already at the bottom for, vs. revealing a
+ * historical message above the fold while prepending older pages, need
+ * opposite answers, so this can no longer hardcode "always scroll down."
+ */
+function injectLinkPreview(messageEl: HTMLElement, url: string, onLoaded?: () => void): void {
     // Check renderer-side cache first
     const cached = linkPreviewCache.get(url);
     if (cached !== undefined) {
         if (cached) {
             messageEl.appendChild(createPreviewCard(cached));
-            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+            onLoaded?.();
         }
         return;
     }
@@ -2983,7 +3013,7 @@ function injectLinkPreview(messageEl: HTMLElement, messagesContainer: HTMLElemen
         // Guard: ensure the message is still in the DOM (tab may have been closed)
         if (!messageEl.isConnected) return;
         messageEl.appendChild(createPreviewCard(data));
-        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        onLoaded?.();
     }).catch(() => {
         linkPreviewCache.set(url, null);
     });
@@ -3120,6 +3150,16 @@ function switchTab(tabId: string): void {
         chatInputBar.classList.add("visible");
         chatInput.focus();
     }
+
+    // A chat tab always opens/refocuses scrolled to the latest message
+    // (PRD 14.1) — never resume whatever scroll position was left over
+    // from a prior visit. Guarded on `initialLoadDone` so a brand-new tab
+    // (still mid-fetch, empty container) isn't force-scrolled prematurely —
+    // its own render loop already lands on the bottom once messages arrive.
+    const tab = chatTabs.get(tabId);
+    if (tab?.initialLoadDone) {
+        tab.messagesEl.scrollTop = tab.messagesEl.scrollHeight;
+    }
 }
 
 function openChatTab(channelId: string, channelName: string): void {
@@ -3167,6 +3207,9 @@ function openChatTab(channelId: string, channelName: string): void {
 
     const messagesEl = document.createElement("div");
     messagesEl.className = "chat-messages";
+    const topSentinelEl = document.createElement("div");
+    topSentinelEl.className = "chat-top-sentinel";
+    messagesEl.appendChild(topSentinelEl);
     contentEl.appendChild(messagesEl);
 
     tabContentArea.appendChild(contentEl);
@@ -3181,8 +3224,13 @@ function openChatTab(channelId: string, channelName: string): void {
         loaded: false,
         pinBarEl,
         pinnedMessageId: null,
+        topSentinelEl,
+        hasMoreOlder: false,
+        loadingOlder: false,
+        initialLoadDone: false,
     };
     chatTabs.set(channelId, chatTab);
+    setupInfiniteScroll(chatTab);
 
     // Switch to the new tab
     switchTab(channelId);
@@ -3193,7 +3241,7 @@ function openChatTab(channelId: string, channelName: string): void {
 
 // ── DM Tab Management ─────────────────────────────────────────────────────
 
-function openDmTab(userId: string, nickname: string): void {
+function openDmTab(userId: string, nickname: string, unreadCountHint?: number): void {
     const tabKey = `dm:${userId}`;
 
     // If tab already exists, just switch to it
@@ -3225,6 +3273,9 @@ function openDmTab(userId: string, nickname: string): void {
 
     const messagesEl = document.createElement("div");
     messagesEl.className = "chat-messages";
+    const topSentinelEl = document.createElement("div");
+    topSentinelEl.className = "chat-top-sentinel";
+    messagesEl.appendChild(topSentinelEl);
     contentEl.appendChild(messagesEl);
 
     tabContentArea.appendChild(contentEl);
@@ -3238,20 +3289,26 @@ function openDmTab(userId: string, nickname: string): void {
         messagesEl,
         loaded: false,
         pinnedMessageId: null,
+        topSentinelEl,
+        hasMoreOlder: false,
+        loadingOlder: false,
+        initialLoadDone: false,
     };
     chatTabs.set(tabKey, chatTab);
+    setupInfiniteScroll(chatTab);
 
     // Switch to the new tab
     switchTab(tabKey);
 
     // Fetch DM history
-    loadChatHistory(chatTab);
+    loadChatHistory(chatTab, unreadCountHint);
 }
 
 function closeTab(channelId: string): void {
     const tab = chatTabs.get(channelId);
     if (!tab) return;
 
+    tab.scrollObserver?.disconnect();
     tab.tabEl.remove();
     tab.contentEl.remove();
     chatTabs.delete(channelId);
@@ -3262,7 +3319,15 @@ function closeTab(channelId: string): void {
     }
 }
 
-async function loadChatHistory(tab: ChatTab): Promise<void> {
+/**
+ * Loads a tab's initial page of history (PRD 14.2). `unreadCountHint`
+ * (DM tabs only, from `GET_UNREAD_DM_PARTNERS`'s per-partner count) widens
+ * the initial fetch past `CHAT_PAGE_SIZE` when there's a deeper unread
+ * backlog than one page — otherwise the "Unread Messages" separator below
+ * would miss the true first-unread message, silently regressing an
+ * existing feature just to shrink the common case's initial fetch size.
+ */
+async function loadChatHistory(tab: ChatTab, unreadCountHint?: number): Promise<void> {
     if (tab.loaded) return;
     tab.loaded = true;
 
@@ -3270,7 +3335,8 @@ async function loadChatHistory(tab: ChatTab): Promise<void> {
         // DM tab — fetch direct messages
         const partnerId = tab.channelId.slice(3);
         const myId = api.getInstanceId();
-        const result = await api.fetchDirectMessages(partnerId);
+        const initialLimit = Math.min(Math.max(unreadCountHint ?? 0, CHAT_PAGE_SIZE), 100);
+        const result = await api.fetchDirectMessages(partnerId, undefined, initialLimit);
         if (result.success && result.messages) {
             // Find the first unread message (sent by the partner, not by us)
             const firstUnreadIndex = result.messages.findIndex(
@@ -3292,10 +3358,12 @@ async function loadChatHistory(tab: ChatTab): Promise<void> {
             if (firstUnreadIndex !== -1) {
                 api.markDmsRead(partnerId);
             }
+
+            tab.hasMoreOlder = result.messages.length >= initialLimit;
         }
     } else {
         // Channel tab — fetch channel messages
-        const result = await api.fetchMessages(tab.channelId);
+        const result = await api.fetchMessages(tab.channelId, undefined, CHAT_PAGE_SIZE);
         if (result.success && result.messages) {
             // Set before rendering so each message's pin button (PRD 11.5)
             // reflects the correct active/inactive state on first paint.
@@ -3304,8 +3372,70 @@ async function loadChatHistory(tab: ChatTab): Promise<void> {
                 renderChatMessage(tab, msg);
             }
             updatePinBarUI(tab, result.pinnedMessage ?? null);
+            tab.hasMoreOlder = result.messages.length >= CHAT_PAGE_SIZE;
         }
     }
+
+    tab.initialLoadDone = true;
+}
+
+/**
+ * Fetches and prepends the next older page once the top sentinel scrolls
+ * into view (PRD 14.2). Cursor is `tab.oldestLoadedTimestamp`, the
+ * `createdAt` of whatever message is currently the earliest rendered.
+ */
+async function loadOlderMessages(tab: ChatTab): Promise<void> {
+    if (!tab.initialLoadDone || tab.loadingOlder || !tab.hasMoreOlder) return;
+
+    tab.loadingOlder = true;
+    tab.topSentinelEl.classList.add("loading");
+    tab.topSentinelEl.textContent = "Loading older messages…";
+
+    const isDm = tab.channelId.startsWith("dm:");
+    const result = isDm
+        ? await api.fetchDirectMessages(tab.channelId.slice(3), tab.oldestLoadedTimestamp, CHAT_PAGE_SIZE)
+        : await api.fetchMessages(tab.channelId, tab.oldestLoadedTimestamp, CHAT_PAGE_SIZE);
+
+    tab.loadingOlder = false;
+    tab.topSentinelEl.classList.remove("loading");
+    tab.topSentinelEl.textContent = "";
+
+    if (!result.success || !result.messages || result.messages.length === 0) {
+        tab.hasMoreOlder = false;
+        return;
+    }
+
+    tab.hasMoreOlder = result.messages.length >= CHAT_PAGE_SIZE;
+
+    // Preserve the user's visual anchor across the prepend (Slack/Discord/
+    // Teams pattern) — record height before insert, then correct scrollTop
+    // by exactly the height the prepended content added.
+    const oldScrollHeight = tab.messagesEl.scrollHeight;
+    const oldScrollTop = tab.messagesEl.scrollTop;
+
+    if (isDm) {
+        prependOlderMessages(tab, result.messages as DirectMessage[], true);
+    } else {
+        prependOlderMessages(tab, result.messages as ChatMessage[], false);
+    }
+
+    const newScrollHeight = tab.messagesEl.scrollHeight;
+    tab.messagesEl.scrollTop = oldScrollTop + (newScrollHeight - oldScrollHeight);
+}
+
+/** One `IntersectionObserver` per tab, watching its own top sentinel against
+ *  its own scrollable `messagesEl` as root (not the window). */
+function setupInfiniteScroll(tab: ChatTab): void {
+    const observer = new IntersectionObserver(
+        (entries) => {
+            for (const entry of entries) {
+                if (entry.isIntersecting) loadOlderMessages(tab);
+            }
+        },
+        { root: tab.messagesEl, threshold: 0 },
+    );
+    observer.observe(tab.topSentinelEl);
+    tab.scrollObserver = observer;
 }
 
 /** "13th", "1st", "22nd", etc. */
@@ -3332,6 +3462,12 @@ function formatDateSectionLabel(date: Date): string {
         : `${label}, ${date.getFullYear()}`;
 }
 
+/** `YYYY-M-D` local-date key used by both the forward (append) and
+ *  backward (prepend) date-divider logic. */
+function computeDayKey(date: Date): string {
+    return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+}
+
 /**
  * Inserts a "--- Month Day(th) ---" divider into `tab.messagesEl` whenever
  * `msgDate` falls on a different local day than the last message rendered
@@ -3340,7 +3476,7 @@ function formatDateSectionLabel(date: Date): string {
  * the same day.
  */
 function maybeInsertDateDivider(tab: ChatTab, msgDate: Date): void {
-    const dayKey = `${msgDate.getFullYear()}-${msgDate.getMonth()}-${msgDate.getDate()}`;
+    const dayKey = computeDayKey(msgDate);
     if (tab.lastRenderedDateKey === dayKey) return;
     tab.lastRenderedDateKey = dayKey;
 
@@ -3350,7 +3486,31 @@ function maybeInsertDateDivider(tab: ChatTab, msgDate: Date): void {
     tab.messagesEl.appendChild(divider);
 }
 
-function renderChatMessage(tab: ChatTab, msg: ChatMessage): void {
+/** True when the container is scrolled at (or within `thresholdPx` of) its
+ *  own bottom — the "should new/async content auto-stick to the bottom"
+ *  check used throughout PRD 14.1/14.2, so a user reading scrolled-up
+ *  history never gets yanked down by something loading in the background. */
+function isNearBottom(el: HTMLElement, thresholdPx = 60): boolean {
+    return el.scrollHeight - el.scrollTop - el.clientHeight <= thresholdPx;
+}
+
+function stickToBottom(tab: ChatTab): void {
+    tab.messagesEl.scrollTop = tab.messagesEl.scrollHeight;
+}
+
+/** Records the oldest-loaded cursor/date-key the very first time a tab
+ *  receives content — a no-op on every append after that, since appends
+ *  only ever add newer messages (the oldest stays whatever was first). */
+function trackOldestOnFirstAppend(tab: ChatTab, createdAt: string): void {
+    if (tab.oldestLoadedTimestamp !== undefined) return;
+    tab.oldestLoadedTimestamp = createdAt;
+    tab.oldestRenderedDateKey = computeDayKey(new Date(createdAt));
+}
+
+/** Builds a channel message's DOM element without appending it or touching
+ *  scroll state — shared by the forward-append path (`renderChatMessage`)
+ *  and the backward-prepend path (`prependOlderMessages`, PRD 14.2). */
+function buildChatMessageElement(tab: ChatTab, msg: ChatMessage): HTMLDivElement {
     const el = document.createElement("div");
     el.className = "chat-msg";
     el.setAttribute("data-msg-id", msg.id);
@@ -3401,9 +3561,31 @@ function renderChatMessage(tab: ChatTab, msg: ChatMessage): void {
     attachEditButton(reactBar, msg, el);
     attachPinButton(reactBar, msg, tab);
 
+    return el;
+}
+
+function renderChatMessage(tab: ChatTab, msg: ChatMessage): void {
+    const wasNearBottom = isNearBottom(tab.messagesEl);
+
     maybeInsertDateDivider(tab, new Date(msg.createdAt));
+    const el = buildChatMessageElement(tab, msg);
     tab.messagesEl.appendChild(el);
-    tab.messagesEl.scrollTop = tab.messagesEl.scrollHeight;
+    trackOldestOnFirstAppend(tab, msg.createdAt);
+
+    if (wasNearBottom) stickToBottom(tab);
+
+    // An attachment's image finishes decoding/laying out asynchronously,
+    // after this synchronous scroll-to-bottom already ran against a
+    // shorter `scrollHeight` — without this, a history with several images
+    // ends up visually short of the true bottom (PRD 14.1). Only re-stick
+    // if the user was already at the bottom when this message arrived —
+    // never yank someone reading older history.
+    if (msg.attachmentUrl) {
+        const img = el.querySelector<HTMLImageElement>(".msg-image");
+        img?.addEventListener("load", () => {
+            if (wasNearBottom) stickToBottom(tab);
+        });
+    }
 
     // Long-message truncation (Phase 12 sub-phase item 5) — must run after
     // appendChild, since scrollHeight/clientHeight need the element to
@@ -3417,9 +3599,73 @@ function renderChatMessage(tab: ChatTab, msg: ChatMessage): void {
     if (msg.content) {
         const url = extractFirstUrl(msg.content);
         if (url) {
-            injectLinkPreview(el, tab.messagesEl, url);
+            injectLinkPreview(el, url, () => {
+                if (wasNearBottom) stickToBottom(tab);
+            });
         }
     }
+}
+
+/**
+ * Prepends an older page (ascending order, as returned by the server) above
+ * whatever is currently the oldest-rendered content, immediately after the
+ * tab's permanent top sentinel (PRD 14.2). Never touches scroll position
+ * itself — the caller (`loadOlderMessages`) applies the anchor-preserving
+ * correction once for the whole batch.
+ */
+function prependOlderMessages(tab: ChatTab, messages: ChatMessage[] | DirectMessage[], isDm: boolean): void {
+    if (messages.length === 0) return;
+
+    // The divider currently sitting right after the sentinel (if any) marks
+    // a boundary against "nothing older was loaded yet" — no longer valid
+    // now that even-older content is about to be inserted above it. It gets
+    // recomputed correctly below instead.
+    const staleLeadingDivider = tab.topSentinelEl.nextElementSibling;
+    if (staleLeadingDivider?.classList.contains("date-separator")) {
+        staleLeadingDivider.remove();
+    }
+
+    // Compute each entry's divider need in forward (chronological) order,
+    // seeded from the day of whatever was previously the oldest-rendered
+    // message, then physically insert in reverse — each insertion goes
+    // immediately after the sentinel, so the last-inserted (oldest) entry
+    // ends up first, restoring correct ascending DOM order overall.
+    let previousDayKey = tab.oldestRenderedDateKey;
+    const entries = messages.map((msg) => {
+        const dayKey = computeDayKey(new Date(msg.createdAt));
+        const needsDivider = dayKey !== previousDayKey;
+        previousDayKey = dayKey;
+        return { msg, dayKey, needsDivider };
+    });
+
+    for (let i = entries.length - 1; i >= 0; i--) {
+        const { msg, dayKey, needsDivider } = entries[i];
+        const el = isDm
+            ? buildDmMessageElement(tab, msg as DirectMessage)
+            : buildChatMessageElement(tab, msg as ChatMessage);
+        tab.topSentinelEl.insertAdjacentElement("afterend", el);
+
+        if (!isDm && msg.content) {
+            const textEl = el.querySelector(".msg-text") as HTMLElement | null;
+            if (textEl) attachMessageTruncation(el, textEl);
+        }
+        if (msg.content) {
+            const url = extractFirstUrl(msg.content);
+            // No onLoaded callback — a historical message revealed above
+            // the fold has no reason to ever force a scroll correction.
+            if (url) injectLinkPreview(el, url);
+        }
+
+        if (needsDivider) {
+            const divider = document.createElement("div");
+            divider.className = "date-separator";
+            divider.innerHTML = `<span>${escapeHtml(formatDateSectionLabel(new Date(msg.createdAt)))}</span>`;
+            tab.topSentinelEl.insertAdjacentElement("afterend", divider);
+        }
+    }
+
+    tab.oldestRenderedDateKey = entries[0].dayKey;
+    tab.oldestLoadedTimestamp = messages[0].createdAt;
 }
 
 /**
@@ -3581,7 +3827,12 @@ function markChannelRead(channelId: string): void {
 
 // ── DM Event Listener ─────────────────────────────────────────────────────
 
-function renderDmMessage(tab: ChatTab, msg: DirectMessage): void {
+/** Builds a DM's DOM element without appending it or touching scroll state —
+ *  shared by the forward-append path (`renderDmMessage`) and the
+ *  backward-prepend path (`prependOlderMessages`, PRD 14.2). Note: DMs have
+ *  never had long-message truncation (unlike channel messages) — preserved
+ *  as-is here, not a gap introduced by this refactor. */
+function buildDmMessageElement(tab: ChatTab, msg: DirectMessage): HTMLDivElement {
     const el = document.createElement("div");
     el.className = "chat-msg";
     el.setAttribute("data-msg-id", msg.id);
@@ -3612,15 +3863,33 @@ function renderDmMessage(tab: ChatTab, msg: DirectMessage): void {
     const reactBar = buildReactionBar(msg.id, true, msg.senderId, msg.reactions);
     el.appendChild(reactBar);
 
+    return el;
+}
+
+function renderDmMessage(tab: ChatTab, msg: DirectMessage): void {
+    const wasNearBottom = isNearBottom(tab.messagesEl);
+
     maybeInsertDateDivider(tab, new Date(msg.createdAt));
+    const el = buildDmMessageElement(tab, msg);
     tab.messagesEl.appendChild(el);
-    tab.messagesEl.scrollTop = tab.messagesEl.scrollHeight;
+    trackOldestOnFirstAppend(tab, msg.createdAt);
+
+    if (wasNearBottom) stickToBottom(tab);
+
+    if (msg.attachmentUrl) {
+        const img = el.querySelector<HTMLImageElement>(".msg-image");
+        img?.addEventListener("load", () => {
+            if (wasNearBottom) stickToBottom(tab);
+        });
+    }
 
     // Async link preview injection
     if (msg.content) {
         const url = extractFirstUrl(msg.content);
         if (url) {
-            injectLinkPreview(el, tab.messagesEl, url);
+            injectLinkPreview(el, url, () => {
+                if (wasNearBottom) stickToBottom(tab);
+            });
         }
     }
 }
@@ -4773,6 +5042,18 @@ async function jumpToPinnedMessage(channelId: string, messageId: string): Promis
         }
         tab.messagesEl.innerHTML = "";
         tab.lastRenderedDateKey = undefined;
+
+        // The wipe above also destroyed the pagination sentinel (PRD
+        // 14.2) — rebuild it as the first child again. A window-centered
+        // fetch never guarantees this is truly the start of history, so
+        // hasMoreOlder stays optimistically true; the next scroll-up
+        // re-derives the real answer from an actual fetch, same as usual.
+        tab.oldestRenderedDateKey = undefined;
+        tab.oldestLoadedTimestamp = undefined;
+        tab.messagesEl.appendChild(tab.topSentinelEl);
+        tab.hasMoreOlder = true;
+        tab.loadingOlder = false;
+
         for (const msg of result.messages) {
             renderChatMessage(tab, msg);
         }
