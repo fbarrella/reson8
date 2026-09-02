@@ -1482,3 +1482,91 @@ Feature/Fix: PRD 14.8 — Fix rich link preview failing on bot-walled sites
   `/bump-version`, release notes in `app-planning/releases/`, and updating
   all three `CLAUDE.md` files plus `README.md` to reflect the final Phase
   14 feature set — pending user confirmation to proceed.
+
+--- Entry: 02/09/2026 ---
+
+Feature/Fix: Phase 14 wrap-up — version bump to v2.3.0, release notes, and
+CLAUDE.md/README documentation updates
+
+  Problem: With every Phase 14 PRD item implemented and verified (chat
+  pagination, jump-to-recent, channel re-parenting/renaming, custom channel
+  icons, self-hear monitor, noise-cancelling strength, the Voice &
+  Shortcuts UI cleanup, and six bug fixes), the phase needed its standard
+  wrap-up: version bump, release notes, and bringing the project's own
+  documentation back in sync with what was actually built — following the
+  same process used for every previous phase.
+
+  Solution:
+  - Used `/bump-version` for a minor bump (2.2.1 → 2.3.0 — feature-additive,
+    backward compatible, no breaking protocol changes): `package.json`,
+    `apps/client/package.json`, `apps/server/package.json`, README's
+    version badge, CLAUDE.md's "Current version" line and phase count
+    (1–13 → 1–14). `packages/shared-types/package.json` left untouched
+    (independently versioned on its own 0.x scheme, per established
+    convention). `package-lock.json` regenerated via
+    `npm install --package-lock-only` (workspace entries only; verified no
+    unrelated third-party dependency versions were touched).
+  - Archived the completed Phase 14 PRD: `git mv
+    app-planning/Reson8_Phase14_PRD.md` into `app-planning/archive/`,
+    matching every previous phase's pattern.
+  - Wrote `app-planning/releases/v2.3.0.md` following the established
+    format (intro paragraph, New Features & Improvements, Bug Fixes,
+    Installation table), sourced entirely from the actual progress.txt
+    entries logged during Phase 14 — no invented or embellished features.
+  - Updated root `CLAUDE.md`: the "Project history" paragraph now lists
+    `Reson8_Phase14_PRD.md` among the archived PRDs (with its 12-item
+    summary) and correctly describes progress.txt's current structure
+    (three condensed summary blocks followed by Phase 14's
+    still-ongoing-log entries, not yet condensed). Added three new
+    Architecture entries: chat pagination (cursor-based
+    `FETCH_MESSAGES`/`FETCH_DIRECT_MESSAGES`, `IntersectionObserver`-driven
+    infinite scroll), link preview (the two-tier `fetch()`-then-hidden-
+    `BrowserWindow` fallback), and extended the existing Voice paragraph to
+    cover the local own-voice speaking indicator, the self-hear monitor,
+    and adjustable noise-cancelling strength. Extended the Data model
+    bullet to mention `Channel.iconEmoji`/`iconUrl` and re-parenting via
+    `CHANNEL_MOVED`.
+  - Updated `apps/client/CLAUDE.md`: `main.ts`'s structure bullet now
+    describes the link-preview fallback; `voice.service.ts`'s bullet
+    mentions adjustable noise-cancelling strength and the self-hear
+    monitor; the preview-mode convention note was corrected to reflect
+    that preview mode now builds the full noise-gate/mic-volume/
+    noise-cancelling chain via a shared `buildProcessingChain()` helper,
+    not just a bare analyser tap (a real change in behavior this phase,
+    not just new prose).
+  - Updated `apps/server/CLAUDE.md`: `upload.route.ts`'s structure bullet
+    now lists the new `/api/upload/channel-icon` route alongside the
+    existing image/emoji upload endpoints.
+  - Updated `README.md`: five feature bullets updated/added under Voice &
+    Audio (own-voice-halo latency note, adjustable noise-cancelling
+    strength, new "Hear Yourself" bullet), Channels & Presence (channel
+    re-parenting, new "Custom Text Channel Icons" bullet), and Text &
+    Messaging (paginated/auto-scroll-to-latest chat history, new "Jump to
+    Most Recent Message" bullet, link-preview bot-wall fallback note).
+    Added a Phase 14 row to the Roadmap table.
+
+  Key Files Modified:
+    package.json
+    apps/client/package.json
+    apps/server/package.json
+    package-lock.json
+    README.md
+    CLAUDE.md
+    apps/client/CLAUDE.md
+    apps/server/CLAUDE.md
+    app-planning/releases/v2.3.0.md (NEW)
+    app-planning/Reson8_Phase14_PRD.md → app-planning/archive/Reson8_Phase14_PRD.md (moved)
+
+  Verification:
+    `npx tsc --noEmit` in `apps/client` and `apps/server` — both clean
+    (re-confirmed after the package.json version bumps, before the
+    doc-only changes that followed). All version-string references
+    cross-checked with a repo-wide grep excluding
+    node_modules/dist/release/.git — remaining historical mentions (two
+    "v2.2.1 incident" references in CLAUDE.md's Electron gotchas list, and
+    all `app-planning/` historical records) deliberately left untouched as
+    frozen history, not live pointers.
+
+  Next Step: none — this closes out Phase 14 entirely. The user will push
+  the branch manually. The next phase PRD will be drafted from a future
+  `app-planning/nextsteps.txt` when new requirements come in.
