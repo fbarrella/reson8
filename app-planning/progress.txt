@@ -1084,3 +1084,90 @@ Feature/Fix: PRD 14.9 — Fix the Settings modal changing height per tab
   (14.12 → 14.11 → 14.10, simplest to most complex) — pending user
   confirmation to proceed. PRD 14.8 (link preview fix) also remains
   available independently at any time.
+
+--- Entry: 02/09/2026 ---
+
+Feature/Fix: PRD 14.12 — Fix AI noise cancelling being too aggressive
+(voice fading during quiet moments) (Phase 14, item 12)
+
+  Problem: DeepFilterNet3 noise cancelling worked well most of the time,
+  but the user's voice would fade to near-silence during quiet moments
+  (e.g. after going quiet for a while), and seemed to somewhat suppress an
+  already-quiet mic more generally.
+
+  Root cause (confirmed by reading the vendored package's actual compiled
+  implementation, not guessed): `voice.service.ts` constructs
+  `DeepFilterNet3Core` with `noiseReductionLevel` hardcoded to 100 (the
+  maximum) — the package's own internal default (if omitted) is 50.
+  Traced this value all the way through: it becomes the WASM model's
+  `atten_lim` (attenuation limit in dB) via
+  `df_create()`/`df_set_atten_lim()`, so 100 is genuinely "maximum
+  possible suppression," which has no way to distinguish quiet speech
+  from silence. The package does expose a public
+  `setSuppressionLevel(level: number)` (0-100) for exactly this, which
+  nothing in this codebase ever called.
+
+  A second, subtler bug was also found and fixed while implementing this:
+  `DeepFilterNet3Core.createAudioWorkletNode()` only ever seeds a
+  brand-new node's initial suppression level from the config snapshot
+  captured once at construction time (the one instance shared for the
+  whole app session) — `setSuppressionLevel()` posts a live message to
+  the current worklet but never writes back into that snapshot. Without a
+  fix, adjusting the new slider mid-session and then leaving+rejoining a
+  voice channel (which creates a fresh `AudioWorkletNode`) would have
+  silently reset back to whatever level was in effect the first time the
+  engine was ever initialized this session, undoing the user's
+  adjustment.
+
+  Solution:
+  - `apps/client/src/services/voice.service.ts`: replaced the hardcoded
+    `noiseReductionLevel: 100` with a module-level `noiseCancelStrength`
+    variable (default 60, a more moderate value than both the old 100 and
+    the package's own 50 default). New public
+    `setNoiseCancelStrength(level)` method updates that shared variable
+    and calls `noiseCancelCore.setSuppressionLevel(level)` live if a node
+    already exists — a plain runtime call, not a graph rewire, so it
+    doesn't touch the fragile ESM/`dynamicImport` interop at all.
+    `createNoiseCancelNode()` (the single private method both the
+    graph-build-at-join and enable-mid-session paths funnel through) now
+    reasserts `noiseCancelCore.setSuppressionLevel(noiseCancelStrength)`
+    immediately after creating every new node, fixing the
+    stale-snapshot-on-rejoin bug above.
+  - `apps/client/src/preload.ts` + `renderer.ts` (`api` interface): new
+    `setNoiseCancelStrength(level)` passthrough to `voiceService`.
+  - `apps/client/src/renderer/renderer.ts`: new "Noise Cancelling
+    Strength" slider (0-100, step 5) in Voice & Shortcuts, shown/hidden
+    alongside the existing Noise Cancelling toggle (mirroring the
+    mic-sensitivity slider's own show/hide pattern). Persisted to
+    localStorage (`reson8-noise-cancel-strength`, default 60) and
+    reapplied at both voice-join call sites (manual join and the
+    auto-reconnect rejoin path) alongside the existing
+    mic-volume/noise-cancel-enabled reapplication, since
+    `joinVoiceChannel()` constructs a fresh `VoiceService` instance per
+    session.
+  - `apps/client/src/renderer/index.html`: new slider markup right after
+    the Noise Cancelling toggle row, reusing the existing
+    `.sensitivity-slider-row`/`.sensitivity-labels` styling (no new CSS
+    needed).
+
+  localStorage Keys:
+    reson8-noise-cancel-strength (new) — 0-100, default 60.
+
+  Key Files Modified:
+    apps/client/src/services/voice.service.ts
+    apps/client/src/preload.ts
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/renderer/index.html
+
+  Verification:
+    `npx tsc --noEmit` in `apps/client` — clean. Manual verification
+    (confirm the slider audibly changes suppression strength live,
+    confirm a moderate default no longer fades a paused/quiet voice to
+    silence the way 100 did, confirm the value persists across restarts
+    and survives leaving/rejoining a voice channel) is pending the user's
+    own hands-on pass.
+
+  Next Step: PRD 14.11 (own-voice active-speaker indicator latency), the
+  second of the three voice-graph items in the PRD's recommended build
+  order — pending user confirmation to proceed. PRD 14.8 (link preview
+  fix) also remains available independently at any time.

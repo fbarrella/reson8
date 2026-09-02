@@ -98,13 +98,24 @@ function resolveNoiseCancelModuleUrl(): string {
 
 let noiseCancelCore: DeepFilterNet3CoreInstance | null = null;
 let noiseCancelInitPromise: Promise<void> | null = null;
+
+// Suppression strength (PRD 14.12), 0-100 — the attenuation limit (in dB)
+// DeepFilterNet3 is allowed to apply. Session-shared like `noiseCancelCore`
+// itself, since the engine is one instance for the whole app session, not
+// per join. Was hardcoded to 100 (the maximum) — almost certainly why a
+// quiet or paused voice faded toward silence, since the model has no
+// signal to distinguish "quiet speech" from "silence" at full strength.
+// The vendored package's own internal default (used if this were omitted
+// entirely) is 50; this app defaults to a slightly less aggressive 60.
+let noiseCancelStrength = 60;
+
 function ensureNoiseCancelInitialized(): Promise<void> {
     if (!noiseCancelInitPromise) {
         noiseCancelInitPromise = (async () => {
             const { DeepFilterNet3Core } = await dynamicImport(resolveNoiseCancelModuleUrl());
             noiseCancelCore = new DeepFilterNet3Core({
                 sampleRate: 48000,
-                noiseReductionLevel: 100,
+                noiseReductionLevel: noiseCancelStrength,
                 assetConfig: { cdnUrl: "../../assets/deepfilternet" },
             });
             await noiseCancelCore.initialize();
@@ -1151,7 +1162,19 @@ export class VoiceService {
         await ensureNoiseCancelInitialized();
         if (!this.audioContext) throw new Error("No audio context to attach noise cancelling to");
         if (!noiseCancelCore) throw new Error("Noise cancelling engine failed to initialize");
-        return noiseCancelCore.createAudioWorkletNode(this.audioContext);
+        const node = await noiseCancelCore.createAudioWorkletNode(this.audioContext);
+        // The engine's own internal config snapshot (captured once, at the
+        // session's very first `new DeepFilterNet3Core(...)` construction)
+        // only ever seeds a *brand-new* node's initial suppression level —
+        // `setSuppressionLevel()` below never writes back into that
+        // snapshot. Without this, a node created on a later join would
+        // silently reset to whatever level was in effect the first time
+        // this session ever initialized the engine, undoing any live
+        // adjustment made on a previous join. Reasserting the current
+        // preference here keeps every freshly-created node in sync (PRD
+        // 14.12) — a plain runtime call, not a graph rewire.
+        noiseCancelCore.setSuppressionLevel(noiseCancelStrength);
+        return node;
     }
 
     /**
@@ -1202,6 +1225,21 @@ export class VoiceService {
             this.noiseCancelEnabled = false;
             this.onError?.("Couldn't enable noise cancelling.");
         }
+    }
+
+    /**
+     * Adjusts how aggressively DeepFilterNet3 suppresses background noise
+     * (0-100, PRD 14.12) — live, on the currently active node if one
+     * exists (a plain `postMessage` to the worklet, not a graph rewire, so
+     * it never touches the fragile ESM/`dynamicImport` interop). Also
+     * updates the session-shared default so a node created later — this
+     * join or a future one — starts at the same level instead of
+     * resetting to whatever was in effect the first time the engine was
+     * ever initialized this session.
+     */
+    setNoiseCancelStrength(level: number): void {
+        noiseCancelStrength = level;
+        noiseCancelCore?.setSuppressionLevel(level);
     }
 
     // ── Preview mode (meter without voice channel) ────────────────────────

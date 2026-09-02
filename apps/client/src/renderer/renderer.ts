@@ -698,6 +698,7 @@ interface Reson8Api {
     setGlobalVoiceVolume(percent: number): void;
     setMicVolume(percent: number): void;
     setNoiseCancelEnabled(enabled: boolean): Promise<void>;
+    setNoiseCancelStrength(level: number): void;
     checkForUpdates(): Promise<{ status: "available" | "not-available" | "error"; message?: string }>;
     downloadUpdate(): Promise<void>;
     quitAndInstall(): void;
@@ -1143,6 +1144,10 @@ let micVolume = Number(localStorage.getItem("reson8-mic-volume") ?? "100");
 // AI noise cancelling (PRD 13.1) — off by default (a real CPU/latency cost),
 // persisted like the noise gate's own enabled flag.
 let noiseCancelEnabled = localStorage.getItem("reson8-noise-cancel-enabled") === "true";
+// Noise cancelling strength (PRD 14.12) — 0-100, was hardcoded to 100 (max)
+// which caused a quiet/paused voice to fade toward silence; 60 is a more
+// moderate default.
+let noiseCancelStrength = Number(localStorage.getItem("reson8-noise-cancel-strength") ?? "60");
 const audioNudgeVolumeSlider = document.getElementById("audio-nudge-volume-slider") as HTMLInputElement;
 const audioNudgeVolumeValue = document.getElementById("audio-nudge-volume-value") as HTMLSpanElement;
 const audioAlertVolumeSlider = document.getElementById("audio-alert-volume-slider") as HTMLInputElement;
@@ -1163,6 +1168,9 @@ const micSensitivitySection = document.getElementById("mic-sensitivity-section")
 const micVolumeSlider = document.getElementById("mic-volume-slider") as HTMLInputElement;
 const micVolumeValue = document.getElementById("mic-volume-value") as HTMLSpanElement;
 const chkNoiseCancel = document.getElementById("chk-noise-cancel") as HTMLInputElement;
+const noiseCancelStrengthWrap = document.getElementById("noise-cancel-strength-wrap") as HTMLDivElement;
+const noiseCancelStrengthSlider = document.getElementById("noise-cancel-strength-slider") as HTMLInputElement;
+const noiseCancelStrengthValue = document.getElementById("noise-cancel-strength-value") as HTMLSpanElement;
 
 // Apply the saved mic volume before the user ever joins a channel (mirrors
 // setGlobalVoiceVolume above — a no-op until a VoiceService instance
@@ -1950,6 +1958,7 @@ async function handleChannelClick(node: TreeNode): Promise<void> {
                 api.setGlobalVoiceVolume(voiceVolume);
                 api.setMicVolume(micVolume);
                 api.setNoiseCancelEnabled(noiseCancelEnabled);
+                api.setNoiseCancelStrength(noiseCancelStrength);
 
                 // Initialize previous occupants for join/leave sound detection
                 previousOccupantIds = new Set(node.occupants.map((o: any) => o.userId));
@@ -2691,6 +2700,7 @@ api.on("voice-reconnected", (data: { channelId: string }) => {
     api.setGlobalVoiceVolume(voiceVolume);
     api.setMicVolume(micVolume);
     api.setNoiseCancelEnabled(noiseCancelEnabled);
+    api.setNoiseCancelStrength(noiseCancelStrength);
     api.setVoiceState(isMuted, isDeafened);
     previousOccupantIds = new Set((node?.occupants ?? []).map((o) => o.userId));
     previousSharingIds = sharingIdsOf(node?.occupants ?? []);
@@ -6875,6 +6885,9 @@ micVolumeSlider?.addEventListener("input", () => {
 // ── Noise Cancelling (PRD 13.1) ──────────────────────────────────────────────
 
 if (chkNoiseCancel) chkNoiseCancel.checked = noiseCancelEnabled;
+if (noiseCancelStrengthWrap) noiseCancelStrengthWrap.style.display = noiseCancelEnabled ? "block" : "none";
+if (noiseCancelStrengthSlider) noiseCancelStrengthSlider.value = String(noiseCancelStrength);
+if (noiseCancelStrengthValue) noiseCancelStrengthValue.textContent = String(noiseCancelStrength);
 
 chkNoiseCancel?.addEventListener("change", () => {
     noiseCancelEnabled = chkNoiseCancel.checked;
@@ -6883,7 +6896,17 @@ chkNoiseCancel?.addEventListener("change", () => {
     } else {
         localStorage.removeItem("reson8-noise-cancel-enabled");
     }
+    if (noiseCancelStrengthWrap) noiseCancelStrengthWrap.style.display = noiseCancelEnabled ? "block" : "none";
     // The very first enable this session fetches/compiles the vendored WASM
     // engine — no UI blocking needed, it applies whenever it resolves.
     api.setNoiseCancelEnabled(noiseCancelEnabled);
+});
+
+// ── Noise Cancelling Strength (PRD 14.12) ────────────────────────────────────
+
+noiseCancelStrengthSlider?.addEventListener("input", () => {
+    noiseCancelStrength = Number(noiseCancelStrengthSlider.value);
+    noiseCancelStrengthValue.textContent = String(noiseCancelStrength);
+    localStorage.setItem("reson8-noise-cancel-strength", String(noiseCancelStrength));
+    api.setNoiseCancelStrength(noiseCancelStrength);
 });

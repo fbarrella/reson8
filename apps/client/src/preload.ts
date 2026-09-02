@@ -564,6 +564,10 @@ const api = {
         await voiceService?.setNoiseCancelEnabled(enabled);
     },
 
+    setNoiseCancelStrength(level: number): void {
+        voiceService?.setNoiseCancelStrength(level);
+    },
+
     // ── Audio Settings ──────────────────────────────────────────────────────
 
     async enumerateAudioDevices(): Promise<{ inputs: { deviceId: string; label: string }[]; outputs: { deviceId: string; label: string }[] }> {
