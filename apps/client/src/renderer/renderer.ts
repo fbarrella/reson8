@@ -2652,7 +2652,13 @@ api.on("connected", (data: { serverId: string; instanceId: string }) => {
     statusText.textContent = `Connected as ${nicknameInput.value.trim() || "User"}`;
     statusText.classList.add("connected");
     statusInstance.textContent = `ID: ${data.instanceId}`;
-    log("Connected to server", "success");
+    if (lastDisconnectAt !== null) {
+        const secs = ((Date.now() - lastDisconnectAt) / 1000).toFixed(1);
+        log(`Connected to server (reconnected after ${secs}s)`, "success");
+        lastDisconnectAt = null;
+    } else {
+        log("Connected to server", "success");
+    }
     SoundAlert.play("connected.mp3");
 
     // Always show the online users button when connected
@@ -2714,7 +2720,15 @@ api.on("connected", (data: { serverId: string; instanceId: string }) => {
     });
 });
 
-api.on("disconnected", () => {
+/** When the last unintended disconnect happened — lets the next "connected"
+ *  log how long the outage lasted (PRD 15.2 diagnostics). */
+let lastDisconnectAt: number | null = null;
+
+api.on("disconnected", (data?: { reason?: string }) => {
+    const disconnectReason = data?.reason ?? "unknown";
+    // "io client disconnect" = the user/app closed it on purpose; anything
+    // else (ping timeout, transport close/error…) is an unintended drop.
+    lastDisconnectAt = disconnectReason === "io client disconnect" ? null : Date.now();
     isConnected = false;
     isAdminUser = false;
     canManageEmojis = false;
@@ -2756,7 +2770,7 @@ api.on("disconnected", () => {
         closeTab(tabId);
     }
     switchTab("server-log");
-    log("Disconnected from server", "error");
+    log(`Disconnected from server (${disconnectReason})`, "error");
     SoundAlert.play("disconnected.mp3");
 });
 

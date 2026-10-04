@@ -245,7 +245,15 @@ export function registerConnectionHandlers(
     }
 
     io.on("connection", (socket: TypedSocket) => {
-        app.log.info({ socketId: socket.id }, "Client connected");
+        // Diagnostics (PRD 15.2): lets a later log be classified without
+        // guesswork — connection lifetime, transport, and the client's
+        // address (an IP change between sockets = roaming network).
+        const connectedAt = Date.now();
+        const clientAddress =
+            (socket.handshake.headers["cf-connecting-ip"] as string | undefined) ??
+            (socket.handshake.headers["x-forwarded-for"] as string | undefined) ??
+            socket.handshake.address;
+        app.log.info({ socketId: socket.id, address: clientAddress }, "Client connected");
 
         // ── PING_LATENCY — instant ack for client-side RTT + clock-offset
         // measurement (the server timestamp lets the client correct for
@@ -672,7 +680,14 @@ export function registerConnectionHandlers(
                 // offline, so do nothing userId-keyed.
                 if (serverId && userId && !ownership.isOwner(userId, socket.id)) {
                     app.log.info(
-                        { socketId: socket.id, nickname, reason, superseded: socket.data.superseded === true },
+                        {
+                            socketId: socket.id,
+                            nickname,
+                            reason,
+                            superseded: socket.data.superseded === true,
+                            transport: socket.conn?.transport?.name,
+                            connectedForMs: Date.now() - connectedAt,
+                        },
                         "Stale socket disconnected (superseded)",
                     );
                     return;
@@ -735,7 +750,14 @@ export function registerConnectionHandlers(
                 }
 
                 app.log.info(
-                    { socketId: socket.id, nickname, reason },
+                    {
+                        socketId: socket.id,
+                        nickname,
+                        reason,
+                        superseded: false,
+                        transport: socket.conn?.transport?.name,
+                        connectedForMs: Date.now() - connectedAt,
+                    },
                     reason === "client namespace disconnect"
                         ? "Client disconnected (finalized immediately)"
                         : "Client disconnected (grace period started)",

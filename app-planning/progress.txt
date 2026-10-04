@@ -1647,3 +1647,70 @@ Feature/Fix: PRD 15.1 — Users showing offline after a quick reconnect (stale-s
   Next Step: PRD 15.2 — disconnect-session investigation report plus
   additive diagnostics logging (builds on this item's `superseded` log
   field).
+
+
+--- Entry: 04/10/2026 ---
+
+Feature/Fix: PRD 15.2 — Investigation: constant disconnects/reconnects session (log analysis + diagnostics)
+
+  Problem: A session (log window 02:34-05:32 UTC) showed users being
+  disconnected and reconnected constantly. The user asked whether this was
+  an app bug or just connectivity, and for a fix if possible.
+
+  Findings (from `logs 03-09-2026 23h30-2h30 ...txt`):
+    - PROVEN app bug, fixed by PRD 15.1: all five abnormal churn events
+      followed one shape — client reconnects on a new socket and rebuilds
+      voice; the server's old half-open socket times out 16-36s later and
+      its userId-keyed cleanup destroys the live session; client voice
+      recovery rejoins ~12.2-12.9s after that. So every single network
+      blip became TWO voice drops plus a "went offline" presence bug,
+      which reads as constant disconnecting.
+    - NOT provable from the logs: why the network drops happened at all.
+      The logs are server-side only. Every old socket died by "ping
+      timeout" after the client had already reconnected (all under the
+      45s pingInterval+pingTimeout ceiling) — the signature of half-open
+      connections, i.e. the path between client and server vanished
+      without a close. Three different users hit it within one hour
+      (04:25-05:21), with none 02:45-04:25, pointing to an upstream/path
+      cause (ISP, Cloudflare Tunnel edge, or server host uplink) rather
+      than a defect in any one client. No application-level cause for the
+      drops themselves is visible; the drops are connectivity-side and not
+      fixable in-app.
+    - Everything else in the log was normal: one genuine blip at 02:35:39
+      ("transport close", reconnected 8s later), rapid channel-hopping at
+      02:36:12 (user clicking), clean shutdown at 05:32.
+    - Socket.io ping settings deliberately left unchanged: lowering them
+      would trade fewer zombies for more false disconnects on weak links,
+      and with PRD 15.1 a zombie socket is harmless. Revisit only if
+      post-15.1 logs still show user-visible churn.
+
+  Solution: Additive diagnostics only (no behavior change), so the next
+  incident can be classified without guesswork.
+
+  Server Changes:
+    - "Client connected" log now includes the client address (prefers
+      `cf-connecting-ip`, then `x-forwarded-for`, then the socket
+      address) — an IP change between sockets reveals roaming networks.
+    - Both disconnect log lines (stale/superseded and normal) now include
+      `transport` (`socket.conn.transport.name`), `connectedForMs`
+      (socket lifetime) and `superseded`.
+
+  Client Changes:
+    - The Server Log tab line is now "Disconnected from server (<reason>)"
+      using the Socket.io reason that was previously discarded, and the
+      next successful connect logs "Connected to server (reconnected
+      after N.Ns)" for an unintended drop. A deliberate disconnect
+      ("io client disconnect") is excluded and logs the plain message.
+      Grepped first: nothing else parses these strings.
+
+  Key Files Modified:
+    apps/server/src/handlers/connection.handler.ts
+    apps/client/src/renderer/renderer.ts
+
+  Verification:
+    `npx tsc --noEmit` in `apps/server` and `apps/client` — both clean.
+    Not run: a live forced disconnect to eyeball the new log fields and
+    the Server Log message (left to the user; stopping the server briefly
+    is enough to see them).
+
+  Next Step: PRD 15.3 — pause the local voice halo while muted.
