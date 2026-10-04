@@ -1,0 +1,935 @@
+[02:34:24.730] INFO (67): Client connected
+    socketId: "8Mvy-DW9B1DD2fecAAAT"
+[02:34:24.841] INFO (67): User joined server
+    socketId: "8Mvy-DW9B1DD2fecAAAT"
+    nickname: "Kdshy"
+    serverId: "73210130-1cb6-462a-9293-dd5217d5a515"
+    instanceId: "90bbd57f-b750-4421-9bfb-e03b6565de73"
+[02:35:39.748] INFO (67): Client disconnected (grace period started)
+    socketId: "8Mvy-DW9B1DD2fecAAAT"
+    nickname: "Kdshy"
+    reason: "transport close"
+[02:35:47.876] INFO (67): Client connected
+    socketId: "KVaAdjMS8w63dC_4AAAV"
+[02:35:47.968] INFO (67): User joined server
+    socketId: "KVaAdjMS8w63dC_4AAAV"
+    nickname: "Kdshy"
+    serverId: "73210130-1cb6-462a-9293-dd5217d5a515"
+    instanceId: "90bbd57f-b750-4421-9bfb-e03b6565de73"
+[02:36:12.956] INFO (67): User joined channel
+    socketId: "KVaAdjMS8w63dC_4AAAV"
+    channelId: "chan-game-room-1"
+[mediasoup] Router created for channel chan-game-room-1
+[02:36:12.972] INFO (67): Sent router capabilities
+    socketId: "KVaAdjMS8w63dC_4AAAV"
+    channelId: "chan-game-room-1"
+[mediasoup] Resolved "voice-server.reson8.com.br" → 179.167.63.21
+[02:36:13.018] INFO (67): WebRTC transport created
+    socketId: "KVaAdjMS8w63dC_4AAAV"
+    channelId: "chan-game-room-1"
+    direction: "send"
+    transportId: "f578d25d-b992-45a1-8ca3-1490c45f8ad2"
+[mediasoup] Resolved "voice-server.reson8.com.br" → 179.167.63.21
+[02:36:13.044] INFO (67): WebRTC transport created
+    socketId: "KVaAdjMS8w63dC_4AAAV"
+    channelId: "chan-game-room-1"
+    direction: "recv"
+    transportId: "eab30609-e5a1-4fc4-8227-81e72389dab9"
+[02:36:13.162] INFO (67): Transport connected
+    socketId: "KVaAdjMS8w63dC_4AAAV"
+    transportId: "f578d25d-b992-45a1-8ca3-1490c45f8ad2"
+[mediasoup] AudioLevelObserver created for channel chan-game-room-1
+[02:36:13.182] INFO (67): User started producing
+    socketId: "KVaAdjMS8w63dC_4AAAV"
+    channelId: "chan-game-room-1"
+    producerId: "ec414af6-ce5e-4e15-832d-6e7bbd45baa5"
+    kind: "audio"
+[mediasoup] Router destroyed for channel chan-game-room-1
+[mediasoup] Cleaned up session for user 90bbd57f-b750-4421-9bfb-e03b6565de73 in channel chan-game-room-1
+[02:36:13.721] INFO (67): User left channel
+    socketId: "KVaAdjMS8w63dC_4AAAV"
+    channelId: "chan-game-room-1"
+[02:36:13.728] INFO (67): User joined channel
+    socketId: "KVaAdjMS8w63dC_4AAAV"
+    channelId: "chan-game-room-2"
+[mediasoup] Router created for channel chan-game-room-2
+[02:36:13.740] INFO (67): Sent router capabilities
+    socketId: "KVaAdjMS8w63dC_4AAAV"
+    channelId: "chan-game-room-2"
+[mediasoup] Resolved "voice-server.reson8.com.br" → 179.167.63.21
+[02:36:13.780] INFO (67): WebRTC transport created
+    socketId: "KVaAdjMS8w63dC_4AAAV"
+    channelId: "chan-game-room-2"
+    direction: "send"
+    transportId: "6357209b-292b-4933-b589-26728fd34add"
+[mediasoup] Resolved "voice-server.reson8.com.br" → 179.167.63.21
+[02:36:13.805] INFO (67): WebRTC transport created
+    socketId: "KVaAdjMS8w63dC_4AAAV"
+    channelId: "chan-game-room-2"
+    direction: "recv"
+    transportId: "e773f318-bfff-4d5c-8463-a98034fe19b8"
+[02:36:13.852] INFO (67): Transport connected
+    socketId: "KVaAdjMS8w63dC_4AAAV"
+    transportId: "6357209b-292b-4933-b589-26728fd34add"
+[mediasoup] AudioLevelObserver created for channel chan-game-room-2
+[02:36:13.871] INFO (67): User started producing
+    socketId: "KVaAdjMS8w63dC_4AAAV"
+    channelId: "chan-game-room-2"
+    producerId: "c9c456ba-d8a4-4934-b7f8-63c3f628786d"
+    kind: "audio"
+[02:37:15.071] INFO (67): Client connected
+    socketId: "X28UKHP8Oloh5nuCAAAX"
+[02:37:15.147] INFO (67): User joined server
+    socketId: "X28UKHP8Oloh5nuCAAAX"
+    nickname: "DNG"
+    serverId: "73210130-1cb6-462a-9293-dd5217d5a515"
+    instanceId: "379d2b4b-3a47-4790-8fbc-66f92260b198"
+[02:37:17.886] INFO (67): User joined channel
+    socketId: "X28UKHP8Oloh5nuCAAAX"
+    channelId: "chan-game-room-2"
+[02:37:17.903] INFO (67): Sent router capabilities
+    socketId: "X28UKHP8Oloh5nuCAAAX"
+    channelId: "chan-game-room-2"
+[mediasoup] Resolved "voice-server.reson8.com.br" → 179.167.63.21
+[02:37:17.992] INFO (67): WebRTC transport created
+    socketId: "X28UKHP8Oloh5nuCAAAX"
+    channelId: "chan-game-room-2"
+    direction: "send"
+    transportId: "256f5d73-cd5c-46f5-9acf-7507f825df67"
+[mediasoup] Resolved "voice-server.reson8.com.br" → 179.167.63.21
+[02:37:18.026] INFO (67): WebRTC transport created
+    socketId: "X28UKHP8Oloh5nuCAAAX"
+    channelId: "chan-game-room-2"
+    direction: "recv"
+    transportId: "8fa9986a-1764-4b1a-bf1d-44b2e019c824"
+[02:37:18.302] INFO (67): Transport connected
+    socketId: "X28UKHP8Oloh5nuCAAAX"
+    transportId: "256f5d73-cd5c-46f5-9acf-7507f825df67"
+[02:37:18.333] INFO (67): User started producing
+    socketId: "X28UKHP8Oloh5nuCAAAX"
+    channelId: "chan-game-room-2"
+    producerId: "26ad8998-dc72-4258-b6a8-f95a90d7e91a"
+    kind: "audio"
+[02:37:18.362] INFO (67): User consuming producer
+    socketId: "KVaAdjMS8w63dC_4AAAV"
+    consumerId: "01de8dfe-ba0d-422b-a9be-4617834d4a1a"
+    producerId: "26ad8998-dc72-4258-b6a8-f95a90d7e91a"
+[02:37:18.363] INFO (67): User consuming producer
+    socketId: "X28UKHP8Oloh5nuCAAAX"
+    consumerId: "aaf1ffb7-be82-46fd-a4be-b86624bdead6"
+    producerId: "c9c456ba-d8a4-4934-b7f8-63c3f628786d"
+[02:37:18.377] INFO (67): Transport connected
+    socketId: "KVaAdjMS8w63dC_4AAAV"
+    transportId: "e773f318-bfff-4d5c-8463-a98034fe19b8"
+[02:37:18.384] INFO (67): Transport connected
+    socketId: "X28UKHP8Oloh5nuCAAAX"
+    transportId: "8fa9986a-1764-4b1a-bf1d-44b2e019c824"
+[02:37:18.396] INFO (67): Consumer resumed
+    socketId: "KVaAdjMS8w63dC_4AAAV"
+    consumerId: "01de8dfe-ba0d-422b-a9be-4617834d4a1a"
+[02:37:18.402] INFO (67): Consumer resumed
+    socketId: "X28UKHP8Oloh5nuCAAAX"
+    consumerId: "aaf1ffb7-be82-46fd-a4be-b86624bdead6"
+[02:37:39.867] INFO (67): Message sent
+    socketId: "X28UKHP8Oloh5nuCAAAX"
+    channelId: "edac5df9-5344-4250-9081-e446dd762d47"
+    messageId: "5fdd795d-fb19-4827-8bf6-a42f90b34a31"
+[02:38:52.064] INFO (67): User joined channel
+    socketId: "IVr1XeMOUvKJrLxQAAAR"
+    channelId: "chan-game-room-2"
+[02:38:52.076] INFO (67): Sent router capabilities
+    socketId: "IVr1XeMOUvKJrLxQAAAR"
+    channelId: "chan-game-room-2"
+[mediasoup] Resolved "voice-server.reson8.com.br" → 179.167.63.21
+[02:38:52.150] INFO (67): WebRTC transport created
+    socketId: "IVr1XeMOUvKJrLxQAAAR"
+    channelId: "chan-game-room-2"
+    direction: "send"
+    transportId: "e16aaf59-4003-4a1a-9988-47d75b017ff2"
+[mediasoup] Resolved "voice-server.reson8.com.br" → 179.167.63.21
+[02:38:52.177] INFO (67): WebRTC transport created
+    socketId: "IVr1XeMOUvKJrLxQAAAR"
+    channelId: "chan-game-room-2"
+    direction: "recv"
+    transportId: "734ca308-31f5-4d05-b3eb-8604c0b4f0d0"
+[02:38:52.251] INFO (67): Transport connected
+    socketId: "IVr1XeMOUvKJrLxQAAAR"
+    transportId: "e16aaf59-4003-4a1a-9988-47d75b017ff2"
+[02:38:52.271] INFO (67): User started producing
+    socketId: "IVr1XeMOUvKJrLxQAAAR"
+    channelId: "chan-game-room-2"
+    producerId: "afc6cdd7-944a-42f7-b862-cf3b9d432340"
+    kind: "audio"
+[02:38:52.284] INFO (67): User consuming producer
+    socketId: "KVaAdjMS8w63dC_4AAAV"
+    consumerId: "5c1bbe60-fb63-4157-b34f-d3a542bc27f6"
+    producerId: "afc6cdd7-944a-42f7-b862-cf3b9d432340"
+[02:38:52.284] INFO (67): User consuming producer
+    socketId: "IVr1XeMOUvKJrLxQAAAR"
+    consumerId: "baf67471-5727-4158-9674-088b44c69a38"
+    producerId: "c9c456ba-d8a4-4934-b7f8-63c3f628786d"
+[02:38:52.286] INFO (67): User consuming producer
+    socketId: "X28UKHP8Oloh5nuCAAAX"
+    consumerId: "9913a832-05f4-456d-91c3-e413dcfda456"
+    producerId: "afc6cdd7-944a-42f7-b862-cf3b9d432340"
+[02:38:52.299] INFO (67): Transport connected
+    socketId: "IVr1XeMOUvKJrLxQAAAR"
+    transportId: "734ca308-31f5-4d05-b3eb-8604c0b4f0d0"
+[02:38:52.299] INFO (67): Consumer resumed
+    socketId: "KVaAdjMS8w63dC_4AAAV"
+    consumerId: "5c1bbe60-fb63-4157-b34f-d3a542bc27f6"
+[02:38:52.313] INFO (67): Consumer resumed
+    socketId: "IVr1XeMOUvKJrLxQAAAR"
+    consumerId: "baf67471-5727-4158-9674-088b44c69a38"
+[02:38:52.318] INFO (67): Consumer resumed
+    socketId: "X28UKHP8Oloh5nuCAAAX"
+    consumerId: "9913a832-05f4-456d-91c3-e413dcfda456"
+[02:38:52.859] INFO (67): User consuming producer
+    socketId: "IVr1XeMOUvKJrLxQAAAR"
+    consumerId: "a280c74d-3c19-4bd2-a7ea-188501b032b0"
+    producerId: "26ad8998-dc72-4258-b6a8-f95a90d7e91a"
+[02:38:52.874] INFO (67): Consumer resumed
+    socketId: "IVr1XeMOUvKJrLxQAAAR"
+    consumerId: "a280c74d-3c19-4bd2-a7ea-188501b032b0"
+[02:44:38.273] INFO (67): User started producing
+    socketId: "IVr1XeMOUvKJrLxQAAAR"
+    channelId: "chan-game-room-2"
+    producerId: "afbdec21-2628-464f-a919-2b50dc3e4b7e"
+    kind: "video"
+    mediaType: "screen-video"
+[02:45:00.228] INFO (67): Client connected
+    socketId: "q7oDapSHRNE1mv8JAAAZ"
+[02:45:00.241] INFO (67): Viewer socket authenticated
+    socketId: "q7oDapSHRNE1mv8JAAAZ"
+    role: "viewer"
+    userId: "90bbd57f-b750-4421-9bfb-e03b6565de73"
+[02:45:00.260] INFO (67): Viewer started watching screen share
+    socketId: "q7oDapSHRNE1mv8JAAAZ"
+    role: "viewer"
+    targetUserId: "89e20269-dcf9-4eb7-ab06-0d22587efd5e"
+    channelId: "chan-game-room-2"
+[mediasoup] Resolved "voice-server.reson8.com.br" → 179.167.63.21
+[02:45:00.340] INFO (67): WebRTC transport created
+    socketId: "q7oDapSHRNE1mv8JAAAZ"
+    channelId: "chan-game-room-2"
+    direction: "recv"
+    transportId: "9d8219e9-7604-475d-a439-ac31c359e79a"
+[02:45:00.355] INFO (67): User consuming producer
+    socketId: "q7oDapSHRNE1mv8JAAAZ"
+    consumerId: "f582f9aa-dc93-4ccf-94c5-a0e203fb7ac8"
+    producerId: "afbdec21-2628-464f-a919-2b50dc3e4b7e"
+[02:45:00.369] INFO (67): Transport connected
+    socketId: "q7oDapSHRNE1mv8JAAAZ"
+    transportId: "9d8219e9-7604-475d-a439-ac31c359e79a"
+[02:45:00.381] INFO (67): Consumer resumed
+    socketId: "q7oDapSHRNE1mv8JAAAZ"
+    consumerId: "f582f9aa-dc93-4ccf-94c5-a0e203fb7ac8"
+[02:45:15.277] INFO (67): Producer closed
+    socketId: "IVr1XeMOUvKJrLxQAAAR"
+    producerId: "afbdec21-2628-464f-a919-2b50dc3e4b7e"
+    sessionField: "screenVideoProducer"
+[mediasoup] Cleaned up session for user viewer:q7oDapSHRNE1mv8JAAAZ in channel chan-game-room-2
+[02:45:18.948] INFO (67): Viewer socket disconnected
+    socketId: "q7oDapSHRNE1mv8JAAAZ"
+    role: "viewer"
+    reason: "client namespace disconnect"
+[03:37:10.035] INFO (67): Message sent
+    socketId: "IVr1XeMOUvKJrLxQAAAR"
+    channelId: "edac5df9-5344-4250-9081-e446dd762d47"
+    messageId: "d169cf68-981e-4ecc-a4f0-22b2a4a9dd92"
+[03:48:42.716] INFO (67): Message sent
+    socketId: "IVr1XeMOUvKJrLxQAAAR"
+    channelId: "edac5df9-5344-4250-9081-e446dd762d47"
+    messageId: "34484584-7b5a-4d09-9c20-2b1cebf89290"
+[03:48:53.516] INFO (67): Message sent
+    socketId: "X28UKHP8Oloh5nuCAAAX"
+    channelId: "chan-chat"
+    messageId: "46d4d357-8f36-4547-beb2-ebb92ee95cef"
+[03:49:23.463] INFO (67): Message sent
+    socketId: "IVr1XeMOUvKJrLxQAAAR"
+    channelId: "chan-chat"
+    messageId: "c5ec49b8-cbdd-4a95-befe-a62247878765"
+[04:25:02.781] INFO (67): Client connected
+    socketId: "1Ai1HGTNwzXBQJ7pAAAb"
+[04:25:02.897] INFO (67): User joined server
+    socketId: "1Ai1HGTNwzXBQJ7pAAAb"
+    nickname: "barrelleitor"
+    serverId: "73210130-1cb6-462a-9293-dd5217d5a515"
+    instanceId: "89e20269-dcf9-4eb7-ab06-0d22587efd5e"
+[04:25:02.938] INFO (67): User joined channel
+    socketId: "1Ai1HGTNwzXBQJ7pAAAb"
+    channelId: "chan-game-room-2"
+[04:25:02.969] INFO (67): Sent router capabilities
+    socketId: "1Ai1HGTNwzXBQJ7pAAAb"
+    channelId: "chan-game-room-2"
+[mediasoup] Resolved "voice-server.reson8.com.br" → 179.167.63.21
+[04:25:03.039] INFO (67): WebRTC transport created
+    socketId: "1Ai1HGTNwzXBQJ7pAAAb"
+    channelId: "chan-game-room-2"
+    direction: "send"
+    transportId: "e729873f-9fa4-4c7e-8b91-0d1d3c6e9b2c"
+[mediasoup] Resolved "voice-server.reson8.com.br" → 179.167.63.21
+[04:25:03.090] INFO (67): WebRTC transport created
+    socketId: "1Ai1HGTNwzXBQJ7pAAAb"
+    channelId: "chan-game-room-2"
+    direction: "recv"
+    transportId: "288339f1-752d-4b01-9922-77c5db1dd9c4"
+[04:25:03.210] INFO (67): Transport connected
+    socketId: "1Ai1HGTNwzXBQJ7pAAAb"
+    transportId: "e729873f-9fa4-4c7e-8b91-0d1d3c6e9b2c"
+[04:25:03.249] INFO (67): User started producing
+    socketId: "1Ai1HGTNwzXBQJ7pAAAb"
+    channelId: "chan-game-room-2"
+    producerId: "79c667de-c135-415b-8608-ed1f503143e6"
+    kind: "audio"
+[04:25:03.266] INFO (67): User consuming producer
+    socketId: "KVaAdjMS8w63dC_4AAAV"
+    consumerId: "d95bd69b-0bc1-4672-ad0c-51ea1e44ed2b"
+    producerId: "79c667de-c135-415b-8608-ed1f503143e6"
+[04:25:03.268] INFO (67): User consuming producer
+    socketId: "X28UKHP8Oloh5nuCAAAX"
+    consumerId: "9fb0ad77-fe76-4faf-b01f-a7b4c626702b"
+    producerId: "79c667de-c135-415b-8608-ed1f503143e6"
+[04:25:03.282] INFO (67): User consuming producer
+    socketId: "1Ai1HGTNwzXBQJ7pAAAb"
+    consumerId: "cb464020-832b-459a-849e-01c909cbb9f8"
+    producerId: "c9c456ba-d8a4-4934-b7f8-63c3f628786d"
+[04:25:03.282] INFO (67): Consumer resumed
+    socketId: "KVaAdjMS8w63dC_4AAAV"
+    consumerId: "d95bd69b-0bc1-4672-ad0c-51ea1e44ed2b"
+[04:25:03.294] INFO (67): Consumer resumed
+    socketId: "X28UKHP8Oloh5nuCAAAX"
+    consumerId: "9fb0ad77-fe76-4faf-b01f-a7b4c626702b"
+[04:25:03.315] INFO (67): Transport connected
+    socketId: "1Ai1HGTNwzXBQJ7pAAAb"
+    transportId: "288339f1-752d-4b01-9922-77c5db1dd9c4"
+[04:25:03.347] INFO (67): Consumer resumed
+    socketId: "1Ai1HGTNwzXBQJ7pAAAb"
+    consumerId: "cb464020-832b-459a-849e-01c909cbb9f8"
+[04:25:03.381] INFO (67): User consuming producer
+    socketId: "1Ai1HGTNwzXBQJ7pAAAb"
+    consumerId: "427313a9-e1cb-4c0c-9535-727ceefeeee5"
+    producerId: "26ad8998-dc72-4258-b6a8-f95a90d7e91a"
+[04:25:03.417] INFO (67): Consumer resumed
+    socketId: "1Ai1HGTNwzXBQJ7pAAAb"
+    consumerId: "427313a9-e1cb-4c0c-9535-727ceefeeee5"
+[mediasoup] Cleaned up session for user 89e20269-dcf9-4eb7-ab06-0d22587efd5e in channel chan-game-room-2
+[04:25:18.055] INFO (67): Client disconnected (grace period started)
+    socketId: "IVr1XeMOUvKJrLxQAAAR"
+    nickname: "barrelleitor"
+    reason: "ping timeout"
+[04:25:30.499] INFO (67): User joined channel
+    socketId: "1Ai1HGTNwzXBQJ7pAAAb"
+    channelId: "chan-game-room-2"
+[04:25:30.529] INFO (67): Sent router capabilities
+    socketId: "1Ai1HGTNwzXBQJ7pAAAb"
+    channelId: "chan-game-room-2"
+[mediasoup] Resolved "voice-server.reson8.com.br" → 179.167.63.21
+[04:25:30.621] INFO (67): WebRTC transport created
+    socketId: "1Ai1HGTNwzXBQJ7pAAAb"
+    channelId: "chan-game-room-2"
+    direction: "send"
+    transportId: "4eab3ee2-11f4-49b0-84b0-3ab72690e805"
+[mediasoup] Resolved "voice-server.reson8.com.br" → 179.167.63.21
+[04:25:30.664] INFO (67): WebRTC transport created
+    socketId: "1Ai1HGTNwzXBQJ7pAAAb"
+    channelId: "chan-game-room-2"
+    direction: "recv"
+    transportId: "ec0217b4-cba5-4f77-b3d0-f4083aed645f"
+[04:25:30.766] INFO (67): Transport connected
+    socketId: "1Ai1HGTNwzXBQJ7pAAAb"
+    transportId: "4eab3ee2-11f4-49b0-84b0-3ab72690e805"
+[04:25:30.800] INFO (67): User started producing
+    socketId: "1Ai1HGTNwzXBQJ7pAAAb"
+    channelId: "chan-game-room-2"
+    producerId: "3af9bda5-5ef2-4421-8895-e5bcd80b5710"
+    kind: "audio"
+[04:25:30.817] INFO (67): User consuming producer
+    socketId: "KVaAdjMS8w63dC_4AAAV"
+    consumerId: "51a1bf82-3415-488e-97ef-6e9602db08fe"
+    producerId: "3af9bda5-5ef2-4421-8895-e5bcd80b5710"
+[04:25:30.817] INFO (67): User consuming producer
+    socketId: "X28UKHP8Oloh5nuCAAAX"
+    consumerId: "8ebccd97-e7de-4326-a83f-e85c2585192f"
+    producerId: "3af9bda5-5ef2-4421-8895-e5bcd80b5710"
+[04:25:30.833] INFO (67): User consuming producer
+    socketId: "1Ai1HGTNwzXBQJ7pAAAb"
+    consumerId: "52202541-fa35-4418-9a31-eea147e9d62b"
+    producerId: "c9c456ba-d8a4-4934-b7f8-63c3f628786d"
+[04:25:30.833] INFO (67): Consumer resumed
+    socketId: "KVaAdjMS8w63dC_4AAAV"
+    consumerId: "51a1bf82-3415-488e-97ef-6e9602db08fe"
+[04:25:30.837] INFO (67): Consumer resumed
+    socketId: "X28UKHP8Oloh5nuCAAAX"
+    consumerId: "8ebccd97-e7de-4326-a83f-e85c2585192f"
+[04:25:30.865] INFO (67): Transport connected
+    socketId: "1Ai1HGTNwzXBQJ7pAAAb"
+    transportId: "ec0217b4-cba5-4f77-b3d0-f4083aed645f"
+[04:25:30.897] INFO (67): Consumer resumed
+    socketId: "1Ai1HGTNwzXBQJ7pAAAb"
+    consumerId: "52202541-fa35-4418-9a31-eea147e9d62b"
+[04:25:30.930] INFO (67): User consuming producer
+    socketId: "1Ai1HGTNwzXBQJ7pAAAb"
+    consumerId: "3566750c-ee04-4044-9ae7-692b5a219362"
+    producerId: "26ad8998-dc72-4258-b6a8-f95a90d7e91a"
+[04:25:30.964] INFO (67): Consumer resumed
+    socketId: "1Ai1HGTNwzXBQJ7pAAAb"
+    consumerId: "3566750c-ee04-4044-9ae7-692b5a219362"
+[04:54:34.313] INFO (67): Message sent
+    socketId: "1Ai1HGTNwzXBQJ7pAAAb"
+    channelId: "edac5df9-5344-4250-9081-e446dd762d47"
+    messageId: "315fdf86-0362-431f-a72b-8563cdca62b7"
+[04:57:01.806] INFO (67): incoming request
+    reqId: "req-e"
+    req: {
+      "method": "POST",
+      "url": "/api/upload",
+      "host": "farewell-ts.reson8.com.br",
+      "remoteAddress": "172.26.0.4",
+      "remotePort": 58606
+    }
+[04:57:02.051] INFO (67): Uploading to Cloudinary...
+[04:57:04.093] INFO (67): File uploaded
+    url: "https://res.cloudinary.com/dlmowiyae/image/upload/v1788411423/reson8/b1467d12-69c8-432c-842c-ed4e133dc64f-image.png"
+    size: 2739071
+    mime: "image/png"
+[04:57:04.094] INFO (67): request completed
+    reqId: "req-e"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 2287.4096660017967
+[04:57:04.776] INFO (67): Message sent
+    socketId: "KVaAdjMS8w63dC_4AAAV"
+    channelId: "chan-chat"
+    messageId: "76fabbf5-abe3-45c4-ac62-cca5586ffb91"
+[04:59:16.961] INFO (67): Message sent
+    socketId: "KVaAdjMS8w63dC_4AAAV"
+    channelId: "chan-chat"
+    messageId: "9862f49f-8c3f-49fd-b811-6b20ab54bc77"
+[04:59:28.917] INFO (67): Message deleted
+    socketId: "KVaAdjMS8w63dC_4AAAV"
+    messageId: "9862f49f-8c3f-49fd-b811-6b20ab54bc77"
+[05:02:49.032] INFO (67): Client connected
+    socketId: "nEuHwtsj4v0cFHu0AAAd"
+[05:02:49.117] INFO (67): User joined server
+    socketId: "nEuHwtsj4v0cFHu0AAAd"
+    nickname: "Kdshy"
+    serverId: "73210130-1cb6-462a-9293-dd5217d5a515"
+    instanceId: "90bbd57f-b750-4421-9bfb-e03b6565de73"
+[05:02:49.145] INFO (67): User joined channel
+    socketId: "nEuHwtsj4v0cFHu0AAAd"
+    channelId: "chan-game-room-2"
+[05:02:49.159] INFO (67): Sent router capabilities
+    socketId: "nEuHwtsj4v0cFHu0AAAd"
+    channelId: "chan-game-room-2"
+[mediasoup] Resolved "voice-server.reson8.com.br" → 179.167.63.21
+[05:02:49.228] INFO (67): WebRTC transport created
+    socketId: "nEuHwtsj4v0cFHu0AAAd"
+    channelId: "chan-game-room-2"
+    direction: "send"
+    transportId: "785e42a6-6a37-4125-9fb9-40646735b1b2"
+[mediasoup] Resolved "voice-server.reson8.com.br" → 179.167.63.21
+[05:02:49.253] INFO (67): WebRTC transport created
+    socketId: "nEuHwtsj4v0cFHu0AAAd"
+    channelId: "chan-game-room-2"
+    direction: "recv"
+    transportId: "62eeb161-4d5f-4a96-a22d-5393ee02180d"
+[05:02:49.324] INFO (67): Transport connected
+    socketId: "nEuHwtsj4v0cFHu0AAAd"
+    transportId: "785e42a6-6a37-4125-9fb9-40646735b1b2"
+[05:02:49.344] INFO (67): User started producing
+    socketId: "nEuHwtsj4v0cFHu0AAAd"
+    channelId: "chan-game-room-2"
+    producerId: "b512570e-3f9e-4e0c-afbf-0bcf0f5922ff"
+    kind: "audio"
+[05:02:49.357] INFO (67): User consuming producer
+    socketId: "nEuHwtsj4v0cFHu0AAAd"
+    consumerId: "5aa9afb4-ec5f-4fc0-8b8e-31a30e612875"
+    producerId: "26ad8998-dc72-4258-b6a8-f95a90d7e91a"
+[05:02:49.357] INFO (67): User consuming producer
+    socketId: "X28UKHP8Oloh5nuCAAAX"
+    consumerId: "f2e74e37-b79e-4275-a7cf-eb8d919e5e64"
+    producerId: "b512570e-3f9e-4e0c-afbf-0bcf0f5922ff"
+[05:02:49.372] INFO (67): Transport connected
+    socketId: "nEuHwtsj4v0cFHu0AAAd"
+    transportId: "62eeb161-4d5f-4a96-a22d-5393ee02180d"
+[05:02:49.374] INFO (67): User consuming producer
+    socketId: "1Ai1HGTNwzXBQJ7pAAAb"
+    consumerId: "fd9edc1d-d19a-4ac9-9df1-bd6babc70572"
+    producerId: "b512570e-3f9e-4e0c-afbf-0bcf0f5922ff"
+[05:02:49.382] INFO (67): Consumer resumed
+    socketId: "X28UKHP8Oloh5nuCAAAX"
+    consumerId: "f2e74e37-b79e-4275-a7cf-eb8d919e5e64"
+[05:02:49.386] INFO (67): Consumer resumed
+    socketId: "nEuHwtsj4v0cFHu0AAAd"
+    consumerId: "5aa9afb4-ec5f-4fc0-8b8e-31a30e612875"
+[05:02:49.404] INFO (67): User consuming producer
+    socketId: "nEuHwtsj4v0cFHu0AAAd"
+    consumerId: "4d9f55ca-c224-4eb1-addc-fc53aa2e06bd"
+    producerId: "3af9bda5-5ef2-4421-8895-e5bcd80b5710"
+[05:02:49.409] INFO (67): Consumer resumed
+    socketId: "1Ai1HGTNwzXBQJ7pAAAb"
+    consumerId: "fd9edc1d-d19a-4ac9-9df1-bd6babc70572"
+[05:02:49.420] INFO (67): Consumer resumed
+    socketId: "nEuHwtsj4v0cFHu0AAAd"
+    consumerId: "4d9f55ca-c224-4eb1-addc-fc53aa2e06bd"
+[mediasoup] Cleaned up session for user 90bbd57f-b750-4421-9bfb-e03b6565de73 in channel chan-game-room-2
+[05:03:16.911] INFO (67): Client disconnected (grace period started)
+    socketId: "KVaAdjMS8w63dC_4AAAV"
+    nickname: "Kdshy"
+    reason: "ping timeout"
+[05:03:29.598] INFO (67): User joined channel
+    socketId: "nEuHwtsj4v0cFHu0AAAd"
+    channelId: "chan-game-room-2"
+[05:03:29.610] INFO (67): Sent router capabilities
+    socketId: "nEuHwtsj4v0cFHu0AAAd"
+    channelId: "chan-game-room-2"
+[mediasoup] Resolved "voice-server.reson8.com.br" → 179.167.63.21
+[05:03:29.679] INFO (67): WebRTC transport created
+    socketId: "nEuHwtsj4v0cFHu0AAAd"
+    channelId: "chan-game-room-2"
+    direction: "send"
+    transportId: "f5433658-151e-4101-99ec-e5d17a6bccce"
+[mediasoup] Resolved "voice-server.reson8.com.br" → 179.167.63.21
+[05:03:29.704] INFO (67): WebRTC transport created
+    socketId: "nEuHwtsj4v0cFHu0AAAd"
+    channelId: "chan-game-room-2"
+    direction: "recv"
+    transportId: "5306e898-df3d-4b6a-8fe1-aa4433d974d8"
+[05:03:29.783] INFO (67): Transport connected
+    socketId: "nEuHwtsj4v0cFHu0AAAd"
+    transportId: "f5433658-151e-4101-99ec-e5d17a6bccce"
+[05:03:29.802] INFO (67): User started producing
+    socketId: "nEuHwtsj4v0cFHu0AAAd"
+    channelId: "chan-game-room-2"
+    producerId: "e4641afe-222b-4267-ad04-d4c4591b2cc0"
+    kind: "audio"
+[05:03:29.820] INFO (67): User consuming producer
+    socketId: "nEuHwtsj4v0cFHu0AAAd"
+    consumerId: "073fd842-5373-4862-9174-d56672dc7df2"
+    producerId: "26ad8998-dc72-4258-b6a8-f95a90d7e91a"
+[05:03:29.821] INFO (67): User consuming producer
+    socketId: "X28UKHP8Oloh5nuCAAAX"
+    consumerId: "ee6d6090-0a7c-4eff-8c8d-52372313a9ff"
+    producerId: "e4641afe-222b-4267-ad04-d4c4591b2cc0"
+[05:03:29.835] INFO (67): User consuming producer
+    socketId: "1Ai1HGTNwzXBQJ7pAAAb"
+    consumerId: "65cdc770-0539-4d66-9b82-91e1e6730e24"
+    producerId: "e4641afe-222b-4267-ad04-d4c4591b2cc0"
+[05:03:29.836] INFO (67): Transport connected
+    socketId: "nEuHwtsj4v0cFHu0AAAd"
+    transportId: "5306e898-df3d-4b6a-8fe1-aa4433d974d8"
+[05:03:29.845] INFO (67): Consumer resumed
+    socketId: "X28UKHP8Oloh5nuCAAAX"
+    consumerId: "ee6d6090-0a7c-4eff-8c8d-52372313a9ff"
+[05:03:29.849] INFO (67): Consumer resumed
+    socketId: "nEuHwtsj4v0cFHu0AAAd"
+    consumerId: "073fd842-5373-4862-9174-d56672dc7df2"
+[05:03:29.864] INFO (67): User consuming producer
+    socketId: "nEuHwtsj4v0cFHu0AAAd"
+    consumerId: "9cbf300c-0ad9-4c63-8834-1962b3820494"
+    producerId: "3af9bda5-5ef2-4421-8895-e5bcd80b5710"
+[05:03:29.871] INFO (67): Consumer resumed
+    socketId: "1Ai1HGTNwzXBQJ7pAAAb"
+    consumerId: "65cdc770-0539-4d66-9b82-91e1e6730e24"
+[05:03:29.880] INFO (67): Consumer resumed
+    socketId: "nEuHwtsj4v0cFHu0AAAd"
+    consumerId: "9cbf300c-0ad9-4c63-8834-1962b3820494"
+[05:04:10.266] INFO (67): Client connected
+    socketId: "6g4gDiu0a3Bhl7DzAAAf"
+[05:04:10.365] INFO (67): User joined server
+    socketId: "6g4gDiu0a3Bhl7DzAAAf"
+    nickname: "DNG"
+    serverId: "73210130-1cb6-462a-9293-dd5217d5a515"
+    instanceId: "379d2b4b-3a47-4790-8fbc-66f92260b198"
+[05:04:10.396] INFO (67): User joined channel
+    socketId: "6g4gDiu0a3Bhl7DzAAAf"
+    channelId: "chan-game-room-2"
+[05:04:10.410] INFO (67): Sent router capabilities
+    socketId: "6g4gDiu0a3Bhl7DzAAAf"
+    channelId: "chan-game-room-2"
+[mediasoup] Resolved "voice-server.reson8.com.br" → 179.167.63.21
+[05:04:10.490] INFO (67): WebRTC transport created
+    socketId: "6g4gDiu0a3Bhl7DzAAAf"
+    channelId: "chan-game-room-2"
+    direction: "send"
+    transportId: "b4d2b6db-9cf4-4813-b5af-70a17f126d5e"
+[mediasoup] Resolved "voice-server.reson8.com.br" → 179.167.63.21
+[05:04:10.518] INFO (67): WebRTC transport created
+    socketId: "6g4gDiu0a3Bhl7DzAAAf"
+    channelId: "chan-game-room-2"
+    direction: "recv"
+    transportId: "1ede938c-a8b7-4919-8eef-61e4b969a276"
+[05:04:10.836] INFO (67): Transport connected
+    socketId: "6g4gDiu0a3Bhl7DzAAAf"
+    transportId: "b4d2b6db-9cf4-4813-b5af-70a17f126d5e"
+[05:04:10.868] INFO (67): User started producing
+    socketId: "6g4gDiu0a3Bhl7DzAAAf"
+    channelId: "chan-game-room-2"
+    producerId: "53e40108-ef2f-44ba-85bd-fc448727b0ad"
+    kind: "audio"
+[05:04:10.885] INFO (67): User consuming producer
+    socketId: "6g4gDiu0a3Bhl7DzAAAf"
+    consumerId: "3faf2fae-b27a-465c-a197-dea5ccfcf12e"
+    producerId: "3af9bda5-5ef2-4421-8895-e5bcd80b5710"
+[05:04:10.886] INFO (67): User consuming producer
+    socketId: "nEuHwtsj4v0cFHu0AAAd"
+    consumerId: "e2a8f001-b9fe-472a-981e-6df092eef383"
+    producerId: "53e40108-ef2f-44ba-85bd-fc448727b0ad"
+[05:04:10.900] INFO (67): User consuming producer
+    socketId: "1Ai1HGTNwzXBQJ7pAAAb"
+    consumerId: "75880a2c-a95f-4d82-ad10-fe7e90fea433"
+    producerId: "53e40108-ef2f-44ba-85bd-fc448727b0ad"
+[05:04:10.903] INFO (67): Consumer resumed
+    socketId: "nEuHwtsj4v0cFHu0AAAd"
+    consumerId: "e2a8f001-b9fe-472a-981e-6df092eef383"
+[05:04:10.904] INFO (67): Transport connected
+    socketId: "6g4gDiu0a3Bhl7DzAAAf"
+    transportId: "1ede938c-a8b7-4919-8eef-61e4b969a276"
+[05:04:10.921] INFO (67): Consumer resumed
+    socketId: "6g4gDiu0a3Bhl7DzAAAf"
+    consumerId: "3faf2fae-b27a-465c-a197-dea5ccfcf12e"
+[05:04:10.936] INFO (67): Consumer resumed
+    socketId: "1Ai1HGTNwzXBQJ7pAAAb"
+    consumerId: "75880a2c-a95f-4d82-ad10-fe7e90fea433"
+[05:04:10.963] INFO (67): User consuming producer
+    socketId: "6g4gDiu0a3Bhl7DzAAAf"
+    consumerId: "b410a49d-f57f-4416-92af-bdb79d149e6c"
+    producerId: "e4641afe-222b-4267-ad04-d4c4591b2cc0"
+[05:04:10.984] INFO (67): Consumer resumed
+    socketId: "6g4gDiu0a3Bhl7DzAAAf"
+    consumerId: "b410a49d-f57f-4416-92af-bdb79d149e6c"
+[mediasoup] Cleaned up session for user 379d2b4b-3a47-4790-8fbc-66f92260b198 in channel chan-game-room-2
+[05:04:46.323] INFO (67): Client disconnected (grace period started)
+    socketId: "X28UKHP8Oloh5nuCAAAX"
+    nickname: "DNG"
+    reason: "ping timeout"
+[05:04:59.199] INFO (67): User joined channel
+    socketId: "6g4gDiu0a3Bhl7DzAAAf"
+    channelId: "chan-game-room-2"
+[05:04:59.212] INFO (67): Sent router capabilities
+    socketId: "6g4gDiu0a3Bhl7DzAAAf"
+    channelId: "chan-game-room-2"
+[mediasoup] Resolved "voice-server.reson8.com.br" → 179.167.63.21
+[05:04:59.281] INFO (67): WebRTC transport created
+    socketId: "6g4gDiu0a3Bhl7DzAAAf"
+    channelId: "chan-game-room-2"
+    direction: "send"
+    transportId: "0908c5ec-faae-42a6-84af-61e4a2ec667c"
+[mediasoup] Resolved "voice-server.reson8.com.br" → 179.167.63.21
+[05:04:59.308] INFO (67): WebRTC transport created
+    socketId: "6g4gDiu0a3Bhl7DzAAAf"
+    channelId: "chan-game-room-2"
+    direction: "recv"
+    transportId: "e726372e-fe96-4c02-bb7f-8882b8bacdbf"
+[05:04:59.484] INFO (67): Transport connected
+    socketId: "6g4gDiu0a3Bhl7DzAAAf"
+    transportId: "0908c5ec-faae-42a6-84af-61e4a2ec667c"
+[05:04:59.506] INFO (67): User started producing
+    socketId: "6g4gDiu0a3Bhl7DzAAAf"
+    channelId: "chan-game-room-2"
+    producerId: "f7b238c7-1b68-451e-874f-bf5bde550feb"
+    kind: "audio"
+[05:04:59.521] INFO (67): User consuming producer
+    socketId: "nEuHwtsj4v0cFHu0AAAd"
+    consumerId: "c7acd82f-379e-4cde-a26b-64cfb5e4a644"
+    producerId: "f7b238c7-1b68-451e-874f-bf5bde550feb"
+[05:04:59.522] INFO (67): User consuming producer
+    socketId: "6g4gDiu0a3Bhl7DzAAAf"
+    consumerId: "5ee37a2c-6572-4f75-91cd-f2086d0acddd"
+    producerId: "3af9bda5-5ef2-4421-8895-e5bcd80b5710"
+[05:04:59.539] INFO (67): User consuming producer
+    socketId: "1Ai1HGTNwzXBQJ7pAAAb"
+    consumerId: "1d6f44cc-763e-49cf-9ba6-9ec059d77dde"
+    producerId: "f7b238c7-1b68-451e-874f-bf5bde550feb"
+[05:04:59.539] INFO (67): Consumer resumed
+    socketId: "nEuHwtsj4v0cFHu0AAAd"
+    consumerId: "c7acd82f-379e-4cde-a26b-64cfb5e4a644"
+[05:04:59.539] INFO (67): Transport connected
+    socketId: "6g4gDiu0a3Bhl7DzAAAf"
+    transportId: "e726372e-fe96-4c02-bb7f-8882b8bacdbf"
+[05:04:59.554] INFO (67): Consumer resumed
+    socketId: "6g4gDiu0a3Bhl7DzAAAf"
+    consumerId: "5ee37a2c-6572-4f75-91cd-f2086d0acddd"
+[05:04:59.575] INFO (67): Consumer resumed
+    socketId: "1Ai1HGTNwzXBQJ7pAAAb"
+    consumerId: "1d6f44cc-763e-49cf-9ba6-9ec059d77dde"
+[05:04:59.587] INFO (67): User consuming producer
+    socketId: "6g4gDiu0a3Bhl7DzAAAf"
+    consumerId: "c062a4be-6a66-4137-b0ff-cebddf67d2ab"
+    producerId: "e4641afe-222b-4267-ad04-d4c4591b2cc0"
+[05:04:59.611] INFO (67): Consumer resumed
+    socketId: "6g4gDiu0a3Bhl7DzAAAf"
+    consumerId: "c062a4be-6a66-4137-b0ff-cebddf67d2ab"
+[05:17:52.303] INFO (67): Client connected
+    socketId: "B-dzG4G-ZfS0ZtuGAAAh"
+[05:17:52.392] INFO (67): User joined server
+    socketId: "B-dzG4G-ZfS0ZtuGAAAh"
+    nickname: "barrelleitor"
+    serverId: "73210130-1cb6-462a-9293-dd5217d5a515"
+    instanceId: "89e20269-dcf9-4eb7-ab06-0d22587efd5e"
+[05:17:52.425] INFO (67): User joined channel
+    socketId: "B-dzG4G-ZfS0ZtuGAAAh"
+    channelId: "chan-game-room-2"
+[05:17:52.440] INFO (67): Sent router capabilities
+    socketId: "B-dzG4G-ZfS0ZtuGAAAh"
+    channelId: "chan-game-room-2"
+[mediasoup] Resolved "voice-server.reson8.com.br" → 179.167.63.21
+[05:17:52.511] INFO (67): WebRTC transport created
+    socketId: "B-dzG4G-ZfS0ZtuGAAAh"
+    channelId: "chan-game-room-2"
+    direction: "send"
+    transportId: "bfc9af82-8929-4a6b-89dc-fc423e39f333"
+[mediasoup] Resolved "voice-server.reson8.com.br" → 179.167.63.21
+[05:17:52.537] INFO (67): WebRTC transport created
+    socketId: "B-dzG4G-ZfS0ZtuGAAAh"
+    channelId: "chan-game-room-2"
+    direction: "recv"
+    transportId: "881486c7-3ae4-40a6-afd0-9600cafac6cd"
+[05:17:52.623] INFO (67): Transport connected
+    socketId: "B-dzG4G-ZfS0ZtuGAAAh"
+    transportId: "bfc9af82-8929-4a6b-89dc-fc423e39f333"
+[05:17:52.644] INFO (67): User started producing
+    socketId: "B-dzG4G-ZfS0ZtuGAAAh"
+    channelId: "chan-game-room-2"
+    producerId: "b288d68e-09ad-461b-b083-5441f614911b"
+    kind: "audio"
+[05:17:52.659] INFO (67): User consuming producer
+    socketId: "nEuHwtsj4v0cFHu0AAAd"
+    consumerId: "5a9227ba-2416-4e9c-98c2-6ba7e6d396d6"
+    producerId: "b288d68e-09ad-461b-b083-5441f614911b"
+[05:17:52.660] INFO (67): User consuming producer
+    socketId: "6g4gDiu0a3Bhl7DzAAAf"
+    consumerId: "1fcc0c36-8d96-4e6c-8c12-844435b36ca2"
+    producerId: "b288d68e-09ad-461b-b083-5441f614911b"
+[05:17:52.661] INFO (67): User consuming producer
+    socketId: "B-dzG4G-ZfS0ZtuGAAAh"
+    consumerId: "b0ae8da2-35bb-4251-afb7-644ed754937e"
+    producerId: "e4641afe-222b-4267-ad04-d4c4591b2cc0"
+[05:17:52.675] INFO (67): Consumer resumed
+    socketId: "nEuHwtsj4v0cFHu0AAAd"
+    consumerId: "5a9227ba-2416-4e9c-98c2-6ba7e6d396d6"
+[05:17:52.678] INFO (67): Transport connected
+    socketId: "B-dzG4G-ZfS0ZtuGAAAh"
+    transportId: "881486c7-3ae4-40a6-afd0-9600cafac6cd"
+[05:17:52.682] INFO (67): Consumer resumed
+    socketId: "6g4gDiu0a3Bhl7DzAAAf"
+    consumerId: "1fcc0c36-8d96-4e6c-8c12-844435b36ca2"
+[05:17:52.697] INFO (67): Consumer resumed
+    socketId: "B-dzG4G-ZfS0ZtuGAAAh"
+    consumerId: "b0ae8da2-35bb-4251-afb7-644ed754937e"
+[05:17:52.715] INFO (67): User consuming producer
+    socketId: "B-dzG4G-ZfS0ZtuGAAAh"
+    consumerId: "725670c6-1f10-420e-801e-66018b8c31eb"
+    producerId: "f7b238c7-1b68-451e-874f-bf5bde550feb"
+[05:17:52.733] INFO (67): Consumer resumed
+    socketId: "B-dzG4G-ZfS0ZtuGAAAh"
+    consumerId: "725670c6-1f10-420e-801e-66018b8c31eb"
+[mediasoup] Cleaned up session for user 89e20269-dcf9-4eb7-ab06-0d22587efd5e in channel chan-game-room-2
+[05:18:21.482] INFO (67): Client disconnected (grace period started)
+    socketId: "1Ai1HGTNwzXBQJ7pAAAb"
+    nickname: "barrelleitor"
+    reason: "ping timeout"
+[05:18:33.638] INFO (67): User joined channel
+    socketId: "B-dzG4G-ZfS0ZtuGAAAh"
+    channelId: "chan-game-room-2"
+[05:18:33.655] INFO (67): Sent router capabilities
+    socketId: "B-dzG4G-ZfS0ZtuGAAAh"
+    channelId: "chan-game-room-2"
+[mediasoup] Resolved "voice-server.reson8.com.br" → 179.167.63.21
+[05:18:33.730] INFO (67): WebRTC transport created
+    socketId: "B-dzG4G-ZfS0ZtuGAAAh"
+    channelId: "chan-game-room-2"
+    direction: "send"
+    transportId: "e3512a6d-2e94-4753-9605-6ddf4cd6cd28"
+[mediasoup] Resolved "voice-server.reson8.com.br" → 179.167.63.21
+[05:18:33.763] INFO (67): WebRTC transport created
+    socketId: "B-dzG4G-ZfS0ZtuGAAAh"
+    channelId: "chan-game-room-2"
+    direction: "recv"
+    transportId: "8c9dfd61-bfe7-4c07-a84d-06965e1c7799"
+[05:18:33.859] INFO (67): Transport connected
+    socketId: "B-dzG4G-ZfS0ZtuGAAAh"
+    transportId: "e3512a6d-2e94-4753-9605-6ddf4cd6cd28"
+[05:18:33.881] INFO (67): User started producing
+    socketId: "B-dzG4G-ZfS0ZtuGAAAh"
+    channelId: "chan-game-room-2"
+    producerId: "f4034269-eaca-457c-aad6-f6abf0b9290e"
+    kind: "audio"
+[05:18:33.897] INFO (67): User consuming producer
+    socketId: "nEuHwtsj4v0cFHu0AAAd"
+    consumerId: "a59ad4b6-b494-45bf-8a6e-4cfe546031f2"
+    producerId: "f4034269-eaca-457c-aad6-f6abf0b9290e"
+[05:18:33.900] INFO (67): User consuming producer
+    socketId: "6g4gDiu0a3Bhl7DzAAAf"
+    consumerId: "281fb438-f897-46c2-8025-756829c077c3"
+    producerId: "f4034269-eaca-457c-aad6-f6abf0b9290e"
+[05:18:33.900] INFO (67): User consuming producer
+    socketId: "B-dzG4G-ZfS0ZtuGAAAh"
+    consumerId: "529697ca-31ef-4a26-9bf2-470d1a6994ce"
+    producerId: "e4641afe-222b-4267-ad04-d4c4591b2cc0"
+[05:18:33.913] INFO (67): Consumer resumed
+    socketId: "nEuHwtsj4v0cFHu0AAAd"
+    consumerId: "a59ad4b6-b494-45bf-8a6e-4cfe546031f2"
+[05:18:33.918] INFO (67): Transport connected
+    socketId: "B-dzG4G-ZfS0ZtuGAAAh"
+    transportId: "8c9dfd61-bfe7-4c07-a84d-06965e1c7799"
+[05:18:33.920] INFO (67): Consumer resumed
+    socketId: "6g4gDiu0a3Bhl7DzAAAf"
+    consumerId: "281fb438-f897-46c2-8025-756829c077c3"
+[05:18:33.938] INFO (67): Consumer resumed
+    socketId: "B-dzG4G-ZfS0ZtuGAAAh"
+    consumerId: "529697ca-31ef-4a26-9bf2-470d1a6994ce"
+[05:18:33.955] INFO (67): User consuming producer
+    socketId: "B-dzG4G-ZfS0ZtuGAAAh"
+    consumerId: "9b15365c-b423-438e-935c-6493549efd85"
+    producerId: "f7b238c7-1b68-451e-874f-bf5bde550feb"
+[05:18:33.975] INFO (67): Consumer resumed
+    socketId: "B-dzG4G-ZfS0ZtuGAAAh"
+    consumerId: "9b15365c-b423-438e-935c-6493549efd85"
+[05:20:36.227] INFO (67): Client connected
+    socketId: "XDpBz6DnuQ_d8WS3AAAj"
+[05:20:36.347] INFO (67): User joined server
+    socketId: "XDpBz6DnuQ_d8WS3AAAj"
+    nickname: "barrelleitor"
+    serverId: "73210130-1cb6-462a-9293-dd5217d5a515"
+    instanceId: "89e20269-dcf9-4eb7-ab06-0d22587efd5e"
+[05:20:36.381] INFO (67): User joined channel
+    socketId: "XDpBz6DnuQ_d8WS3AAAj"
+    channelId: "chan-game-room-2"
+[05:20:36.395] INFO (67): Sent router capabilities
+    socketId: "XDpBz6DnuQ_d8WS3AAAj"
+    channelId: "chan-game-room-2"
+[mediasoup] Resolved "voice-server.reson8.com.br" → 179.167.63.21
+[05:20:36.494] INFO (67): WebRTC transport created
+    socketId: "XDpBz6DnuQ_d8WS3AAAj"
+    channelId: "chan-game-room-2"
+    direction: "send"
+    transportId: "ac49f9ad-ca93-4143-9a3d-d9b0ffb84941"
+[mediasoup] Resolved "voice-server.reson8.com.br" → 179.167.63.21
+[05:20:36.523] INFO (67): WebRTC transport created
+    socketId: "XDpBz6DnuQ_d8WS3AAAj"
+    channelId: "chan-game-room-2"
+    direction: "recv"
+    transportId: "a81b2409-a014-4ad3-a985-fa09883e77d8"
+[05:20:36.615] INFO (67): Transport connected
+    socketId: "XDpBz6DnuQ_d8WS3AAAj"
+    transportId: "ac49f9ad-ca93-4143-9a3d-d9b0ffb84941"
+[05:20:36.636] INFO (67): User started producing
+    socketId: "XDpBz6DnuQ_d8WS3AAAj"
+    channelId: "chan-game-room-2"
+    producerId: "40550026-cb78-4dff-9353-3efa9cd01610"
+    kind: "audio"
+[05:20:36.653] INFO (67): User consuming producer
+    socketId: "nEuHwtsj4v0cFHu0AAAd"
+    consumerId: "2eab9a77-5221-43b2-a21c-d0d179f8d066"
+    producerId: "40550026-cb78-4dff-9353-3efa9cd01610"
+[05:20:36.654] INFO (67): User consuming producer
+    socketId: "6g4gDiu0a3Bhl7DzAAAf"
+    consumerId: "e0de5190-9fde-4556-b814-be9491b46758"
+    producerId: "40550026-cb78-4dff-9353-3efa9cd01610"
+[05:20:36.655] INFO (67): User consuming producer
+    socketId: "XDpBz6DnuQ_d8WS3AAAj"
+    consumerId: "7464c07a-3a90-4135-bf2c-00fce4b8c2c3"
+    producerId: "e4641afe-222b-4267-ad04-d4c4591b2cc0"
+[05:20:36.670] INFO (67): Consumer resumed
+    socketId: "nEuHwtsj4v0cFHu0AAAd"
+    consumerId: "2eab9a77-5221-43b2-a21c-d0d179f8d066"
+[05:20:36.670] INFO (67): Transport connected
+    socketId: "XDpBz6DnuQ_d8WS3AAAj"
+    transportId: "a81b2409-a014-4ad3-a985-fa09883e77d8"
+[05:20:36.676] INFO (67): Consumer resumed
+    socketId: "6g4gDiu0a3Bhl7DzAAAf"
+    consumerId: "e0de5190-9fde-4556-b814-be9491b46758"
+[05:20:36.685] INFO (67): Consumer resumed
+    socketId: "XDpBz6DnuQ_d8WS3AAAj"
+    consumerId: "7464c07a-3a90-4135-bf2c-00fce4b8c2c3"
+[05:20:36.704] INFO (67): User consuming producer
+    socketId: "XDpBz6DnuQ_d8WS3AAAj"
+    consumerId: "a0cc363e-9aa9-4fe5-8dd3-660578ff17c1"
+    producerId: "f7b238c7-1b68-451e-874f-bf5bde550feb"
+[05:20:36.722] INFO (67): Consumer resumed
+    socketId: "XDpBz6DnuQ_d8WS3AAAj"
+    consumerId: "a0cc363e-9aa9-4fe5-8dd3-660578ff17c1"
+[mediasoup] Cleaned up session for user 89e20269-dcf9-4eb7-ab06-0d22587efd5e in channel chan-game-room-2
+[05:21:07.381] INFO (67): Client disconnected (grace period started)
+    socketId: "B-dzG4G-ZfS0ZtuGAAAh"
+    nickname: "barrelleitor"
+    reason: "ping timeout"
+[05:21:20.052] INFO (67): User joined channel
+    socketId: "XDpBz6DnuQ_d8WS3AAAj"
+    channelId: "chan-game-room-2"
+[05:21:20.066] INFO (67): Sent router capabilities
+    socketId: "XDpBz6DnuQ_d8WS3AAAj"
+    channelId: "chan-game-room-2"
+[mediasoup] Resolved "voice-server.reson8.com.br" → 179.167.63.21
+[05:21:20.142] INFO (67): WebRTC transport created
+    socketId: "XDpBz6DnuQ_d8WS3AAAj"
+    channelId: "chan-game-room-2"
+    direction: "send"
+    transportId: "21c16c8b-0526-4fce-b4de-544525e794df"
+[mediasoup] Resolved "voice-server.reson8.com.br" → 179.167.63.21
+[05:21:20.174] INFO (67): WebRTC transport created
+    socketId: "XDpBz6DnuQ_d8WS3AAAj"
+    channelId: "chan-game-room-2"
+    direction: "recv"
+    transportId: "b9f8e105-4689-474a-8140-7d8f4b9c0529"
+[05:21:20.263] INFO (67): Transport connected
+    socketId: "XDpBz6DnuQ_d8WS3AAAj"
+    transportId: "21c16c8b-0526-4fce-b4de-544525e794df"
+[05:21:20.280] INFO (67): User started producing
+    socketId: "XDpBz6DnuQ_d8WS3AAAj"
+    channelId: "chan-game-room-2"
+    producerId: "305c5c01-2320-49b9-af36-849a05e47b29"
+    kind: "audio"
+[05:21:20.298] INFO (67): User consuming producer
+    socketId: "nEuHwtsj4v0cFHu0AAAd"
+    consumerId: "7100d37f-2db9-4466-8baa-b4a0cc21e9be"
+    producerId: "305c5c01-2320-49b9-af36-849a05e47b29"
+[05:21:20.298] INFO (67): User consuming producer
+    socketId: "XDpBz6DnuQ_d8WS3AAAj"
+    consumerId: "c23edf75-576a-45ba-850a-f5e731e47f15"
+    producerId: "e4641afe-222b-4267-ad04-d4c4591b2cc0"
+[05:21:20.299] INFO (67): User consuming producer
+    socketId: "6g4gDiu0a3Bhl7DzAAAf"
+    consumerId: "8b53ee54-f802-44ce-ae51-97fec7dcf764"
+    producerId: "305c5c01-2320-49b9-af36-849a05e47b29"
+[05:21:20.315] INFO (67): Transport connected
+    socketId: "XDpBz6DnuQ_d8WS3AAAj"
+    transportId: "b9f8e105-4689-474a-8140-7d8f4b9c0529"
+[05:21:20.316] INFO (67): Consumer resumed
+    socketId: "nEuHwtsj4v0cFHu0AAAd"
+    consumerId: "7100d37f-2db9-4466-8baa-b4a0cc21e9be"
+[05:21:20.320] INFO (67): Consumer resumed
+    socketId: "6g4gDiu0a3Bhl7DzAAAf"
+    consumerId: "8b53ee54-f802-44ce-ae51-97fec7dcf764"
+[05:21:20.333] INFO (67): Consumer resumed
+    socketId: "XDpBz6DnuQ_d8WS3AAAj"
+    consumerId: "c23edf75-576a-45ba-850a-f5e731e47f15"
+[05:21:20.349] INFO (67): User consuming producer
+    socketId: "XDpBz6DnuQ_d8WS3AAAj"
+    consumerId: "d0684c93-0a43-4cf4-a24e-ecc67a03714b"
+    producerId: "f7b238c7-1b68-451e-874f-bf5bde550feb"
+[05:21:20.366] INFO (67): Consumer resumed
+    socketId: "XDpBz6DnuQ_d8WS3AAAj"
+    consumerId: "d0684c93-0a43-4cf4-a24e-ecc67a03714b"
+[mediasoup] Cleaned up session for user 90bbd57f-b750-4421-9bfb-e03b6565de73 in channel chan-game-room-2
+[05:32:12.967] INFO (67): Client disconnected (finalized immediately)
+    socketId: "nEuHwtsj4v0cFHu0AAAd"
+    nickname: "Kdshy"
+    reason: "client namespace disconnect"
+[mediasoup] Cleaned up session for user 379d2b4b-3a47-4790-8fbc-66f92260b198 in channel chan-game-room-2
+[05:32:14.227] INFO (67): Client disconnected (finalized immediately)
+    socketId: "6g4gDiu0a3Bhl7DzAAAf"
+    nickname: "DNG"
+    reason: "client namespace disconnect"
+[mediasoup] Router destroyed for channel chan-game-room-2
+[mediasoup] Cleaned up session for user 89e20269-dcf9-4eb7-ab06-0d22587efd5e in channel chan-game-room-2
+[05:32:20.273] INFO (67): User left channel
+    socketId: "XDpBz6DnuQ_d8WS3AAAj"
+    channelId: "chan-game-room-2"
+[05:32:45.566] INFO (67): Client disconnected (finalized immediately)
+    socketId: "XDpBz6DnuQ_d8WS3AAAj"
+    nickname: "barrelleitor"
+    reason: "client namespace disconnect"
