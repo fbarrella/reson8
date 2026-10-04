@@ -1570,3 +1570,80 @@ CLAUDE.md/README documentation updates
   Next Step: none — this closes out Phase 14 entirely. The user will push
   the branch manually. The next phase PRD will be drafted from a future
   `app-planning/nextsteps.txt` when new requirements come in.
+
+
+--- Entry: 04/10/2026 ---
+
+Feature/Fix: PRD 15.1 — Users showing offline after a quick reconnect (stale-socket race)
+
+  Problem: After a brief connection drop and an automatic reconnect, users
+  stopped appearing as online (and dropped out of voice a second time)
+  even though they were back in the app. Root cause, confirmed by
+  correlating the 23h30-2h30 server log (5 of 5 occurrences identical): the
+  client reconnects on a NEW socket and rebuilds its voice session, while
+  the server still holds the OLD half-open socket until its ping timeout
+  (16-36s later in the log). That old socket's `disconnect` handler then
+  ran userId-keyed cleanup — `mediasoup.cleanupUserSession` (killing the
+  live session, hence a second voice drop ~12.5s later when the client's
+  recovery rejoins) and a 10s `pendingDisconnects` timer that nothing
+  cancelled (the new socket's USER_JOIN_SERVER had already run), which
+  then called `finalizeDisconnect` (deleting the Redis presence hash and
+  server-set membership, broadcasting USER_LEFT). The later voice rejoin
+  re-added only `channelId` to the deleted hash, leaving the user in the
+  channel but absent from the online list.
+
+  Solution: Track which socket OWNS each userId and make every
+  userId-keyed teardown ownership-aware.
+
+  Server Changes:
+    - New pure `SocketOwnership` registry (`claim`/`isOwner`/`hasOwner`/
+      `release`) in `services/socket-ownership.ts`. `release` only clears
+      ownership if the releasing socket is still the owner, so a stale
+      socket releasing late can't evict its replacement.
+    - `USER_JOIN_SERVER` claims ownership after the ban/auth checks; if a
+      different socket was displaced, `supersedeSocket()` retires it
+      immediately and deterministically — flags `socket.data.superseded`,
+      emits PRODUCER_CLOSED + `mediasoup.cleanupUserSession` +
+      `presence.leaveChannel` + a PRESENCE_UPDATE broadcast if it had a
+      current channel (also closes the secondary ghost-occupant gap where
+      the new socket's `presence.joinServer` reset `channelId` without
+      removing the user from the old channel's set), then
+      `disconnect(true)`s it. This runs before the new socket's voice
+      handshake can race it.
+    - `disconnect` handler: a primary socket that is not the registered
+      owner of its userId now logs "Stale socket disconnected
+      (superseded)" and returns without touching mediasoup, presence or
+      `pendingDisconnects`. An owner socket releases ownership and behaves
+      exactly as before (immediate mediasoup cleanup, 10s grace period,
+      immediate finalize on "client namespace disconnect").
+    - The grace-timer callback re-checks `ownership.hasOwner(userId)` and
+      skips `finalizeDisconnect` if the user has since reconnected
+      (defense in depth).
+    - Unchanged: the 10s grace period, viewer-socket path, client
+      reconnect logic, Socket.io ping settings.
+
+  Shared Types Changes:
+    - `SocketData.superseded?: boolean` (server-side only, not on the
+      wire).
+
+  Key Files Modified:
+    apps/server/src/services/socket-ownership.ts (NEW)
+    apps/server/src/__tests__/socket-ownership.test.ts (NEW)
+    apps/server/src/handlers/connection.handler.ts
+    packages/shared-types/src/socket-events.ts
+
+  Verification:
+    `npx tsc --build` in `packages/shared-types`, then `npx tsc --noEmit`
+    in `apps/server` — clean. `npm run test` in `apps/server` — 25/25
+    pass (6 new SocketOwnership tests: first claim, displacement,
+    same-socket re-claim, late stale release, owner release, per-user
+    independence). NOT yet verified: the end-to-end behavior (a client
+    reconnecting after a real network drop stays online and in voice, and
+    the server log shows the old socket as superseded with no stray
+    "Cleaned up session") — that manual check is left to the user. The
+    disconnect/grace-timer wiring itself has no automated test (only the
+    registry does).
+
+  Next Step: PRD 15.2 — disconnect-session investigation report plus
+  additive diagnostics logging (builds on this item's `superseded` log
+  field).

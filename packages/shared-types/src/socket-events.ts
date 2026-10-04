@@ -687,4 +687,9 @@ export interface SocketData {
      *  `VIEWER_LEFT_YOUR_STREAM` (PRD 13.16) without needing the client to
      *  resend it. */
     watchingUserId?: string;
+    /** Set (server-side only, never on the wire) on a primary socket that was
+     *  replaced by a newer connection for the same `userId` (PRD 15.1) — its
+     *  eventual `disconnect` must not touch the userId-keyed state the newer
+     *  socket now owns. */
+    superseded?: boolean;
 }
