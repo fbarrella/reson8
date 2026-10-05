@@ -18,6 +18,7 @@ import type {
 import { PresenceService } from "../services/presence.service.js";
 import { buildChannelTree } from "../services/channel-tree.service.js";
 import type { MediasoupService } from "../services/mediasoup.service.js";
+import { SocketOwnership } from "../services/socket-ownership.js";
 
 type TypedIO = SocketIOServer<
     ClientToServerEvents,
@@ -168,6 +169,51 @@ export function registerConnectionHandlers(
     const DISCONNECT_GRACE_MS = 10_000;
     const pendingDisconnects = new Map<string, ReturnType<typeof setTimeout>>();
 
+    // ── Socket ownership (PRD 15.1) ─────────────────────────────────────────
+    // Presence/mediasoup/grace-timer state is keyed by userId, but a user who
+    // reconnects has two live primary sockets until the server's ping timeout
+    // finally reaps the old half-open one. Tracking which socket OWNS a userId
+    // lets the old socket's late `disconnect` be recognized as stale instead
+    // of tearing down the live socket's voice session and presence (which is
+    // what made reconnected users vanish from the online list and drop voice
+    // a second time ~12s later).
+    const ownership = new SocketOwnership();
+
+    /** Retires a displaced socket: runs its userId-keyed cleanup exactly once,
+     *  deterministically, BEFORE the new socket's voice handshake can race it,
+     *  then drops its connection. */
+    async function supersedeSocket(oldSocketId: string, userId: string): Promise<void> {
+        const old = io.sockets.sockets.get(oldSocketId);
+        if (!old) return; // already gone — its disconnect handler ran earlier
+        old.data.superseded = true;
+
+        const { serverId, currentChannelId } = old.data;
+        if (currentChannelId) {
+            const producerId = mediasoup.getSession(currentChannelId, userId)?.producer?.id;
+            if (producerId) {
+                old.to(`channel:${currentChannelId}`).emit("PRODUCER_CLOSED", { userId, producerId });
+            }
+            mediasoup.cleanupUserSession(currentChannelId, userId);
+            await presence.leaveChannel(userId, currentChannelId);
+
+            const occupantIds = await presence.getChannelOccupants(currentChannelId);
+            if (occupantIds.length === 0) {
+                voiceSessionStartedAt.delete(currentChannelId);
+            }
+            const occupants: IUserPresence[] = await Promise.all(
+                occupantIds.map((uid) => buildOccupant(uid, presence, app.prisma)),
+            );
+            io.to(`server:${serverId}`).emit("PRESENCE_UPDATE", {
+                channelId: currentChannelId,
+                occupants,
+                sessionStartedAt: voiceSessionStartedAt.get(currentChannelId)?.toISOString(),
+            });
+        }
+
+        app.log.info({ socketId: oldSocketId, userId }, "Superseding stale socket");
+        old.disconnect(true);
+    }
+
     /** Actually removes presence and broadcasts the leave — run once the
      *  grace period has elapsed with no reconnect. */
     async function finalizeDisconnect(
@@ -199,7 +245,15 @@ export function registerConnectionHandlers(
     }
 
     io.on("connection", (socket: TypedSocket) => {
-        app.log.info({ socketId: socket.id }, "Client connected");
+        // Diagnostics (PRD 15.2): lets a later log be classified without
+        // guesswork — connection lifetime, transport, and the client's
+        // address (an IP change between sockets = roaming network).
+        const connectedAt = Date.now();
+        const clientAddress =
+            (socket.handshake.headers["cf-connecting-ip"] as string | undefined) ??
+            (socket.handshake.headers["x-forwarded-for"] as string | undefined) ??
+            socket.handshake.address;
+        app.log.info({ socketId: socket.id, address: clientAddress }, "Client connected");
 
         // ── PING_LATENCY — instant ack for client-side RTT + clock-offset
         // measurement (the server timestamp lets the client correct for
@@ -294,6 +348,14 @@ export function registerConnectionHandlers(
                 if (pendingDisconnect) {
                     clearTimeout(pendingDisconnect);
                     pendingDisconnects.delete(instanceId);
+                }
+
+                // Take ownership of this userId; if an older socket for the
+                // same user is still around (a zombie from a dropped
+                // connection), retire it now (PRD 15.1).
+                const displacedSocketId = ownership.claim(instanceId, socket.id);
+                if (displacedSocketId) {
+                    await supersedeSocket(displacedSocketId, instanceId);
                 }
 
                 // Join the Socket.io room for this server
@@ -611,6 +673,27 @@ export function registerConnectionHandlers(
 
                 const { serverId, currentChannelId, nickname, userId } = socket.data;
 
+                // A superseded/stale socket (PRD 15.1) no longer owns this
+                // userId's mediasoup session, presence or grace timer — they
+                // belong to the newer socket. Touching them here is exactly
+                // what used to kill the live session and mark the user
+                // offline, so do nothing userId-keyed.
+                if (serverId && userId && !ownership.isOwner(userId, socket.id)) {
+                    app.log.info(
+                        {
+                            socketId: socket.id,
+                            nickname,
+                            reason,
+                            superseded: socket.data.superseded === true,
+                            transport: socket.conn?.transport?.name,
+                            connectedForMs: Date.now() - connectedAt,
+                        },
+                        "Stale socket disconnected (superseded)",
+                    );
+                    return;
+                }
+                if (serverId && userId) ownership.release(userId, socket.id);
+
                 if (serverId) {
                     // Clean up the mediasoup voice session immediately — this
                     // transport is tied to the now-dead socket either way,
@@ -655,6 +738,9 @@ export function registerConnectionHandlers(
                         // leave to anyone else.
                         const timer = setTimeout(() => {
                             pendingDisconnects.delete(userId);
+                            // Defense in depth (PRD 15.1): never finalize a
+                            // user who has since reconnected on a new socket.
+                            if (ownership.hasOwner(userId)) return;
                             finalizeDisconnect(userId, serverId, currentChannelId).catch((err) => {
                                 app.log.error({ err }, "Error during deferred disconnect cleanup");
                             });
@@ -664,7 +750,14 @@ export function registerConnectionHandlers(
                 }
 
                 app.log.info(
-                    { socketId: socket.id, nickname, reason },
+                    {
+                        socketId: socket.id,
+                        nickname,
+                        reason,
+                        superseded: false,
+                        transport: socket.conn?.transport?.name,
+                        connectedForMs: Date.now() - connectedAt,
+                    },
                     reason === "client namespace disconnect"
                         ? "Client disconnected (finalized immediately)"
                         : "Client disconnected (grace period started)",

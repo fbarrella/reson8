@@ -5,13 +5,14 @@
  * This is the entry point for the Electron desktop client.
  */
 
-import { app, BrowserWindow, session, ipcMain, globalShortcut, Menu, Tray, nativeImage, shell, desktopCapturer, dialog } from "electron";
+import { app, BrowserWindow, session, ipcMain, globalShortcut, Menu, Tray, nativeImage, shell, desktopCapturer, dialog, net, clipboard } from "electron";
 import path from "node:path";
 import { getInstanceId, hasExistingInstanceId } from "./instance-id.js";
 import { autoUpdater, NsisUpdater } from "electron-updater";
 import { startCapture, resolvePidForWindowSourceId, listAudioProducingApps, platformSupportsCapture } from "@reson8/native-audio";
 import type { CaptureHandle } from "@reson8/native-audio";
 import MarkdownIt from "markdown-it";
+import { loadWindowState, trackWindowState } from "./window-state.js";
 
 // ── Single-instance lock (PRD 13.18) ────────────────────────────────────
 // Requested as early as possible, before any other startup work. Opening
@@ -22,15 +23,26 @@ import MarkdownIt from "markdown-it";
 // instance is already running elsewhere; quit immediately — calling
 // app.quit() this early prevents app.whenReady() from ever resolving, so
 // none of the window/tray/IPC setup further down actually runs.
+// ── Windows: native window occlusion tracking (PRD 15.7, hypothesis H2) ──
+// Chromium's CalculateNativeWinOcclusion can wrongly decide a window that was
+// just restored from the tray/minimized state is still occluded and stop
+// painting it — the window comes forward but looks frozen until it is
+// minimized and restored again. Disabling the feature is the well-known
+// workaround. Must be set before the app is ready; merged with any existing
+// `disable-features` value rather than replacing it.
+if (process.platform === "win32") {
+    const existing = app.commandLine.getSwitchValue("disable-features");
+    const features = new Set(existing ? existing.split(",") : []);
+    features.add("CalculateNativeWinOcclusion");
+    app.commandLine.appendSwitch("disable-features", [...features].join(","));
+}
+
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 if (!gotSingleInstanceLock) {
     app.quit();
 } else {
     app.on("second-instance", () => {
-        if (!mainWindow) return;
-        if (mainWindow.isMinimized()) mainWindow.restore();
-        if (!mainWindow.isVisible()) mainWindow.show();
-        mainWindow.focus();
+        showMainWindow("second-instance");
     });
 }
 
@@ -407,6 +419,34 @@ function getDesktopSourcesWithTimeout(
     ]);
 }
 
+/**
+ * Single code path for bringing the main window to the front (PRD 15.7) —
+ * used by a second app launch, the tray icon click and the tray "Restore"
+ * item, which used to be three divergent implementations (the tray ones only
+ * called `show()`, never `restore()`).
+ *
+ * Also logs the window's state before and after: the freeze this guards
+ * against could not be reproduced from the code alone, so if it ever recurs
+ * the console output shows what state the window and renderer were in.
+ */
+function showMainWindow(source: string): void {
+    const win = mainWindow;
+    if (!win || win.isDestroyed()) return;
+
+    const snapshot = () =>
+        `minimized=${win.isMinimized()} visible=${win.isVisible()} focused=${win.isFocused()} ` +
+        `maximized=${win.isMaximized()} loading=${win.webContents.isLoading()} ` +
+        `crashed=${win.webContents.isCrashed()}`;
+    console.log(`[main] showMainWindow(${source}) before: ${snapshot()}`);
+
+    if (win.isMinimized()) win.restore();
+    if (!win.isVisible()) win.show();
+    win.moveTop();
+    win.focus();
+
+    console.log(`[main] showMainWindow(${source}) after: ${snapshot()}`);
+}
+
 function createWindow(): void {
     // Grant mic/camera permission requests automatically
     session.defaultSession.setPermissionRequestHandler(
@@ -440,9 +480,20 @@ function createWindow(): void {
         }
     });
 
-    mainWindow = new BrowserWindow({
+    const savedWindowState = loadWindowState({
         width: 1024,
         height: 768,
+        minWidth: 800,
+        minHeight: 600,
+    });
+
+    mainWindow = new BrowserWindow({
+        // x/y are omitted when no safe saved position exists, so Electron
+        // centers the window as before (PRD 15.6).
+        x: savedWindowState.x,
+        y: savedWindowState.y,
+        width: savedWindowState.width,
+        height: savedWindowState.height,
         minWidth: 800,
         minHeight: 600,
         title: "Reson8",
@@ -454,6 +505,9 @@ function createWindow(): void {
             sandbox: false,
         },
     });
+
+    if (savedWindowState.isMaximized) mainWindow.maximize();
+    trackWindowState(mainWindow);
 
     mainWindow.loadFile(path.join(__dirname, "renderer", "index.html"));
 
@@ -523,7 +577,21 @@ function createWindow(): void {
     });
 
     // ── Minimize-to-tray interception ────────────────────────────────────
+    // Windows/macOS: intercept `will-minimize` and hide instead, so the
+    // window never enters the minimized state at all (PRD 15.7, hypothesis
+    // H1). Calling `hide()` from inside the post-hoc `minimize` event — what
+    // this used to do — left a window that was both minimized AND hidden,
+    // which `restore()`/`show()` then had to untangle.
+    (mainWindow as any).on("will-minimize", (event: Electron.Event) => {
+        if (!minimizeToTray) return;
+        event.preventDefault();
+        mainWindow?.hide();
+        // The `minimize` event below won't fire for a prevented minimize.
+        mainWindow?.webContents.send("window-minimized");
+    });
+
     (mainWindow as any).on("minimize", () => {
+        // Fallback for platforms that don't emit `will-minimize` (Linux).
         if (minimizeToTray) {
             mainWindow?.hide();
         }
@@ -557,8 +625,7 @@ function createTray(): void {
         {
             label: "Restore",
             click: () => {
-                mainWindow?.show();
-                mainWindow?.focus();
+                showMainWindow("tray-restore");
             },
         },
         { type: "separator" },
@@ -574,8 +641,7 @@ function createTray(): void {
 
     // Single-click on tray icon restores the window
     tray.on("click", () => {
-        mainWindow?.show();
-        mainWindow?.focus();
+        showMainWindow("tray-click");
     });
 }
 
@@ -728,6 +794,73 @@ app.whenReady().then(() => {
     ipcMain.handle("download-image", (_event, url: string) => {
         if (mainWindow) {
             mainWindow.webContents.downloadURL(url);
+        }
+    });
+
+    // ── Image viewer actions (PRD 15.9) ──────────────────────────────────
+    // The renderer never gets raw Node/Electron access, so everything the
+    // viewer's toolbar needs from outside the page goes through these.
+
+    /** Only plain web URLs may be opened/fetched — never file:, javascript:,
+     *  custom protocols, etc. (attachment URLs come from other users). */
+    const isHttpUrl = (value: unknown): value is string => {
+        if (typeof value !== "string") return false;
+        try {
+            const u = new URL(value);
+            return u.protocol === "http:" || u.protocol === "https:";
+        } catch {
+            return false;
+        }
+    };
+
+    ipcMain.handle("open-external-url", async (_event, url: unknown) => {
+        if (!isHttpUrl(url)) return { success: false, error: "Only http(s) links can be opened" };
+        await shell.openExternal(url);
+        return { success: true };
+    });
+
+    ipcMain.handle("copy-text-to-clipboard", (_event, text: unknown) => {
+        if (typeof text !== "string") return false;
+        clipboard.writeText(text);
+        return true;
+    });
+
+    /** The renderer re-encodes whatever it fetched to PNG first (see
+     *  `copyLightboxImage`), so only PNG bytes are accepted here. */
+    ipcMain.handle("copy-png-to-clipboard", (_event, bytes: unknown) => {
+        if (!(bytes instanceof Uint8Array) || bytes.byteLength === 0) return false;
+        const image = nativeImage.createFromBuffer(Buffer.from(bytes));
+        if (image.isEmpty()) return false;
+        clipboard.writeImage(image);
+        return true;
+    });
+
+    /**
+     * Fetches an image's bytes in the main process — no CORS or canvas-taint
+     * problems like a renderer fetch of a cross-origin image would have.
+     * Bounded: http(s) only, `image/*` responses only, 25 MB cap, 15s timeout.
+     */
+    const IMAGE_FETCH_MAX_BYTES = 25 * 1024 * 1024;
+    ipcMain.handle("fetch-image-bytes", async (_event, url: unknown) => {
+        if (!isHttpUrl(url)) return { success: false, error: "Invalid image URL" };
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 15_000);
+        try {
+            const res = await net.fetch(url, { signal: controller.signal, credentials: "omit" });
+            if (!res.ok) return { success: false, error: `Server responded ${res.status}` };
+            const type = res.headers.get("content-type") ?? "";
+            if (!type.toLowerCase().startsWith("image/")) {
+                return { success: false, error: "That link is not an image" };
+            }
+            const declared = Number(res.headers.get("content-length") ?? 0);
+            if (declared > IMAGE_FETCH_MAX_BYTES) return { success: false, error: "Image is too large to copy" };
+            const buffer = Buffer.from(await res.arrayBuffer());
+            if (buffer.byteLength > IMAGE_FETCH_MAX_BYTES) return { success: false, error: "Image is too large to copy" };
+            return { success: true, bytes: new Uint8Array(buffer) };
+        } catch (err: any) {
+            return { success: false, error: err?.name === "AbortError" ? "Timed out fetching the image" : "Couldn't fetch the image" };
+        } finally {
+            clearTimeout(timer);
         }
     });
 

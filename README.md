@@ -8,7 +8,7 @@ A high-performance desktop communication platform inspired by TeamSpeak 3,
 built with modern technology for low-latency voice, hierarchical channel trees,
 and private server ownership.
 
-[![Version](https://img.shields.io/badge/version-2.3.0-blue.svg)](#)
+[![Version](https://img.shields.io/badge/version-2.4.0-blue.svg)](#)
 [![Electron](https://img.shields.io/badge/Electron-34-47848F?logo=electron&logoColor=white)](https://www.electronjs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D20-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
@@ -29,7 +29,7 @@ and private server ownership.
 ### 🔊 Voice & Audio
 - **Crystal-Clear Voice** — Low-latency SFU-based audio via mediasoup. No peer-to-peer bottlenecks, even in large groups.
 - **Push-to-Talk** — Configurable global hotkey with voice-activity fallback. Toggle freely from the settings panel.
-- **Active Speaker Indicator** — Animated green halo highlights users who are currently speaking in the channel tree. Your own halo lights up instantly (computed locally, no server round-trip), while other participants' halos remain server-driven since their audio genuinely arrives that way.
+- **Active Speaker Indicator** — Animated green halo highlights users who are currently speaking in the channel tree. Your own halo lights up instantly (computed locally, no server round-trip) and goes dark the moment you mute, deafen, or release push-to-talk, while other participants' halos remain server-driven since their audio genuinely arrives that way.
 - **Audio Device Selection** — Choose microphone and speaker devices from settings. Save and apply with a dedicated button.
 - **AI Noise Cancelling** — Real-time AI denoising (DeepFilterNet3, running fully self-hosted via WebAssembly) suppresses keyboard clicks, fan noise, and other background sound, toggleable from Voice & Shortcuts, with an adjustable strength slider to dial back suppression if it fades a quiet voice too aggressively.
 - **Hear Yourself** — A "Hear Yourself" toggle next to the live mic meter lets you monitor your own processed mic in real time with every adjustment applied, so you can judge how you actually sound. Automatically mutes and deafens you while active if you're in a voice channel.
@@ -57,11 +57,12 @@ and private server ownership.
 - **Custom Text Channel Icons** — Give any text channel its own icon in the channel tree — pick from the full curated emoji set, or upload and crop your own image.
 - **Drag & Drop Reordering** — Reorder channels within a category by dragging them into place.
 - **NSFW Channels** — Mark text channels as NSFW; members see a confirmation prompt before entering, and images posted there render blurred with a "click to reveal" overlay until opened in the full-screen viewer.
-- **Real-Time Presence** — See who's online and in which channel, instantly updated across all connected clients — including promptly reflecting when someone quits the app, rather than showing them as online for a lingering delay.
+- **Real-Time Presence** — See who's online and in which channel, instantly updated across all connected clients — including promptly reflecting when someone quits the app, rather than showing them as online for a lingering delay, and staying correctly online through a quick network drop and reconnect.
 
 ### 💬 Text & Messaging
 - **Tabbed Text Chat** — Per-channel text messaging with rich formatting, file attachments, and message history. Always opens scrolled to the latest message, loading the next 20 older messages seamlessly as you scroll up rather than fetching the entire history at once.
 - **Jump to Most Recent Message** — A floating button appears whenever you've scrolled away from the latest message, jumping you straight back down with one click.
+- **Multi-Line Messages & Markdown** — Shift+Enter adds a new line, and messages render Discord-style Markdown: `**bold**`, `*italic*`, `__underline__`, `~~strikethrough~~`, quotes, lists, titles, `inline code`, code blocks, and auto-linked URLs. Raw HTML and masked links are never rendered.
 - **Edit & Delete Messages** — Fix a typo within 2 minutes of sending, or remove a message (and its attachment) entirely.
 - **Unread Channel Indicators** — Text channels with unseen activity show a highlighted dot until you open them.
 - **Instant Upload Feedback** — Attachments show a live thumbnail and progress spinner the moment you pick them, with a one-click retry if the upload fails.
@@ -69,19 +70,23 @@ and private server ownership.
 - **Persistent DMs (Offline Access)** — DM conversations remain accessible even when the other user is offline.
 - **Date Sectioning** — Messages are grouped under `--- Month Day ---` dividers as you scroll through history, with the year added once a message predates the current one.
 - **Emoji Picker & Reactions** — Insert any of 550+ curated emojis into chat, or react directly to messages with persistent, tallied emoji pills. A message containing nothing but a single emoji renders at roughly 4x size.
+- **Reaction Hover Card** — Hover a reaction for a second to see the emoji enlarged, its name, and who reacted ("A, B, C and 2 others reacted with :red_heart:").
+- **Same Emoji on Every OS** — Reson8 bundles Google's Noto Color Emoji, so emoji (flags included) look identical on Windows, Linux and macOS.
+- **Image Viewer** — Open any image full-screen with an icon toolbar: zoom up to 200% of its real size (mouse wheel, drag to pan), copy the image or its link, open it in your browser, download it, and see who sent it and when.
 - **Custom Emoji** — Upload your own emoji with a built-in crop tool, or upload an animated GIF via a dedicated crop-free path to preserve the animation; new uploads are queued for admin approval before becoming usable server-wide.
 - **Link Previews** — URLs in chat auto-expand with title, description, and image. YouTube/video embeds supported; a hidden-browser fallback recovers previews from sites that block simple automated requests outright.
-- **Pinned Messages** — Admins can pin one message per text channel; a bar above the chat shows a preview and jumps you straight to it (loading older history if needed), with a click.
+- **Pinned Messages** — Admins can pin one message per text channel; a high-contrast dark-yellow bar above the chat shows a plain-text preview and jumps you straight to it (loading older history if needed), with a click.
 - **Message Length Limit** — A safe default cap on message length protects the server against oversized messages, with an admin override in Settings → Server.
 - **Long Message Truncation** — Long messages collapse behind a pill-shaped "See more" button, positioned directly above the message's reactions. Expanded messages always reset — minimizing the app, switching channels, or relaunching all re-collapse them.
 
 ### 🛡️ Administration & Security
 - **Role-Based Permissions** — Bitwise permission system with admin role management. Fine-grained access control.
 - **Server Password Protection** — Optional `SERVER_PRIVATE_PASSWORD` env var with client-side password input.
-- **Kick & Ban** — Admin right-click to kick users from voice channels. Ban/Unban lives in the Settings → User Management tab, which lists every server user (online or not), so offline troublemakers can be banned too — persisted by instance ID.
+- **Kick & Ban** — Admin right-click to kick users from voice channels. Ban/Unban lives in the Settings → User Management tab, which lists every server user (online or not), so offline troublemakers can be banned too — persisted by instance ID. Your own row shows a disabled Ban button so the list stays consistent.
 
 ### 🖥️ Desktop Experience
 - **Auto-Updates** — Checks for new releases on launch and installs them with one click; a "Check for Updates" button in the About tab lets you trigger it anytime.
+- **Remembers Window Size & Position** — Reson8 reopens at the size and position (and maximized state) you left it, falling back safely if that monitor is gone. (Position can't be restored on Wayland, where the compositor controls it.)
 - **Single Instance** — Opening Reson8 while it's already running focuses the existing window instead of launching a redundant second instance.
 - **"What's New" Modal** — The first time you open Reson8 after an update, a one-time modal renders the GitHub release notes as formatted text, sourced live rather than showing raw markdown.
 - **Server Name in Title Bar** — The window title shows "Reson8 - [Server Name]" once connected.
@@ -269,6 +274,8 @@ reson8/
 │   │   │   ├── main.ts              # Electron main process (tray, PTT, link preview, desktopCapturer)
 │   │   │   ├── preload.ts           # contextBridge API for the main window (60+ methods)
 │   │   │   ├── preload-viewer.ts    # Scoped contextBridge API for the screen-share Viewer window
+│   │   │   ├── markdown.ts          # Pure chat Markdown renderer (used via the preload)
+│   │   │   ├── window-state.ts      # Remembers window size/position between sessions
 │   │   │   ├── renderer/            # Main window UI (HTML + TypeScript)
 │   │   │   │   ├── index.html / renderer.ts    # Main window
 │   │   │   │   └── viewer.html / viewer.ts     # Screen-share Viewer window (own socket + recv transport)
@@ -287,7 +294,7 @@ reson8/
 │       │   │   ├── admin.handler.ts        # Role management
 │       │   │   ├── nudge.handler.ts        # Nudge + server-wide settings (screen share toggle, etc.)
 │       │   │   └── moderation.handler.ts   # Kick & ban
-│       │   ├── services/       # mediasoup, presence, permissions
+│       │   ├── services/       # mediasoup, presence, permissions, socket ownership, reactions
 │       │   ├── config/         # mediasoup, message-length, and version configuration
 │       │   └── plugins/        # Prisma, Redis Fastify plugins
 │       ├── prisma/
@@ -323,6 +330,7 @@ reson8/
 | 12 | **Screen Sharing** — Native per-app audio capture (Rust/NAPI-RS), VP9 SVC video pipeline, source selection modal, dedicated Viewer window, LIVE badges, server-wide toggle — plus a follow-up pass fixing per-user local volume/mute, deafen for late joiners, stale presence nicknames, and adding message-length limits, message truncation, and a client/server version-mismatch warning | ✅ Done |
 | 13 | **Voice Quality & Polish** — AI noise cancelling (DeepFilterNet3/WASM), a real noise-gate fade envelope, a mic volume slider, and an always-visible mic level meter; NSFW image blurring, chat date sectioning, animated custom emoji, bigger solo-emoji messages, and screen-share sound alerts; Ban moved to a renamed "User Management" tab (now works for offline users) and a single-instance app lock; a markdown-rendering "What's New" modal; plus fixes for a presence bug that left quit users showing online and a handful of smaller UI issues | ✅ Done |
 | 14 | **Chat & Channel Management, Voice Self-Monitoring** — Cursor-paginated chat history with infinite scroll-up and a "Jump to Most Recent Message" button; channel re-parenting, parent-channel renaming, and custom text-channel icons; a self-hear mic monitor and an adjustable noise-cancelling strength slider; a reorganized, decluttered Voice & Shortcuts tab; plus fixes for the chat scroll-position bug, the DM sound alert, the Settings modal's per-tab height, own-voice active-speaker latency, and rich link previews on bot-walled sites | ✅ Done |
+| 15 | **Rich Chat & Sturdier Connections** — Multi-line messages with Discord-style Markdown, a redesigned image viewer (zoom, copy, open in browser, "sent by"), a reaction hover card, bundled Google Noto emoji on every OS, remembered window size/position, a dark-yellow pinned bar and a disabled self-Ban button; plus fixes for users showing offline (and voice dropping a second time) after a quick reconnect, the own voice halo showing while muted, and the Windows re-launch freeze, and richer disconnect diagnostics | ✅ Done |
 
 ---
 

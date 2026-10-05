@@ -19,6 +19,8 @@ import type {
 import { PresenceService } from "../services/presence.service.js";
 import { deleteAttachment } from "../services/storage.service.js";
 import { DEFAULT_MAX_MESSAGE_LENGTH } from "../config/message.config.js";
+import { normalizeNewlines } from "../services/message-text.js";
+import { aggregateReactionRows, loadReactorNicknames } from "../services/reaction.service.js";
 
 type TypedIO = SocketIOServer<
     ClientToServerEvents,
@@ -47,7 +49,8 @@ export function registerDMHandlers(
         // ── SEND_DIRECT_MESSAGE ────────────────────────────────────────────
         socket.on("SEND_DIRECT_MESSAGE", async (payload, ack) => {
             try {
-                const { recipientId, content, attachmentUrl, attachmentPublicId } = payload;
+                const { recipientId, attachmentUrl, attachmentPublicId } = payload;
+                const content = normalizeNewlines(payload.content);
 
                 if ((!content || content.trim().length === 0) && !attachmentUrl) {
                     ack({ success: false, error: "Message content is empty" });
@@ -154,33 +157,24 @@ export function registerDMHandlers(
                     },
                 });
 
-                // Convert to DTOs in chronological order
-                const dtos: IDirectMessage[] = messages
-                    .reverse()
-                    .map((m) => {
-                        // Aggregate reactions by emoji
-                        const rMap = new Map<string, string[]>();
-                        for (const r of m.reactions) {
-                            let list = rMap.get(r.emoji);
-                            if (!list) { list = []; rMap.set(r.emoji, list); }
-                            list.push(r.userId);
-                        }
-                        const reactions = Array.from(rMap.entries()).map(([emoji, userIds]) => ({
-                            emoji, count: userIds.length, userIds,
-                        }));
-
-                        return {
-                            id: m.id,
-                            senderId: m.senderId,
-                            senderNickname: m.sender.nickname,
-                            receiverId: m.receiverId,
-                            content: m.content,
-                            attachmentUrl: m.attachmentUrl,
-                            createdAt: m.createdAt.toISOString(),
-                            readAt: m.readAt?.toISOString() ?? null,
-                            reactions,
-                        };
-                    });
+                // Convert to DTOs in chronological order — every reactor's
+                // nickname is resolved in a single query (PRD 15.11).
+                const ordered = messages.reverse();
+                const reactorNicknames = await loadReactorNicknames(
+                    app.prisma,
+                    ordered.flatMap((m) => m.reactions.map((r) => r.userId)),
+                );
+                const dtos: IDirectMessage[] = ordered.map((m) => ({
+                    id: m.id,
+                    senderId: m.senderId,
+                    senderNickname: m.sender.nickname,
+                    receiverId: m.receiverId,
+                    content: m.content,
+                    attachmentUrl: m.attachmentUrl,
+                    createdAt: m.createdAt.toISOString(),
+                    readAt: m.readAt?.toISOString() ?? null,
+                    reactions: aggregateReactionRows(m.reactions, reactorNicknames),
+                }));
 
                 ack({ success: true, messages: dtos });
             } catch (err) {

@@ -21,6 +21,7 @@ import type {
     ITransportOptions,
     IConsumerInfo,
     ICustomEmoji,
+    IReactionSummary,
 } from "./models.js";
 
 // ---------------------------------------------------------------------------
@@ -615,7 +616,7 @@ export interface ServerToClientEvents {
     REACTION_UPDATED: (payload: {
         messageId: string;
         isDm: boolean;
-        reactions: Array<{ emoji: string; count: number; userIds: string[] }>;
+        reactions: IReactionSummary[];
     }) => void;
 
     /** Broadcasts a newly-approved custom emoji so every connected picker updates live. */
@@ -687,4 +688,9 @@ export interface SocketData {
      *  `VIEWER_LEFT_YOUR_STREAM` (PRD 13.16) without needing the client to
      *  resend it. */
     watchingUserId?: string;
+    /** Set (server-side only, never on the wire) on a primary socket that was
+     *  replaced by a newer connection for the same `userId` (PRD 15.1) — its
+     *  eventual `disconnect` must not touch the userId-keyed state the newer
+     *  socket now owns. */
+    superseded?: boolean;
 }

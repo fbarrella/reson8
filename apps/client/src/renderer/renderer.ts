@@ -7,6 +7,16 @@
  *   - Bottom: Voice controls + status bar
  */
 
+/** One emoji's reactions on a message (mirrors shared-types' IReactionSummary).
+ *  `users` (PRD 15.11) carries reactor nicknames, aligned with `userIds`; it is
+ *  absent when talking to a server that predates it. */
+interface ReactionSummary {
+    emoji: string;
+    count: number;
+    userIds: string[];
+    users?: Array<{ userId: string; nickname: string }>;
+}
+
 interface ChatMessage {
     id: string;
     channelId: string;
@@ -16,7 +26,7 @@ interface ChatMessage {
     attachmentUrl?: string | null;
     createdAt: string;
     editedAt?: string | null;
-    reactions?: Array<{ emoji: string; count: number; userIds: string[] }>;
+    reactions?: ReactionSummary[];
 }
 
 interface PinnedMessage {
@@ -35,7 +45,7 @@ interface DirectMessage {
     attachmentUrl?: string | null;
     createdAt: string;
     readAt?: string | null;
-    reactions?: Array<{ emoji: string; count: number; userIds: string[] }>;
+    reactions?: ReactionSummary[];
 }
 
 interface CustomEmoji {
@@ -754,6 +764,13 @@ interface Reson8Api {
     getBannedUsers(): Promise<{ success: boolean; users?: { userId: string; nickname: string; bannedAt: string }[]; error?: string }>;
     uploadFile(fileBuffer: ArrayBuffer, fileName: string, mimeType: string): Promise<{ url: string; publicId?: string }>;
     downloadImage(url: string): void;
+    setCustomEmojis(list: Array<{ name: string; imageUrl: string }>): void;
+    renderMarkdown(text: string): { html: string; block: boolean };
+    markdownToPlainText(text: string): string;
+    openExternal(url: string): Promise<{ success: boolean; error?: string }>;
+    copyText(text: string): Promise<boolean>;
+    fetchImageBytes(url: string): Promise<{ success: boolean; bytes?: Uint8Array; error?: string }>;
+    copyPngToClipboard(bytes: Uint8Array): Promise<boolean>;
     fetchLinkPreview(url: string): Promise<LinkPreviewData | null>;
     setTrayPrefs(prefs: { minimizeToTray: boolean; closeToTray: boolean }): void;
     getTrayPrefs(): Promise<{ minimizeToTray: boolean; closeToTray: boolean }>;
@@ -983,7 +1000,7 @@ const eventLog = document.getElementById("event-log") as HTMLDivElement;
 const tabBar = document.getElementById("tab-bar") as HTMLDivElement;
 const tabContentArea = document.getElementById("tab-content-area") as HTMLDivElement;
 const chatInputBar = document.getElementById("chat-input-bar") as HTMLDivElement;
-const chatInput = document.getElementById("chat-input") as HTMLInputElement;
+const chatInput = document.getElementById("chat-input") as HTMLTextAreaElement;
 const btnSend = document.getElementById("btn-send") as HTMLButtonElement;
 const btnAttach = document.getElementById("btn-attach") as HTMLButtonElement;
 const btnEmoji = document.getElementById("btn-emoji") as HTMLButtonElement;
@@ -2057,6 +2074,7 @@ async function deleteChannel(channelId: string): Promise<void> {
 // ── Voice Controls ────────────────────────────────────────────────────────
 
 function updateVoiceUI(channelName?: string): void {
+    refreshLocalSpeakingHalo();
     if (isInVoice) {
         voicePanel.classList.add("visible");
         if (channelName) {
@@ -2652,7 +2670,13 @@ api.on("connected", (data: { serverId: string; instanceId: string }) => {
     statusText.textContent = `Connected as ${nicknameInput.value.trim() || "User"}`;
     statusText.classList.add("connected");
     statusInstance.textContent = `ID: ${data.instanceId}`;
-    log("Connected to server", "success");
+    if (lastDisconnectAt !== null) {
+        const secs = ((Date.now() - lastDisconnectAt) / 1000).toFixed(1);
+        log(`Connected to server (reconnected after ${secs}s)`, "success");
+        lastDisconnectAt = null;
+    } else {
+        log("Connected to server", "success");
+    }
     SoundAlert.play("connected.mp3");
 
     // Always show the online users button when connected
@@ -2687,6 +2711,7 @@ api.on("connected", (data: { serverId: string; instanceId: string }) => {
     api.getApprovedEmojis().then((res) => {
         if (res.success && res.emojis) {
             customEmojis = res.emojis;
+            api.setCustomEmojis(customEmojis);
         }
     });
 
@@ -2714,7 +2739,15 @@ api.on("connected", (data: { serverId: string; instanceId: string }) => {
     });
 });
 
-api.on("disconnected", () => {
+/** When the last unintended disconnect happened — lets the next "connected"
+ *  log how long the outage lasted (PRD 15.2 diagnostics). */
+let lastDisconnectAt: number | null = null;
+
+api.on("disconnected", (data?: { reason?: string }) => {
+    const disconnectReason = data?.reason ?? "unknown";
+    // "io client disconnect" = the user/app closed it on purpose; anything
+    // else (ping timeout, transport close/error…) is an unintended drop.
+    lastDisconnectAt = disconnectReason === "io client disconnect" ? null : Date.now();
     isConnected = false;
     isAdminUser = false;
     canManageEmojis = false;
@@ -2723,6 +2756,7 @@ api.on("disconnected", () => {
     currentServerId = "";
     currentTree = [];
     customEmojis = [];
+    api.setCustomEmojis(customEmojis);
     previousOccupantIds = new Set();
     previousSharingIds = new Set();
     connectedServerName = null;
@@ -2756,7 +2790,7 @@ api.on("disconnected", () => {
         closeTab(tabId);
     }
     switchTab("server-log");
-    log("Disconnected from server", "error");
+    log(`Disconnected from server (${disconnectReason})`, "error");
     SoundAlert.play("disconnected.mp3");
 });
 
@@ -3123,6 +3157,93 @@ function isSoloEmojiMessage(text: string): boolean {
         : [...trimmed].length === 1;
 }
 
+// ── Message body rendering (PRD 15.10) ──────────────────────────────────
+
+const MSG_ALLOWED_TAGS = new Set([
+    "P", "BR", "STRONG", "EM", "U", "S", "DEL", "BLOCKQUOTE", "UL", "OL", "LI",
+    "H1", "H2", "H3", "PRE", "CODE", "A", "IMG",
+]);
+const HTTP_URL = /^https?:\/\//i;
+
+/**
+ * Defense in depth for rendered Markdown. The renderer in the preload
+ * (`markdown.ts`) already refuses raw HTML and unsafe link schemes; this
+ * allow-list pass re-checks its output before it is assigned to `innerHTML`:
+ * only known tags survive (anything else collapses to its plain text), links
+ * keep only an http(s) `href`, `<img>` is allowed solely for the inline
+ * custom-emoji class, and every other attribute — including all event
+ * handlers — is dropped. A DOMParser document is inert: nothing in it runs
+ * or loads while it is being walked.
+ */
+function sanitizeMessageHtml(html: string): string {
+    const doc = new DOMParser().parseFromString(`<body>${html}</body>`, "text/html");
+
+    const walk = (parent: Node): void => {
+        for (const node of Array.from(parent.childNodes)) {
+            if (node.nodeType === Node.TEXT_NODE) continue;
+            if (node.nodeType !== Node.ELEMENT_NODE) {
+                node.parentNode?.removeChild(node);
+                continue;
+            }
+            const el = node as Element;
+
+            if (!MSG_ALLOWED_TAGS.has(el.tagName)) {
+                el.replaceWith(document.createTextNode(el.textContent ?? ""));
+                continue;
+            }
+
+            for (const attr of Array.from(el.attributes)) {
+                const keep =
+                    (el.tagName === "A" &&
+                        ((attr.name === "href" && HTTP_URL.test(attr.value)) ||
+                            (attr.name === "target" && attr.value === "_blank") ||
+                            attr.name === "rel" ||
+                            (attr.name === "class" && attr.value === "msg-link"))) ||
+                    (el.tagName === "IMG" &&
+                        ((attr.name === "src" && HTTP_URL.test(attr.value)) ||
+                            attr.name === "alt" ||
+                            attr.name === "title" ||
+                            (attr.name === "class" && attr.value === "custom-emoji-inline")));
+                if (!keep) el.removeAttribute(attr.name);
+            }
+
+            if (el.tagName === "A" && !el.hasAttribute("href")) {
+                el.replaceWith(document.createTextNode(el.textContent ?? ""));
+                continue;
+            }
+            if (el.tagName === "IMG" && (!el.classList.contains("custom-emoji-inline") || !el.getAttribute("src"))) {
+                el.replaceWith(document.createTextNode(el.getAttribute("alt") ?? ""));
+                continue;
+            }
+
+            walk(el);
+        }
+    };
+    walk(doc.body);
+    return doc.body.innerHTML;
+}
+
+/**
+ * Renders a message's text into its `.msg-text` element — the single place
+ * channel messages, DMs, edits and edit broadcasts all go through, so their
+ * formatting can't drift apart. A lone emoji keeps its 4x solo rendering and
+ * bypasses Markdown; a single plain line stays inline (the layout every
+ * message had before Markdown); anything with a line break or block syntax
+ * becomes a block starting under the `[time] nick` header.
+ */
+function setMessageBody(textEl: HTMLElement, content: string): void {
+    const solo = isSoloEmojiMessage(content);
+    textEl.classList.toggle("msg-text-solo-emoji", solo);
+    if (solo) {
+        textEl.classList.remove("msg-text-block");
+        textEl.innerHTML = linkifyContent(content);
+        return;
+    }
+    const rendered = api.renderMarkdown(content);
+    textEl.innerHTML = sanitizeMessageHtml(rendered.html);
+    textEl.classList.toggle("msg-text-block", rendered.block);
+}
+
 /** Build HTML for message text with clickable URL links and inline custom
  * emoji. Operates on raw (unescaped) text so the regexes work correctly,
  * then escapes/transforms each segment independently. */
@@ -3400,11 +3521,21 @@ function renderAdminUsers(users: any[]): void {
             row.appendChild(badgesEl);
         }
 
-        // Ban / Unban — only for those who hold BAN_USER, never for yourself
-        // (PRD 13.17). Works for offline users too, unlike the old Online
-        // Users modal button this replaces — GET_ALL_USERS lists every user
-        // with a role on this server regardless of online status.
-        if (canBanUsers && user.id !== myId) {
+        // Ban / Unban — only for those who hold BAN_USER (PRD 13.17). Works
+        // for offline users too, unlike the old Online Users modal button
+        // this replaces — GET_ALL_USERS lists every user with a role on
+        // this server regardless of online status. Your own row shows a
+        // disabled Ban button instead of hiding it (PRD 15.4) so the rows
+        // stay consistent; the server independently rejects self-ban.
+        if (canBanUsers && user.id === myId) {
+            const selfBanBtn = document.createElement("button");
+            selfBanBtn.className = "btn-ban";
+            selfBanBtn.disabled = true;
+            selfBanBtn.setAttribute("aria-disabled", "true");
+            selfBanBtn.title = "You can't ban yourself";
+            selfBanBtn.innerHTML = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="7" cy="7" r="4"/><circle cx="18" cy="17" r="5"/><line x1="14.5" y1="20.5" x2="21.5" y2="13.5"/></svg> Ban';
+            row.appendChild(selfBanBtn);
+        } else if (canBanUsers) {
             const banBtn = document.createElement("button");
             banBtn.className = user.isBanned ? "btn-unban" : "btn-ban";
             // "Ban" gets a user-with-a-no-entry-circle icon so the
@@ -3922,11 +4053,13 @@ function buildChatMessageElement(tab: ChatTab, msg: ChatMessage): HTMLDivElement
     let html = `<span class="msg-time">${time}</span>${editedLabel}<span class="msg-nick">${escapeHtml(msg.nickname)}</span>`;
 
     if (msg.content) {
-        const soloEmojiClass = isSoloEmojiMessage(msg.content) ? " msg-text-solo-emoji" : "";
-        html += `<span class="msg-text${soloEmojiClass}">${linkifyContent(msg.content)}</span>`;
+        html += `<span class="msg-text"></span>`;
     }
 
     el.innerHTML = html;
+    if (msg.content) {
+        setMessageBody(el.querySelector(".msg-text") as HTMLElement, msg.content);
+    }
 
     if (msg.attachmentUrl) {
         const img = document.createElement("img");
@@ -3934,7 +4067,7 @@ function buildChatMessageElement(tab: ChatTab, msg: ChatMessage): HTMLDivElement
         img.className = "msg-image";
         img.loading = "lazy";
         img.alt = "Shared image";
-        img.addEventListener("click", () => openLightbox(msg.attachmentUrl!));
+        img.addEventListener("click", () => openLightbox(msg.attachmentUrl!, { senderNickname: msg.nickname, sentAt: msg.createdAt }));
 
         // NSFW channels blur every image thumbnail permanently — only the
         // full-screen lightbox (opened by clicking through) ever shows it
@@ -3947,7 +4080,7 @@ function buildChatMessageElement(tab: ChatTab, msg: ChatMessage): HTMLDivElement
             const overlay = document.createElement("div");
             overlay.className = "msg-image-nsfw-overlay";
             overlay.innerHTML = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><span>NSFW. Click to open image and reveal content.</span>`;
-            overlay.addEventListener("click", () => openLightbox(msg.attachmentUrl!));
+            overlay.addEventListener("click", () => openLightbox(msg.attachmentUrl!, { senderNickname: msg.nickname, sentAt: msg.createdAt }));
             wrap.appendChild(overlay);
             el.appendChild(wrap);
         } else {
@@ -4126,11 +4259,24 @@ api.on("window-minimized", collapseAllExpandedMessages);
 
 // ── Chat Input ────────────────────────────────────────────────────────────
 
+/** Grows the chat box with its content (up to the CSS max-height, then it
+ *  scrolls) and shrinks it back when emptied. */
+function autosizeChatInput(): void {
+    chatInput.style.height = "auto";
+    // scrollHeight excludes the border, but the box is border-box — add it
+    // back or the content ends up 2px short and a scrollbar sliver appears.
+    const border = chatInput.offsetHeight - chatInput.clientHeight;
+    chatInput.style.height = `${chatInput.scrollHeight + border}px`;
+}
+
+chatInput.addEventListener("input", autosizeChatInput);
+
 async function sendChatMessage(): Promise<void> {
     const content = chatInput.value.trim();
     if ((!content && !pendingAttachmentUrl) || activeTabId === "server-log") return;
 
     chatInput.value = "";
+    autosizeChatInput();
     const attachmentUrl = pendingAttachmentUrl;
     const attachmentPublicId = pendingAttachmentPublicId;
     clearAttachmentPreview();
@@ -4155,7 +4301,9 @@ async function sendChatMessage(): Promise<void> {
 btnSend.addEventListener("click", () => sendChatMessage());
 
 chatInput.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && !e.shiftKey) {
+    // Enter sends, Shift+Enter inserts a newline; ignore the Enter that
+    // confirms an IME composition.
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
         e.preventDefault();
         sendChatMessage();
     }
@@ -4247,11 +4395,13 @@ function buildDmMessageElement(tab: ChatTab, msg: DirectMessage): HTMLDivElement
     let html = `<span class="msg-time">${time}</span><span class="msg-nick">${escapeHtml(msg.senderNickname)}</span>`;
 
     if (msg.content) {
-        const soloEmojiClass = isSoloEmojiMessage(msg.content) ? " msg-text-solo-emoji" : "";
-        html += `<span class="msg-text${soloEmojiClass}">${linkifyContent(msg.content)}</span>`;
+        html += `<span class="msg-text"></span>`;
     }
 
     el.innerHTML = html;
+    if (msg.content) {
+        setMessageBody(el.querySelector(".msg-text") as HTMLElement, msg.content);
+    }
 
     if (msg.attachmentUrl) {
         const img = document.createElement("img");
@@ -4259,7 +4409,7 @@ function buildDmMessageElement(tab: ChatTab, msg: DirectMessage): HTMLDivElement
         img.className = "msg-image";
         img.loading = "lazy";
         img.alt = "Shared image";
-        img.addEventListener("click", () => openLightbox(msg.attachmentUrl!));
+        img.addEventListener("click", () => openLightbox(msg.attachmentUrl!, { senderNickname: msg.senderNickname, sentAt: msg.createdAt }));
         el.appendChild(img);
     }
 
@@ -4945,6 +5095,7 @@ document.addEventListener("keydown", (e) => {
         // PTT keydown → unmute (only in PTT mode, and only if not locked/muted/deafened)
         if (shortcuts.ptt && setsEqual(heldKeys, shortcuts.ptt.keys) && pttModeEnabled && isInVoice && !isMuted && !isDeafened) {
             api.setMuted(false);
+            isPttHeld = true;
             updateVoiceUI();
         }
     }
@@ -4975,6 +5126,7 @@ document.addEventListener("keyup", (e) => {
         heldKeys.delete(e.code);
         if (wasMatching && pttModeEnabled && isInVoice && !isMuted && !isDeafened) {
             api.setMuted(true);
+            isPttHeld = false;
             updateVoiceUI();
         }
     } else {
@@ -4986,11 +5138,16 @@ document.addEventListener("keyup", (e) => {
 api.on("ptt-pressed", () => {
     if (shortcuts.ptt && pttModeEnabled && isInVoice && !isMuted && !isDeafened) {
         api.setMuted(false);
+        isPttHeld = true;
         updateVoiceUI();
     }
 });
 
 api.on("ptt-released", () => {
+    // Always clear, even if the guard below is false (e.g. the user muted
+    // or deafened while holding the key) — otherwise a stale "held" flag
+    // would let the halo light up later.
+    isPttHeld = false;
     if (shortcuts.ptt && pttModeEnabled && isInVoice && !isMuted && !isDeafened) {
         api.setMuted(true);
         updateVoiceUI();
@@ -5184,20 +5341,194 @@ function clearAttachmentPreview(): void {
     attachmentPreview.innerHTML = "";
 }
 
-// ── Lightbox ───────────────────────────────────────────────────────────
+// ── Lightbox (PRD 15.9) ────────────────────────────────────────────────
+//
+// The image is laid out once at its NATURAL pixel size, centred in the stage,
+// and zoomed/panned purely through `transform: translate() scale()` — no
+// layout work per frame, animated GIFs keep animating, and no re-decode.
+// Scale is a fraction of natural size: the lowest zoom is "fit to window"
+// (never upscaling small images, as before) and the highest is 200%.
 
-function openLightbox(imageUrl: string): void {
+interface LightboxMeta {
+    senderNickname?: string;
+    sentAt?: string;
+}
+
+const LIGHTBOX_MAX_SCALE = 2; // 200% of the image's natural pixel size
+const LIGHTBOX_FIT_MARGIN = 0.9; // fitted image fills at most 90% of the stage (as the old 90vw/90vh)
+const LIGHTBOX_ZOOM_STOPS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
+const LIGHTBOX_EPS = 0.001;
+
+const lightboxStage = document.getElementById("lightbox-stage") as HTMLDivElement;
+const lightboxSender = document.getElementById("lightbox-sender") as HTMLDivElement;
+const lightboxZoomIndicator = document.getElementById("lightbox-zoom-indicator") as HTMLDivElement;
+const btnLightboxZoomIn = document.getElementById("btn-lightbox-zoom-in") as HTMLButtonElement;
+const btnLightboxZoomOut = document.getElementById("btn-lightbox-zoom-out") as HTMLButtonElement;
+const btnLightboxCopyImage = document.getElementById("btn-lightbox-copy-image") as HTMLButtonElement;
+const btnLightboxCopyLink = document.getElementById("btn-lightbox-copy-link") as HTMLButtonElement;
+const btnLightboxOpenBrowser = document.getElementById("btn-lightbox-open-browser") as HTMLButtonElement;
+
+const lightbox = {
+    url: "",
+    naturalW: 0,
+    naturalH: 0,
+    fit: 1,
+    scale: 1,
+    tx: 0,
+    ty: 0,
+    dragging: false,
+    dragMoved: false,
+    dragStartX: 0,
+    dragStartY: 0,
+    dragOriginTx: 0,
+    dragOriginTy: 0,
+    suppressClick: false,
+    indicatorTimer: null as ReturnType<typeof setTimeout> | null,
+    busy: false,
+};
+
+function lightboxStageSize(): { w: number; h: number } {
+    return { w: lightboxStage.clientWidth, h: lightboxStage.clientHeight };
+}
+
+function lightboxComputeFit(): number {
+    if (!lightbox.naturalW || !lightbox.naturalH) return 1;
+    const { w, h } = lightboxStageSize();
+    return Math.min(1, (w * LIGHTBOX_FIT_MARGIN) / lightbox.naturalW, (h * LIGHTBOX_FIT_MARGIN) / lightbox.naturalH);
+}
+
+/** Keeps the image from being dragged out of view: while it's smaller than
+ *  the stage on an axis it stays centred, otherwise its edge may reach the
+ *  stage edge but not pass it. */
+function lightboxClampPan(): void {
+    const { w, h } = lightboxStageSize();
+    const maxX = Math.max(0, (lightbox.naturalW * lightbox.scale - w) / 2);
+    const maxY = Math.max(0, (lightbox.naturalH * lightbox.scale - h) / 2);
+    lightbox.tx = Math.min(maxX, Math.max(-maxX, lightbox.tx));
+    lightbox.ty = Math.min(maxY, Math.max(-maxY, lightbox.ty));
+}
+
+function lightboxIsZoomed(): boolean {
+    return lightbox.scale > lightbox.fit + LIGHTBOX_EPS;
+}
+
+function lightboxApply(animate: boolean): void {
+    lightboxClampPan();
+    lightboxImage.style.transition = animate ? "transform 0.12s ease-out, opacity 0.12s" : "opacity 0.12s";
+    lightboxImage.style.transform = `translate(${lightbox.tx}px, ${lightbox.ty}px) scale(${lightbox.scale})`;
+    lightboxImage.classList.toggle("zoomed", lightboxIsZoomed());
+    btnLightboxZoomIn.disabled = lightbox.scale >= LIGHTBOX_MAX_SCALE - LIGHTBOX_EPS;
+    btnLightboxZoomOut.disabled = !lightboxIsZoomed();
+}
+
+function lightboxShowZoomIndicator(): void {
+    lightboxZoomIndicator.textContent = `${Math.round(lightbox.scale * 100)}%`;
+    lightboxZoomIndicator.classList.add("visible");
+    if (lightbox.indicatorTimer) clearTimeout(lightbox.indicatorTimer);
+    lightbox.indicatorTimer = setTimeout(() => lightboxZoomIndicator.classList.remove("visible"), 900);
+}
+
+/** Zooms to `next`, keeping the point under `anchor` (stage-centre-relative
+ *  px; defaults to the centre) fixed on screen. */
+function lightboxSetScale(next: number, anchor = { x: 0, y: 0 }, animate = false): void {
+    const clamped = Math.min(LIGHTBOX_MAX_SCALE, Math.max(lightbox.fit, next));
+    const ratio = clamped / lightbox.scale;
+    lightbox.tx = anchor.x - (anchor.x - lightbox.tx) * ratio;
+    lightbox.ty = anchor.y - (anchor.y - lightbox.ty) * ratio;
+    lightbox.scale = clamped;
+    lightboxApply(animate);
+    lightboxShowZoomIndicator();
+}
+
+/** The discrete zoom levels the buttons/keys step through: "fit", then the
+ *  fixed percentages above it. */
+function lightboxStops(): number[] {
+    return [lightbox.fit, ...LIGHTBOX_ZOOM_STOPS.filter((v) => v > lightbox.fit + LIGHTBOX_EPS)];
+}
+
+function lightboxStepZoom(direction: 1 | -1): void {
+    const stops = lightboxStops();
+    const target = direction === 1
+        ? stops.find((v) => v > lightbox.scale + LIGHTBOX_EPS)
+        : [...stops].reverse().find((v) => v < lightbox.scale - LIGHTBOX_EPS);
+    if (target !== undefined) lightboxSetScale(target, undefined, true);
+}
+
+function lightboxResetZoom(): void {
+    lightbox.tx = 0;
+    lightbox.ty = 0;
+    lightboxSetScale(lightbox.fit, undefined, true);
+}
+
+function lightboxStagePoint(e: MouseEvent): { x: number; y: number } {
+    const rect = lightboxStage.getBoundingClientRect();
+    return { x: e.clientX - (rect.left + rect.width / 2), y: e.clientY - (rect.top + rect.height / 2) };
+}
+
+function openLightbox(imageUrl: string, meta?: LightboxMeta): void {
+    lightbox.url = imageUrl;
+    lightbox.scale = 1;
+    lightbox.fit = 1;
+    lightbox.tx = 0;
+    lightbox.ty = 0;
+    lightbox.naturalW = 0;
+    lightbox.naturalH = 0;
+    lightboxImage.classList.remove("ready", "zoomed", "dragging");
+
+    // "Sent by" pill — omitted entirely when a caller has no sender info.
+    lightboxSender.textContent = "";
+    if (meta?.senderNickname) {
+        lightboxSender.append("Sent by ");
+        const nick = document.createElement("strong");
+        nick.textContent = meta.senderNickname;
+        lightboxSender.appendChild(nick);
+        if (meta.sentAt) {
+            const when = document.createElement("span");
+            when.className = "lightbox-sent-at";
+            when.textContent = new Date(meta.sentAt).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
+            lightboxSender.appendChild(when);
+        }
+        lightboxSender.hidden = false;
+    } else {
+        lightboxSender.hidden = true;
+    }
+
+    // Set before `src` so a cached image can't finish loading unobserved.
+    lightboxImage.onload = () => {
+        lightbox.naturalW = lightboxImage.naturalWidth;
+        lightbox.naturalH = lightboxImage.naturalHeight;
+        lightboxImage.style.width = `${lightbox.naturalW}px`;
+        lightboxImage.style.height = `${lightbox.naturalH}px`;
+        lightboxImage.style.marginLeft = `${-lightbox.naturalW / 2}px`;
+        lightboxImage.style.marginTop = `${-lightbox.naturalH / 2}px`;
+        lightbox.fit = lightboxComputeFit();
+        lightbox.scale = lightbox.fit;
+        lightbox.tx = 0;
+        lightbox.ty = 0;
+        lightboxApply(false);
+        lightboxImage.classList.add("ready");
+    };
+    lightboxImage.onerror = () => showToast("Couldn't load the image");
     lightboxImage.src = imageUrl;
     imageLightboxModal.classList.add("visible");
+    btnLightboxZoomIn.disabled = true;
+    btnLightboxZoomOut.disabled = true;
 }
 
 function closeLightbox(): void {
     imageLightboxModal.classList.remove("visible");
+    lightboxImage.onload = null;
+    lightboxImage.onerror = null;
     lightboxImage.src = "";
+    lightboxImage.classList.remove("ready", "zoomed", "dragging");
+    lightboxZoomIndicator.classList.remove("visible");
+    lightbox.url = "";
+    lightbox.dragging = false;
 }
 
 imageLightboxModal.addEventListener("click", (e) => {
-    if (e.target === imageLightboxModal) {
+    if (lightbox.suppressClick) return; // the click that ended a pan-drag
+    if (e.target === imageLightboxModal || e.target === lightboxStage) {
         closeLightbox();
     }
 });
@@ -5207,9 +5538,137 @@ btnLightboxClose.addEventListener("click", () => {
 });
 
 btnLightboxDownload.addEventListener("click", () => {
-    const url = lightboxImage.src;
+    const url = lightbox.url;
     if (url) {
         api.downloadImage(url);
+    }
+});
+
+btnLightboxZoomIn.addEventListener("click", () => lightboxStepZoom(1));
+btnLightboxZoomOut.addEventListener("click", () => lightboxStepZoom(-1));
+
+btnLightboxCopyLink.addEventListener("click", async () => {
+    if (!lightbox.url) return;
+    const ok = await api.copyText(lightbox.url);
+    showToast(ok ? "Image link copied" : "Couldn't copy the link");
+});
+
+btnLightboxOpenBrowser.addEventListener("click", async () => {
+    if (!lightbox.url) return;
+    const res = await api.openExternal(lightbox.url);
+    if (!res.success) showToast(escapeHtml(res.error ?? "Couldn't open the link"));
+});
+
+/**
+ * Copies the image itself. The bytes are fetched in the main process (no CORS
+ * restrictions), decoded here and re-encoded as PNG — which also normalises
+ * WebP/GIF (a GIF copies as its first frame) — then handed back to main to
+ * place on the clipboard.
+ */
+btnLightboxCopyImage.addEventListener("click", async () => {
+    const url = lightbox.url;
+    if (!url || lightbox.busy) return;
+    lightbox.busy = true;
+    btnLightboxCopyImage.disabled = true;
+    try {
+        const res = await api.fetchImageBytes(url);
+        if (!res.success || !res.bytes) throw new Error(res.error ?? "Couldn't fetch the image");
+        const bitmap = await createImageBitmap(new Blob([res.bytes as Uint8Array<ArrayBuffer>]));
+        const canvas = document.createElement("canvas");
+        canvas.width = bitmap.width;
+        canvas.height = bitmap.height;
+        canvas.getContext("2d")!.drawImage(bitmap, 0, 0);
+        bitmap.close();
+        const png = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
+        if (!png) throw new Error("Couldn't convert the image");
+        const ok = await api.copyPngToClipboard(new Uint8Array(await png.arrayBuffer()));
+        if (!ok) throw new Error("Couldn't copy the image");
+        showToast("Image copied to clipboard");
+    } catch (err: any) {
+        showToast(escapeHtml(err?.message ?? "Couldn't copy the image"));
+    } finally {
+        lightbox.busy = false;
+        btnLightboxCopyImage.disabled = false;
+    }
+});
+
+// Mouse wheel zooms toward the cursor.
+imageLightboxModal.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    if (!lightbox.naturalW) return;
+    lightboxSetScale(lightbox.scale * Math.exp(-e.deltaY * 0.002), lightboxStagePoint(e));
+}, { passive: false });
+
+// Double-click toggles between fit and 100% (or 200% for an image that is
+// already shown at its natural size).
+lightboxImage.addEventListener("dblclick", (e) => {
+    if (!lightbox.naturalW) return;
+    if (lightboxIsZoomed()) {
+        lightboxResetZoom();
+    } else {
+        lightboxSetScale(lightbox.fit < 1 ? 1 : LIGHTBOX_MAX_SCALE, lightboxStagePoint(e), true);
+    }
+});
+
+// Drag to pan while zoomed in.
+lightboxImage.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0 || !lightboxIsZoomed()) return;
+    lightbox.dragging = true;
+    lightbox.dragMoved = false;
+    lightbox.dragStartX = e.clientX;
+    lightbox.dragStartY = e.clientY;
+    lightbox.dragOriginTx = lightbox.tx;
+    lightbox.dragOriginTy = lightbox.ty;
+    lightboxImage.setPointerCapture(e.pointerId);
+    lightboxImage.classList.add("dragging");
+});
+
+lightboxImage.addEventListener("pointermove", (e) => {
+    if (!lightbox.dragging) return;
+    const dx = e.clientX - lightbox.dragStartX;
+    const dy = e.clientY - lightbox.dragStartY;
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) lightbox.dragMoved = true;
+    lightbox.tx = lightbox.dragOriginTx + dx;
+    lightbox.ty = lightbox.dragOriginTy + dy;
+    lightboxApply(false);
+});
+
+function endLightboxDrag(e: PointerEvent): void {
+    if (!lightbox.dragging) return;
+    lightbox.dragging = false;
+    lightboxImage.classList.remove("dragging");
+    if (lightboxImage.hasPointerCapture(e.pointerId)) lightboxImage.releasePointerCapture(e.pointerId);
+    if (lightbox.dragMoved) {
+        // A drag must not count as a click on the backdrop (which closes).
+        lightbox.suppressClick = true;
+        setTimeout(() => { lightbox.suppressClick = false; }, 0);
+    }
+}
+lightboxImage.addEventListener("pointerup", endLightboxDrag);
+lightboxImage.addEventListener("pointercancel", endLightboxDrag);
+
+// Keep the fitted size correct when the window is resized while open.
+window.addEventListener("resize", () => {
+    if (!imageLightboxModal.classList.contains("visible") || !lightbox.naturalW) return;
+    const wasFit = !lightboxIsZoomed();
+    lightbox.fit = lightboxComputeFit();
+    lightbox.scale = wasFit ? lightbox.fit : Math.min(LIGHTBOX_MAX_SCALE, Math.max(lightbox.fit, lightbox.scale));
+    lightboxApply(false);
+});
+
+// Keyboard zoom: + / - / 0. Only while the viewer is open, and handled keys
+// are swallowed so they can't also reach a chat input underneath.
+document.addEventListener("keydown", (e) => {
+    if (!imageLightboxModal.classList.contains("visible") || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.key === "+" || e.key === "=") {
+        e.preventDefault();
+        lightboxStepZoom(1);
+    } else if (e.key === "-" || e.key === "_") {
+        e.preventDefault();
+        lightboxStepZoom(-1);
+    } else if (e.key === "0") {
+        e.preventDefault();
+        lightboxResetZoom();
     }
 });
 
@@ -5231,12 +5690,212 @@ document.addEventListener("keydown", (e) => {
 let reactionTargetMsgId: string | null = null;
 let reactionTargetIsDm = false;
 
+// ── Reaction hover card (PRD 15.11) ────────────────────────────────────────
+//
+// Hovering a reaction pill for 1s (pointer held still) shows a card with the
+// emoji large, its name, and who reacted. One shared element, event
+// delegation (pills are rebuilt on every REACTION_UPDATED), non-interactive.
+
+const REACTION_CARD_DELAY_MS = 1000;
+const REACTION_CARD_MOVE_TOLERANCE_PX = 4;
+const REACTION_CARD_MAX_NAMES = 3;
+
+/** Which reaction summary each pill element was built from. */
+const reactionPillData = new WeakMap<HTMLElement, ReactionSummary>();
+
+const reactionCard = document.createElement("div");
+reactionCard.id = "reaction-card";
+reactionCard.className = "reaction-card";
+reactionCard.setAttribute("role", "tooltip");
+document.body.appendChild(reactionCard);
+
+let reactionCardPill: HTMLElement | null = null;
+let reactionCardTimer: ReturnType<typeof setTimeout> | null = null;
+let reactionCardAnchor = { x: 0, y: 0 };
+
+/** Unicode emoji -> `:snake_case_name:`, built once from the picker's dataset
+ *  (variation selectors stripped so "❤" and "❤️" resolve the same). */
+let emojiNameLookup: Map<string, string> | null = null;
+function emojiShortName(emoji: string): string | null {
+    if (!emojiNameLookup) {
+        emojiNameLookup = new Map();
+        for (const entry of EMOJI_DATA) {
+            const snake = entry.name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+            emojiNameLookup.set(entry.emoji.replace(/\uFE0F/g, ""), `:${snake}:`);
+        }
+    }
+    return emojiNameLookup.get(emoji.replace(/\uFE0F/g, "")) ?? null;
+}
+
+/** The emoji's display name: a custom emoji's own `:name:`, a known unicode
+ *  emoji's derived short name, or null when it can't be named. */
+function reactionEmojiName(emoji: string): string | null {
+    if (emoji.length > 2 && emoji.startsWith(":") && emoji.endsWith(":")) return emoji;
+    return emojiShortName(emoji);
+}
+
+/** "A", "A and B", "A, B and C", "A, B, C and 2 others" — as DOM nodes so
+ *  nicknames are never parsed as HTML. */
+function buildReactorsText(summary: ReactionSummary): Node[] {
+    const myId = api.getInstanceId();
+    const users = summary.users ?? [];
+    if (users.length === 0) {
+        return [document.createTextNode(`${summary.count} ${summary.count === 1 ? "person" : "people"}`)];
+    }
+
+    const nameNode = (u: { userId: string; nickname: string }): HTMLElement => {
+        const strong = document.createElement("strong");
+        strong.textContent = u.userId === myId ? "You" : u.nickname;
+        return strong;
+    };
+    const shown = users.slice(0, REACTION_CARD_MAX_NAMES);
+    const others = summary.count - shown.length;
+    const nodes: Node[] = [];
+
+    shown.forEach((u, i) => {
+        if (i > 0) {
+            const last = i === shown.length - 1 && others <= 0;
+            nodes.push(document.createTextNode(last ? " and " : ", "));
+        }
+        nodes.push(nameNode(u));
+    });
+    if (others > 0) {
+        nodes.push(document.createTextNode(" and "));
+        const rest = document.createElement("span");
+        rest.className = "reaction-card-others";
+        rest.textContent = `${others} other${others === 1 ? "" : "s"}`;
+        nodes.push(rest);
+    }
+    return nodes;
+}
+
+function hideReactionCard(): void {
+    if (reactionCardTimer) {
+        clearTimeout(reactionCardTimer);
+        reactionCardTimer = null;
+    }
+    reactionCard.classList.remove("visible");
+    reactionCardPill?.removeAttribute("aria-describedby");
+    reactionCardPill = null;
+}
+
+function showReactionCard(pill: HTMLElement): void {
+    const summary = reactionPillData.get(pill);
+    if (!summary || !pill.isConnected) return;
+
+    reactionCard.textContent = "";
+
+    const big = document.createElement("div");
+    big.className = "reaction-card-emoji";
+    big.innerHTML = renderEmojiToken(summary.emoji); // escaped / <img> only for known custom emoji
+    reactionCard.appendChild(big);
+
+    const text = document.createElement("div");
+    text.className = "reaction-card-text";
+    for (const node of buildReactorsText(summary)) text.appendChild(node);
+    const name = reactionEmojiName(summary.emoji);
+    text.appendChild(document.createTextNode(name ? " reacted with " : " reacted"));
+    if (name) {
+        const nameEl = document.createElement("span");
+        nameEl.className = "reaction-card-name";
+        nameEl.textContent = name;
+        text.appendChild(nameEl);
+    }
+    reactionCard.appendChild(text);
+
+    // Position above the pill, centred, flipped below when there's no room
+    // and clamped so it never leaves the window.
+    reactionCard.style.left = "0px";
+    reactionCard.style.top = "0px";
+    const cardRect = reactionCard.getBoundingClientRect();
+    const pillRect = pill.getBoundingClientRect();
+    const margin = 8;
+    const left = Math.min(
+        window.innerWidth - cardRect.width - margin,
+        Math.max(margin, pillRect.left + pillRect.width / 2 - cardRect.width / 2),
+    );
+    let top = pillRect.top - cardRect.height - margin;
+    if (top < margin) top = pillRect.bottom + margin;
+    reactionCard.style.left = `${left}px`;
+    reactionCard.style.top = `${top}px`;
+
+    reactionCardPill = pill;
+    pill.setAttribute("aria-describedby", reactionCard.id);
+    reactionCard.classList.add("visible");
+}
+
+function startReactionCardDwell(pill: HTMLElement): void {
+    if (reactionCardTimer) clearTimeout(reactionCardTimer);
+    reactionCardTimer = setTimeout(() => {
+        reactionCardTimer = null;
+        showReactionCard(pill);
+    }, REACTION_CARD_DELAY_MS);
+}
+
+function reactionPillFrom(target: EventTarget | null): HTMLElement | null {
+    return target instanceof Element ? (target.closest(".reaction-pill") as HTMLElement | null) : null;
+}
+
+document.addEventListener("mouseover", (e) => {
+    const pill = reactionPillFrom(e.target);
+    if (!pill || pill === reactionCardPill) return;
+    hideReactionCard();
+    reactionCardAnchor = { x: e.clientX, y: e.clientY };
+    reactionCardPill = pill; // tracks the pill under the pointer while the dwell runs
+    startReactionCardDwell(pill);
+});
+
+document.addEventListener("mousemove", (e) => {
+    // Only while the dwell is still pending: "hover still" means the pointer
+    // moving more than a few px restarts the wait. Once shown, it stays.
+    if (!reactionCardTimer || !reactionCardPill) return;
+    if (!reactionPillFrom(e.target)) return;
+    const moved = Math.hypot(e.clientX - reactionCardAnchor.x, e.clientY - reactionCardAnchor.y);
+    if (moved > REACTION_CARD_MOVE_TOLERANCE_PX) {
+        reactionCardAnchor = { x: e.clientX, y: e.clientY };
+        startReactionCardDwell(reactionCardPill);
+    }
+});
+
+document.addEventListener("mouseout", (e) => {
+    const pill = reactionPillFrom(e.target);
+    if (!pill) return;
+    const into = e.relatedTarget instanceof Node ? e.relatedTarget : null;
+    if (into && pill.contains(into)) return; // moving between the pill's own children
+    hideReactionCard();
+});
+
+// Keyboard users get it too, immediately (no dwell).
+document.addEventListener("focusin", (e) => {
+    const pill = reactionPillFrom(e.target);
+    if (pill && (e.target as HTMLElement).matches(":focus-visible")) {
+        hideReactionCard();
+        showReactionCard(pill);
+    }
+});
+document.addEventListener("focusout", (e) => {
+    if (reactionPillFrom(e.target)) hideReactionCard();
+});
+
+document.addEventListener("click", (e) => {
+    if (reactionPillFrom(e.target)) hideReactionCard(); // toggling a reaction
+}, true);
+document.addEventListener("scroll", () => hideReactionCard(), true);
+document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") hideReactionCard();
+});
+window.addEventListener("blur", hideReactionCard);
+
 function buildReactionBar(
     msgId: string,
     isDm: boolean,
     ownerId: string,
-    reactions?: Array<{ emoji: string; count: number; userIds: string[] }>,
+    reactions?: ReactionSummary[],
 ): HTMLDivElement {
+    // A bar being (re)built means any open hover card may now describe a
+    // pill that is about to be replaced — close it rather than show stale data.
+    hideReactionCard();
+
     const bar = document.createElement("div");
     bar.className = "msg-reactions";
     bar.setAttribute("data-react-bar", msgId);
@@ -5248,7 +5907,9 @@ function buildReactionBar(
             const pill = document.createElement("button");
             pill.className = "reaction-pill" + (r.userIds.includes(myId) ? " mine" : "");
             pill.innerHTML = `${renderEmojiToken(r.emoji)} <span class="reaction-count">${r.count}</span>`;
-            pill.title = `Reacted by ${r.count} user${r.count > 1 ? "s" : ""}`;
+            // No native `title`: the hover card (PRD 15.11) replaces it, and
+            // both at once would double up.
+            reactionPillData.set(pill, r);
             pill.addEventListener("click", (e) => {
                 e.stopPropagation();
                 api.toggleReaction(msgId, r.emoji, isDm);
@@ -5305,7 +5966,7 @@ function openReactionPicker(msgId: string, isDm: boolean, anchor: HTMLElement): 
 function updateReactionBar(
     msgId: string,
     isDm: boolean,
-    reactions: Array<{ emoji: string; count: number; userIds: string[] }>,
+    reactions: ReactionSummary[],
 ): void {
     // Find all reaction bars for this message (could be in multiple open tabs)
     const bars = document.querySelectorAll(`[data-react-bar="${msgId}"]`);
@@ -5322,7 +5983,7 @@ function updateReactionBar(
 }
 
 // Listen for reaction updates from server
-api.on("reaction-updated", (data: { messageId: string; isDm: boolean; reactions: Array<{ emoji: string; count: number; userIds: string[] }> }) => {
+api.on("reaction-updated", (data: { messageId: string; isDm: boolean; reactions: ReactionSummary[] }) => {
     updateReactionBar(data.messageId, data.isDm, data.reactions);
 });
 
@@ -5436,9 +6097,9 @@ function updatePinBarUI(tab: ChatTab, pinnedMessage: PinnedMessage | null): void
     if (!tab.pinBarEl) return;
     if (pinnedMessage) {
         const textEl = tab.pinBarEl.querySelector(".pinned-bar-text") as HTMLSpanElement;
-        const preview = pinnedMessage.content.length > 100
-            ? `${pinnedMessage.content.slice(0, 100)}…`
-            : pinnedMessage.content;
+        // One line of plain text — never raw Markdown syntax or line breaks.
+        const plain = api.markdownToPlainText(pinnedMessage.content);
+        const preview = plain.length > 100 ? `${plain.slice(0, 100)}…` : plain;
         textEl.textContent = preview || "(attachment only)";
         tab.pinBarEl.dataset.pinnedMsgId = pinnedMessage.id;
         tab.pinBarEl.classList.add("visible");
@@ -5797,8 +6458,8 @@ function startMessageEdit(el: HTMLDivElement, msg: ChatMessage): void {
         // client) and just harmlessly re-applies the same content.
         msg.content = newContent;
         const newTextEl = document.createElement("span");
-        newTextEl.className = isSoloEmojiMessage(newContent) ? "msg-text msg-text-solo-emoji" : "msg-text";
-        newTextEl.innerHTML = linkifyContent(newContent);
+        newTextEl.className = "msg-text";
+        setMessageBody(newTextEl, newContent);
         input.replaceWith(newTextEl);
         if (!el.querySelector(".msg-edited")) {
             el.querySelector(".msg-time")?.insertAdjacentHTML("afterend", `<span class="msg-edited">(edited)</span>`);
@@ -5812,7 +6473,7 @@ function startMessageEdit(el: HTMLDivElement, msg: ChatMessage): void {
     };
 
     const onKeydown = (e: KeyboardEvent) => {
-        if (e.key === "Enter" && !e.shiftKey) {
+        if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
             e.preventDefault();
             finish(true);
         } else if (e.key === "Escape") {
@@ -5832,8 +6493,7 @@ function applyMessageEdit(msg: ChatMessage): void {
         const textEl = el.querySelector(".msg-text") as HTMLElement | null;
         if (textEl) {
             textEl.classList.remove("msg-text-clamped", "msg-text-expanded");
-            textEl.classList.toggle("msg-text-solo-emoji", isSoloEmojiMessage(msg.content));
-            textEl.innerHTML = linkifyContent(msg.content);
+            setMessageBody(textEl, msg.content);
             // Re-evaluate truncation for the other clients viewing this
             // edit too, not just the editor's own optimistic path above.
             el.querySelector(".btn-see-more")?.remove();
@@ -5855,6 +6515,7 @@ api.on("message-edited", (msg: ChatMessage) => {
 api.on("custom-emoji-approved", (data: { serverId: string; emoji: CustomEmoji }) => {
     if (!customEmojis.some((e) => e.id === data.emoji.id)) {
         customEmojis.push(data.emoji);
+        api.setCustomEmojis(customEmojis);
     }
     if (emojiPicker.classList.contains("visible")) {
         renderEmojiGrid(emojiSearch.value);
@@ -6118,6 +6779,7 @@ function insertEmojiAtCursor(emoji: string): void {
     const start = chatInput.selectionStart ?? chatInput.value.length;
     const end = chatInput.selectionEnd ?? start;
     chatInput.setRangeText(emoji, start, end, "end");
+    autosizeChatInput();
     chatInput.focus();
 }
 
@@ -6923,6 +7585,9 @@ btnCheckUpdates.addEventListener("click", async () => {
 // active-speaker hold behavior, so brief pauses between words don't flicker
 // the halo on/off the way a raw instantaneous threshold check would.
 let isLocalSpeaking = false;
+/** True while the PTT key/combo is physically held (PRD 15.3) — the only
+ *  moment the mic actually transmits in push-to-talk mode. */
+let isPttHeld = false;
 let localSpeakingHoldTimer: ReturnType<typeof setTimeout> | null = null;
 
 /** Reuses the noise gate's own threshold when it's enabled (consistent
@@ -6931,6 +7596,28 @@ let localSpeakingHoldTimer: ReturnType<typeof setTimeout> | null = null;
  *  threshold (mediasoup.service.ts). */
 function localSpeakingThreshold(): number {
     return micSensitivityEnabled ? parseInt(micSensitivitySlider.value, 10) : -50;
+}
+
+/** Whether the mic is actually open to other participants right now (PRD
+ *  15.3). The local analyser taps the graph BEFORE mute takes effect, so
+ *  level alone says nothing about whether anyone can hear you. */
+function isLocalMicTransmitting(): boolean {
+    return isInVoice && !isMuted && !isDeafened && (!pttModeEnabled || isPttHeld);
+}
+
+/** Drops the own-voice halo immediately when the mic stops transmitting
+ *  (mute/deafen/PTT release), instead of waiting out the 300ms hold timer.
+ *  Safe to call on every voice-UI refresh: a no-op while transmitting. */
+function refreshLocalSpeakingHalo(): void {
+    if (isLocalMicTransmitting()) return;
+    if (localSpeakingHoldTimer) {
+        clearTimeout(localSpeakingHoldTimer);
+        localSpeakingHoldTimer = null;
+    }
+    if (isLocalSpeaking) {
+        isLocalSpeaking = false;
+        setLocalSpeakingClass(false);
+    }
 }
 
 function setLocalSpeakingClass(speaking: boolean): void {
@@ -6951,7 +7638,7 @@ function startMicLevelMeter(): void {
         // this analyser is reading the settings-preview capture instead,
         // and there's no local `.tree-occupant` row to update anyway.
         if (isInVoice) {
-            const speaking = dB > localSpeakingThreshold();
+            const speaking = isLocalMicTransmitting() && dB > localSpeakingThreshold();
             if (speaking) {
                 if (localSpeakingHoldTimer) {
                     clearTimeout(localSpeakingHoldTimer);

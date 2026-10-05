@@ -5,10 +5,12 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy"
-    content="default-src 'self'; script-src 'self' blob:; connect-src 'self' file: ws: wss: http: https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; media-src 'self' blob: http: https:; img-src 'self' blob: http: https: data:; frame-src https:;">
+    content="default-src 'self'; script-src 'self' blob:; connect-src 'self' file: ws: wss: http: https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; media-src 'self' blob: http: https:; img-src 'self' blob: http: https: data:; frame-src https:;">
   <title>Reson8</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <!-- Vendored Noto Color Emoji (PRD 15.8) — same relative-path convention as the sound alerts / deepfilternet assets -->
+  <link href="../../assets/fonts/noto-color-emoji/noto-color-emoji.css" rel="stylesheet">
   <style>
     /* ── Reset & Variables ─────────────────────────────────────────────── */
     *,
@@ -37,7 +39,24 @@
       --voice-icon: #4fc3f7;
       --text-icon: #ffa726;
       --radius: 6px;
-      --font: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      --font: 'Reson8 Emoji', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      /* Pinned message bar (PRD 15.5) — dark amber so it stands apart from
+         the blue chrome; text/background contrast measured at 9.8:1. */
+      --pin-bg: #4a3b0a;
+      --pin-bg-hover: #5c4a0e;
+      --pin-text: #fff3c4;
+      --pin-accent: #ffd54f;
+      --pin-border: #b8860b;
+    }
+
+    /* Form controls don't inherit font-family by default and fall back to the
+       platform's, which would render emoji in the OS emoji font (PRD 15.8).
+       Putting the vendored emoji family first is safe for ordinary text: its
+       unicode-range only covers emoji code points, so every other character
+       still resolves to system-ui exactly as before. Explicit per-control
+       font-family rules further down still win. */
+    button, input, textarea, select {
+      font-family: 'Reson8 Emoji', system-ui, sans-serif;
     }
 
     body {
@@ -687,9 +706,9 @@
       gap: 8px;
       padding: 6px 12px;
       flex-shrink: 0;
-      background: var(--bg-secondary);
-      border-bottom: 1px solid var(--border);
-      color: var(--text-secondary);
+      background: var(--pin-bg);
+      border-bottom: 1px solid var(--pin-border);
+      color: var(--pin-text);
       cursor: pointer;
       transition: background 0.15s;
     }
@@ -699,12 +718,12 @@
     }
 
     .pinned-bar:hover {
-      background: rgba(99, 102, 241, 0.08);
+      background: var(--pin-bg-hover);
     }
 
     .pinned-bar svg {
       flex-shrink: 0;
-      color: var(--accent);
+      color: var(--pin-accent);
     }
 
     .pinned-bar-text {
@@ -718,7 +737,7 @@
       flex: 1;
       overflow-y: auto;
       padding: 8px 12px;
-      font-family: 'Consolas', 'Monaco', monospace;
+      font-family: 'Reson8 Emoji', 'Consolas', 'Monaco', monospace;
       font-size: 12px;
       line-height: 1.6;
     }
@@ -790,12 +809,79 @@
        (via JS, attachMessageTruncation()) to messages that actually
        overflow this clamp; a short message never gets this class at all,
        so it keeps flowing inline right after the nickname as before. */
-    .chat-msg .msg-text.msg-text-clamped {
+    .chat-msg .msg-text.msg-text-clamped:not(.msg-text-block) {
       display: -webkit-box;
       -webkit-line-clamp: 4;
       -webkit-box-orient: vertical;
       overflow: hidden;
     }
+
+    /* Block (multi-line / Markdown) messages hold nested blocks, which
+       -webkit-line-clamp doesn't clamp reliably — use a height cap instead. */
+    .chat-msg .msg-text.msg-text-block.msg-text-clamped {
+      max-height: calc(1.4em * 4);
+      overflow: hidden;
+    }
+
+    /* ── Markdown inside messages (PRD 15.10) ──────────────────────── */
+    .chat-msg .msg-text.msg-text-block {
+      display: block;
+      margin-top: 2px;
+      overflow-wrap: anywhere;
+    }
+
+    .msg-text p { margin: 0 0 0.35em; }
+    .msg-text > :last-child { margin-bottom: 0; }
+
+    .msg-text blockquote {
+      margin: 0.2em 0;
+      padding: 0 0 0 10px;
+      border-left: 3px solid var(--accent-dim);
+      color: var(--text-secondary);
+    }
+
+    .msg-text ul,
+    .msg-text ol {
+      margin: 0.2em 0;
+      padding-left: 22px;
+    }
+
+    .msg-text h1,
+    .msg-text h2,
+    .msg-text h3 {
+      margin: 0.3em 0 0.2em;
+      line-height: 1.25;
+      font-weight: 700;
+    }
+    .msg-text h1 { font-size: 1.35em; }
+    .msg-text h2 { font-size: 1.2em; }
+    .msg-text h3 { font-size: 1.07em; }
+
+    .msg-text code {
+      font-family: 'Reson8 Emoji', 'Consolas', 'Monaco', monospace;
+      font-size: 0.92em;
+      padding: 1px 4px;
+      border-radius: 4px;
+      background: var(--bg-input);
+    }
+
+    .msg-text pre {
+      margin: 0.3em 0;
+      padding: 8px 10px;
+      border-radius: var(--radius);
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      overflow-x: auto;
+    }
+
+    .msg-text pre code {
+      padding: 0;
+      background: transparent;
+      white-space: pre;
+    }
+
+    .msg-text s,
+    .msg-text del { text-decoration: line-through; }
 
     .btn-see-more {
       /* Must always start its own line, whether the preceding .msg-text is
@@ -933,6 +1019,68 @@
     .reaction-pill.mine {
       border-color: var(--accent);
       background: rgba(99, 102, 241, 0.2);
+    }
+
+    /* ── Reaction hover card (PRD 15.11) ───────────────────────────── */
+    .reaction-card {
+      position: fixed;
+      z-index: 9000;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      max-width: 340px;
+      padding: 10px 14px;
+      border-radius: 10px;
+      background: #0e1626;
+      border: 1px solid var(--border);
+      box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
+      color: var(--text-primary);
+      pointer-events: none;
+      opacity: 0;
+      visibility: hidden;
+      transition: opacity 0.12s, visibility 0.12s;
+    }
+
+    .reaction-card.visible {
+      opacity: 1;
+      visibility: visible;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .reaction-card { transition: none; }
+    }
+
+    /* Same size as an emoji sent alone in a message (4x the 13px body text). */
+    .reaction-card-emoji {
+      flex-shrink: 0;
+      font-size: 52px;
+      line-height: 1;
+    }
+
+    .reaction-card-emoji .custom-emoji-inline {
+      height: 52px;
+      width: auto;
+      vertical-align: top;
+    }
+
+    .reaction-card-text {
+      font-size: 13px;
+      line-height: 1.4;
+      overflow-wrap: anywhere;
+    }
+
+    .reaction-card-text strong {
+      font-weight: 600;
+      color: #fff;
+    }
+
+    .reaction-card-others {
+      color: var(--accent);
+      font-weight: 600;
+    }
+
+    .reaction-card-name {
+      color: var(--text-secondary);
     }
 
     .reaction-count {
@@ -1163,7 +1311,7 @@
     /* Chat input */
     #chat-input-bar {
       display: none;
-      align-items: center;
+      align-items: flex-end; /* the input grows upward-aligned with the buttons (PRD 15.10) */
       gap: 8px;
       padding: 8px 12px;
       border-top: 1px solid var(--border);
@@ -1184,6 +1332,10 @@
       border-radius: var(--radius);
       font-size: 12px;
       font-family: var(--font);
+      line-height: 1.25;
+      resize: none;
+      overflow-y: auto;
+      max-height: 150px; /* ~8 lines, then it scrolls */
       outline: none;
       transition: border-color 0.2s;
     }
@@ -1307,7 +1459,7 @@
       background: rgba(79, 195, 247, 0.12);
     }
 
-    /* ── Image Lightbox ────────────────────────────────────────── */
+    /* ── Image Lightbox (PRD 15.9) ─────────────────────────────── */
     #image-lightbox-modal {
       display: none;
       position: fixed;
@@ -1317,73 +1469,203 @@
       bottom: 0;
       background: rgba(0, 0, 0, 0.85);
       z-index: 200;
-      align-items: center;
-      justify-content: center;
       cursor: pointer;
       -webkit-app-region: no-drag;
     }
 
     #image-lightbox-modal.visible {
-      display: flex;
+      display: block;
+    }
+
+    /* The stage clips the (possibly zoomed) image; the image itself is laid
+       out at its natural pixel size, centred, and scaled/panned purely with
+       `transform` so zooming never triggers layout. */
+    #lightbox-stage {
+      position: absolute;
+      inset: 0;
+      overflow: hidden;
     }
 
     #lightbox-image {
-      max-width: 90vw;
-      max-height: 90vh;
-      border-radius: 8px;
-      object-fit: contain;
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      max-width: none;
+      max-height: none;
+      transform-origin: center center;
+      will-change: transform;
       cursor: default;
+      user-select: none;
+      -webkit-user-drag: none;
       box-shadow: 0 4px 40px rgba(0, 0, 0, 0.5);
+      opacity: 0;
+      transition: opacity 0.12s;
     }
 
-    #btn-lightbox-download {
+    #lightbox-image.ready {
+      opacity: 1;
+    }
+
+    #lightbox-image.zoomed {
+      cursor: grab;
+    }
+
+    #lightbox-image.dragging {
+      cursor: grabbing;
+    }
+
+    .lightbox-toolbar,
+    .lightbox-close,
+    .lightbox-sender,
+    .lightbox-zoom-indicator {
       position: fixed;
+      z-index: 202;
+      background: rgba(30, 30, 40, 0.92);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      color: #e8e8f0;
+      -webkit-app-region: no-drag;
+      cursor: default;
+    }
+
+    .lightbox-toolbar {
+      top: 16px;
+      right: 68px;
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      padding: 4px;
+      border-radius: 10px;
+    }
+
+    .lightbox-toolbar button {
+      position: relative; /* anchors the tooltip; .lightbox-close stays position: fixed */
+    }
+
+    .lightbox-toolbar button,
+    .lightbox-close {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 32px;
+      height: 32px;
+      padding: 0;
+      border: none;
+      border-radius: 7px;
+      background: transparent;
+      color: inherit;
+      cursor: pointer;
+      transition: background 0.12s, color 0.12s;
+    }
+
+    .lightbox-toolbar button:hover:not(:disabled),
+    .lightbox-close:hover {
+      background: rgba(255, 255, 255, 0.14);
+      color: #fff;
+    }
+
+    .lightbox-toolbar button:focus-visible,
+    .lightbox-close:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 1px;
+    }
+
+    .lightbox-toolbar button:disabled {
+      opacity: 0.35;
+      cursor: not-allowed;
+    }
+
+    .lightbox-sep {
+      width: 1px;
+      height: 18px;
+      margin: 0 3px;
+      background: rgba(255, 255, 255, 0.18);
+    }
+
+    /* Close is separate from the toolbar pill, at the far top-right. */
+    .lightbox-close {
       top: 16px;
       right: 16px;
-      background: rgba(255, 255, 255, 0.15);
-      border: 1px solid rgba(255, 255, 255, 0.25);
-      color: #fff;
-      border-radius: 8px;
-      padding: 8px 14px;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      font-size: 12px;
-      font-family: var(--font);
-      font-weight: 500;
-      transition: all 0.15s;
-      z-index: 201;
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
     }
 
-    #btn-lightbox-download:hover {
-      background: rgba(255, 255, 255, 0.3);
-      border-color: rgba(255, 255, 255, 0.5);
-    }
-
-    #btn-lightbox-close {
-      position: fixed;
+    .lightbox-sender {
       top: 16px;
       left: 16px;
-      background: rgba(220, 38, 38, 0.25);
-      border: 1px solid rgba(220, 38, 38, 0.5);
-      color: #fff;
-      border-radius: 8px;
-      padding: 8px 14px;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      gap: 6px;
+      max-width: calc(100vw - 420px);
+      padding: 8px 12px;
+      border-radius: 10px;
       font-size: 12px;
-      font-family: var(--font);
-      font-weight: 500;
-      transition: all 0.15s;
-      z-index: 201;
+      line-height: 1.3;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
 
-    #btn-lightbox-close:hover {
-      background: rgba(220, 38, 38, 0.45);
-      border-color: rgba(220, 38, 38, 0.7);
+    .lightbox-sender[hidden] {
+      display: none;
+    }
+
+    .lightbox-sender strong {
+      color: #fff;
+      font-weight: 600;
+    }
+
+    .lightbox-sender .lightbox-sent-at {
+      color: var(--text-secondary);
+      margin-left: 6px;
+    }
+
+    .lightbox-zoom-indicator {
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 4px 12px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 600;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s;
+    }
+
+    .lightbox-zoom-indicator.visible {
+      opacity: 1;
+    }
+
+    /* Instant, consistent tooltips (the native `title` one takes ~1s). */
+    .lightbox-toolbar [data-tooltip]::after,
+    .lightbox-close[data-tooltip]::after {
+      content: attr(data-tooltip);
+      position: absolute;
+      top: calc(100% + 8px);
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 4px 8px;
+      border-radius: 6px;
+      background: #000;
+      color: #fff;
+      font-size: 11px;
+      font-weight: 500;
+      white-space: nowrap;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.12s;
+      z-index: 203;
+    }
+
+    .lightbox-close[data-tooltip]::after {
+      left: auto;
+      right: 0;
+      transform: none;
+    }
+
+    .lightbox-toolbar [data-tooltip]:hover::after,
+    .lightbox-toolbar [data-tooltip]:focus-visible::after,
+    .lightbox-close[data-tooltip]:hover::after,
+    .lightbox-close[data-tooltip]:focus-visible::after {
+      opacity: 1;
     }
 
     /* ── Video Lightbox ──────────────────────────────────────────────── */
@@ -1459,7 +1741,7 @@
 
     .status-latency {
       font-size: 10px;
-      font-family: monospace;
+      font-family: 'Reson8 Emoji', monospace;
       font-variant-numeric: tabular-nums;
       margin-left: 6px;
       opacity: 0.85;
@@ -1473,7 +1755,7 @@
       display: flex;
       align-items: center;
       gap: 6px;
-      font-family: monospace;
+      font-family: 'Reson8 Emoji', monospace;
       color: var(--text-muted);
       font-size: 10px;
       user-select: text;
@@ -1858,7 +2140,7 @@
 
     .admin-user-id {
       font-size: 9px;
-      font-family: monospace;
+      font-family: 'Reson8 Emoji', monospace;
       color: var(--text-muted);
       white-space: nowrap;
       overflow: hidden;
@@ -2295,9 +2577,19 @@
       flex-shrink: 0;
     }
 
-    .btn-ban:hover {
+    .btn-ban:not(:disabled):hover {
       background: #e74c3c;
       color: #fff;
+    }
+
+    /* Your own row (PRD 15.4): shown but inert, so the rows stay visually
+       consistent instead of the button vanishing. */
+    .btn-ban:disabled {
+      color: var(--text-muted);
+      border-color: var(--border);
+      background: transparent;
+      cursor: not-allowed;
+      opacity: 0.6;
     }
 
     .btn-nudge {
@@ -3303,7 +3595,7 @@
         <input type="file" id="file-input" accept="image/jpeg,image/png,image/gif,image/webp" style="display:none;">
         <button id="btn-attach" title="Attach Image"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></button>
         <button id="btn-emoji" title="Emoji"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg></button>
-        <input type="text" id="chat-input" placeholder="Type a message...">
+        <textarea id="chat-input" rows="1" placeholder="Type a message..."></textarea>
         <button id="btn-send">Send</button>
       </div>
       <div id="attachment-preview"></div>
@@ -3969,24 +4261,23 @@
     </div>
   </div>
 
-  <!-- ── Image Lightbox Modal ───────────────────────────────────── -->
+  <!-- ── Image Lightbox Modal (PRD 15.9) ─────────────────────────── -->
   <div id="image-lightbox-modal">
-    <img id="lightbox-image" src="" alt="Expanded image">
-    <button id="btn-lightbox-close" title="Close">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <line x1="18" y1="6" x2="6" y2="18"/>
-        <line x1="6" y1="6" x2="18" y2="18"/>
-      </svg>
-      Close
-    </button>
-    <button id="btn-lightbox-download" title="Download Image">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-        <polyline points="7 10 12 15 17 10"/>
-        <line x1="12" y1="15" x2="12" y2="3"/>
-      </svg>
-      Download
-    </button>
+    <div id="lightbox-stage">
+      <img id="lightbox-image" src="" alt="Expanded image" draggable="false">
+    </div>
+    <div id="lightbox-sender" class="lightbox-sender" hidden></div>
+    <div class="lightbox-toolbar" role="toolbar" aria-label="Image actions">
+      <button type="button" id="btn-lightbox-zoom-in" data-tooltip="Zoom In" aria-label="Zoom In"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg></button>
+      <button type="button" id="btn-lightbox-zoom-out" data-tooltip="Zoom Out" aria-label="Zoom Out"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/></svg></button>
+      <span class="lightbox-sep" aria-hidden="true"></span>
+      <button type="button" id="btn-lightbox-copy-image" data-tooltip="Copy Image" aria-label="Copy Image"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/></svg></button>
+      <button type="button" id="btn-lightbox-copy-link" data-tooltip="Copy Link" aria-label="Copy Link"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></button>
+      <button type="button" id="btn-lightbox-open-browser" data-tooltip="Open in Browser" aria-label="Open in Browser"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg></button>
+      <button type="button" id="btn-lightbox-download" data-tooltip="Download" aria-label="Download"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button>
+    </div>
+    <button type="button" id="btn-lightbox-close" class="lightbox-close" data-tooltip="Close" aria-label="Close"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    <div id="lightbox-zoom-indicator" class="lightbox-zoom-indicator" aria-live="polite"></div>
   </div>
 
   <!-- ── Video Lightbox Modal ───────────────────────────────────── -->

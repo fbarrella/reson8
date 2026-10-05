@@ -20,6 +20,8 @@ import { PermissionFlags } from "@reson8/shared-types";
 import { requirePermission } from "../middleware/permissions.middleware.js";
 import { deleteAttachment } from "../services/storage.service.js";
 import { DEFAULT_MAX_MESSAGE_LENGTH } from "../config/message.config.js";
+import { normalizeNewlines } from "../services/message-text.js";
+import { aggregateReactionRows, loadReactorNicknames } from "../services/reaction.service.js";
 
 type TypedIO = SocketIOServer<
     ClientToServerEvents,
@@ -52,18 +54,9 @@ type MessageWithRelations = {
     reactions: { emoji: string; userId: string }[];
 };
 
-/** Maps a Prisma message row (with user + reactions included) to the wire DTO. */
-function toMessageDto(m: MessageWithRelations): IMessage {
-    const rMap = new Map<string, string[]>();
-    for (const r of m.reactions) {
-        let list = rMap.get(r.emoji);
-        if (!list) { list = []; rMap.set(r.emoji, list); }
-        list.push(r.userId);
-    }
-    const reactions = Array.from(rMap.entries()).map(([emoji, userIds]) => ({
-        emoji, count: userIds.length, userIds,
-    }));
-
+/** Maps a Prisma message row (with user + reactions included) to the wire DTO.
+ *  `reactorNicknames` is the batch-loaded nickname lookup (PRD 15.11). */
+function toMessageDto(m: MessageWithRelations, reactorNicknames: ReadonlyMap<string, string>): IMessage {
     return {
         id: m.id,
         channelId: m.channelId,
@@ -73,8 +66,20 @@ function toMessageDto(m: MessageWithRelations): IMessage {
         attachmentUrl: m.attachmentUrl,
         createdAt: m.createdAt.toISOString(),
         editedAt: m.editedAt?.toISOString() ?? null,
-        reactions,
+        reactions: aggregateReactionRows(m.reactions, reactorNicknames),
     };
+}
+
+/** Maps a whole fetched page, resolving every reactor's nickname in ONE query. */
+async function toMessageDtos(
+    prisma: FastifyInstance["prisma"],
+    messages: MessageWithRelations[],
+): Promise<IMessage[]> {
+    const nicknames = await loadReactorNicknames(
+        prisma,
+        messages.flatMap((m) => m.reactions.map((r) => r.userId)),
+    );
+    return messages.map((m) => toMessageDto(m, nicknames));
 }
 
 /**
@@ -88,7 +93,8 @@ export function registerMessageHandlers(
         // ── SEND_MESSAGE ───────────────────────────────────────────────────
         socket.on("SEND_MESSAGE", async (payload, ack) => {
             try {
-                const { channelId, content, attachmentUrl, attachmentPublicId } = payload;
+                const { channelId, attachmentUrl, attachmentPublicId } = payload;
+                const content = normalizeNewlines(payload.content);
 
                 if ((!content || content.trim().length === 0) && !attachmentUrl) {
                     ack({ success: false });
@@ -221,7 +227,7 @@ export function registerMessageHandlers(
                         }),
                     ]);
 
-                    dtos = [...beforeMsgs.reverse(), targetMsg, ...afterMsgs].map(toMessageDto);
+                    dtos = await toMessageDtos(app.prisma, [...beforeMsgs.reverse(), targetMsg, ...afterMsgs]);
                 } else {
                     const where: any = { channelId };
                     if (before) {
@@ -235,7 +241,7 @@ export function registerMessageHandlers(
                         include: messageInclude,
                     });
 
-                    dtos = messages.reverse().map(toMessageDto);
+                    dtos = await toMessageDtos(app.prisma, messages.reverse());
                 }
 
                 // Only resolve the channel's current pin on the initial load
@@ -355,8 +361,8 @@ export function registerMessageHandlers(
         // ── EDIT_MESSAGE ─────────────────────────────────────────────────────
         socket.on("EDIT_MESSAGE", async (payload, ack) => {
             try {
-                const { messageId, content } = payload;
-                const trimmed = content?.trim() ?? "";
+                const { messageId } = payload;
+                const trimmed = normalizeNewlines(payload.content).trim();
                 if (!trimmed) {
                     ack({ success: false, error: "Message content cannot be empty" });
                     return;
