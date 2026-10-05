@@ -1837,3 +1837,62 @@ Feature/Fix: PRD 15.5 — Pinned message bar to dark yellow
     pinned.
 
   Next Step: PRD 15.6 — remember window size and position between sessions.
+
+
+--- Entry: 04/10/2026 ---
+
+Feature/Fix: PRD 15.6 — Remember window size and position between sessions
+
+  Problem: `createWindow()` always opened a hard-coded 1024x768 window, so
+  users had to resize/reposition the app on every launch.
+
+  Solution: Persist the main window's bounds and maximized state and
+  restore them, validated against the displays that exist at launch.
+
+  Client Changes:
+    - New `src/window-state.ts`, hand-rolled (no new dependency — avoids
+      the unmaintained `electron-window-state` and this project's history
+      of dependency surprises). State is JSON at
+      `app.getPath("userData")/window-state.json`.
+    - `sanitizeWindowState()` is a pure function: rejects non-finite /
+      non-numeric / null input (falls back to defaults), clamps width and
+      height to the target display's work area and to the 800x600 minimum,
+      and only keeps x/y if at least 100x50px of the window still
+      overlaps some display's work area (title bar stays reachable) —
+      otherwise x/y are dropped so Electron centers the window. A kept
+      position is pulled back inside its display. The primary display is
+      the fallback target.
+    - `loadWindowState()` reads the file; missing/corrupt JSON yields the
+      defaults, never an exception.
+    - `trackWindowState(win)` saves on `resize`/`move`/`maximize`/
+      `unmaximize` (debounced 500ms) and flushes on `close`. It saves
+      `getNormalBounds()` so maximizing never overwrites the size the user
+      returns to on un-maximize, skips minimized/hidden/fullscreen windows
+      (their bounds aren't what the user chose), and writes atomically
+      (temp file + `renameSync`).
+    - `main.ts`: `createWindow()` builds the BrowserWindow from the loaded
+      state (x/y omitted when unknown), calls `maximize()` if it was
+      maximized, then `trackWindowState()`. minWidth/minHeight unchanged.
+      Viewer window and Settings modal deliberately not covered.
+    - Known limitation (documented in the module header): on Wayland the
+      compositor ignores app-requested positions, so only size and
+      maximized state restore there.
+
+  Key Files Modified:
+    apps/client/src/window-state.ts (NEW)
+    apps/client/src/main.ts
+
+  Verification:
+    `npx tsc --noEmit` in `apps/client` — clean. Exercised
+    `sanitizeWindowState` directly (built output with `electron` stubbed)
+    against 11 cases — valid on primary, valid on a second monitor,
+    second monitor unplugged (position dropped, size kept), only 30px
+    visible (dropped), tiny size (raised to minimum), oversized (clamped
+    to the display), window sticking out the right edge (pulled in),
+    NaN/string/null fields, null input, no displays, size-only state —
+    all produced the intended output. NOT run: the actual Electron
+    window lifecycle (resize, quit, relaunch, maximize, deleting/
+    corrupting the file, real multi-monitor) — left to the user.
+
+  Next Step: PRD 15.7 — Windows freeze after re-clicking the app icon
+  (needs a Windows hand-test).

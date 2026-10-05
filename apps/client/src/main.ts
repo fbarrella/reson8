@@ -12,6 +12,7 @@ import { autoUpdater, NsisUpdater } from "electron-updater";
 import { startCapture, resolvePidForWindowSourceId, listAudioProducingApps, platformSupportsCapture } from "@reson8/native-audio";
 import type { CaptureHandle } from "@reson8/native-audio";
 import MarkdownIt from "markdown-it";
+import { loadWindowState, trackWindowState } from "./window-state.js";
 
 // ── Single-instance lock (PRD 13.18) ────────────────────────────────────
 // Requested as early as possible, before any other startup work. Opening
@@ -440,9 +441,20 @@ function createWindow(): void {
         }
     });
 
-    mainWindow = new BrowserWindow({
+    const savedWindowState = loadWindowState({
         width: 1024,
         height: 768,
+        minWidth: 800,
+        minHeight: 600,
+    });
+
+    mainWindow = new BrowserWindow({
+        // x/y are omitted when no safe saved position exists, so Electron
+        // centers the window as before (PRD 15.6).
+        x: savedWindowState.x,
+        y: savedWindowState.y,
+        width: savedWindowState.width,
+        height: savedWindowState.height,
         minWidth: 800,
         minHeight: 600,
         title: "Reson8",
@@ -454,6 +466,9 @@ function createWindow(): void {
             sandbox: false,
         },
     });
+
+    if (savedWindowState.isMaximized) mainWindow.maximize();
+    trackWindowState(mainWindow);
 
     mainWindow.loadFile(path.join(__dirname, "renderer", "index.html"));
 
