@@ -13,6 +13,7 @@ import type {
     InterServerEvents,
     SocketData,
 } from "@reson8/shared-types";
+import { aggregateReactionsForMessage } from "../services/reaction.service.js";
 
 type TypedIO = SocketIOServer<
     ClientToServerEvents,
@@ -20,40 +21,6 @@ type TypedIO = SocketIOServer<
     InterServerEvents,
     SocketData
 >;
-
-/**
- * Aggregate reactions for a given message (channel or DM) into
- * a compact array of { emoji, count, userIds }.
- */
-async function aggregateReactions(
-    prisma: FastifyInstance["prisma"],
-    messageId: string,
-    isDm: boolean,
-): Promise<Array<{ emoji: string; count: number; userIds: string[] }>> {
-    const where = isDm ? { dmId: messageId } : { messageId };
-    const rows = await prisma.reaction.findMany({
-        where,
-        select: { emoji: true, userId: true },
-        orderBy: { createdAt: "asc" },
-    });
-
-    // Group by emoji
-    const map = new Map<string, string[]>();
-    for (const row of rows) {
-        let list = map.get(row.emoji);
-        if (!list) {
-            list = [];
-            map.set(row.emoji, list);
-        }
-        list.push(row.userId);
-    }
-
-    return Array.from(map.entries()).map(([emoji, userIds]) => ({
-        emoji,
-        count: userIds.length,
-        userIds,
-    }));
-}
 
 export function registerReactionHandlers(
     io: TypedIO,
@@ -119,7 +86,7 @@ export function registerReactionHandlers(
                 }
 
                 // Aggregate and broadcast
-                const reactions = await aggregateReactions(app.prisma, messageId, isDm);
+                const reactions = await aggregateReactionsForMessage(app.prisma, messageId, isDm);
                 io.to(`server:${socket.data.serverId}`).emit("REACTION_UPDATED", {
                     messageId,
                     isDm,

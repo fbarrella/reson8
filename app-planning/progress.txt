@@ -2227,3 +2227,105 @@ Feature/Fix: PRD 15.10 — Multi-line messages + Markdown rendering
 
   Next Step: PRD 15.11 — reaction hover card (the only item that changes
   the wire format, additively).
+
+
+--- Entry: 04/10/2026 ---
+
+Feature/Fix: PRD 15.11 — Reaction hover card
+
+  Problem: A reaction pill only showed the small emoji and a count, so it
+  was often hard to tell which emoji it was or who reacted. The wire format
+  carried only `userIds`, and the `Reaction` table has no relation to
+  `User`, so the client could not name reactors (especially offline ones).
+  Reaction aggregation was also copy-pasted in three places.
+
+  Solution: A hover card modeled on the two Discord reference screenshots,
+  plus the server data it needs.
+
+  Shared Types Changes:
+    - New `IReactionSummary { emoji, count, userIds, users? }` where
+      `users` is `Array<{ userId, nickname }>` aligned with `userIds`.
+      Additive and optional, so a client talking to an older server (or
+      vice versa) keeps working; `userIds`/`count` are unchanged. Replaces
+      the inline object type in `IMessage`, `IDirectMessage` and
+      `REACTION_UPDATED`.
+
+  Server Changes:
+    - New `services/reaction.service.ts`: pure `aggregateReactionRows(rows,
+      nicknameById)` (emoji ordered by first reaction, reactors
+      chronologically, "Unknown" fallback for a deleted user),
+      `loadReactorNicknames()` (ONE `user.findMany` per batch — a history
+      page of 20 messages costs 1 extra query, not N) and
+      `aggregateReactionsForMessage()`.
+    - `reaction.handler.ts` (its private `aggregateReactions` removed),
+      `message.handler.ts` (`toMessageDto` now takes the nickname map; new
+      `toMessageDtos()` batch helper for both the normal and
+      around-a-message fetch paths) and `dm.handler.ts` (FETCH_DIRECT_MESSAGES)
+      all use the service — the duplication is gone rather than tripled.
+    - Nicknames are the user's CURRENT nickname (`User.nickname` is
+      refreshed on every join).
+
+  Client Changes:
+    - One shared `#reaction-card` element appended to `document.body`
+      (outside any overflow:hidden message container), event-delegated on
+      `document` since pills are rebuilt on every REACTION_UPDATED. Pill ->
+      summary mapping kept in a WeakMap; the pill's native `title` removed
+      so the two don't double up.
+    - Trigger: 1000ms dwell with the pointer held "still" — moving more
+      than 4px while the dwell is pending restarts it; once shown it stays
+      until the pointer leaves. Hidden on mouseleave, click (toggling a
+      reaction), scroll, Escape, window blur, focus loss, and whenever a
+      reaction bar is (re)built (so it can't show stale data). Keyboard
+      users get it immediately on `:focus-visible`.
+    - Content: big emoji (52px = the solo-emoji size; custom emoji `<img>`
+      52px tall) + text. One reactor "A reacted with :name:", up to three
+      names then "and N other(s)" (accent-colored, static): "A, B, C and 1
+      other reacted with :red_heart:". Your own entry reads "You". Names are
+      added as text nodes (a nickname like `Bo<b>b` stays literal text — an
+      injected `<b>` is never created). Unicode emoji names come from the
+      picker's EMOJI_DATA, snake_cased (`:thumbs_up:`, `:red_heart:`;
+      tolerant of U+FE0F); custom emoji show their own `:name:`; an emoji
+      that can't be named just says "reacted". Old-server fallback (no
+      `users`): "N people reacted".
+    - Positioned above the pill, flipped below when there's no room, and
+      clamped horizontally to the window; `pointer-events: none`,
+      `role="tooltip"`, `aria-describedby` while shown,
+      `prefers-reduced-motion` respected.
+    - Renderer now has a local `ReactionSummary` type replacing five inline
+      copies of the reaction object type.
+
+  Key Files Modified:
+    packages/shared-types/src/models.ts
+    packages/shared-types/src/socket-events.ts
+    apps/server/src/services/reaction.service.ts (NEW)
+    apps/server/src/__tests__/reaction.service.test.ts (NEW)
+    apps/server/src/handlers/reaction.handler.ts
+    apps/server/src/handlers/message.handler.ts
+    apps/server/src/handlers/dm.handler.ts
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/renderer/index.html
+
+  Verification:
+    `npx tsc --build` (shared-types) then `npx tsc --noEmit` in
+    `apps/server` and `apps/client` — clean. `npm run test` (server) —
+    35/35 pass (5 new: empty input, original `emoji/count/userIds` fields
+    identical to the old aggregation, ordering, nickname alignment,
+    unknown-user fallback). Hover card exercised in the REAL built app with
+    trusted mouse events over the DevTools protocol: absent at 0.5s, shown
+    at 1.3s; moving 6px at 0.7s restarts the dwell (hidden at 1.2s, shown
+    at 2.0s); correct text for 1 reactor, 4 reactors ("... Ageemo and 1
+    other reacted with :red_heart:"), own reaction ("You and Bob"), custom
+    emoji (image shown, `Bo<b>b` rendered as text, 0 injected elements) and
+    a flag ("flag_brazil"); hides on leave, scroll, Escape and a bar
+    rebuild; near the window's top edge it flips below the pill and stays
+    inside the window. Screenshots match the reference layout. NOT tested:
+    the server handlers against a real database (only typecheck + the pure
+    aggregation tests — Postgres wasn't running), so live
+    REACTION_UPDATED/history payloads carrying `users` are unverified end
+    to end; also not tested: click-to-hide, keyboard focus trigger, real
+    channel/DM messages (the demo built reaction bars directly), and
+    reactions on an older server.
+
+  Next Step: all PRD 15 items are implemented — remaining after the user's
+  review: bump versions (/bump-version), write the release notes, and
+  update the three CLAUDE.md files and README.md.

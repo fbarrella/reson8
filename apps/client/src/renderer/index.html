@@ -1021,6 +1021,68 @@
       background: rgba(99, 102, 241, 0.2);
     }
 
+    /* ── Reaction hover card (PRD 15.11) ───────────────────────────── */
+    .reaction-card {
+      position: fixed;
+      z-index: 9000;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      max-width: 340px;
+      padding: 10px 14px;
+      border-radius: 10px;
+      background: #0e1626;
+      border: 1px solid var(--border);
+      box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
+      color: var(--text-primary);
+      pointer-events: none;
+      opacity: 0;
+      visibility: hidden;
+      transition: opacity 0.12s, visibility 0.12s;
+    }
+
+    .reaction-card.visible {
+      opacity: 1;
+      visibility: visible;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .reaction-card { transition: none; }
+    }
+
+    /* Same size as an emoji sent alone in a message (4x the 13px body text). */
+    .reaction-card-emoji {
+      flex-shrink: 0;
+      font-size: 52px;
+      line-height: 1;
+    }
+
+    .reaction-card-emoji .custom-emoji-inline {
+      height: 52px;
+      width: auto;
+      vertical-align: top;
+    }
+
+    .reaction-card-text {
+      font-size: 13px;
+      line-height: 1.4;
+      overflow-wrap: anywhere;
+    }
+
+    .reaction-card-text strong {
+      font-weight: 600;
+      color: #fff;
+    }
+
+    .reaction-card-others {
+      color: var(--accent);
+      font-weight: 600;
+    }
+
+    .reaction-card-name {
+      color: var(--text-secondary);
+    }
+
     .reaction-count {
       font-size: 10px;
       font-variant-numeric: tabular-nums;

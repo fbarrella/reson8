@@ -7,6 +7,16 @@
  *   - Bottom: Voice controls + status bar
  */
 
+/** One emoji's reactions on a message (mirrors shared-types' IReactionSummary).
+ *  `users` (PRD 15.11) carries reactor nicknames, aligned with `userIds`; it is
+ *  absent when talking to a server that predates it. */
+interface ReactionSummary {
+    emoji: string;
+    count: number;
+    userIds: string[];
+    users?: Array<{ userId: string; nickname: string }>;
+}
+
 interface ChatMessage {
     id: string;
     channelId: string;
@@ -16,7 +26,7 @@ interface ChatMessage {
     attachmentUrl?: string | null;
     createdAt: string;
     editedAt?: string | null;
-    reactions?: Array<{ emoji: string; count: number; userIds: string[] }>;
+    reactions?: ReactionSummary[];
 }
 
 interface PinnedMessage {
@@ -35,7 +45,7 @@ interface DirectMessage {
     attachmentUrl?: string | null;
     createdAt: string;
     readAt?: string | null;
-    reactions?: Array<{ emoji: string; count: number; userIds: string[] }>;
+    reactions?: ReactionSummary[];
 }
 
 interface CustomEmoji {
@@ -5680,12 +5690,212 @@ document.addEventListener("keydown", (e) => {
 let reactionTargetMsgId: string | null = null;
 let reactionTargetIsDm = false;
 
+// ── Reaction hover card (PRD 15.11) ────────────────────────────────────────
+//
+// Hovering a reaction pill for 1s (pointer held still) shows a card with the
+// emoji large, its name, and who reacted. One shared element, event
+// delegation (pills are rebuilt on every REACTION_UPDATED), non-interactive.
+
+const REACTION_CARD_DELAY_MS = 1000;
+const REACTION_CARD_MOVE_TOLERANCE_PX = 4;
+const REACTION_CARD_MAX_NAMES = 3;
+
+/** Which reaction summary each pill element was built from. */
+const reactionPillData = new WeakMap<HTMLElement, ReactionSummary>();
+
+const reactionCard = document.createElement("div");
+reactionCard.id = "reaction-card";
+reactionCard.className = "reaction-card";
+reactionCard.setAttribute("role", "tooltip");
+document.body.appendChild(reactionCard);
+
+let reactionCardPill: HTMLElement | null = null;
+let reactionCardTimer: ReturnType<typeof setTimeout> | null = null;
+let reactionCardAnchor = { x: 0, y: 0 };
+
+/** Unicode emoji -> `:snake_case_name:`, built once from the picker's dataset
+ *  (variation selectors stripped so "❤" and "❤️" resolve the same). */
+let emojiNameLookup: Map<string, string> | null = null;
+function emojiShortName(emoji: string): string | null {
+    if (!emojiNameLookup) {
+        emojiNameLookup = new Map();
+        for (const entry of EMOJI_DATA) {
+            const snake = entry.name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+            emojiNameLookup.set(entry.emoji.replace(/\uFE0F/g, ""), `:${snake}:`);
+        }
+    }
+    return emojiNameLookup.get(emoji.replace(/\uFE0F/g, "")) ?? null;
+}
+
+/** The emoji's display name: a custom emoji's own `:name:`, a known unicode
+ *  emoji's derived short name, or null when it can't be named. */
+function reactionEmojiName(emoji: string): string | null {
+    if (emoji.length > 2 && emoji.startsWith(":") && emoji.endsWith(":")) return emoji;
+    return emojiShortName(emoji);
+}
+
+/** "A", "A and B", "A, B and C", "A, B, C and 2 others" — as DOM nodes so
+ *  nicknames are never parsed as HTML. */
+function buildReactorsText(summary: ReactionSummary): Node[] {
+    const myId = api.getInstanceId();
+    const users = summary.users ?? [];
+    if (users.length === 0) {
+        return [document.createTextNode(`${summary.count} ${summary.count === 1 ? "person" : "people"}`)];
+    }
+
+    const nameNode = (u: { userId: string; nickname: string }): HTMLElement => {
+        const strong = document.createElement("strong");
+        strong.textContent = u.userId === myId ? "You" : u.nickname;
+        return strong;
+    };
+    const shown = users.slice(0, REACTION_CARD_MAX_NAMES);
+    const others = summary.count - shown.length;
+    const nodes: Node[] = [];
+
+    shown.forEach((u, i) => {
+        if (i > 0) {
+            const last = i === shown.length - 1 && others <= 0;
+            nodes.push(document.createTextNode(last ? " and " : ", "));
+        }
+        nodes.push(nameNode(u));
+    });
+    if (others > 0) {
+        nodes.push(document.createTextNode(" and "));
+        const rest = document.createElement("span");
+        rest.className = "reaction-card-others";
+        rest.textContent = `${others} other${others === 1 ? "" : "s"}`;
+        nodes.push(rest);
+    }
+    return nodes;
+}
+
+function hideReactionCard(): void {
+    if (reactionCardTimer) {
+        clearTimeout(reactionCardTimer);
+        reactionCardTimer = null;
+    }
+    reactionCard.classList.remove("visible");
+    reactionCardPill?.removeAttribute("aria-describedby");
+    reactionCardPill = null;
+}
+
+function showReactionCard(pill: HTMLElement): void {
+    const summary = reactionPillData.get(pill);
+    if (!summary || !pill.isConnected) return;
+
+    reactionCard.textContent = "";
+
+    const big = document.createElement("div");
+    big.className = "reaction-card-emoji";
+    big.innerHTML = renderEmojiToken(summary.emoji); // escaped / <img> only for known custom emoji
+    reactionCard.appendChild(big);
+
+    const text = document.createElement("div");
+    text.className = "reaction-card-text";
+    for (const node of buildReactorsText(summary)) text.appendChild(node);
+    const name = reactionEmojiName(summary.emoji);
+    text.appendChild(document.createTextNode(name ? " reacted with " : " reacted"));
+    if (name) {
+        const nameEl = document.createElement("span");
+        nameEl.className = "reaction-card-name";
+        nameEl.textContent = name;
+        text.appendChild(nameEl);
+    }
+    reactionCard.appendChild(text);
+
+    // Position above the pill, centred, flipped below when there's no room
+    // and clamped so it never leaves the window.
+    reactionCard.style.left = "0px";
+    reactionCard.style.top = "0px";
+    const cardRect = reactionCard.getBoundingClientRect();
+    const pillRect = pill.getBoundingClientRect();
+    const margin = 8;
+    const left = Math.min(
+        window.innerWidth - cardRect.width - margin,
+        Math.max(margin, pillRect.left + pillRect.width / 2 - cardRect.width / 2),
+    );
+    let top = pillRect.top - cardRect.height - margin;
+    if (top < margin) top = pillRect.bottom + margin;
+    reactionCard.style.left = `${left}px`;
+    reactionCard.style.top = `${top}px`;
+
+    reactionCardPill = pill;
+    pill.setAttribute("aria-describedby", reactionCard.id);
+    reactionCard.classList.add("visible");
+}
+
+function startReactionCardDwell(pill: HTMLElement): void {
+    if (reactionCardTimer) clearTimeout(reactionCardTimer);
+    reactionCardTimer = setTimeout(() => {
+        reactionCardTimer = null;
+        showReactionCard(pill);
+    }, REACTION_CARD_DELAY_MS);
+}
+
+function reactionPillFrom(target: EventTarget | null): HTMLElement | null {
+    return target instanceof Element ? (target.closest(".reaction-pill") as HTMLElement | null) : null;
+}
+
+document.addEventListener("mouseover", (e) => {
+    const pill = reactionPillFrom(e.target);
+    if (!pill || pill === reactionCardPill) return;
+    hideReactionCard();
+    reactionCardAnchor = { x: e.clientX, y: e.clientY };
+    reactionCardPill = pill; // tracks the pill under the pointer while the dwell runs
+    startReactionCardDwell(pill);
+});
+
+document.addEventListener("mousemove", (e) => {
+    // Only while the dwell is still pending: "hover still" means the pointer
+    // moving more than a few px restarts the wait. Once shown, it stays.
+    if (!reactionCardTimer || !reactionCardPill) return;
+    if (!reactionPillFrom(e.target)) return;
+    const moved = Math.hypot(e.clientX - reactionCardAnchor.x, e.clientY - reactionCardAnchor.y);
+    if (moved > REACTION_CARD_MOVE_TOLERANCE_PX) {
+        reactionCardAnchor = { x: e.clientX, y: e.clientY };
+        startReactionCardDwell(reactionCardPill);
+    }
+});
+
+document.addEventListener("mouseout", (e) => {
+    const pill = reactionPillFrom(e.target);
+    if (!pill) return;
+    const into = e.relatedTarget instanceof Node ? e.relatedTarget : null;
+    if (into && pill.contains(into)) return; // moving between the pill's own children
+    hideReactionCard();
+});
+
+// Keyboard users get it too, immediately (no dwell).
+document.addEventListener("focusin", (e) => {
+    const pill = reactionPillFrom(e.target);
+    if (pill && (e.target as HTMLElement).matches(":focus-visible")) {
+        hideReactionCard();
+        showReactionCard(pill);
+    }
+});
+document.addEventListener("focusout", (e) => {
+    if (reactionPillFrom(e.target)) hideReactionCard();
+});
+
+document.addEventListener("click", (e) => {
+    if (reactionPillFrom(e.target)) hideReactionCard(); // toggling a reaction
+}, true);
+document.addEventListener("scroll", () => hideReactionCard(), true);
+document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") hideReactionCard();
+});
+window.addEventListener("blur", hideReactionCard);
+
 function buildReactionBar(
     msgId: string,
     isDm: boolean,
     ownerId: string,
-    reactions?: Array<{ emoji: string; count: number; userIds: string[] }>,
+    reactions?: ReactionSummary[],
 ): HTMLDivElement {
+    // A bar being (re)built means any open hover card may now describe a
+    // pill that is about to be replaced — close it rather than show stale data.
+    hideReactionCard();
+
     const bar = document.createElement("div");
     bar.className = "msg-reactions";
     bar.setAttribute("data-react-bar", msgId);
@@ -5697,7 +5907,9 @@ function buildReactionBar(
             const pill = document.createElement("button");
             pill.className = "reaction-pill" + (r.userIds.includes(myId) ? " mine" : "");
             pill.innerHTML = `${renderEmojiToken(r.emoji)} <span class="reaction-count">${r.count}</span>`;
-            pill.title = `Reacted by ${r.count} user${r.count > 1 ? "s" : ""}`;
+            // No native `title`: the hover card (PRD 15.11) replaces it, and
+            // both at once would double up.
+            reactionPillData.set(pill, r);
             pill.addEventListener("click", (e) => {
                 e.stopPropagation();
                 api.toggleReaction(msgId, r.emoji, isDm);
@@ -5754,7 +5966,7 @@ function openReactionPicker(msgId: string, isDm: boolean, anchor: HTMLElement): 
 function updateReactionBar(
     msgId: string,
     isDm: boolean,
-    reactions: Array<{ emoji: string; count: number; userIds: string[] }>,
+    reactions: ReactionSummary[],
 ): void {
     // Find all reaction bars for this message (could be in multiple open tabs)
     const bars = document.querySelectorAll(`[data-react-bar="${msgId}"]`);
@@ -5771,7 +5983,7 @@ function updateReactionBar(
 }
 
 // Listen for reaction updates from server
-api.on("reaction-updated", (data: { messageId: string; isDm: boolean; reactions: Array<{ emoji: string; count: number; userIds: string[] }> }) => {
+api.on("reaction-updated", (data: { messageId: string; isDm: boolean; reactions: ReactionSummary[] }) => {
     updateReactionBar(data.messageId, data.isDm, data.reactions);
 });
 

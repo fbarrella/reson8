@@ -142,6 +142,20 @@ export interface IRole {
 // Message
 // ---------------------------------------------------------------------------
 
+/**
+ * One emoji's reactions on a message. `userIds` and `count` are the original
+ * fields; `users` (PRD 15.11) adds each reactor's current nickname, in the
+ * same order as `userIds`, so a client can name who reacted — including
+ * people who are offline. Optional so a client talking to a not-yet-updated
+ * server (the app already warns on version mismatch) keeps working.
+ */
+export interface IReactionSummary {
+    emoji: string;
+    count: number;
+    userIds: string[];
+    users?: Array<{ userId: string; nickname: string }>;
+}
+
 export interface IMessage {
     id: string;
     channelId: string;
@@ -151,7 +165,7 @@ export interface IMessage {
     attachmentUrl?: string | null;
     createdAt: string;
     editedAt?: string | null;
-    reactions?: Array<{ emoji: string; count: number; userIds: string[] }>;
+    reactions?: IReactionSummary[];
 }
 
 // ---------------------------------------------------------------------------
@@ -167,7 +181,7 @@ export interface IDirectMessage {
     attachmentUrl?: string | null;
     createdAt: string;
     readAt?: string | null;
-    reactions?: Array<{ emoji: string; count: number; userIds: string[] }>;
+    reactions?: IReactionSummary[];
 }
 
 /** Lightweight user record for the DM user list (includes offline DM partners). */

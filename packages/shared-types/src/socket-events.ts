@@ -21,6 +21,7 @@ import type {
     ITransportOptions,
     IConsumerInfo,
     ICustomEmoji,
+    IReactionSummary,
 } from "./models.js";
 
 // ---------------------------------------------------------------------------
@@ -615,7 +616,7 @@ export interface ServerToClientEvents {
     REACTION_UPDATED: (payload: {
         messageId: string;
         isDm: boolean;
-        reactions: Array<{ emoji: string; count: number; userIds: string[] }>;
+        reactions: IReactionSummary[];
     }) => void;
 
     /** Broadcasts a newly-approved custom emoji so every connected picker updates live. */
