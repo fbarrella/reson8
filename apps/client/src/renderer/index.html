@@ -38,6 +38,13 @@
       --text-icon: #ffa726;
       --radius: 6px;
       --font: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      /* Pinned message bar (PRD 15.5) — dark amber so it stands apart from
+         the blue chrome; text/background contrast measured at 9.8:1. */
+      --pin-bg: #4a3b0a;
+      --pin-bg-hover: #5c4a0e;
+      --pin-text: #fff3c4;
+      --pin-accent: #ffd54f;
+      --pin-border: #b8860b;
     }
 
     body {
@@ -687,9 +694,9 @@
       gap: 8px;
       padding: 6px 12px;
       flex-shrink: 0;
-      background: var(--bg-secondary);
-      border-bottom: 1px solid var(--border);
-      color: var(--text-secondary);
+      background: var(--pin-bg);
+      border-bottom: 1px solid var(--pin-border);
+      color: var(--pin-text);
       cursor: pointer;
       transition: background 0.15s;
     }
@@ -699,12 +706,12 @@
     }
 
     .pinned-bar:hover {
-      background: rgba(99, 102, 241, 0.08);
+      background: var(--pin-bg-hover);
     }
 
     .pinned-bar svg {
       flex-shrink: 0;
-      color: var(--accent);
+      color: var(--pin-accent);
     }
 
     .pinned-bar-text {

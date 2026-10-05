@@ -1798,3 +1798,42 @@ Feature/Fix: PRD 15.4 — Show a disabled Ban button on your own User Management
     unclickable Ban; other rows still ban/unban and refresh the list.
 
   Next Step: PRD 15.5 — pinned message bar to dark yellow.
+
+
+--- Entry: 04/10/2026 ---
+
+Feature/Fix: PRD 15.5 — Pinned message bar to dark yellow
+
+  Problem: The pinned message bar used `--bg-secondary` (#16213e) with
+  secondary-grey text, nearly the same blue as the surrounding chrome, so a
+  pinned message didn't stand out.
+
+  Solution: Restyled the bar in dark amber, picking values from measured
+  contrast rather than by eye.
+
+  Client Changes:
+    - `index.html`: new theme tokens next to the existing ones in `:root`
+      — `--pin-bg #4a3b0a`, `--pin-bg-hover #5c4a0e`, `--pin-text
+      #fff3c4`, `--pin-accent #ffd54f`, `--pin-border #b8860b`.
+      `.pinned-bar` (background, bottom border, text colour), its `:hover`
+      (was a faint indigo tint) and its pin icon now use them. Height,
+      padding, ellipsis and click-to-jump behaviour untouched; no JS sets
+      any colour on the bar (checked), so this is CSS-only.
+    - Measured WCAG contrast (computed, not estimated): text on bar
+      9.82:1, text on hover 7.73:1 (both above the 7:1 AAA target), icon
+      on bar 7.75:1 / on hover 6.1:1 (non-text needs 3:1). The bar itself
+      against the chat background is 1.56:1, which is intentional — it is
+      meant to read as a distinct band.
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html
+
+  Verification:
+    Contrast ratios computed with a script from the WCAG relative-
+    luminance formula. CSS-only change, so no typecheck is affected (not
+    re-run). Visual check not run (left to the user): open a channel with a
+    pinned message — bar legible at a glance, hover state visible, icon
+    visible, long text still ellipsised, bar hidden when nothing is
+    pinned.
+
+  Next Step: PRD 15.6 — remember window size and position between sessions.
