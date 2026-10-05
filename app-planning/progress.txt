@@ -1714,3 +1714,49 @@ Feature/Fix: PRD 15.2 — Investigation: constant disconnects/reconnects session
     is enough to see them).
 
   Next Step: PRD 15.3 — pause the local voice halo while muted.
+
+
+--- Entry: 04/10/2026 ---
+
+Feature/Fix: PRD 15.3 — Pause own voice halo while muted
+
+  Problem: After muting, the user's own green speaking halo in the channel
+  tree kept reacting to their voice, making it look like they were still
+  being heard. The local halo is driven by the settings/call analyser,
+  which taps the mic graph BEFORE mute takes effect, so level alone says
+  nothing about whether the mic is actually open. The same applied to
+  deafen and to push-to-talk while the key isn't held.
+
+  Solution: Gate the local halo on whether the mic is genuinely
+  transmitting.
+
+  Client Changes:
+    - New `isLocalMicTransmitting()` = `isInVoice && !isMuted &&
+      !isDeafened && (!pttModeEnabled || isPttHeld)`. `startMicLevelMeter()`
+      now computes `speaking = isLocalMicTransmitting() && dB > threshold`.
+    - New `isPttHeld` flag, set/cleared in all four PTT paths (global
+      `ptt-pressed`/`ptt-released` and the in-window keydown/keyup combo
+      handlers). `ptt-released` clears it unconditionally so a mute or
+      deafen while holding the key can't leave a stale "held" state.
+    - New `refreshLocalSpeakingHalo()` called at the top of
+      `updateVoiceUI()` (which every mute/deafen/PTT transition already
+      calls): when not transmitting it cancels the 300ms hold timer and
+      clears the halo immediately; a no-op while transmitting, so the
+      un-muted halo behavior (and PRD 14.11's low latency) is unchanged.
+    - Deliberately unchanged: the Settings -> Voice mic level meter bar
+      keeps moving while muted (it's a configuration aid), and other
+      participants' server-driven halos.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts
+
+  Verification:
+    `npx tsc --noEmit` in `apps/client` — clean. Checked that no
+    top-level `updateVoiceUI()` call can run before the new `let`
+    declarations (all calls are inside functions/handlers), so no TDZ
+    error. Manual UI check not run (left to the user): talk -> halo; mute
+    -> halo disappears at once and stays off; unmute -> returns; deafen ->
+    off; PTT mode -> halo only while the key is held; Settings meter still
+    moves while muted.
+
+  Next Step: PRD 15.4 — disabled Ban button on your own User Management row.

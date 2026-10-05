@@ -2057,6 +2057,7 @@ async function deleteChannel(channelId: string): Promise<void> {
 // ── Voice Controls ────────────────────────────────────────────────────────
 
 function updateVoiceUI(channelName?: string): void {
+    refreshLocalSpeakingHalo();
     if (isInVoice) {
         voicePanel.classList.add("visible");
         if (channelName) {
@@ -4959,6 +4960,7 @@ document.addEventListener("keydown", (e) => {
         // PTT keydown → unmute (only in PTT mode, and only if not locked/muted/deafened)
         if (shortcuts.ptt && setsEqual(heldKeys, shortcuts.ptt.keys) && pttModeEnabled && isInVoice && !isMuted && !isDeafened) {
             api.setMuted(false);
+            isPttHeld = true;
             updateVoiceUI();
         }
     }
@@ -4989,6 +4991,7 @@ document.addEventListener("keyup", (e) => {
         heldKeys.delete(e.code);
         if (wasMatching && pttModeEnabled && isInVoice && !isMuted && !isDeafened) {
             api.setMuted(true);
+            isPttHeld = false;
             updateVoiceUI();
         }
     } else {
@@ -5000,11 +5003,16 @@ document.addEventListener("keyup", (e) => {
 api.on("ptt-pressed", () => {
     if (shortcuts.ptt && pttModeEnabled && isInVoice && !isMuted && !isDeafened) {
         api.setMuted(false);
+        isPttHeld = true;
         updateVoiceUI();
     }
 });
 
 api.on("ptt-released", () => {
+    // Always clear, even if the guard below is false (e.g. the user muted
+    // or deafened while holding the key) — otherwise a stale "held" flag
+    // would let the halo light up later.
+    isPttHeld = false;
     if (shortcuts.ptt && pttModeEnabled && isInVoice && !isMuted && !isDeafened) {
         api.setMuted(true);
         updateVoiceUI();
@@ -6937,6 +6945,9 @@ btnCheckUpdates.addEventListener("click", async () => {
 // active-speaker hold behavior, so brief pauses between words don't flicker
 // the halo on/off the way a raw instantaneous threshold check would.
 let isLocalSpeaking = false;
+/** True while the PTT key/combo is physically held (PRD 15.3) — the only
+ *  moment the mic actually transmits in push-to-talk mode. */
+let isPttHeld = false;
 let localSpeakingHoldTimer: ReturnType<typeof setTimeout> | null = null;
 
 /** Reuses the noise gate's own threshold when it's enabled (consistent
@@ -6945,6 +6956,28 @@ let localSpeakingHoldTimer: ReturnType<typeof setTimeout> | null = null;
  *  threshold (mediasoup.service.ts). */
 function localSpeakingThreshold(): number {
     return micSensitivityEnabled ? parseInt(micSensitivitySlider.value, 10) : -50;
+}
+
+/** Whether the mic is actually open to other participants right now (PRD
+ *  15.3). The local analyser taps the graph BEFORE mute takes effect, so
+ *  level alone says nothing about whether anyone can hear you. */
+function isLocalMicTransmitting(): boolean {
+    return isInVoice && !isMuted && !isDeafened && (!pttModeEnabled || isPttHeld);
+}
+
+/** Drops the own-voice halo immediately when the mic stops transmitting
+ *  (mute/deafen/PTT release), instead of waiting out the 300ms hold timer.
+ *  Safe to call on every voice-UI refresh: a no-op while transmitting. */
+function refreshLocalSpeakingHalo(): void {
+    if (isLocalMicTransmitting()) return;
+    if (localSpeakingHoldTimer) {
+        clearTimeout(localSpeakingHoldTimer);
+        localSpeakingHoldTimer = null;
+    }
+    if (isLocalSpeaking) {
+        isLocalSpeaking = false;
+        setLocalSpeakingClass(false);
+    }
 }
 
 function setLocalSpeakingClass(speaking: boolean): void {
@@ -6965,7 +6998,7 @@ function startMicLevelMeter(): void {
         // this analyser is reading the settings-preview capture instead,
         // and there's no local `.tree-occupant` row to update anyway.
         if (isInVoice) {
-            const speaking = dB > localSpeakingThreshold();
+            const speaking = isLocalMicTransmitting() && dB > localSpeakingThreshold();
             if (speaking) {
                 if (localSpeakingHoldTimer) {
                     clearTimeout(localSpeakingHoldTimer);
