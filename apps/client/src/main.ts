@@ -23,15 +23,26 @@ import { loadWindowState, trackWindowState } from "./window-state.js";
 // instance is already running elsewhere; quit immediately — calling
 // app.quit() this early prevents app.whenReady() from ever resolving, so
 // none of the window/tray/IPC setup further down actually runs.
+// ── Windows: native window occlusion tracking (PRD 15.7, hypothesis H2) ──
+// Chromium's CalculateNativeWinOcclusion can wrongly decide a window that was
+// just restored from the tray/minimized state is still occluded and stop
+// painting it — the window comes forward but looks frozen until it is
+// minimized and restored again. Disabling the feature is the well-known
+// workaround. Must be set before the app is ready; merged with any existing
+// `disable-features` value rather than replacing it.
+if (process.platform === "win32") {
+    const existing = app.commandLine.getSwitchValue("disable-features");
+    const features = new Set(existing ? existing.split(",") : []);
+    features.add("CalculateNativeWinOcclusion");
+    app.commandLine.appendSwitch("disable-features", [...features].join(","));
+}
+
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 if (!gotSingleInstanceLock) {
     app.quit();
 } else {
     app.on("second-instance", () => {
-        if (!mainWindow) return;
-        if (mainWindow.isMinimized()) mainWindow.restore();
-        if (!mainWindow.isVisible()) mainWindow.show();
-        mainWindow.focus();
+        showMainWindow("second-instance");
     });
 }
 
@@ -408,6 +419,34 @@ function getDesktopSourcesWithTimeout(
     ]);
 }
 
+/**
+ * Single code path for bringing the main window to the front (PRD 15.7) —
+ * used by a second app launch, the tray icon click and the tray "Restore"
+ * item, which used to be three divergent implementations (the tray ones only
+ * called `show()`, never `restore()`).
+ *
+ * Also logs the window's state before and after: the freeze this guards
+ * against could not be reproduced from the code alone, so if it ever recurs
+ * the console output shows what state the window and renderer were in.
+ */
+function showMainWindow(source: string): void {
+    const win = mainWindow;
+    if (!win || win.isDestroyed()) return;
+
+    const snapshot = () =>
+        `minimized=${win.isMinimized()} visible=${win.isVisible()} focused=${win.isFocused()} ` +
+        `maximized=${win.isMaximized()} loading=${win.webContents.isLoading()} ` +
+        `crashed=${win.webContents.isCrashed()}`;
+    console.log(`[main] showMainWindow(${source}) before: ${snapshot()}`);
+
+    if (win.isMinimized()) win.restore();
+    if (!win.isVisible()) win.show();
+    win.moveTop();
+    win.focus();
+
+    console.log(`[main] showMainWindow(${source}) after: ${snapshot()}`);
+}
+
 function createWindow(): void {
     // Grant mic/camera permission requests automatically
     session.defaultSession.setPermissionRequestHandler(
@@ -538,7 +577,21 @@ function createWindow(): void {
     });
 
     // ── Minimize-to-tray interception ────────────────────────────────────
+    // Windows/macOS: intercept `will-minimize` and hide instead, so the
+    // window never enters the minimized state at all (PRD 15.7, hypothesis
+    // H1). Calling `hide()` from inside the post-hoc `minimize` event — what
+    // this used to do — left a window that was both minimized AND hidden,
+    // which `restore()`/`show()` then had to untangle.
+    (mainWindow as any).on("will-minimize", (event: Electron.Event) => {
+        if (!minimizeToTray) return;
+        event.preventDefault();
+        mainWindow?.hide();
+        // The `minimize` event below won't fire for a prevented minimize.
+        mainWindow?.webContents.send("window-minimized");
+    });
+
     (mainWindow as any).on("minimize", () => {
+        // Fallback for platforms that don't emit `will-minimize` (Linux).
         if (minimizeToTray) {
             mainWindow?.hide();
         }
@@ -572,8 +625,7 @@ function createTray(): void {
         {
             label: "Restore",
             click: () => {
-                mainWindow?.show();
-                mainWindow?.focus();
+                showMainWindow("tray-restore");
             },
         },
         { type: "separator" },
@@ -589,8 +641,7 @@ function createTray(): void {
 
     // Single-click on tray icon restores the window
     tray.on("click", () => {
-        mainWindow?.show();
-        mainWindow?.focus();
+        showMainWindow("tray-click");
     });
 }
 

@@ -1896,3 +1896,63 @@ Feature/Fix: PRD 15.6 — Remember window size and position between sessions
 
   Next Step: PRD 15.7 — Windows freeze after re-clicking the app icon
   (needs a Windows hand-test).
+
+
+--- Entry: 04/10/2026 ---
+
+Feature/Fix: PRD 15.7 — App freezes after re-clicking the app icon (Windows) — hypothesis-driven fix, awaiting Windows confirmation
+
+  Problem: Launching Reson8 again while it is running (single-instance
+  refocus, PRD 13.18) brings the window forward on Windows but leaves it
+  frozen/unresponsive until it is minimized and restored again. This could
+  NOT be reproduced from the code, so the root cause is a hypothesis, not
+  confirmed. Two well-known Electron/Windows causes were addressed, plus
+  diagnostics, and the item is only done once the user confirms on a
+  Windows machine.
+
+  Solution:
+    - H1 (minimize-to-tray): the old `minimize` handler called
+      `mainWindow.hide()` AFTER the window had already minimized, leaving a
+      window that was both minimized and hidden; `restore()`/`show()` then
+      had to untangle that half-state (and the tray's Restore only called
+      `show()`). Now a `will-minimize` handler (emitted on Windows/macOS)
+      calls `event.preventDefault()` + `hide()` when minimize-to-tray is
+      on, so the window never enters the minimized state. It also sends
+      the `window-minimized` IPC itself, since the `minimize` event does
+      not fire for a prevented minimize (keeps "collapse expanded long
+      messages on minimize" working). The old `minimize` handler remains
+      as the fallback for Linux, which doesn't emit `will-minimize`, and
+      for plain minimizes.
+    - H2 (Chromium occlusion tracking): on `win32` only, before the app is
+      ready, the `CalculateNativeWinOcclusion` feature is appended to
+      `disable-features` (merged with any existing value, not replacing
+      it). That feature can wrongly mark a just-restored window as
+      occluded and stop painting it — the classic "shown but frozen until
+      minimize/restore" symptom. Trade-off: slightly more background work
+      while the window is covered, acceptable for a voice app.
+    - New `showMainWindow(source)` helper replaces three divergent code
+      paths (second-instance, tray click, tray "Restore"): guards a
+      missing/destroyed window, `restore()` if minimized, `show()` if
+      hidden, `moveTop()`, `focus()`.
+    - Diagnostics: the helper logs `minimized/visible/focused/maximized/
+      loading/crashed` before and after to the main-process console, so if
+      the freeze survives both fixes there is evidence to work from.
+    - Deliberately NOT added: speculative hacks (always-on-top toggling,
+      forced repaint loops) unless the diagnostics show they are needed.
+
+  Key Files Modified:
+    apps/client/src/main.ts
+
+  Verification:
+    `npx tsc --noEmit` in `apps/client` — clean. This is the ONLY check
+    run: the behavior cannot be verified on the Linux dev machine (the
+    bug is Windows-specific and `will-minimize` / occlusion tracking don't
+    apply here). Required manual test on Windows: minimize-to-tray on ->
+    minimize -> click the app icon again -> window returns and is
+    interactive; same from close-to-tray, from a plain minimize and from
+    behind other windows; repeat ~10 times; confirm tray click and tray
+    Restore also work and that plain minimize still collapses expanded
+    messages. If it still freezes, attach the `showMainWindow` console
+    output.
+
+  Next Step: PRD 15.8 — Google (Noto) emoji on every OS.
