@@ -20,6 +20,7 @@ import { PermissionFlags } from "@reson8/shared-types";
 import { requirePermission } from "../middleware/permissions.middleware.js";
 import { deleteAttachment } from "../services/storage.service.js";
 import { DEFAULT_MAX_MESSAGE_LENGTH } from "../config/message.config.js";
+import { normalizeNewlines } from "../services/message-text.js";
 
 type TypedIO = SocketIOServer<
     ClientToServerEvents,
@@ -88,7 +89,8 @@ export function registerMessageHandlers(
         // ── SEND_MESSAGE ───────────────────────────────────────────────────
         socket.on("SEND_MESSAGE", async (payload, ack) => {
             try {
-                const { channelId, content, attachmentUrl, attachmentPublicId } = payload;
+                const { channelId, attachmentUrl, attachmentPublicId } = payload;
+                const content = normalizeNewlines(payload.content);
 
                 if ((!content || content.trim().length === 0) && !attachmentUrl) {
                     ack({ success: false });
@@ -355,8 +357,8 @@ export function registerMessageHandlers(
         // ── EDIT_MESSAGE ─────────────────────────────────────────────────────
         socket.on("EDIT_MESSAGE", async (payload, ack) => {
             try {
-                const { messageId, content } = payload;
-                const trimmed = content?.trim() ?? "";
+                const { messageId } = payload;
+                const trimmed = normalizeNewlines(payload.content).trim();
                 if (!trimmed) {
                     ack({ success: false, error: "Message content cannot be empty" });
                     return;

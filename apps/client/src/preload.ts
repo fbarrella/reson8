@@ -8,6 +8,8 @@
 
 import { contextBridge, ipcRenderer } from "electron";
 import { io, Socket } from "socket.io-client";
+import { renderMessageMarkdown, markdownToPlainText } from "./markdown";
+import type { CustomEmojiMap } from "./markdown";
 import type {
     ClientToServerEvents,
     ServerToClientEvents,
@@ -247,6 +249,9 @@ async function attemptVoiceRejoin(channelId: string): Promise<void> {
     voiceService?.cleanup();
     emit("voice-rejoin-failed", { channelId, error: lastError });
 }
+
+/** Approved custom emoji for Markdown `:name:` rendering — set by the renderer (PRD 15.10). */
+let markdownEmoji: CustomEmojiMap = new Map();
 
 const api = {
     // A static fact known at preload-load-time (PRD 12.11 needs it to tell
@@ -958,6 +963,24 @@ const api = {
 
     downloadImage(url: string): void {
         ipcRenderer.invoke("download-image", url);
+    },
+
+    // ── Markdown (PRD 15.10) ─────────────────────────────────────────────
+    // markdown-it is a CommonJS dependency and the renderer has no bundler,
+    // so rendering happens here and the renderer calls it synchronously.
+
+    /** Replaces the approved-custom-emoji list `:name:` tokens resolve against. */
+    setCustomEmojis(list: Array<{ name: string; imageUrl: string }>): void {
+        markdownEmoji = new Map(list.map((e) => [e.name, e.imageUrl]));
+    },
+
+    renderMarkdown(text: string): { html: string; block: boolean } {
+        return renderMessageMarkdown(text, markdownEmoji);
+    },
+
+    /** One line of plain text with all Markdown syntax and line breaks removed. */
+    markdownToPlainText(text: string): string {
+        return markdownToPlainText(text);
     },
 
     // ── Image viewer actions (PRD 15.9) ──────────────────────────────────

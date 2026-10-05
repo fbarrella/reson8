@@ -809,12 +809,79 @@
        (via JS, attachMessageTruncation()) to messages that actually
        overflow this clamp; a short message never gets this class at all,
        so it keeps flowing inline right after the nickname as before. */
-    .chat-msg .msg-text.msg-text-clamped {
+    .chat-msg .msg-text.msg-text-clamped:not(.msg-text-block) {
       display: -webkit-box;
       -webkit-line-clamp: 4;
       -webkit-box-orient: vertical;
       overflow: hidden;
     }
+
+    /* Block (multi-line / Markdown) messages hold nested blocks, which
+       -webkit-line-clamp doesn't clamp reliably — use a height cap instead. */
+    .chat-msg .msg-text.msg-text-block.msg-text-clamped {
+      max-height: calc(1.4em * 4);
+      overflow: hidden;
+    }
+
+    /* ── Markdown inside messages (PRD 15.10) ──────────────────────── */
+    .chat-msg .msg-text.msg-text-block {
+      display: block;
+      margin-top: 2px;
+      overflow-wrap: anywhere;
+    }
+
+    .msg-text p { margin: 0 0 0.35em; }
+    .msg-text > :last-child { margin-bottom: 0; }
+
+    .msg-text blockquote {
+      margin: 0.2em 0;
+      padding: 0 0 0 10px;
+      border-left: 3px solid var(--accent-dim);
+      color: var(--text-secondary);
+    }
+
+    .msg-text ul,
+    .msg-text ol {
+      margin: 0.2em 0;
+      padding-left: 22px;
+    }
+
+    .msg-text h1,
+    .msg-text h2,
+    .msg-text h3 {
+      margin: 0.3em 0 0.2em;
+      line-height: 1.25;
+      font-weight: 700;
+    }
+    .msg-text h1 { font-size: 1.35em; }
+    .msg-text h2 { font-size: 1.2em; }
+    .msg-text h3 { font-size: 1.07em; }
+
+    .msg-text code {
+      font-family: 'Reson8 Emoji', 'Consolas', 'Monaco', monospace;
+      font-size: 0.92em;
+      padding: 1px 4px;
+      border-radius: 4px;
+      background: var(--bg-input);
+    }
+
+    .msg-text pre {
+      margin: 0.3em 0;
+      padding: 8px 10px;
+      border-radius: var(--radius);
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      overflow-x: auto;
+    }
+
+    .msg-text pre code {
+      padding: 0;
+      background: transparent;
+      white-space: pre;
+    }
+
+    .msg-text s,
+    .msg-text del { text-decoration: line-through; }
 
     .btn-see-more {
       /* Must always start its own line, whether the preceding .msg-text is
@@ -1182,7 +1249,7 @@
     /* Chat input */
     #chat-input-bar {
       display: none;
-      align-items: center;
+      align-items: flex-end; /* the input grows upward-aligned with the buttons (PRD 15.10) */
       gap: 8px;
       padding: 8px 12px;
       border-top: 1px solid var(--border);
@@ -1203,6 +1270,10 @@
       border-radius: var(--radius);
       font-size: 12px;
       font-family: var(--font);
+      line-height: 1.25;
+      resize: none;
+      overflow-y: auto;
+      max-height: 150px; /* ~8 lines, then it scrolls */
       outline: none;
       transition: border-color 0.2s;
     }
@@ -3462,7 +3533,7 @@
         <input type="file" id="file-input" accept="image/jpeg,image/png,image/gif,image/webp" style="display:none;">
         <button id="btn-attach" title="Attach Image"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></button>
         <button id="btn-emoji" title="Emoji"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg></button>
-        <input type="text" id="chat-input" placeholder="Type a message...">
+        <textarea id="chat-input" rows="1" placeholder="Type a message..."></textarea>
         <button id="btn-send">Send</button>
       </div>
       <div id="attachment-preview"></div>

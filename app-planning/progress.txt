@@ -2117,3 +2117,113 @@ Feature/Fix: PRD 15.9 — Image viewer: icon toolbar, zoom, copy, open in browse
     (openLightbox was called directly) — left to the user.
 
   Next Step: PRD 15.10 — multi-line messages + Markdown rendering.
+
+
+--- Entry: 04/10/2026 ---
+
+Feature/Fix: PRD 15.10 — Multi-line messages + Markdown rendering
+
+  Problem: The chat box was a single-line `<input>`, so newlines couldn't be
+  typed and a pasted multi-line text collapsed to one line; message bodies
+  were only HTML-escaped + URL-linkified, with no formatting at all.
+
+  Solution: A multi-line chat box plus Discord-style Markdown rendering
+  (confirmed dialect), built so existing single-line messages are unchanged.
+
+  Client Changes:
+    - Input: `#chat-input` is now a `<textarea rows="1">`. Enter sends,
+      Shift+Enter inserts a newline (Enter during IME composition is
+      ignored — also applied to the in-place edit box, which was already a
+      textarea). It auto-grows with its content up to 150px (~8 lines) then
+      scrolls, and shrinks back after send/clear/emoji insert
+      (`autosizeChatInput()`; includes the border so no scrollbar sliver
+      appears — caught in testing). Bar alignment is `flex-end`.
+    - New pure module `src/markdown.ts` on markdown-it (already a dep,
+      real CJS build): `html:false`, `breaks:true`, `linkify` restricted to
+      explicit http(s) URLs (no bare domains like "next.js", no emails/ftp/
+      mailto/`//`). Supports **bold**, *italic*/_italic_, `__underline__`
+      (markdown-it parses it as `strong` with `markup === "__"`; the
+      renderer rules emit `<u>`), ~~strike~~, > quotes, lists, h1-h3,
+      `inline code`, fenced code blocks (no syntax highlighting), and
+      custom `:name:` emoji via an inline rule registered BEFORE `emphasis`
+      so names with underscores aren't eaten as italics. Deliberately
+      disabled: raw HTML, images, tables, hr, setext headings, indented
+      code blocks, reference links, masked links `[text](url)` (the link
+      text could spoof the destination — only visible URLs link; flagged
+      in the PRD for the user to confirm), and h4+ (demoted to a paragraph
+      that keeps the literal "####").
+    - Layout rule: a lone paragraph with no line break renders inline (no
+      wrapping `<p>`), so existing single-line messages keep the
+      `[time] nick text` layout; anything with a newline or block syntax is
+      `.msg-text-block` (`display:block`) under the header. A lone emoji
+      still bypasses Markdown (4x solo rendering unchanged).
+    - preload exposes `renderMarkdown`, `markdownToPlainText` and
+      `setCustomEmojis` (synchronous — renderer has no bundler and a strict
+      CSP, so it can't import markdown-it; renderer calls
+      `api.setCustomEmojis` at its three `customEmojis` mutation points).
+    - Renderer: `sanitizeMessageHtml()` re-checks the output with a
+      DOMParser allow-list before `innerHTML` (known tags only, else
+      collapsed to text; `<a>` keeps only an http(s) href; `<img>` only for
+      the custom-emoji class; all other attributes incl. event handlers
+      dropped). One `setMessageBody()` helper now serves channel messages,
+      DMs, the optimistic edit and the MESSAGE_EDITED broadcast, replacing
+      four ad-hoc `linkifyContent` call sites (kept only for solo emoji).
+    - Pinned bar preview uses `markdownToPlainText()` (one plain line, no
+      `**`/`#`, no line breaks).
+    - Truncation: `-webkit-line-clamp` kept for plain inline messages
+      (original look/ellipsis), but block messages now clamp with
+      `max-height: 4 lines` since line-clamp doesn't clamp nested blocks
+      reliably; "See more/less" works for both.
+    - CSS for p/blockquote/lists/h1-h3/code/pre/strike inside `.msg-text`.
+    - New `npm run test:markdown` (builds, then runs
+      `scripts/markdown-smoke.mjs`) since the client has no test runner.
+
+  Server Changes:
+    - New `services/message-text.ts` `normalizeNewlines()` (CRLF / lone CR
+      -> LF) applied to SEND_MESSAGE, SEND_DIRECT_MESSAGE and EDIT_MESSAGE
+      before the empty/length checks and persistence, so a line break counts
+      as one character regardless of the sender's OS. Consecutive blank
+      lines are NOT collapsed (the existing length cap and the 4-line
+      "See more" clamp already bound abuse).
+
+  Key Files Modified:
+    apps/client/src/markdown.ts (NEW)
+    apps/client/scripts/markdown-smoke.mjs (NEW)
+    apps/client/src/preload.ts
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/renderer/index.html
+    apps/client/package.json
+    apps/server/src/services/message-text.ts (NEW)
+    apps/server/src/__tests__/message-text.test.ts (NEW)
+    apps/server/src/handlers/message.handler.ts
+    apps/server/src/handlers/dm.handler.ts
+
+  Verification:
+    `npx tsc --noEmit` in `apps/client` and `apps/server` — clean.
+    `npm run test` (server) — 30/30 pass (5 new). `markdown-smoke.mjs` —
+    all 50 checks pass: every syntax, inline-vs-block classification,
+    underline vs bold, emoji with underscores / inside italics / unknown
+    names literal, no linking of bare domains/emails/masked links, and 16
+    XSS vectors (script, onerror, javascript:/data: links and masked links,
+    svg/iframe/style, nested/malformed HTML, markdown-wrapped HTML) all
+    inert. (The first run caught two real issues: demoted h4+ silently
+    dropped its "####", now kept literally; and one wrong test
+    expectation.) Then in the REAL built app (preload + renderer, via the
+    DevTools protocol): `api.renderMarkdown` is exposed so markdown-it
+    loads in the preload; hostile HTML pushed through
+    `sanitizeMessageHtml` is stripped and injecting it leaves
+    `window.__pwn` undefined; the full pipeline renders every case
+    correctly; the textarea is 31px empty (matching the old input), grows
+    with lines, caps at 150px, never overflows; a screenshot of demo
+    messages shows plain one-liners unchanged, multi-line/Markdown blocks,
+    the 4x solo emoji and a clamped 12-item list with a "See more" pill.
+    NOT tested (left to the user): sending/receiving real messages end to
+    end (the demo called `setMessageBody` directly), editing a message into
+    multi-line, DMs, history/pagination scroll math with block messages,
+    link previews inside multi-line messages, pasting real multi-paragraph
+    text, and IME composition. Note for the release notes: older plain
+    messages containing Markdown characters (e.g. `*sigh*`, `a_b_c`) now
+    render formatted.
+
+  Next Step: PRD 15.11 — reaction hover card (the only item that changes
+  the wire format, additively).

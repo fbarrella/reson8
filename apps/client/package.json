@@ -20,6 +20,7 @@
         "test-build:win": "node scripts/test-build.mjs win",
         "test-build:linux": "node scripts/test-build.mjs linux",
         "test-build:mac": "node scripts/test-build.mjs mac",
+        "test:markdown": "tsc --build && node scripts/markdown-smoke.mjs",
         "typecheck": "tsc --noEmit"
     },
     "build": {

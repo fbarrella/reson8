@@ -19,6 +19,7 @@ import type {
 import { PresenceService } from "../services/presence.service.js";
 import { deleteAttachment } from "../services/storage.service.js";
 import { DEFAULT_MAX_MESSAGE_LENGTH } from "../config/message.config.js";
+import { normalizeNewlines } from "../services/message-text.js";
 
 type TypedIO = SocketIOServer<
     ClientToServerEvents,
@@ -47,7 +48,8 @@ export function registerDMHandlers(
         // ── SEND_DIRECT_MESSAGE ────────────────────────────────────────────
         socket.on("SEND_DIRECT_MESSAGE", async (payload, ack) => {
             try {
-                const { recipientId, content, attachmentUrl, attachmentPublicId } = payload;
+                const { recipientId, attachmentUrl, attachmentPublicId } = payload;
+                const content = normalizeNewlines(payload.content);
 
                 if ((!content || content.trim().length === 0) && !attachmentUrl) {
                     ack({ success: false, error: "Message content is empty" });

@@ -754,6 +754,9 @@ interface Reson8Api {
     getBannedUsers(): Promise<{ success: boolean; users?: { userId: string; nickname: string; bannedAt: string }[]; error?: string }>;
     uploadFile(fileBuffer: ArrayBuffer, fileName: string, mimeType: string): Promise<{ url: string; publicId?: string }>;
     downloadImage(url: string): void;
+    setCustomEmojis(list: Array<{ name: string; imageUrl: string }>): void;
+    renderMarkdown(text: string): { html: string; block: boolean };
+    markdownToPlainText(text: string): string;
     openExternal(url: string): Promise<{ success: boolean; error?: string }>;
     copyText(text: string): Promise<boolean>;
     fetchImageBytes(url: string): Promise<{ success: boolean; bytes?: Uint8Array; error?: string }>;
@@ -987,7 +990,7 @@ const eventLog = document.getElementById("event-log") as HTMLDivElement;
 const tabBar = document.getElementById("tab-bar") as HTMLDivElement;
 const tabContentArea = document.getElementById("tab-content-area") as HTMLDivElement;
 const chatInputBar = document.getElementById("chat-input-bar") as HTMLDivElement;
-const chatInput = document.getElementById("chat-input") as HTMLInputElement;
+const chatInput = document.getElementById("chat-input") as HTMLTextAreaElement;
 const btnSend = document.getElementById("btn-send") as HTMLButtonElement;
 const btnAttach = document.getElementById("btn-attach") as HTMLButtonElement;
 const btnEmoji = document.getElementById("btn-emoji") as HTMLButtonElement;
@@ -2698,6 +2701,7 @@ api.on("connected", (data: { serverId: string; instanceId: string }) => {
     api.getApprovedEmojis().then((res) => {
         if (res.success && res.emojis) {
             customEmojis = res.emojis;
+            api.setCustomEmojis(customEmojis);
         }
     });
 
@@ -2742,6 +2746,7 @@ api.on("disconnected", (data?: { reason?: string }) => {
     currentServerId = "";
     currentTree = [];
     customEmojis = [];
+    api.setCustomEmojis(customEmojis);
     previousOccupantIds = new Set();
     previousSharingIds = new Set();
     connectedServerName = null;
@@ -3140,6 +3145,93 @@ function isSoloEmojiMessage(text: string): boolean {
     return graphemeSegmenter
         ? [...graphemeSegmenter.segment(trimmed)].length === 1
         : [...trimmed].length === 1;
+}
+
+// ── Message body rendering (PRD 15.10) ──────────────────────────────────
+
+const MSG_ALLOWED_TAGS = new Set([
+    "P", "BR", "STRONG", "EM", "U", "S", "DEL", "BLOCKQUOTE", "UL", "OL", "LI",
+    "H1", "H2", "H3", "PRE", "CODE", "A", "IMG",
+]);
+const HTTP_URL = /^https?:\/\//i;
+
+/**
+ * Defense in depth for rendered Markdown. The renderer in the preload
+ * (`markdown.ts`) already refuses raw HTML and unsafe link schemes; this
+ * allow-list pass re-checks its output before it is assigned to `innerHTML`:
+ * only known tags survive (anything else collapses to its plain text), links
+ * keep only an http(s) `href`, `<img>` is allowed solely for the inline
+ * custom-emoji class, and every other attribute — including all event
+ * handlers — is dropped. A DOMParser document is inert: nothing in it runs
+ * or loads while it is being walked.
+ */
+function sanitizeMessageHtml(html: string): string {
+    const doc = new DOMParser().parseFromString(`<body>${html}</body>`, "text/html");
+
+    const walk = (parent: Node): void => {
+        for (const node of Array.from(parent.childNodes)) {
+            if (node.nodeType === Node.TEXT_NODE) continue;
+            if (node.nodeType !== Node.ELEMENT_NODE) {
+                node.parentNode?.removeChild(node);
+                continue;
+            }
+            const el = node as Element;
+
+            if (!MSG_ALLOWED_TAGS.has(el.tagName)) {
+                el.replaceWith(document.createTextNode(el.textContent ?? ""));
+                continue;
+            }
+
+            for (const attr of Array.from(el.attributes)) {
+                const keep =
+                    (el.tagName === "A" &&
+                        ((attr.name === "href" && HTTP_URL.test(attr.value)) ||
+                            (attr.name === "target" && attr.value === "_blank") ||
+                            attr.name === "rel" ||
+                            (attr.name === "class" && attr.value === "msg-link"))) ||
+                    (el.tagName === "IMG" &&
+                        ((attr.name === "src" && HTTP_URL.test(attr.value)) ||
+                            attr.name === "alt" ||
+                            attr.name === "title" ||
+                            (attr.name === "class" && attr.value === "custom-emoji-inline")));
+                if (!keep) el.removeAttribute(attr.name);
+            }
+
+            if (el.tagName === "A" && !el.hasAttribute("href")) {
+                el.replaceWith(document.createTextNode(el.textContent ?? ""));
+                continue;
+            }
+            if (el.tagName === "IMG" && (!el.classList.contains("custom-emoji-inline") || !el.getAttribute("src"))) {
+                el.replaceWith(document.createTextNode(el.getAttribute("alt") ?? ""));
+                continue;
+            }
+
+            walk(el);
+        }
+    };
+    walk(doc.body);
+    return doc.body.innerHTML;
+}
+
+/**
+ * Renders a message's text into its `.msg-text` element — the single place
+ * channel messages, DMs, edits and edit broadcasts all go through, so their
+ * formatting can't drift apart. A lone emoji keeps its 4x solo rendering and
+ * bypasses Markdown; a single plain line stays inline (the layout every
+ * message had before Markdown); anything with a line break or block syntax
+ * becomes a block starting under the `[time] nick` header.
+ */
+function setMessageBody(textEl: HTMLElement, content: string): void {
+    const solo = isSoloEmojiMessage(content);
+    textEl.classList.toggle("msg-text-solo-emoji", solo);
+    if (solo) {
+        textEl.classList.remove("msg-text-block");
+        textEl.innerHTML = linkifyContent(content);
+        return;
+    }
+    const rendered = api.renderMarkdown(content);
+    textEl.innerHTML = sanitizeMessageHtml(rendered.html);
+    textEl.classList.toggle("msg-text-block", rendered.block);
 }
 
 /** Build HTML for message text with clickable URL links and inline custom
@@ -3951,11 +4043,13 @@ function buildChatMessageElement(tab: ChatTab, msg: ChatMessage): HTMLDivElement
     let html = `<span class="msg-time">${time}</span>${editedLabel}<span class="msg-nick">${escapeHtml(msg.nickname)}</span>`;
 
     if (msg.content) {
-        const soloEmojiClass = isSoloEmojiMessage(msg.content) ? " msg-text-solo-emoji" : "";
-        html += `<span class="msg-text${soloEmojiClass}">${linkifyContent(msg.content)}</span>`;
+        html += `<span class="msg-text"></span>`;
     }
 
     el.innerHTML = html;
+    if (msg.content) {
+        setMessageBody(el.querySelector(".msg-text") as HTMLElement, msg.content);
+    }
 
     if (msg.attachmentUrl) {
         const img = document.createElement("img");
@@ -4155,11 +4249,24 @@ api.on("window-minimized", collapseAllExpandedMessages);
 
 // ── Chat Input ────────────────────────────────────────────────────────────
 
+/** Grows the chat box with its content (up to the CSS max-height, then it
+ *  scrolls) and shrinks it back when emptied. */
+function autosizeChatInput(): void {
+    chatInput.style.height = "auto";
+    // scrollHeight excludes the border, but the box is border-box — add it
+    // back or the content ends up 2px short and a scrollbar sliver appears.
+    const border = chatInput.offsetHeight - chatInput.clientHeight;
+    chatInput.style.height = `${chatInput.scrollHeight + border}px`;
+}
+
+chatInput.addEventListener("input", autosizeChatInput);
+
 async function sendChatMessage(): Promise<void> {
     const content = chatInput.value.trim();
     if ((!content && !pendingAttachmentUrl) || activeTabId === "server-log") return;
 
     chatInput.value = "";
+    autosizeChatInput();
     const attachmentUrl = pendingAttachmentUrl;
     const attachmentPublicId = pendingAttachmentPublicId;
     clearAttachmentPreview();
@@ -4184,7 +4291,9 @@ async function sendChatMessage(): Promise<void> {
 btnSend.addEventListener("click", () => sendChatMessage());
 
 chatInput.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && !e.shiftKey) {
+    // Enter sends, Shift+Enter inserts a newline; ignore the Enter that
+    // confirms an IME composition.
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
         e.preventDefault();
         sendChatMessage();
     }
@@ -4276,11 +4385,13 @@ function buildDmMessageElement(tab: ChatTab, msg: DirectMessage): HTMLDivElement
     let html = `<span class="msg-time">${time}</span><span class="msg-nick">${escapeHtml(msg.senderNickname)}</span>`;
 
     if (msg.content) {
-        const soloEmojiClass = isSoloEmojiMessage(msg.content) ? " msg-text-solo-emoji" : "";
-        html += `<span class="msg-text${soloEmojiClass}">${linkifyContent(msg.content)}</span>`;
+        html += `<span class="msg-text"></span>`;
     }
 
     el.innerHTML = html;
+    if (msg.content) {
+        setMessageBody(el.querySelector(".msg-text") as HTMLElement, msg.content);
+    }
 
     if (msg.attachmentUrl) {
         const img = document.createElement("img");
@@ -5774,9 +5885,9 @@ function updatePinBarUI(tab: ChatTab, pinnedMessage: PinnedMessage | null): void
     if (!tab.pinBarEl) return;
     if (pinnedMessage) {
         const textEl = tab.pinBarEl.querySelector(".pinned-bar-text") as HTMLSpanElement;
-        const preview = pinnedMessage.content.length > 100
-            ? `${pinnedMessage.content.slice(0, 100)}…`
-            : pinnedMessage.content;
+        // One line of plain text — never raw Markdown syntax or line breaks.
+        const plain = api.markdownToPlainText(pinnedMessage.content);
+        const preview = plain.length > 100 ? `${plain.slice(0, 100)}…` : plain;
         textEl.textContent = preview || "(attachment only)";
         tab.pinBarEl.dataset.pinnedMsgId = pinnedMessage.id;
         tab.pinBarEl.classList.add("visible");
@@ -6135,8 +6246,8 @@ function startMessageEdit(el: HTMLDivElement, msg: ChatMessage): void {
         // client) and just harmlessly re-applies the same content.
         msg.content = newContent;
         const newTextEl = document.createElement("span");
-        newTextEl.className = isSoloEmojiMessage(newContent) ? "msg-text msg-text-solo-emoji" : "msg-text";
-        newTextEl.innerHTML = linkifyContent(newContent);
+        newTextEl.className = "msg-text";
+        setMessageBody(newTextEl, newContent);
         input.replaceWith(newTextEl);
         if (!el.querySelector(".msg-edited")) {
             el.querySelector(".msg-time")?.insertAdjacentHTML("afterend", `<span class="msg-edited">(edited)</span>`);
@@ -6150,7 +6261,7 @@ function startMessageEdit(el: HTMLDivElement, msg: ChatMessage): void {
     };
 
     const onKeydown = (e: KeyboardEvent) => {
-        if (e.key === "Enter" && !e.shiftKey) {
+        if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
             e.preventDefault();
             finish(true);
         } else if (e.key === "Escape") {
@@ -6170,8 +6281,7 @@ function applyMessageEdit(msg: ChatMessage): void {
         const textEl = el.querySelector(".msg-text") as HTMLElement | null;
         if (textEl) {
             textEl.classList.remove("msg-text-clamped", "msg-text-expanded");
-            textEl.classList.toggle("msg-text-solo-emoji", isSoloEmojiMessage(msg.content));
-            textEl.innerHTML = linkifyContent(msg.content);
+            setMessageBody(textEl, msg.content);
             // Re-evaluate truncation for the other clients viewing this
             // edit too, not just the editor's own optimistic path above.
             el.querySelector(".btn-see-more")?.remove();
@@ -6193,6 +6303,7 @@ api.on("message-edited", (msg: ChatMessage) => {
 api.on("custom-emoji-approved", (data: { serverId: string; emoji: CustomEmoji }) => {
     if (!customEmojis.some((e) => e.id === data.emoji.id)) {
         customEmojis.push(data.emoji);
+        api.setCustomEmojis(customEmojis);
     }
     if (emojiPicker.classList.contains("visible")) {
         renderEmojiGrid(emojiSearch.value);
@@ -6456,6 +6567,7 @@ function insertEmojiAtCursor(emoji: string): void {
     const start = chatInput.selectionStart ?? chatInput.value.length;
     const end = chatInput.selectionEnd ?? start;
     chatInput.setRangeText(emoji, start, end, "end");
+    autosizeChatInput();
     chatInput.focus();
 }
 
