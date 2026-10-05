@@ -960,6 +960,26 @@ const api = {
         ipcRenderer.invoke("download-image", url);
     },
 
+    // ── Image viewer actions (PRD 15.9) ──────────────────────────────────
+
+    openExternal(url: string): Promise<{ success: boolean; error?: string }> {
+        return ipcRenderer.invoke("open-external-url", url);
+    },
+
+    copyText(text: string): Promise<boolean> {
+        return ipcRenderer.invoke("copy-text-to-clipboard", text);
+    },
+
+    /** Fetches an image's bytes through the main process (no CORS limits). */
+    fetchImageBytes(url: string): Promise<{ success: boolean; bytes?: Uint8Array; error?: string }> {
+        return ipcRenderer.invoke("fetch-image-bytes", url);
+    },
+
+    /** Puts PNG-encoded bytes on the clipboard as an image. */
+    copyPngToClipboard(bytes: Uint8Array): Promise<boolean> {
+        return ipcRenderer.invoke("copy-png-to-clipboard", bytes);
+    },
+
     // ── Link Preview ─────────────────────────────────────────────────────
 
     async fetchLinkPreview(url: string): Promise<{ title?: string; description?: string; image?: string; url?: string; domain?: string } | null> {

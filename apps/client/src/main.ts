@@ -5,7 +5,7 @@
  * This is the entry point for the Electron desktop client.
  */
 
-import { app, BrowserWindow, session, ipcMain, globalShortcut, Menu, Tray, nativeImage, shell, desktopCapturer, dialog } from "electron";
+import { app, BrowserWindow, session, ipcMain, globalShortcut, Menu, Tray, nativeImage, shell, desktopCapturer, dialog, net, clipboard } from "electron";
 import path from "node:path";
 import { getInstanceId, hasExistingInstanceId } from "./instance-id.js";
 import { autoUpdater, NsisUpdater } from "electron-updater";
@@ -794,6 +794,73 @@ app.whenReady().then(() => {
     ipcMain.handle("download-image", (_event, url: string) => {
         if (mainWindow) {
             mainWindow.webContents.downloadURL(url);
+        }
+    });
+
+    // ── Image viewer actions (PRD 15.9) ──────────────────────────────────
+    // The renderer never gets raw Node/Electron access, so everything the
+    // viewer's toolbar needs from outside the page goes through these.
+
+    /** Only plain web URLs may be opened/fetched — never file:, javascript:,
+     *  custom protocols, etc. (attachment URLs come from other users). */
+    const isHttpUrl = (value: unknown): value is string => {
+        if (typeof value !== "string") return false;
+        try {
+            const u = new URL(value);
+            return u.protocol === "http:" || u.protocol === "https:";
+        } catch {
+            return false;
+        }
+    };
+
+    ipcMain.handle("open-external-url", async (_event, url: unknown) => {
+        if (!isHttpUrl(url)) return { success: false, error: "Only http(s) links can be opened" };
+        await shell.openExternal(url);
+        return { success: true };
+    });
+
+    ipcMain.handle("copy-text-to-clipboard", (_event, text: unknown) => {
+        if (typeof text !== "string") return false;
+        clipboard.writeText(text);
+        return true;
+    });
+
+    /** The renderer re-encodes whatever it fetched to PNG first (see
+     *  `copyLightboxImage`), so only PNG bytes are accepted here. */
+    ipcMain.handle("copy-png-to-clipboard", (_event, bytes: unknown) => {
+        if (!(bytes instanceof Uint8Array) || bytes.byteLength === 0) return false;
+        const image = nativeImage.createFromBuffer(Buffer.from(bytes));
+        if (image.isEmpty()) return false;
+        clipboard.writeImage(image);
+        return true;
+    });
+
+    /**
+     * Fetches an image's bytes in the main process — no CORS or canvas-taint
+     * problems like a renderer fetch of a cross-origin image would have.
+     * Bounded: http(s) only, `image/*` responses only, 25 MB cap, 15s timeout.
+     */
+    const IMAGE_FETCH_MAX_BYTES = 25 * 1024 * 1024;
+    ipcMain.handle("fetch-image-bytes", async (_event, url: unknown) => {
+        if (!isHttpUrl(url)) return { success: false, error: "Invalid image URL" };
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 15_000);
+        try {
+            const res = await net.fetch(url, { signal: controller.signal, credentials: "omit" });
+            if (!res.ok) return { success: false, error: `Server responded ${res.status}` };
+            const type = res.headers.get("content-type") ?? "";
+            if (!type.toLowerCase().startsWith("image/")) {
+                return { success: false, error: "That link is not an image" };
+            }
+            const declared = Number(res.headers.get("content-length") ?? 0);
+            if (declared > IMAGE_FETCH_MAX_BYTES) return { success: false, error: "Image is too large to copy" };
+            const buffer = Buffer.from(await res.arrayBuffer());
+            if (buffer.byteLength > IMAGE_FETCH_MAX_BYTES) return { success: false, error: "Image is too large to copy" };
+            return { success: true, bytes: new Uint8Array(buffer) };
+        } catch (err: any) {
+            return { success: false, error: err?.name === "AbortError" ? "Timed out fetching the image" : "Couldn't fetch the image" };
+        } finally {
+            clearTimeout(timer);
         }
     });
 

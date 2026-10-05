@@ -2032,3 +2032,88 @@ Feature/Fix: PRD 15.8 — Google (Noto) emoji on every OS
 
   Next Step: PRD 15.9 — image viewer toolbar, zoom, copy, open in browser
   and "sent by".
+
+
+--- Entry: 04/10/2026 ---
+
+Feature/Fix: PRD 15.9 — Image viewer: icon toolbar, zoom, copy, open in browser, "sent by"
+
+  Problem: The image viewer only offered a text "Close" button, a text
+  "Download" button and a fit-to-window image. A very tall image was shrunk
+  until unreadable, and there was no way to copy the image/its link, open it
+  in the browser, or see who sent it.
+
+  Solution: Rebuilt the viewer after the Discord reference screenshot — a
+  horizontal icon-only toolbar, with Close separated at the far top-right.
+
+  Client Changes (index.html / renderer.ts):
+    - Toolbar pill (top-right): Zoom In, Zoom Out | Copy Image, Copy Link,
+      Open in Browser, Download. Close is its own button at the far
+      top-right. Every control is an inline stroke SVG matching the app's
+      icon style, a real `<button type="button">` with `aria-label`,
+      `:focus-visible` outline, and an instant CSS tooltip (`data-tooltip`)
+      with the full action name (the native `title` tooltip has a ~1s delay).
+    - "Sent by <nick> <date, time>" pill at the top-left. `openLightbox(url,
+      meta?)` takes an optional `{ senderNickname, sentAt }`; the three call
+      sites (channel image, NSFW overlay click, DM image) pass it from the
+      message; with no meta the pill is simply hidden.
+    - Zoom (per the confirmed decision: percent of NATURAL size). The image
+      is laid out at natural pixel size, centred, and zoomed/panned only via
+      `transform: translate() scale()` (no layout per frame, GIFs keep
+      animating). Lowest zoom = fit-to-window (90% of the stage, never
+      upscaling small images — same as before), highest = 200% of natural.
+      Buttons/keys step through [fit, 25%, 50%, 75%, 100%, 125%, 150%,
+      175%, 200%]; buttons disable at both ends. Also: mouse wheel zooms
+      toward the cursor, `+`/`-`/`0` keys (swallowed only while the viewer
+      is open), double-click toggles fit <-> 100% (200% for an image already
+      at natural size), drag-to-pan with Pointer Events + pointer capture
+      while zoomed (clamped so the image can't leave the view; a drag does
+      not count as a backdrop click), a transient percentage indicator, and
+      the fit is recomputed on window resize. State resets on every open.
+    - Copy Link / Open in Browser / Copy Image / Download. Download is
+      unchanged (`api.downloadImage`). Esc, backdrop click, the NSFW
+      click-through and `closeLightbox()` clearing `src` all still work; the
+      video lightbox is untouched.
+
+  Main / Preload Changes:
+    - New IPC (main.ts) + preload bridge methods (`openExternal`,
+      `copyText`, `fetchImageBytes`, `copyPngToClipboard`). All URLs are
+      validated as http(s) only (attachment URLs originate from other
+      users). `fetch-image-bytes` uses `net.fetch` in the main process (no
+      CORS/canvas-taint problems), `credentials: "omit"`, `image/*`
+      responses only, 25 MB cap (declared and actual), 15s timeout.
+    - Copy Image: main fetches the bytes, the renderer decodes with
+      `createImageBitmap` and re-encodes to PNG (this normalises WebP/GIF;
+      an animated GIF copies as its first frame), main puts it on the
+      clipboard via `clipboard.writeImage`. Done in main rather than
+      `navigator.clipboard.write` because the app's permission handler only
+      whitelists media permissions, which would make the async-clipboard
+      path unreliable.
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/preload.ts
+    apps/client/src/main.ts
+
+  Verification:
+    `npx tsc --noEmit` in `apps/client` — clean. Tested in real Electron
+    against the built app with scripted interaction and screenshots: a
+    600x2400 image fits at 25.2% and steps up to exactly 200%, zoom-out and
+    reset return to fit, wheel zoom, pan clamp, a small 300x200 image
+    starts at 100% with Zoom Out disabled and no sender pill; screenshots
+    show the toolbar/close/sender layout matching the reference and the
+    200% view with the indicator. The screenshots caught a real bug —
+    `.lightbox-close` was pushed to the far left because a shared
+    `position: relative` rule overrode its `position: fixed` — fixed and
+    re-checked. Through the REAL main process (DevTools protocol + main
+    inspector): Copy Link put the URL on the system clipboard, Copy Image
+    put a 600x2400 image on it, both toasts appeared, and the IPC rejects
+    file:// for both open-external and fetch, a non-image URL ("That link is
+    not an image") and a 404. NOT tested: Open in Browser actually
+    launching a browser (only the rejection path was exercised), a
+    drag-pan with a real mouse, double-click, `+`/`-`/`0` keys, a
+    GIF/WebP copy, and opening from a real channel/DM/NSFW message
+    (openLightbox was called directly) — left to the user.
+
+  Next Step: PRD 15.10 — multi-line messages + Markdown rendering.

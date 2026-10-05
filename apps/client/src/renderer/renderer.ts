@@ -754,6 +754,10 @@ interface Reson8Api {
     getBannedUsers(): Promise<{ success: boolean; users?: { userId: string; nickname: string; bannedAt: string }[]; error?: string }>;
     uploadFile(fileBuffer: ArrayBuffer, fileName: string, mimeType: string): Promise<{ url: string; publicId?: string }>;
     downloadImage(url: string): void;
+    openExternal(url: string): Promise<{ success: boolean; error?: string }>;
+    copyText(text: string): Promise<boolean>;
+    fetchImageBytes(url: string): Promise<{ success: boolean; bytes?: Uint8Array; error?: string }>;
+    copyPngToClipboard(bytes: Uint8Array): Promise<boolean>;
     fetchLinkPreview(url: string): Promise<LinkPreviewData | null>;
     setTrayPrefs(prefs: { minimizeToTray: boolean; closeToTray: boolean }): void;
     getTrayPrefs(): Promise<{ minimizeToTray: boolean; closeToTray: boolean }>;
@@ -3959,7 +3963,7 @@ function buildChatMessageElement(tab: ChatTab, msg: ChatMessage): HTMLDivElement
         img.className = "msg-image";
         img.loading = "lazy";
         img.alt = "Shared image";
-        img.addEventListener("click", () => openLightbox(msg.attachmentUrl!));
+        img.addEventListener("click", () => openLightbox(msg.attachmentUrl!, { senderNickname: msg.nickname, sentAt: msg.createdAt }));
 
         // NSFW channels blur every image thumbnail permanently — only the
         // full-screen lightbox (opened by clicking through) ever shows it
@@ -3972,7 +3976,7 @@ function buildChatMessageElement(tab: ChatTab, msg: ChatMessage): HTMLDivElement
             const overlay = document.createElement("div");
             overlay.className = "msg-image-nsfw-overlay";
             overlay.innerHTML = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><span>NSFW. Click to open image and reveal content.</span>`;
-            overlay.addEventListener("click", () => openLightbox(msg.attachmentUrl!));
+            overlay.addEventListener("click", () => openLightbox(msg.attachmentUrl!, { senderNickname: msg.nickname, sentAt: msg.createdAt }));
             wrap.appendChild(overlay);
             el.appendChild(wrap);
         } else {
@@ -4284,7 +4288,7 @@ function buildDmMessageElement(tab: ChatTab, msg: DirectMessage): HTMLDivElement
         img.className = "msg-image";
         img.loading = "lazy";
         img.alt = "Shared image";
-        img.addEventListener("click", () => openLightbox(msg.attachmentUrl!));
+        img.addEventListener("click", () => openLightbox(msg.attachmentUrl!, { senderNickname: msg.senderNickname, sentAt: msg.createdAt }));
         el.appendChild(img);
     }
 
@@ -5216,20 +5220,194 @@ function clearAttachmentPreview(): void {
     attachmentPreview.innerHTML = "";
 }
 
-// ── Lightbox ───────────────────────────────────────────────────────────
+// ── Lightbox (PRD 15.9) ────────────────────────────────────────────────
+//
+// The image is laid out once at its NATURAL pixel size, centred in the stage,
+// and zoomed/panned purely through `transform: translate() scale()` — no
+// layout work per frame, animated GIFs keep animating, and no re-decode.
+// Scale is a fraction of natural size: the lowest zoom is "fit to window"
+// (never upscaling small images, as before) and the highest is 200%.
 
-function openLightbox(imageUrl: string): void {
+interface LightboxMeta {
+    senderNickname?: string;
+    sentAt?: string;
+}
+
+const LIGHTBOX_MAX_SCALE = 2; // 200% of the image's natural pixel size
+const LIGHTBOX_FIT_MARGIN = 0.9; // fitted image fills at most 90% of the stage (as the old 90vw/90vh)
+const LIGHTBOX_ZOOM_STOPS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
+const LIGHTBOX_EPS = 0.001;
+
+const lightboxStage = document.getElementById("lightbox-stage") as HTMLDivElement;
+const lightboxSender = document.getElementById("lightbox-sender") as HTMLDivElement;
+const lightboxZoomIndicator = document.getElementById("lightbox-zoom-indicator") as HTMLDivElement;
+const btnLightboxZoomIn = document.getElementById("btn-lightbox-zoom-in") as HTMLButtonElement;
+const btnLightboxZoomOut = document.getElementById("btn-lightbox-zoom-out") as HTMLButtonElement;
+const btnLightboxCopyImage = document.getElementById("btn-lightbox-copy-image") as HTMLButtonElement;
+const btnLightboxCopyLink = document.getElementById("btn-lightbox-copy-link") as HTMLButtonElement;
+const btnLightboxOpenBrowser = document.getElementById("btn-lightbox-open-browser") as HTMLButtonElement;
+
+const lightbox = {
+    url: "",
+    naturalW: 0,
+    naturalH: 0,
+    fit: 1,
+    scale: 1,
+    tx: 0,
+    ty: 0,
+    dragging: false,
+    dragMoved: false,
+    dragStartX: 0,
+    dragStartY: 0,
+    dragOriginTx: 0,
+    dragOriginTy: 0,
+    suppressClick: false,
+    indicatorTimer: null as ReturnType<typeof setTimeout> | null,
+    busy: false,
+};
+
+function lightboxStageSize(): { w: number; h: number } {
+    return { w: lightboxStage.clientWidth, h: lightboxStage.clientHeight };
+}
+
+function lightboxComputeFit(): number {
+    if (!lightbox.naturalW || !lightbox.naturalH) return 1;
+    const { w, h } = lightboxStageSize();
+    return Math.min(1, (w * LIGHTBOX_FIT_MARGIN) / lightbox.naturalW, (h * LIGHTBOX_FIT_MARGIN) / lightbox.naturalH);
+}
+
+/** Keeps the image from being dragged out of view: while it's smaller than
+ *  the stage on an axis it stays centred, otherwise its edge may reach the
+ *  stage edge but not pass it. */
+function lightboxClampPan(): void {
+    const { w, h } = lightboxStageSize();
+    const maxX = Math.max(0, (lightbox.naturalW * lightbox.scale - w) / 2);
+    const maxY = Math.max(0, (lightbox.naturalH * lightbox.scale - h) / 2);
+    lightbox.tx = Math.min(maxX, Math.max(-maxX, lightbox.tx));
+    lightbox.ty = Math.min(maxY, Math.max(-maxY, lightbox.ty));
+}
+
+function lightboxIsZoomed(): boolean {
+    return lightbox.scale > lightbox.fit + LIGHTBOX_EPS;
+}
+
+function lightboxApply(animate: boolean): void {
+    lightboxClampPan();
+    lightboxImage.style.transition = animate ? "transform 0.12s ease-out, opacity 0.12s" : "opacity 0.12s";
+    lightboxImage.style.transform = `translate(${lightbox.tx}px, ${lightbox.ty}px) scale(${lightbox.scale})`;
+    lightboxImage.classList.toggle("zoomed", lightboxIsZoomed());
+    btnLightboxZoomIn.disabled = lightbox.scale >= LIGHTBOX_MAX_SCALE - LIGHTBOX_EPS;
+    btnLightboxZoomOut.disabled = !lightboxIsZoomed();
+}
+
+function lightboxShowZoomIndicator(): void {
+    lightboxZoomIndicator.textContent = `${Math.round(lightbox.scale * 100)}%`;
+    lightboxZoomIndicator.classList.add("visible");
+    if (lightbox.indicatorTimer) clearTimeout(lightbox.indicatorTimer);
+    lightbox.indicatorTimer = setTimeout(() => lightboxZoomIndicator.classList.remove("visible"), 900);
+}
+
+/** Zooms to `next`, keeping the point under `anchor` (stage-centre-relative
+ *  px; defaults to the centre) fixed on screen. */
+function lightboxSetScale(next: number, anchor = { x: 0, y: 0 }, animate = false): void {
+    const clamped = Math.min(LIGHTBOX_MAX_SCALE, Math.max(lightbox.fit, next));
+    const ratio = clamped / lightbox.scale;
+    lightbox.tx = anchor.x - (anchor.x - lightbox.tx) * ratio;
+    lightbox.ty = anchor.y - (anchor.y - lightbox.ty) * ratio;
+    lightbox.scale = clamped;
+    lightboxApply(animate);
+    lightboxShowZoomIndicator();
+}
+
+/** The discrete zoom levels the buttons/keys step through: "fit", then the
+ *  fixed percentages above it. */
+function lightboxStops(): number[] {
+    return [lightbox.fit, ...LIGHTBOX_ZOOM_STOPS.filter((v) => v > lightbox.fit + LIGHTBOX_EPS)];
+}
+
+function lightboxStepZoom(direction: 1 | -1): void {
+    const stops = lightboxStops();
+    const target = direction === 1
+        ? stops.find((v) => v > lightbox.scale + LIGHTBOX_EPS)
+        : [...stops].reverse().find((v) => v < lightbox.scale - LIGHTBOX_EPS);
+    if (target !== undefined) lightboxSetScale(target, undefined, true);
+}
+
+function lightboxResetZoom(): void {
+    lightbox.tx = 0;
+    lightbox.ty = 0;
+    lightboxSetScale(lightbox.fit, undefined, true);
+}
+
+function lightboxStagePoint(e: MouseEvent): { x: number; y: number } {
+    const rect = lightboxStage.getBoundingClientRect();
+    return { x: e.clientX - (rect.left + rect.width / 2), y: e.clientY - (rect.top + rect.height / 2) };
+}
+
+function openLightbox(imageUrl: string, meta?: LightboxMeta): void {
+    lightbox.url = imageUrl;
+    lightbox.scale = 1;
+    lightbox.fit = 1;
+    lightbox.tx = 0;
+    lightbox.ty = 0;
+    lightbox.naturalW = 0;
+    lightbox.naturalH = 0;
+    lightboxImage.classList.remove("ready", "zoomed", "dragging");
+
+    // "Sent by" pill — omitted entirely when a caller has no sender info.
+    lightboxSender.textContent = "";
+    if (meta?.senderNickname) {
+        lightboxSender.append("Sent by ");
+        const nick = document.createElement("strong");
+        nick.textContent = meta.senderNickname;
+        lightboxSender.appendChild(nick);
+        if (meta.sentAt) {
+            const when = document.createElement("span");
+            when.className = "lightbox-sent-at";
+            when.textContent = new Date(meta.sentAt).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
+            lightboxSender.appendChild(when);
+        }
+        lightboxSender.hidden = false;
+    } else {
+        lightboxSender.hidden = true;
+    }
+
+    // Set before `src` so a cached image can't finish loading unobserved.
+    lightboxImage.onload = () => {
+        lightbox.naturalW = lightboxImage.naturalWidth;
+        lightbox.naturalH = lightboxImage.naturalHeight;
+        lightboxImage.style.width = `${lightbox.naturalW}px`;
+        lightboxImage.style.height = `${lightbox.naturalH}px`;
+        lightboxImage.style.marginLeft = `${-lightbox.naturalW / 2}px`;
+        lightboxImage.style.marginTop = `${-lightbox.naturalH / 2}px`;
+        lightbox.fit = lightboxComputeFit();
+        lightbox.scale = lightbox.fit;
+        lightbox.tx = 0;
+        lightbox.ty = 0;
+        lightboxApply(false);
+        lightboxImage.classList.add("ready");
+    };
+    lightboxImage.onerror = () => showToast("Couldn't load the image");
     lightboxImage.src = imageUrl;
     imageLightboxModal.classList.add("visible");
+    btnLightboxZoomIn.disabled = true;
+    btnLightboxZoomOut.disabled = true;
 }
 
 function closeLightbox(): void {
     imageLightboxModal.classList.remove("visible");
+    lightboxImage.onload = null;
+    lightboxImage.onerror = null;
     lightboxImage.src = "";
+    lightboxImage.classList.remove("ready", "zoomed", "dragging");
+    lightboxZoomIndicator.classList.remove("visible");
+    lightbox.url = "";
+    lightbox.dragging = false;
 }
 
 imageLightboxModal.addEventListener("click", (e) => {
-    if (e.target === imageLightboxModal) {
+    if (lightbox.suppressClick) return; // the click that ended a pan-drag
+    if (e.target === imageLightboxModal || e.target === lightboxStage) {
         closeLightbox();
     }
 });
@@ -5239,9 +5417,137 @@ btnLightboxClose.addEventListener("click", () => {
 });
 
 btnLightboxDownload.addEventListener("click", () => {
-    const url = lightboxImage.src;
+    const url = lightbox.url;
     if (url) {
         api.downloadImage(url);
+    }
+});
+
+btnLightboxZoomIn.addEventListener("click", () => lightboxStepZoom(1));
+btnLightboxZoomOut.addEventListener("click", () => lightboxStepZoom(-1));
+
+btnLightboxCopyLink.addEventListener("click", async () => {
+    if (!lightbox.url) return;
+    const ok = await api.copyText(lightbox.url);
+    showToast(ok ? "Image link copied" : "Couldn't copy the link");
+});
+
+btnLightboxOpenBrowser.addEventListener("click", async () => {
+    if (!lightbox.url) return;
+    const res = await api.openExternal(lightbox.url);
+    if (!res.success) showToast(escapeHtml(res.error ?? "Couldn't open the link"));
+});
+
+/**
+ * Copies the image itself. The bytes are fetched in the main process (no CORS
+ * restrictions), decoded here and re-encoded as PNG — which also normalises
+ * WebP/GIF (a GIF copies as its first frame) — then handed back to main to
+ * place on the clipboard.
+ */
+btnLightboxCopyImage.addEventListener("click", async () => {
+    const url = lightbox.url;
+    if (!url || lightbox.busy) return;
+    lightbox.busy = true;
+    btnLightboxCopyImage.disabled = true;
+    try {
+        const res = await api.fetchImageBytes(url);
+        if (!res.success || !res.bytes) throw new Error(res.error ?? "Couldn't fetch the image");
+        const bitmap = await createImageBitmap(new Blob([res.bytes as Uint8Array<ArrayBuffer>]));
+        const canvas = document.createElement("canvas");
+        canvas.width = bitmap.width;
+        canvas.height = bitmap.height;
+        canvas.getContext("2d")!.drawImage(bitmap, 0, 0);
+        bitmap.close();
+        const png = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
+        if (!png) throw new Error("Couldn't convert the image");
+        const ok = await api.copyPngToClipboard(new Uint8Array(await png.arrayBuffer()));
+        if (!ok) throw new Error("Couldn't copy the image");
+        showToast("Image copied to clipboard");
+    } catch (err: any) {
+        showToast(escapeHtml(err?.message ?? "Couldn't copy the image"));
+    } finally {
+        lightbox.busy = false;
+        btnLightboxCopyImage.disabled = false;
+    }
+});
+
+// Mouse wheel zooms toward the cursor.
+imageLightboxModal.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    if (!lightbox.naturalW) return;
+    lightboxSetScale(lightbox.scale * Math.exp(-e.deltaY * 0.002), lightboxStagePoint(e));
+}, { passive: false });
+
+// Double-click toggles between fit and 100% (or 200% for an image that is
+// already shown at its natural size).
+lightboxImage.addEventListener("dblclick", (e) => {
+    if (!lightbox.naturalW) return;
+    if (lightboxIsZoomed()) {
+        lightboxResetZoom();
+    } else {
+        lightboxSetScale(lightbox.fit < 1 ? 1 : LIGHTBOX_MAX_SCALE, lightboxStagePoint(e), true);
+    }
+});
+
+// Drag to pan while zoomed in.
+lightboxImage.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0 || !lightboxIsZoomed()) return;
+    lightbox.dragging = true;
+    lightbox.dragMoved = false;
+    lightbox.dragStartX = e.clientX;
+    lightbox.dragStartY = e.clientY;
+    lightbox.dragOriginTx = lightbox.tx;
+    lightbox.dragOriginTy = lightbox.ty;
+    lightboxImage.setPointerCapture(e.pointerId);
+    lightboxImage.classList.add("dragging");
+});
+
+lightboxImage.addEventListener("pointermove", (e) => {
+    if (!lightbox.dragging) return;
+    const dx = e.clientX - lightbox.dragStartX;
+    const dy = e.clientY - lightbox.dragStartY;
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) lightbox.dragMoved = true;
+    lightbox.tx = lightbox.dragOriginTx + dx;
+    lightbox.ty = lightbox.dragOriginTy + dy;
+    lightboxApply(false);
+});
+
+function endLightboxDrag(e: PointerEvent): void {
+    if (!lightbox.dragging) return;
+    lightbox.dragging = false;
+    lightboxImage.classList.remove("dragging");
+    if (lightboxImage.hasPointerCapture(e.pointerId)) lightboxImage.releasePointerCapture(e.pointerId);
+    if (lightbox.dragMoved) {
+        // A drag must not count as a click on the backdrop (which closes).
+        lightbox.suppressClick = true;
+        setTimeout(() => { lightbox.suppressClick = false; }, 0);
+    }
+}
+lightboxImage.addEventListener("pointerup", endLightboxDrag);
+lightboxImage.addEventListener("pointercancel", endLightboxDrag);
+
+// Keep the fitted size correct when the window is resized while open.
+window.addEventListener("resize", () => {
+    if (!imageLightboxModal.classList.contains("visible") || !lightbox.naturalW) return;
+    const wasFit = !lightboxIsZoomed();
+    lightbox.fit = lightboxComputeFit();
+    lightbox.scale = wasFit ? lightbox.fit : Math.min(LIGHTBOX_MAX_SCALE, Math.max(lightbox.fit, lightbox.scale));
+    lightboxApply(false);
+});
+
+// Keyboard zoom: + / - / 0. Only while the viewer is open, and handled keys
+// are swallowed so they can't also reach a chat input underneath.
+document.addEventListener("keydown", (e) => {
+    if (!imageLightboxModal.classList.contains("visible") || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.key === "+" || e.key === "=") {
+        e.preventDefault();
+        lightboxStepZoom(1);
+    } else if (e.key === "-" || e.key === "_") {
+        e.preventDefault();
+        lightboxStepZoom(-1);
+    } else if (e.key === "0") {
+        e.preventDefault();
+        lightboxResetZoom();
     }
 });
 
