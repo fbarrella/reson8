@@ -2329,3 +2329,60 @@ Feature/Fix: PRD 15.11 — Reaction hover card
   Next Step: all PRD 15 items are implemented — remaining after the user's
   review: bump versions (/bump-version), write the release notes, and
   update the three CLAUDE.md files and README.md.
+
+
+--- Entry: 04/10/2026 ---
+
+Feature/Fix: Phase 15 close-out — version bump to 2.4.0, release notes, documentation
+
+  Problem: With all 11 PRD 15 items implemented and hand-tested by the
+  user, the release still needed its version bump, release notes, and the
+  project docs brought up to date.
+
+  Solution:
+    - Version bump 2.3.0 -> 2.4.0 (minor: user-facing features, one
+      additive optional wire-format field, no DB migration, fully backward
+      compatible) in root, `apps/client` and `apps/server` `package.json`,
+      the README version badge and CLAUDE.md's "Current version" line.
+      `packages/shared-types` left on its own 0.x scheme.
+      `package-lock.json` regenerated with `npm install --package-lock-only`
+      (only the four workspace entries changed). Repo-wide sweep for
+      "2.3.0" outside node_modules/dist/release/.git/app-planning found no
+      other live pointers.
+    - New `app-planning/releases/v2.4.0.md` (every bullet traces to a
+      Phase 15 progress entry; calls out that the reaction hover card's
+      reactor names need the server updated too, and that older messages
+      containing Markdown characters now render formatted).
+    - `Reson8_Phase15_PRD.md` moved to `app-planning/archive/`.
+    - Docs: root CLAUDE.md (phases 1-15, new "Socket ownership", "Chat
+      messages (multi-line + Markdown)", "Emoji rendering" and "Reaction
+      hover card" paragraphs, the Windows window-restore/occlusion note,
+      window-state and image-viewer IPC notes, history paragraph and PRD
+      list); `apps/client/CLAUDE.md` (markdown.ts, window-state.ts, the
+      vendored emoji font, `setMessageBody`/lightbox/halo conventions, the
+      DevTools-protocol testing tip); `apps/server/CLAUDE.md` (new
+      services, test list, ownership and reaction-service conventions);
+      README (features, Phase 15 roadmap row, project structure).
+
+  Key Files Modified:
+    package.json
+    apps/client/package.json
+    apps/server/package.json
+    package-lock.json
+    README.md
+    CLAUDE.md
+    apps/client/CLAUDE.md
+    apps/server/CLAUDE.md
+    app-planning/releases/v2.4.0.md (NEW)
+    app-planning/Reson8_Phase15_PRD.md -> app-planning/archive/Reson8_Phase15_PRD.md (moved)
+
+  Verification:
+    `npx tsc --noEmit` in `apps/client` and `apps/server` — both clean
+    after the version bump. Lockfile diff reviewed (4 lines, workspace
+    entries only). Docs are prose only — not otherwise verified. Not done
+    (suggested housekeeping): progress.txt's ongoing log now holds Phase 14
+    + Phase 15 entries and is long; CLAUDE.md notes it should be condensed
+    into a fourth summary block with the full text archived.
+
+  Next Step: none — this closes out Phase 15. The user will push the
+  branch manually.
