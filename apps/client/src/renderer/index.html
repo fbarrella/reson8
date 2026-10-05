@@ -5,10 +5,12 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy"
-    content="default-src 'self'; script-src 'self' blob:; connect-src 'self' file: ws: wss: http: https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; media-src 'self' blob: http: https:; img-src 'self' blob: http: https: data:; frame-src https:;">
+    content="default-src 'self'; script-src 'self' blob:; connect-src 'self' file: ws: wss: http: https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; media-src 'self' blob: http: https:; img-src 'self' blob: http: https: data:; frame-src https:;">
   <title>Reson8</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <!-- Vendored Noto Color Emoji (PRD 15.8) — same relative-path convention as the sound alerts / deepfilternet assets -->
+  <link href="../../assets/fonts/noto-color-emoji/noto-color-emoji.css" rel="stylesheet">
   <style>
     /* ── Reset & Variables ─────────────────────────────────────────────── */
     *,
@@ -37,7 +39,7 @@
       --voice-icon: #4fc3f7;
       --text-icon: #ffa726;
       --radius: 6px;
-      --font: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      --font: 'Reson8 Emoji', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
       /* Pinned message bar (PRD 15.5) — dark amber so it stands apart from
          the blue chrome; text/background contrast measured at 9.8:1. */
       --pin-bg: #4a3b0a;
@@ -45,6 +47,16 @@
       --pin-text: #fff3c4;
       --pin-accent: #ffd54f;
       --pin-border: #b8860b;
+    }
+
+    /* Form controls don't inherit font-family by default and fall back to the
+       platform's, which would render emoji in the OS emoji font (PRD 15.8).
+       Putting the vendored emoji family first is safe for ordinary text: its
+       unicode-range only covers emoji code points, so every other character
+       still resolves to system-ui exactly as before. Explicit per-control
+       font-family rules further down still win. */
+    button, input, textarea, select {
+      font-family: 'Reson8 Emoji', system-ui, sans-serif;
     }
 
     body {
@@ -725,7 +737,7 @@
       flex: 1;
       overflow-y: auto;
       padding: 8px 12px;
-      font-family: 'Consolas', 'Monaco', monospace;
+      font-family: 'Reson8 Emoji', 'Consolas', 'Monaco', monospace;
       font-size: 12px;
       line-height: 1.6;
     }
@@ -1466,7 +1478,7 @@
 
     .status-latency {
       font-size: 10px;
-      font-family: monospace;
+      font-family: 'Reson8 Emoji', monospace;
       font-variant-numeric: tabular-nums;
       margin-left: 6px;
       opacity: 0.85;
@@ -1480,7 +1492,7 @@
       display: flex;
       align-items: center;
       gap: 6px;
-      font-family: monospace;
+      font-family: 'Reson8 Emoji', monospace;
       color: var(--text-muted);
       font-size: 10px;
       user-select: text;
@@ -1865,7 +1877,7 @@
 
     .admin-user-id {
       font-size: 9px;
-      font-family: monospace;
+      font-family: 'Reson8 Emoji', monospace;
       color: var(--text-muted);
       white-space: nowrap;
       overflow: hidden;

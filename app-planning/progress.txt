@@ -1956,3 +1956,79 @@ Feature/Fix: PRD 15.7 — App freezes after re-clicking the app icon (Windows) �
     output.
 
   Next Step: PRD 15.8 — Google (Noto) emoji on every OS.
+
+
+--- Entry: 04/10/2026 ---
+
+Feature/Fix: PRD 15.8 — Google (Noto) emoji on every OS
+
+  Problem: Emoji were plain Unicode text drawn by each OS's own emoji font
+  (Segoe UI Emoji on Windows, Apple Color Emoji on macOS, Noto on most
+  Linux), so the same message looked different per platform; Windows also
+  has no flag glyphs at all.
+
+  Solution: Bundle Google's Noto Color Emoji as a self-hosted web font and
+  put it first in the font stacks. Emoji stay real text, so selection,
+  copy/paste, the chat input, the picker, reactions and solo-emoji 4x
+  scaling keep working unchanged.
+
+  Two corrections to the PRD's assumptions, found while implementing:
+    1. The @fontsource/noto-color-emoji npm package ships the OpenType-SVG
+       build (`SVG ` table). Chromium does not render that format — a
+       first render test showed every emoji as BLANK (not even a fallback).
+       The vendored files are instead the COLRv1 woff2 subsets Google Fonts
+       serves to Chrome (COLR/CPAL tables; verified with fontTools).
+    2. Google's own `unicode-range` lines are NOT emoji-only: one subset
+       includes U+23 (#), U+2A (*), U+30-39 (digits), U+A9, U+AE and U+2122
+       (for keycap/text-default emoji). With the family first in the stack
+       that would draw ordinary digits and (c)/(R)/(TM) as emoji. Those code
+       points are stripped from the vendored CSS (documented in its header
+       comment; re-apply when updating the files). Consequence: keycap
+       sequences such as 1-FE0F-20E3 fall back to the system emoji font.
+
+  Client Changes:
+    - New `assets/fonts/noto-color-emoji/`: `noto-color-emoji.css` (family
+      renamed to 'Reson8 Emoji', `font-display: block`, 11 unicode-range
+      subsets), `files/*.woff2` (2.1 MB total, measured), and the OFL
+      LICENSE. Same relative-path convention as the sound alerts
+      (`../../assets/...` from dist/renderer/index.html); already covered
+      by `build.files: assets/**/*`, so no package.json change.
+    - `index.html`: `<link>` to the emoji stylesheet; CSP `font-src` gained
+      `'self'` (nothing else changed); `--font` now starts with 'Reson8
+      Emoji'; the `monospace` stacks (event log + 3 others) got it first;
+      a new base rule `button, input, textarea, select { font-family:
+      'Reson8 Emoji', system-ui, sans-serif }` because form controls don't
+      inherit font-family (the reaction pills, picker items and category
+      tabs are buttons and would otherwise keep the OS emoji). Explicit
+      per-control rules further down still win. Side effect to be aware of:
+      controls that previously had NO font-family now name `system-ui`
+      explicitly instead of the platform default, which is nearly identical
+      on every OS.
+    - Out of scope (OS-rendered, cannot be styled): native window title
+      (the red dot while sharing), tray menu, native notifications, the
+      Viewer window's title bar.
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html
+    apps/client/assets/fonts/noto-color-emoji/noto-color-emoji.css (NEW)
+    apps/client/assets/fonts/noto-color-emoji/files/*.woff2 (NEW, 11 files)
+    apps/client/assets/fonts/noto-color-emoji/LICENSE (NEW)
+
+  Verification:
+    Rendered a test page in real Electron (Chromium 132) with the vendored
+    CSS and captured a screenshot: digits/#/*/(c)/(R)/(TM) stay plain text;
+    thumbs-up, heart, flags (BR, US, rainbow), a ZWJ family and a skin-tone
+    technologist all render in the Noto style, crisp at 52px (vector), in
+    normal text, inside a <button>, inside an <input> and in a monospace
+    stack. Loaded the real built `dist/renderer/index.html` in Electron:
+    the font faces load (`loaded` status for the subsets used) with no CSP
+    violation logged. `build.files` checked statically (`assets/**/*`);
+    NOT run: an actual packaged build. NOT verified: Windows rendering —
+    this was tested on Linux, where the web font still takes precedence
+    over the system one, but the Windows hand-check remains the user's.
+    (If COLRv1 misbehaves there, the fallback is the bitmap CBDT build.)
+    Also not checked: line-height shifts in chat rows / picker / reaction
+    pills — visual check left to the user.
+
+  Next Step: PRD 15.9 — image viewer toolbar, zoom, copy, open in browser
+  and "sent by".
