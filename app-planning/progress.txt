@@ -1760,3 +1760,41 @@ Feature/Fix: PRD 15.3 — Pause own voice halo while muted
     moves while muted.
 
   Next Step: PRD 15.4 — disabled Ban button on your own User Management row.
+
+
+--- Entry: 04/10/2026 ---
+
+Feature/Fix: PRD 15.4 — Show a disabled Ban button on your own User Management row
+
+  Problem: In Settings -> User Management, the Ban button was hidden on the
+  viewing admin's own row, so the rows looked inconsistent.
+
+  Solution: Render the Ban button on the user's own row too, but disabled.
+
+  Client Changes:
+    - `renderer.ts` (User Management row builder): the old
+      `canBanUsers && user.id !== myId` condition is split. When
+      `canBanUsers && user.id === myId` a real `<button disabled>` is
+      appended — same `.btn-ban` class, same Ban icon and label,
+      `aria-disabled="true"`, `title="You can't ban yourself"`, and no
+      click listener attached. Other users' rows keep the existing
+      Ban/Unban logic untouched (`else if (canBanUsers)`).
+    - `index.html`: `.btn-ban:hover` became `.btn-ban:not(:disabled):hover`
+      so a disabled button shows no hover fill; new `.btn-ban:disabled`
+      rule (muted text/border, transparent background, `cursor:
+      not-allowed`, 0.6 opacity).
+    - Server needed no change: `moderation.handler.ts` already rejects a
+      self-ban ("Cannot ban yourself"), so the disabled UI is not the only
+      guard.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/renderer/index.html
+
+  Verification:
+    `npx tsc --noEmit` in `apps/client` — clean. Confirmed by reading
+    `moderation.handler.ts` that the server-side self-ban guard exists.
+    Manual UI check not run (left to the user): own row shows a grey,
+    unclickable Ban; other rows still ban/unban and refresh the list.
+
+  Next Step: PRD 15.5 — pinned message bar to dark yellow.

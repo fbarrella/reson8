@@ -3415,11 +3415,21 @@ function renderAdminUsers(users: any[]): void {
             row.appendChild(badgesEl);
         }
 
-        // Ban / Unban — only for those who hold BAN_USER, never for yourself
-        // (PRD 13.17). Works for offline users too, unlike the old Online
-        // Users modal button this replaces — GET_ALL_USERS lists every user
-        // with a role on this server regardless of online status.
-        if (canBanUsers && user.id !== myId) {
+        // Ban / Unban — only for those who hold BAN_USER (PRD 13.17). Works
+        // for offline users too, unlike the old Online Users modal button
+        // this replaces — GET_ALL_USERS lists every user with a role on
+        // this server regardless of online status. Your own row shows a
+        // disabled Ban button instead of hiding it (PRD 15.4) so the rows
+        // stay consistent; the server independently rejects self-ban.
+        if (canBanUsers && user.id === myId) {
+            const selfBanBtn = document.createElement("button");
+            selfBanBtn.className = "btn-ban";
+            selfBanBtn.disabled = true;
+            selfBanBtn.setAttribute("aria-disabled", "true");
+            selfBanBtn.title = "You can't ban yourself";
+            selfBanBtn.innerHTML = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="7" cy="7" r="4"/><circle cx="18" cy="17" r="5"/><line x1="14.5" y1="20.5" x2="21.5" y2="13.5"/></svg> Ban';
+            row.appendChild(selfBanBtn);
+        } else if (canBanUsers) {
             const banBtn = document.createElement("button");
             banBtn.className = user.isBanned ? "btn-unban" : "btn-ban";
             // "Ban" gets a user-with-a-no-entry-circle icon so the

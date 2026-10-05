@@ -2295,9 +2295,19 @@
       flex-shrink: 0;
     }
 
-    .btn-ban:hover {
+    .btn-ban:not(:disabled):hover {
       background: #e74c3c;
       color: #fff;
+    }
+
+    /* Your own row (PRD 15.4): shown but inert, so the rows stay visually
+       consistent instead of the button vanishing. */
+    .btn-ban:disabled {
+      color: var(--text-muted);
+      border-color: var(--border);
+      background: transparent;
+      cursor: not-allowed;
+      opacity: 0.6;
     }
 
     .btn-nudge {
