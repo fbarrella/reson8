@@ -3,7 +3,7 @@
 **Created:** 07/10/2026
 **Author:** Felipe B. Netto (assisted by AI)
 **Status:** Draft — Pending Review
-**Source:** `app-planning/nextsteps.txt` (8 items) + the five reference screenshots in `app-planning/` (`print_discord_*.png`)
+**Source:** `app-planning/nextsteps.txt` (8 items) + the five reference screenshots in `app-planning/` (`print_discord_*.png`) + two upload-pipeline issues found during the audit and added at the user's request (PRD 16.8, 16.9)
 **Branch:** `phase16-go`
 
 ---
@@ -14,15 +14,17 @@
 2. [PRD 16.2 — Chore: Optional Image Blurring in NSFW Channels (Per User)](#prd-162--chore-optional-image-blurring-in-nsfw-channels-per-user)
 3. [PRD 16.3 — Chore: Highlight the Text Channel Being Viewed (Eye Icon)](#prd-163--chore-highlight-the-text-channel-being-viewed-eye-icon)
 4. [PRD 16.4 — Feat: Mute Text Channels (Per User, Client-Side)](#prd-164--feat-mute-text-channels-per-user-client-side)
-5. [PRD 16.5 — Refactor: Floating Message Action Toolbar (Foundation for 16.6 and 16.9)](#prd-165--refactor-floating-message-action-toolbar-foundation-for-166-and-169)
+5. [PRD 16.5 — Refactor: Floating Message Action Toolbar (Foundation for 16.6 and 16.11)](#prd-165--refactor-floating-message-action-toolbar-foundation-for-166-and-1611)
 6. [PRD 16.6 — Chore: Group Consecutive Messages + Header Layout + HH:MM Timestamps](#prd-166--chore-group-consecutive-messages--header-layout--hhmm-timestamps)
 7. [PRD 16.7 — Feat: Emoji Autocomplete While Typing `:name`](#prd-167--feat-emoji-autocomplete-while-typing-name)
-8. [PRD 16.8 — Chore: Multi-Image Upload, Persistent Previews, Preview Viewer, Drag & Drop](#prd-168--chore-multi-image-upload-persistent-previews-preview-viewer-drag--drop)
-9. [PRD 16.9 — Feat: Message Replies (Channels and DMs)](#prd-169--feat-message-replies-channels-and-dms)
-10. [Cross-Cutting Dependencies & Recommended Implementation Order](#cross-cutting-dependencies--recommended-implementation-order)
-11. [Open Decisions Confirmed With the User](#open-decisions-confirmed-with-the-user)
-12. [Pre-Existing Issues Noticed During the Audit (Out of Scope)](#pre-existing-issues-noticed-during-the-audit-out-of-scope)
-13. [Mapping to `nextsteps.txt`](#mapping-to-nextstepstxt)
+8. [PRD 16.8 — Security Fix: Server-Side Upload Ownership (Stored-File Ledger + Upload Tokens)](#prd-168--security-fix-server-side-upload-ownership-stored-file-ledger--upload-tokens)
+9. [PRD 16.9 — Fix: Orphaned Upload Cleanup (Discard, Sweeper, Channel Delete, One-Time Prune)](#prd-169--fix-orphaned-upload-cleanup-discard-sweeper-channel-delete-one-time-prune)
+10. [PRD 16.10 — Chore: Multi-Image Upload, Persistent Previews, Preview Viewer, Drag & Drop](#prd-1610--chore-multi-image-upload-persistent-previews-preview-viewer-drag--drop)
+11. [PRD 16.11 — Feat: Message Replies (Channels and DMs)](#prd-1611--feat-message-replies-channels-and-dms)
+12. [Cross-Cutting Dependencies & Recommended Implementation Order](#cross-cutting-dependencies--recommended-implementation-order)
+13. [Open Decisions Confirmed With the User](#open-decisions-confirmed-with-the-user)
+14. [Pre-Existing Issues Noticed During the Audit](#pre-existing-issues-noticed-during-the-audit)
+15. [Mapping to `nextsteps.txt`](#mapping-to-nextstepstxt)
 
 ---
 
@@ -35,8 +37,9 @@
 > next item. Complex UI/UX testing is done by hand by the user, not by Claude.
 >
 > Only after every item below is implemented and confirmed: run `/bump-version`
-> (SemVer: this phase adds user-facing features, two additive DB migrations and
-> additive wire-format fields, all backward compatible with v2.4.0 clients/servers,
+> (SemVer: this phase adds user-facing features, three additive DB migrations,
+> additive wire-format fields and a security fix, all backward compatible with
+> v2.4.0 clients/servers,
 > so a **minor** bump to `2.5.0` is expected, pending the skill's own check), write
 > the release notes into `app-planning/releases/`, and update all three `CLAUDE.md`
 > files plus `README.md` to reflect the final Phase 16 feature set.
@@ -52,12 +55,12 @@
 > This PRD was written after reading every `nextsteps.txt` item, the five reference
 > screenshots, and auditing the code each item touches: `renderer.ts`, `index.html`,
 > `preload.ts`, `main.ts`, `markdown.ts`, `message.handler.ts`, `dm.handler.ts`,
-> `upload.route.ts`, `storage.service.ts`, `schema.prisma`, and the shared-types
+> `emoji.handler.ts`, `channel.handler.ts`, `upload.route.ts`, `storage.service.ts`, `index.ts`, `schema.prisma`, and the shared-types
 > event maps/models. File paths and line numbers reflect the code as of 07/10/2026
 > (branch `phase16-go`, post-Phase-15, v2.4.0). Re-check them if the surrounding
-> code has moved by the time an item is implemented; items 16.5–16.9 all edit the
-> same message-rendering region of `renderer.ts`, so line numbers *will* drift
-> between them. Eight design decisions were resolved directly with the user (see
+> code has moved by the time an item is implemented; items 16.5–16.11 all edit the
+> same message-rendering or upload regions of `renderer.ts`, so line numbers *will* drift
+> between them. Nine design decisions were resolved directly with the user (see
 > [Open Decisions](#open-decisions-confirmed-with-the-user)); the remaining
 > reasonable-default assumptions are listed there too. Flag anything you'd rather
 > change before implementation starts.
@@ -175,7 +178,7 @@ The render code keeps always wrapping NSFW images exactly as now, so turning the
 ### Edge Cases
 
 - Admin toggles a channel's NSFW flag while it's open: pre-existing behavior (already-rendered messages keep their original wrapping until the tab is rebuilt) is unchanged and out of scope.
-- PRD 16.8 renders multiple images per message and **must keep wrapping each NSFW image in `.msg-image-nsfw-wrap`** so this toggle covers them too (called out in 16.8's regression section).
+- PRD 16.10 renders multiple images per message and **must keep wrapping each NSFW image in `.msg-image-nsfw-wrap`** so this toggle covers them too (called out in 16.10's regression section).
 
 ### Regression Risk
 
@@ -292,15 +295,15 @@ The context-menu signature changes (one call site each in `renderChannel`/`rende
 
 ---
 
-## PRD 16.5 — Refactor: Floating Message Action Toolbar (Foundation for 16.6 and 16.9)
+## PRD 16.5 — Refactor: Floating Message Action Toolbar (Foundation for 16.6 and 16.11)
 
 **Type:** 🔧 REFACTOR (user-approved, enabling change)
-**Priority:** High (blocks 16.6 and 16.9)
+**Priority:** High (blocks 16.6 and 16.11)
 **Affected Components:** Client only: `renderer.ts` (`buildReactionBar`, `attachEditButton`, `attachPinButton`, `updatePinBarUI`, `updateReactionBar`, message element builders), `index.html` (CSS).
 
 ### Why This Exists
 
-Today the message actions (react, edit, pin, delete) are appended **inside** `.msg-reactions` (`buildReactionBar()`, `renderer.ts:5889`), and that bar has `min-height: 20px` (`index.html:990`) on **every** message so the hover-only buttons have somewhere to appear. That is why every message carries a fixed empty strip under it. It directly contradicts the grouping item (16.6): *"even though the grouped messages are vertically close, whenever a reaction is added, the space respective to the reactions section should be reinstated"*. It also leaves no good place for 16.9's Reply button. The user approved moving the actions into a floating hover toolbar like the one in `print_discord_grouped_messages.png`.
+Today the message actions (react, edit, pin, delete) are appended **inside** `.msg-reactions` (`buildReactionBar()`, `renderer.ts:5889`), and that bar has `min-height: 20px` (`index.html:990`) on **every** message so the hover-only buttons have somewhere to appear. That is why every message carries a fixed empty strip under it. It directly contradicts the grouping item (16.6): *"even though the grouped messages are vertically close, whenever a reaction is added, the space respective to the reactions section should be reinstated"*. It also leaves no good place for 16.11's Reply button. The user approved moving the actions into a floating hover toolbar like the one in `print_discord_grouped_messages.png`.
 
 This item is purely structural: **every existing action keeps working exactly as before**. It just moves.
 
@@ -311,7 +314,7 @@ This item is purely structural: **every existing action keeps working exactly as
   - Hidden by default (`opacity: 0; pointer-events: none`). Shown on `.chat-msg:hover`, `.chat-msg:focus-within` (keyboard access), and while `.chat-msg.actions-open` is set. That class is set while this message's reaction picker is open, so the toolbar doesn't vanish when the pointer moves into the picker. It is cleared in `closeEmojiPicker()` (`renderer.ts:6568`).
   - **Near the top edge:** if a message's top is within ~18px of its scroll container's visible top, the toolbar would be clipped. On `mouseenter`, add `.actions-inside` (`top: 2px`) when `el.getBoundingClientRect().top - messagesEl.getBoundingClientRect().top < 18`.
   - Buttons: 26×26, 16px Feather-style SVG icons, `aria-label` + `title` on each, hover background `rgba(255,255,255,0.08)`. Delete hovers to `var(--danger)` as today.
-  - **Order (left → right):** React · *(Reply, added in 16.9)* · Edit (own, within the 2-min window) · Pin (channels only) · Delete (own). This mirrors the reference's order (react → edit → reply → more).
+  - **Order (left → right):** React · *(Reply, added in 16.11)* · Edit (own, within the 2-min window) · Pin (channels only) · Delete (own). This mirrors the reference's order (react → edit → reply → more).
 - **Row hover tint:** `.chat-msg:hover { background: rgba(255,255,255,0.03); }` with a small negative horizontal margin and matching padding, so the user sees which line the toolbar applies to. This is essential once 16.6 packs lines tightly.
 - **Reaction bar becomes reactions-only:**
   - `.msg-reactions` holds only the pills plus, *when at least one pill exists*, a trailing small "add reaction" button (the same smiley SVG, the Discord pattern).
@@ -324,7 +327,7 @@ This item is purely structural: **every existing action keeps working exactly as
 1. **Split `buildReactionBar()`** into:
    - `buildReactionBar(msgId, isDm, reactions)`: pills + the trailing add button when non-empty, and sets `.has-reactions`. Keeps `data-react-bar` and `reactionPillData` / hover-card behavior (PRD 15.11) intact, including `hideReactionCard()` on rebuild.
    - `buildMessageActions(msgId, isDm, ownerId)`: the toolbar with React (opens `openReactionPicker(msgId, isDm, btn)` and sets `actions-open`) and Delete (own messages → `showDeleteMessageModal`).
-2. **`attachEditButton()` / `attachPinButton()`** take the **toolbar** instead of the reaction bar (the signature's `bar` parameter becomes `toolbar`). Insertion order must follow the design order above. Use `insertBefore` relative to the Delete button rather than plain `append`, so 16.9 can slot Reply in deterministically. The edit button's 2-minute self-removal timer is unchanged.
+2. **`attachEditButton()` / `attachPinButton()`** take the **toolbar** instead of the reaction bar (the signature's `bar` parameter becomes `toolbar`). Insertion order must follow the design order above. Use `insertBefore` relative to the Delete button rather than plain `append`, so 16.11 can slot Reply in deterministically. The edit button's 2-minute self-removal timer is unchanged.
 3. **`updateReactionBar()`** (`:5968`) no longer needs `data-msg-owner` to rebuild owner-only buttons, since the bar no longer contains any. Simplify accordingly (keep the attribute itself; 16.6 uses it).
 4. **Both builders** (`buildChatMessageElement` `:4044`, `buildDmMessageElement` `:4387`) append the reaction bar *and* the toolbar.
 5. **`attachMessageTruncation()`** (`:4215`) still inserts "See more" before `.msg-reactions`. The bar is always present in the DOM (just hidden when empty), so this keeps working unchanged.
@@ -380,7 +383,7 @@ hey!
   2. Same author (`data-msg-owner`).
   3. `cur.createdAt − groupStart(prev) < 5 min` (`GROUP_WINDOW_MS = 5 * 60 * 1000`), measured **from the group's first message** (user decision). A group never spans more than 5 minutes, so the header time stays meaningful.
   4. `cur.createdAt ≥ prev.createdAt` (defensive against clock skew).
-  5. `cur` is **not a reply** (16.9: a reply always starts a new group with its own header, matching `print_discord_reply2.png`). Until 16.9 lands, this condition is a no-op.
+  5. `cur` is **not a reply** (16.11: a reply always starts a new group with its own header, matching `print_discord_reply2.png`). Until 16.11 lands, this condition is a no-op.
 - **Continuation timestamp:** a continuation shows no visible time. Its `.msg-body` carries a `title` with the full date/time, so hovering the text reveals when it was sent. (The project has no avatar gutter, so Discord's hover-time-in-the-gutter has no place to go; a native tooltip on the text keeps the layout unchanged.)
 - **Reactions:** unchanged behavior. Thanks to 16.5, a continuation with no reactions takes only its text line; adding a reaction shows its strip directly under that line (the "space reinstated" requirement).
 - **"(edited)" label:** moves from after the time to **after the message text** (`.msg-edited` inline at the end of `.msg-body`), the Discord placement. A continuation has no header to hold it, so this is the only consistent spot for both message kinds.
@@ -392,7 +395,7 @@ hey!
 <div class="chat-msg msg-group-start|msg-continuation"
      data-msg-id data-msg-type data-msg-owner
      data-created-at="ISO" data-group-start="ISO">
-  <!-- 16.9: .msg-reply snippet goes here -->
+  <!-- 16.11: .msg-reply snippet goes here -->
   <div class="msg-header">                        <!-- always rendered; hidden by CSS on continuations -->
     <span class="msg-nick">nick</span><span class="msg-time" title="full date">23:32</span>
   </div>
@@ -487,7 +490,7 @@ Typing `:` followed by a **letter** in the chat box opens a floating card **righ
 - **Keyboard (while open):**
   - `↑`/`↓` move the selection (wrapping).
   - `Enter` or `Tab` **select**, and must *not* send the message. Integrate into the existing `chatInput` keydown handler (`:4302`): if the autocomplete consumed the key, `preventDefault()` and return before the send logic.
-  - `Escape` closes the card only (and must not also cancel 16.9's reply mode; use `stopPropagation`).
+  - `Escape` closes the card only (and must not also cancel 16.11's reply mode; use `stopPropagation`).
   - `Shift+Enter` closes the card and inserts a newline as usual.
 - **Mouse:** hover highlights; `mousedown` → `preventDefault()` (keeps textarea focus); `click` selects.
 - **Selecting:** replace the `:query` span (from the colon to the caret) using `setRangeText(..., "end")`:
@@ -527,11 +530,189 @@ Low-medium: the main risk is the Enter key. Sending must keep working whenever t
 
 ---
 
-## PRD 16.8 — Chore: Multi-Image Upload, Persistent Previews, Preview Viewer, Drag & Drop
+## PRD 16.8 — Security Fix: Server-Side Upload Ownership (Stored-File Ledger + Upload Tokens)
+
+**Type:** 🔒 SECURITY FIX (with a schema change)
+**Priority:** Critical (must land before 16.10, which multiplies the number of files per message)
+**Source:** found during this PRD's audit; added at the user's request
+**Affected Components:** shared-types, server (`schema.prisma` + migration, `routes/upload.route.ts`, `message.handler.ts`, `dm.handler.ts`, `emoji.handler.ts`, `channel.handler.ts`, new `services/stored-file.service.ts` + tests), client (`preload.ts`, `renderer.ts`).
+
+### The Vulnerability (confirmed by code reading)
+
+The server stores whatever file URL and Cloudinary `publicId` a client *says* belongs to it, then later **deletes the file at that URL / `publicId`**:
+
+| Path | Trusted client input | Destructive follow-up |
+|:---|:---|:---|
+| `SEND_MESSAGE` (`message.handler.ts:~90`), `SEND_DIRECT_MESSAGE` (`dm.handler.ts:~52`) | `attachmentUrl`, `attachmentPublicId` | `DELETE_MESSAGE`/`DELETE_DIRECT_MESSAGE` → `deleteAttachment(url, publicId)` |
+| `CREATE_CUSTOM_EMOJI` (`emoji.handler.ts:70`) | `imageUrl`, `imagePublicId` | an admin **rejecting** it → `deleteAttachment(...)` (`:201`) |
+| `UPDATE_CHANNEL` icon (`channel.handler.ts:~177`, MANAGE_CHANNELS only) | `iconUrl`, `iconPublicId` | replacing the icon deletes the *previous* one |
+
+Concrete attacks (a modified client, or simply the DevTools console calling the preload API):
+1. Post a message whose "attachment" is another user's image URL (visible to everyone in chat), then delete your own message. The **victim's file is deleted** from local disk (`storage.service.ts:40` deletes by basename).
+2. Same, but with an arbitrary `attachmentPublicId`. `cloudinary.uploader.destroy()` is called with it, so **any asset in the server's Cloudinary account** can be destroyed, even ones outside the `reson8/` folder.
+3. Submit a custom emoji pointing at someone's image. An admin who rejects it unknowingly deletes the victim's file.
+4. Side issue: any external URL can be posted as an "attachment" (e.g. a tracking pixel on a third-party host that logs the IP of everyone who opens the chat). Today only uploaded files *should* ever be attachments.
+
+### Design: a Stored-File Ledger + Socket-Issued Upload Tokens
+
+The server keeps its own record of every file it stores. Consumers reference those records by id. Each record is claimable **once**, **only by its uploader**, **only for its purpose**. Deletion only ever uses the ledger's own `url`/`publicId`.
+
+**1. Ledger model**
+
+```prisma
+enum StoredFileKind {
+  MESSAGE_ATTACHMENT
+  CUSTOM_EMOJI
+  CHANNEL_ICON
+}
+
+model StoredFile {
+  id        String         @id @default(uuid())
+  url       String         @unique
+  publicId  String?        // Cloudinary public_id — null for local-disk storage
+  kind      StoredFileKind
+  ownerId   String?        // uploader's instance id; null = tokenless legacy upload or backfilled row
+  claimedAt DateTime?      // null = uploaded but not attached to anything yet
+  createdAt DateTime       @default(now())
+
+  @@index([claimedAt, createdAt]) // the 16.9 sweeper's query
+  @@map("stored_files")
+}
+```
+
+Migration `add_stored_file_ledger` (`--create-only`, then hand-append the backfill). Every file **already referenced** today is recorded as claimed:
+
+```sql
+INSERT INTO "stored_files" ("id","url","publicId","kind","ownerId","claimedAt","createdAt")
+SELECT gen_random_uuid(), "attachmentUrl", "attachmentPublicId", 'MESSAGE_ATTACHMENT', "userId", "createdAt", "createdAt"
+FROM "messages" WHERE "attachmentUrl" IS NOT NULL
+ON CONFLICT ("url") DO NOTHING;
+-- same for "direct_messages" (owner "senderId"), "custom_emojis"."imageUrl"
+-- (kind CUSTOM_EMOJI, owner "uploadedBy"), "channels"."iconUrl" (kind CHANNEL_ICON, owner NULL)
+```
+
+`ON CONFLICT DO NOTHING` matters: the same URL can legitimately appear twice already (or because the exploit was used), and `url` is unique in the ledger. The release guard below handles shared URLs safely.
+
+**2. Upload tokens** (who uploaded this?)
+
+`/api/upload*` is plain HTTP with no identity, while the socket *is* the user's identity. So:
+- New socket event `REQUEST_UPLOAD_TOKEN` → ack `{ success, token?, expiresAt? }`. The server generates `crypto.randomBytes(32).toString("base64url")` and stores `upload-token:<sha256(token)>` → `userId` in Redis with `EX 600` (10 minutes). The Redis key is hashed so a Redis dump doesn't contain usable tokens. One token covers any number of uploads until it expires (no extra round trip per file). **Viewer sockets** (`role: "viewer"`) are refused.
+- `preload.ts` `uploadTo()` caches the token, fetches a new one when under 60s remain, and on a `401` refreshes once and retries. It sends `Authorization: Bearer <token>`. (Fastify CORS is registered with `origin: true`, which reflects requested headers in the preflight; verify the preflight passes in manual testing.)
+- `handleUpload(app, request, reply, maxSize, mimeTypes, kind)`:
+  - header present → resolve the owner from Redis; missing or expired → `401 { error: "Upload session expired" }`;
+  - header absent → `ownerId = null` (v2.4.0 client compatibility, see below).
+
+  After storing the file it creates the ledger row (`claimedAt: null`) and responds with `{ url, publicId, uploadId }`. `url`/`publicId` are kept so old clients keep working.
+
+**3. `services/stored-file.service.ts`**
+- `claimUploads(tx, { ids?, legacyUrls?, kind, userId })`: one conditional `updateMany` (`where: { id|url in …, kind, claimedAt: null, OR: [{ ownerId: userId }, { ownerId: null }] }`, `data: { claimedAt: now }`). If `count` ≠ the number requested, it throws `UploadClaimError`, which the handler acks as *"Attachment is no longer available. Please re-attach it."* It then returns the ledger rows, whose `url`/`publicId` are what get persisted.
+  - The conditional update is an **atomic compare-and-set**: two concurrent sends of the same upload can't both win, and there's no read-then-write race.
+  - It runs inside the **same `$transaction`** as the message, emoji, or channel write, so a failed write rolls the claim back.
+- `releaseStoredFile(prisma, url)`: deletes the ledger row (`DELETE … RETURNING "url","publicId"`). Then the **reference-count guard**: the physical file is deleted only if no `messages`/`direct_messages` (and, after 16.10, `attachments`)/`custom_emojis`/`channels` row still references that URL. It always uses the **ledger's** `publicId`, never a client value. A URL absent from the ledger is never physically deleted.
+- Pure, unit-tested helpers (`src/__tests__/stored-file.service.test.ts`): `isClaimableBy(row, kind, userId)` (mirrors the `where` clause), the claim-count check, and token-key hashing.
+
+**4. Consumers**
+
+| Event | New input (shared-types, additive) | Behavior |
+|:---|:---|:---|
+| `SEND_MESSAGE` / `SEND_DIRECT_MESSAGE` | `attachmentIds?: string[]` (ledger ids; max **1** in this item, raised to 10 by 16.10) | claim `MESSAGE_ATTACHMENT`; persist the ledger's url/publicId |
+| | legacy `attachmentUrl` (v2.4.0 clients) | claimed **by URL** under the same rules |
+| | `attachmentPublicId` | **ignored from now on**: the `publicId` always comes from the ledger |
+| `DELETE_MESSAGE` / `DELETE_DIRECT_MESSAGE` | n/a | `releaseStoredFile(url)` instead of `deleteAttachment(clientValues)` |
+| `CREATE_CUSTOM_EMOJI` | `imageUploadId?` (legacy `imageUrl` accepted, `imagePublicId` ignored) | claim `CUSTOM_EMOJI` |
+| `REVIEW_CUSTOM_EMOJI` (reject) | n/a | `releaseStoredFile(emoji.imageUrl)` |
+| `UPDATE_CHANNEL` (icon) | `iconUploadId?` (legacy `iconUrl` accepted, `iconPublicId` ignored) | claim `CHANNEL_ICON`; the replaced or cleared icon → `releaseStoredFile` |
+
+The **kind** check prevents cross-purpose reuse (e.g. a chat upload can't become an emoji). The route-specific size and MIME limits stay as they are.
+
+**5. Client**
+- `preload.ts`: `uploadFile`/`uploadEmojiFile`/`uploadEmojiAnimatedFile`/`uploadChannelIcon` return `uploadId` as well. `sendMessage`/`sendDirectMessage` send `attachmentIds`; `createCustomEmoji` and `updateChannel` send the new id fields.
+- `renderer.ts`: keep `pendingAttachmentUploadId` alongside the existing pending state and pass it on send. The emoji crop/animated flows and the channel-icon flow pass their upload ids.
+
+### Backward Compatibility (v2.4.0 clients on a v2.5.0 server)
+
+Tokenless uploads are still accepted, recorded **ownerless**, and claimable **by URL, once**. The exploit is closed for old clients too, because every attack above relies on referencing a file **already in use**, and a claimed file can never be claimed again.
+
+The only residual window is that someone could claim another user's *ownerless, not-yet-sent* upload first, which requires guessing a random-UUID URL that only the uploader knows. A single config constant `ALLOW_TOKENLESS_UPLOADS = true` (`src/config/upload.config.ts`) makes "require tokens" a one-line change for a later phase, once v2.4.0 clients are gone.
+
+### Honest Scope Note
+
+Reson8 has no login. A user *is* the `instanceId` presented at `USER_JOIN_SERVER`. An upload token proves "connected as user X", which is exactly the strength of every other socket-gated action. It cannot defend against `instanceId` impersonation; that is the project's identity model and out of scope.
+
+### Regression Risk
+
+**High**: every upload path (chat, DM, static emoji, animated emoji, channel icon), message/DM delete, emoji review, and channel icon replace. Mitigated by the legacy fallbacks and by the claim running in the same transaction as each write.
+
+### Verification
+
+- **Typecheck:** shared-types → server → client. `npm run test` (new `stored-file.service` tests). `npm run db:migrate` on a DB with existing images, emoji and icons → all backfilled as claimed, and everything still renders.
+- **Manual (user):**
+  1. Send/delete an image in a channel and a DM → the file is created and removed.
+  2. Upload a static and an animated emoji → approve one, reject one → the rejected file is removed.
+  3. Set, replace and clear a channel icon → old files removed.
+  4. **Exploit regression:** from client B's DevTools console, send a message whose legacy `attachmentUrl` is client A's already-posted image URL → rejected ("no longer available"); A's image is intact.
+  5. Send with a fabricated `attachmentPublicId` → ignored.
+  6. Send with an external `https://…` URL as the attachment → rejected.
+  7. A v2.4.0 build (if available) can still send an image to the new server.
+  8. Leave the app idle for over 10 minutes, then upload → the token refreshes transparently.
+
+---
+
+## PRD 16.9 — Fix: Orphaned Upload Cleanup (Discard, Sweeper, Channel Delete, One-Time Prune)
+
+**Type:** 🐛 FIX
+**Priority:** Medium
+**Depends on:** 16.8 (the ledger is what makes "unreferenced" knowable)
+**Source:** found during this PRD's audit; added at the user's request
+**Affected Components:** shared-types, server (`channel.handler.ts`, new `services/upload-sweeper.ts`, new socket event, new prune script, `index.ts`), client (`preload.ts`, `renderer.ts`), `README.md`.
+
+### Where Orphans Come From Today
+
+1. An image picked, then removed from the tray (✕), or abandoned when the app closes. It was already uploaded the moment it was picked.
+2. A custom-emoji or channel-icon upload that is cancelled or fails after the file was uploaded (e.g. the emoji name is already taken).
+3. A send that fails after its upload.
+4. **`DELETE_CHANNEL`** (`channel.handler.ts:~147`): the messages cascade-delete in the DB, but their files (and the channel's icon) are never deleted.
+5. Historical leftovers from all of the above, from before this phase.
+
+### Fixes
+
+1. **Immediate discard.** New socket event `DISCARD_UPLOAD { uploadId }` → ack `{ success }`. One atomic statement: `DELETE FROM "stored_files" WHERE "id" = $1 AND "claimedAt" IS NULL AND "ownerId" = $2 RETURNING "url","publicId"`, then delete the file. You can only discard **your own unclaimed** uploads; ownerless legacy uploads are left to the sweeper. The client fires it (fire-and-forget; any failure falls to the sweeper) when:
+   - a pending image is removed from the tray (today's ✕; 16.10's trash button);
+   - the emoji upload or crop flow, or the channel-icon flow, is cancelled or rejected after its upload completed.
+2. **Unclaimed-upload sweeper** (`services/upload-sweeper.ts`, `startUploadSweeper(app)` called from `index.ts` after plugins load):
+   - Runs 1 minute after boot, then **hourly** (`setInterval(...).unref()`), and is cleared in Fastify's `onClose` hook.
+   - Each run, in batches of 500: `DELETE … WHERE "claimedAt" IS NULL AND "createdAt" < now() - interval '24 hours' RETURNING …`, then delete each file through the same reference-count guard as `releaseStoredFile` (16.8).
+   - The `DELETE … RETURNING` is atomic against a concurrent claim: either the claim wins (row claimed, not swept) or the sweep wins (the claim count mismatches and the user is told to re-attach; 16.10 shows that as a failed card with Retry).
+   - TTL constant `UNCLAIMED_UPLOAD_TTL_MS = 24h` in `config/upload.config.ts`. Logs `{ swept, freedBytes? }` at info level only when something was swept.
+3. **Channel deletion cleans its files.** In `DELETE_CHANNEL`, *before* deleting, collect the URLs of every message attachment in that channel plus the channel's own icon, via `collectChannelFileUrls(prisma, channelId)`. In this item that reads the legacy `messages.attachmentUrl`; 16.10 switches it to the `attachments` table. Then delete the channel (**DB first**, so a failed delete never loses files), then `releaseStoredFile` each URL with bounded concurrency (20 at a time, `Promise.allSettled`). Child channels are re-parented (`SetNull`), not deleted, so their messages and files are correctly untouched.
+4. **One-time historical prune** (local-disk storage): `apps/server/scripts/prune-orphan-uploads.mjs` (plain ESM + `@prisma/client`, so it runs in the production Docker image without `tsx`), exposed as `npm run uploads:prune`.
+   - Lists `uploads/`. A file is **kept** if its `/uploads/<name>` URL is in `stored_files` *or* still referenced by any of the referencing columns, or if it was modified in the last 24h (in-flight uploads).
+   - **Dry run by default:** prints each orphan and the total size. `--apply` deletes.
+   - README gets a short "Cleaning up orphaned uploads" section with the dev and `docker compose exec server npm run uploads:prune` usage. (Add a `COPY scripts` line to the server `Dockerfile` if the image doesn't already include it.)
+   - Cloudinary is **not** auto-pruned: listing assets uses the rate-limited Admin API, and the account may hold non-Reson8 assets. The README documents the manual approach (compare the `reson8/` folder against `stored_files`).
+
+### Regression Risk
+
+Medium. Deletion is the dangerous direction, so every delete path goes through `releaseStoredFile`'s reference-count guard, the sweeper only touches **unclaimed rows older than 24h**, and the prune script is dry-run by default and skips recent files.
+
+### Verification
+
+- **Typecheck** shared-types → server → client; `npm run test`.
+- **Manual (user):**
+  1. Pick an image, remove it → its file disappears from `apps/server/uploads/` immediately.
+  2. Cancel an emoji upload after picking the file → removed.
+  3. To test the sweeper without waiting 24h, temporarily lower the TTL (or backdate a row's `createdAt` in psql), restart → swept, and the server log shows the count.
+  4. Delete a channel that had images → their files are gone; a child channel's images remain.
+  5. `npm run uploads:prune` lists pre-existing orphans without deleting; `--apply` removes them; every image still in chat keeps loading.
+
+---
+
+## PRD 16.10 — Chore: Multi-Image Upload, Persistent Previews, Preview Viewer, Drag & Drop
 
 **Type:** 🧹 CHORE (with a schema change)
 **Priority:** High
-**Affected Components:** shared-types (`models.ts`, `socket-events.ts`), server (`schema.prisma` + migration, `message.handler.ts`, `dm.handler.ts`, new `services/attachment.service.ts` + tests), client (`preload.ts`, `renderer.ts`, `index.html`, `main.ts`).
+**Depends on:** 16.8 (uploads are referenced by ledger id and claimed server-side), 16.9 (removing a card discards its upload)
+**Affected Components:** shared-types (`models.ts`, `socket-events.ts`), server (`schema.prisma` + migration, `message.handler.ts`, `dm.handler.ts`, `channel.handler.ts`, `stored-file.service.ts`, new `services/attachment.service.ts` + tests), client (`preload.ts`, `renderer.ts`, `index.html`, `main.ts`).
 
 ### Current Behavior
 
@@ -579,33 +760,34 @@ model Attachment {
   -- same for "direct_messages" → "dmId"
   ```
   (`gen_random_uuid()` is built into Postgres 13+; the project runs 16.) The backfill runs inside the migration transaction, so it's all-or-nothing.
-- **Expand/contract:** the legacy `attachmentUrl`/`attachmentPublicId` columns are **kept, marked `// @deprecated (PRD 16.8)`, and no longer written or read** after the backfill. Dropping them is deferred to a future phase. That keeps a server rollback non-destructive, which is standard zero-downtime schema-change practice. The `Attachment` table becomes the single source of truth.
+- **Expand/contract:** the legacy `attachmentUrl`/`attachmentPublicId` columns are **kept, marked `// @deprecated (PRD 16.10)`, and no longer written or read** after the backfill. Dropping them is deferred to a future phase. That keeps a server rollback non-destructive, which is standard zero-downtime schema-change practice. The `Attachment` table becomes the single source of truth.
 - Docker deployments pick the migration up automatically (`entrypoint.sh` runs migrate on start).
 
 ### Wire Format (shared-types first; additive and backward compatible)
 
 - `models.ts`: `export interface IAttachment { url: string; }` and `export const MAX_ATTACHMENTS_PER_MESSAGE = 10;` (Discord's limit; shared by client validation and server enforcement).
 - `IMessage` / `IDirectMessage`: add `attachments?: IAttachment[]`. **Keep** `attachmentUrl`, now documented as deprecated and **always filled with `attachments[0]?.url ?? null`**, so a v2.4.0 client connected to a v2.5.0 server still renders the first image of a multi-image message instead of nothing.
-- `SEND_MESSAGE` / `SEND_DIRECT_MESSAGE` payloads: add `attachments?: { url: string; publicId?: string }[]`. **Keep accepting** the legacy single `attachmentUrl`/`attachmentPublicId` fields (a v2.4.0 client sending to a v2.5.0 server), normalized server-side to a one-element list.
+- `SEND_MESSAGE` / `SEND_DIRECT_MESSAGE` payloads: `attachmentIds?: string[]` (introduced by 16.8 with a max of 1) is raised to `MAX_ATTACHMENTS_PER_MESSAGE`. The legacy single `attachmentUrl` (v2.4.0 clients) keeps working through 16.8's claim-by-URL path. **No client-supplied URL or `publicId` is ever persisted:** `url`/`publicId` always come from the claimed ledger rows.
 
 ### Server
 
 1. **New `services/attachment.service.ts`** (pure where possible, the same pattern as `reaction.service.ts` / `message-text.ts`):
-   - `normalizeAttachmentInput(payload)`: merges `attachments` with the legacy fields. It validates that each entry is a non-empty string `url` ≤ 2048 chars and an optional string `publicId`, drops malformed entries, and rejects (returns an error) when there are more than `MAX_ATTACHMENTS_PER_MESSAGE`. Returns `{ url, publicId }[]`.
+   - `normalizeAttachmentInput(payload)`: validates `attachmentIds` (an array of non-empty strings, de-duplicated, order preserved) plus the legacy `attachmentUrl`, and rejects (returns an error) when there are more than `MAX_ATTACHMENTS_PER_MESSAGE`. Returns `{ ids, legacyUrls }` for 16.8's `claimUploads`; the claimed ledger rows (in request order) become the attachment list.
    - `toAttachmentDtos(rows)`: sorts by `position` and maps to `IAttachment[]` (never exposes `publicId`, the same as today).
-   - `deleteAttachmentFiles(rows)`: `Promise.allSettled` over the existing `deleteAttachment(url, publicId)`.
+   - `releaseAttachmentFiles(rows)`: `Promise.allSettled` over 16.8's `releaseStoredFile(url)` (ledger `publicId` + reference-count guard). Never calls `deleteAttachment` with message-row values directly.
+   - 16.8's reference-count guard and 16.9's `collectChannelFileUrls()` are updated to read the new `attachments` table (in addition to the deprecated columns, which still hold pre-migration values).
    - **Unit tests** `src/__tests__/attachment.service.test.ts`: legacy-only input, array-only input, both, empty, over-limit, malformed entries, ordering.
 2. **`message.handler.ts`:**
-   - `SEND_MESSAGE`: normalize; the empty-message check becomes "no text **and** no attachments". Create the message with a nested `attachments: { create: list.map((a, i) => ({ ...a, position: i })) }` (one atomic write). The DTO includes `attachments` + `attachmentUrl`.
+   - `SEND_MESSAGE`: normalize; the empty-message check becomes "no text **and** no attachments". In one `$transaction`: `claimUploads(...)` (16.8), then create the message with a nested `attachments: { create: claimed.map((f, i) => ({ url: f.url, publicId: f.publicId, position: i })) }`. A failed claim aborts the whole send. The DTO includes `attachments` + `attachmentUrl`.
    - `messageInclude` (`:40`): add `attachments: { orderBy: { position: "asc" } }`. `toMessageDto` and the `MessageWithRelations` type are updated.
-   - `DELETE_MESSAGE`: `deleteAttachmentFiles(message.attachments)` before deleting the row (the rows themselves cascade).
+   - `DELETE_MESSAGE`: delete the row first (attachments cascade), then `releaseAttachmentFiles(…)` on the URLs read beforehand. DB first, so a failed delete never loses files.
    - `EDIT_MESSAGE`: the "Image messages cannot be edited" rule becomes `attachments.length > 0` (same rule, new source). Its DTO includes attachments.
 3. **`dm.handler.ts`:** the same changes for `SEND_DIRECT_MESSAGE`, `FETCH_DIRECT_MESSAGES`, `DELETE_DIRECT_MESSAGE`.
 4. **Upload route unchanged:** one file per `POST /api/upload`, with the same 5 MB cap and MIME allowlist. The client uploads N files as N requests (simpler and more robust than a multi-part batch, and each card gets independent progress and retry).
 
 ### Client: Composer Restructure
 
-- Wrap the input area in a `#chat-composer` column: **(16.9's reply bar) → `#attachment-tray` → `#chat-input-bar`**. The tray moves **above** the input, as in the reference. `switchTab()`'s show/hide of `chatInputBar` (`:3586`) toggles `#chat-composer` instead. The old `#attachment-preview` element and its CSS are removed and replaced.
+- Wrap the input area in a `#chat-composer` column: **(16.11's reply bar) → `#attachment-tray` → `#chat-input-bar`**. The tray moves **above** the input, as in the reference. `switchTab()`'s show/hide of `chatInputBar` (`:3586`) toggles `#chat-composer` instead. The old `#attachment-preview` element and its CSS are removed and replaced.
 - `#file-input` gets `multiple`.
 
 ### Client: Pending Attachments State
@@ -616,7 +798,8 @@ interface PendingAttachment {
   file: File;
   objectUrl: string;     // kept alive for the card + preview until removed or sent
   status: "uploading" | "ready" | "failed";
-  url?: string; publicId?: string; error?: string;
+  uploadId?: string;     // 16.8 ledger id, set once uploaded
+  error?: string;
 }
 let pendingAttachments: PendingAttachment[] = [];
 ```
@@ -632,7 +815,7 @@ let pendingAttachments: PendingAttachment[] = [];
 - **Card:** 156px wide; a 140px-tall image area (`object-fit: contain` on `var(--bg-input)`, `border-radius: var(--radius)`); filename below, single line, ellipsized, full name in `title`.
 - **Action group** (top-right of the card, the reference's floating pill): `var(--bg-secondary)` background, border, radius. Revealed on card hover or `:focus-within`, and **always visible on a failed card**. Buttons (SVG, `aria-label` + tooltip):
   - 👁 **Preview** (eye): opens the limited viewer on the local `objectUrl`; works even while uploading.
-  - 🗑 **Remove** (trash, hover `var(--danger)`).
+  - 🗑 **Remove** (trash, hover `var(--danger)`): drops the card, revokes its object URL, and calls 16.9's `DISCARD_UPLOAD` if it was already uploaded. If it's still uploading, the discard runs as soon as the upload resolves.
   - ↻ **Retry** (rotate-ccw): **only** on failed cards.
 - **States:** uploading = image dimmed + a centered spinner (reuse `@keyframes attachment-spin`); ready = normal; failed = `var(--danger)` border + a warning icon overlay, with the error in the card's `title`.
 
@@ -643,7 +826,7 @@ let pendingAttachments: PendingAttachment[] = [];
 ### Client: Sending
 
 - **Gating:** if any card is `uploading`, Send and Enter don't send; show a toast *"Waiting for images to finish uploading…"*. If any card is `failed`, show *"Remove or retry the failed image first"*. The Send button gets a disabled look in both cases.
-- Payload: `attachments: ready.map(a => ({ url: a.url!, publicId: a.publicId }))`. `preload.ts`'s `sendMessage`/`sendDirectMessage` signatures change from `(…, attachmentUrl?, attachmentPublicId?)` to `(…, attachments?)`.
+- Payload: `attachmentIds: ready.map(a => a.uploadId!)`, in tray order (the 16.8 preload signature already takes the array). If the server answers *"no longer available"* (e.g. the 16.9 sweeper removed an upload left in the tray for over 24h), the restored cards for those uploads are marked failed with Retry, which re-uploads the same `File`.
 - Keep today's optimistic clear (input + tray clear immediately). On an **ack failure**, restore the tray items (their object URLs were deliberately not revoked yet) if the tray is still empty, and log the error as today. **Only revoke after success.**
 
 ### Client: Rendering Multiple Images in Messages
@@ -664,7 +847,6 @@ let pendingAttachments: PendingAttachment[] = [];
 
 ### Out of Scope (documented)
 
-- Orphaned files when a pending image is removed before sending (pre-existing; see [Pre-Existing Issues](#pre-existing-issues-noticed-during-the-audit-out-of-scope)).
 - Gallery left/right navigation between a message's images in the viewer.
 - Non-image file types.
 
@@ -701,11 +883,11 @@ let pendingAttachments: PendingAttachment[] = [];
 
 ---
 
-## PRD 16.9 — Feat: Message Replies (Channels and DMs)
+## PRD 16.11 — Feat: Message Replies (Channels and DMs)
 
 **Type:** ✨ FEATURE (with a schema change)
 **Priority:** High
-**Depends on:** 16.5 (toolbar), 16.6 (grouping rule 5), 16.8 (composer layout)
+**Depends on:** 16.5 (toolbar), 16.6 (grouping rule 5), 16.10 (composer layout)
 **Affected Components:** shared-types, server (`schema.prisma` + migration, `message.handler.ts`, `dm.handler.ts`, new `services/reply.service.ts` + tests), client (`preload.ts`, `renderer.ts`, `index.html`).
 
 ### Goal (per `print_discord_reply1.png` / `print_discord_reply2.png`)
@@ -721,7 +903,7 @@ Every message (channel **and DM**, per the user's decision) gets a **Reply** but
 
 - `models.ts`:
   ```ts
-  /** Snapshot of the message a reply points at (PRD 16.9). `deleted: true`
+  /** Snapshot of the message a reply points at (PRD 16.11). `deleted: true`
    *  means the original no longer exists; the other fields are then empty. */
   export interface IReplyPreview {
       id: string;
@@ -751,11 +933,11 @@ Every message (channel **and DM**, per the user's decision) gets a **Reply** but
 
 ### Client: Reply Mode (composer)
 
-- `#reply-bar` at the top of `#chat-composer` (from 16.8): `Replying to <strong class="reply-bar-nick">nick</strong>` (nick in accent) on the left, a ✕ SVG button (`aria-label="Cancel reply"`) on the right, `var(--bg-tertiary)` background, small text, like the reference.
+- `#reply-bar` at the top of `#chat-composer` (from 16.10): `Replying to <strong class="reply-bar-nick">nick</strong>` (nick in accent) on the left, a ✕ SVG button (`aria-label="Cancel reply"`) on the right, `var(--bg-tertiary)` background, small text, like the reference.
 - **State per tab:** `replyTargets: Map<tabId, { messageId; nickname }>`. A draft reply belongs to the conversation it was started in. `switchTab()` renders the bar for the newly active tab; `closeTab()` deletes its entry.
 - **Entering:** toolbar Reply → set the target, show the bar, focus `chatInput`, and add `.msg-reply-target` to the original message (a subtle accent left border, so the user sees what they're answering).
 - **Cancel:** the ✕, or **Escape** in the input when the emoji autocomplete (16.7) isn't open. Remove `.msg-reply-target`.
-- **Send:** pass `replyToId`; clear reply mode on send, and restore it on ack failure (the same pattern as 16.8's attachment restore).
+- **Send:** pass `replyToId`; clear reply mode on send, and restore it on ack failure (the same pattern as 16.10's attachment restore).
 - **Original deleted while replying** (`message-deleted` / `dm-deleted` for the target id): cancel reply mode and toast *"The message you were replying to was deleted."*
 
 ### Client: Rendering a Reply
@@ -790,7 +972,7 @@ Mentions or "ping the author" (Reson8 has no mention or notification system for 
 
 ### Regression Risk
 
-Medium: the composer (shared with 16.8), the Escape key (shared with 16.7), the pin-bar jump refactor, and two more DTO fields. Old clients ignore `replyTo` and just render the reply text as a normal message. That degrades gracefully with no breakage.
+Medium: the composer (shared with 16.10), the Escape key (shared with 16.7), the pin-bar jump refactor, and two more DTO fields. Old clients ignore `replyTo` and just render the reply text as a normal message. That degrades gracefully with no breakage.
 
 ### Verification
 
@@ -819,18 +1001,21 @@ Medium: the composer (shared with 16.8), the Escape key (shared with 16.7), the 
 | 3 | **16.3** Viewing highlight | Isolated tree change; `switchTab()` hook |
 | 4 | **16.4** Mute text channels | Tree + context menu; builds on 16.3's targeted-update pattern |
 | 5 | **16.5** Action toolbar | Foundation: frees the reaction strip, hosts Reply |
-| 6 | **16.6** Grouping + header + HH:MM | Needs 16.5; defines rule 5 that 16.9 activates |
-| 7 | **16.7** Emoji autocomplete | Composer keyboard handling; must exist before 16.9's Escape rule |
-| 8 | **16.8** Multi-image + composer | Schema migration #1; creates `#chat-composer` that 16.9 uses |
-| 9 | **16.9** Replies | Schema migration #2; uses 16.5, 16.6, 16.7, 16.8 |
+| 6 | **16.6** Grouping + header + HH:MM | Needs 16.5; defines rule 5 that 16.11 activates |
+| 7 | **16.7** Emoji autocomplete | Composer keyboard handling; must exist before 16.11's Escape rule |
+| 8 | **16.8** Upload ownership (security) | Schema migration #1 (ledger); must precede 16.10 so multi-image is built on claimed ids, not client URLs |
+| 9 | **16.9** Orphan cleanup | Needs the 16.8 ledger; provides `DISCARD_UPLOAD` used by 16.10's Remove |
+| 10 | **16.10** Multi-image + composer | Schema migration #2 (`attachments`); creates `#chat-composer` that 16.11 uses |
+| 11 | **16.11** Replies | Schema migration #3; uses 16.5, 16.6, 16.7, 16.10 |
 
 Shared touch points to watch:
-- **`switchTab()`** is touched by 16.3 (viewing), 16.7 (close autocomplete), 16.8 (composer visibility), and 16.9 (reply bar).
-- **`chatInput` keydown** is touched by 16.7 (Enter/Tab/Escape) and 16.9 (Escape). Precedence: autocomplete, then reply cancel, then send.
-- **Message builders** are touched by 16.5, 16.6, 16.8, and 16.9. Each item re-verifies the previous items' behavior.
+- **`switchTab()`** is touched by 16.3 (viewing), 16.7 (close autocomplete), 16.10 (composer visibility), and 16.11 (reply bar).
+- **`chatInput` keydown** is touched by 16.7 (Enter/Tab/Escape) and 16.11 (Escape). Precedence: autocomplete, then reply cancel, then send.
+- **Message builders** are touched by 16.5, 16.6, 16.10, and 16.11. Each item re-verifies the previous items' behavior.
 - **Settings → Application "Content" section** is touched by 16.1 and 16.2.
+- **Every upload/delete path** (`upload.route.ts`, message/DM/emoji/channel handlers) is touched by 16.8, 16.9 and 16.10. After 16.10, re-run 16.8's exploit-regression checks and 16.9's discard/sweeper checks against multi-image messages.
 
-Wrap-up after 16.9 (only after user confirmation): `/bump-version` (expected **2.4.0 → 2.5.0**, minor); release notes `app-planning/releases/v2.5.0.md` (mention that v2.4.0 clients see only the first image of multi-image messages and no reply snippets, and recommend updating); update the root, client, and server `CLAUDE.md` files (new `Attachment` model + expand/contract note, `reply.service.ts`/`attachment.service.ts`, the toolbar and grouping conventions, the `will-navigate` guard, the new `reson8-*` keys) and `README.md` (features + roadmap row 16); move this PRD to `archive/`.
+Wrap-up after 16.11 (only after user confirmation): `/bump-version` (expected **2.4.0 → 2.5.0**, minor); release notes `app-planning/releases/v2.5.0.md` (mention that v2.4.0 clients see only the first image of multi-image messages and no reply snippets, and recommend updating; describe the upload security fix at a high level, without a step-by-step exploit, and the new `npm run uploads:prune` maintenance command for self-hosters); update the root, client, and server `CLAUDE.md` files (the `StoredFile` ledger and "never persist or delete a client-supplied URL/publicId" rule, upload tokens, the sweeper, the new `Attachment` model + expand/contract note, `stored-file.service.ts`/`upload-sweeper.ts`/`reply.service.ts`/`attachment.service.ts`, the toolbar and grouping conventions, the `will-navigate` guard, the new `reson8-*` keys) and `README.md` (features + roadmap row 16); move this PRD to `archive/`.
 
 ---
 
@@ -846,6 +1031,7 @@ Wrap-up after 16.9 (only after user confirmation): `/bump-version` (expected **2
 | 6 | Pending-image card actions | **Preview (eye) + Remove (trash)**; no pencil |
 | 7 | Drag & drop images onto the chat | **Yes** |
 | 8 | Autocomplete inserts for Unicode emoji | **The emoji character itself**; a fully typed known `:name:` converts too |
+| 9 | Fix the two upload-pipeline issues found in the audit? | **Yes, both** (they become PRD 16.8 and 16.9) |
 
 **Reasonable-default assumptions (flag any you'd like changed):**
 - Autocomplete opens after **1 letter** (as written in `nextsteps.txt`; Discord waits for 2), shows at most 10 results, and ranks custom emoji first on ties.
@@ -856,16 +1042,19 @@ Wrap-up after 16.9 (only after user confirmation): `/bump-version` (expected **2
 - Continuation messages show their time via a **hover tooltip** on the text (there's no avatar gutter for Discord's hover-time slot).
 - "(edited)" moves to the **end of the message text**.
 - Legacy attachment columns are **kept but unused** this phase (expand/contract); dropping them is a future cleanup.
+- Tokenless (v2.4.0-client) uploads stay **accepted but ownerless and claim-once** for this release (`ALLOW_TOKENLESS_UPLOADS = true`); requiring tokens is a one-line change for a later phase.
+- Unclaimed uploads are swept after **24 hours**; the sweeper runs **hourly**. Upload tokens last **10 minutes**.
+- Historical orphan pruning is **local-disk only** and **dry-run by default**; Cloudinary cleanup stays manual (documented).
 
 ---
 
-## Pre-Existing Issues Noticed During the Audit (Out of Scope)
+## Pre-Existing Issues Noticed During the Audit
 
-Not part of `nextsteps.txt`; listed so they're tracked rather than silently ignored. Say the word if any should be pulled into this phase.
+Not part of the original `nextsteps.txt`. All three are now **in scope**:
 
-1. **Attachment URLs are trusted from the client.** `SEND_MESSAGE`/`SEND_DIRECT_MESSAGE` persist whatever `attachmentUrl` the client sends, and `DELETE_MESSAGE` then deletes that file from local disk by basename (`storage.service.ts:40`). A modified client could reference another user's `/uploads/…` URL in its own message, delete that message, and remove the other user's image file. A future fix: have `/api/upload` return a short-lived signed token per upload, or record uploader ownership server-side. PRD 16.8 keeps today's trust model unchanged.
-2. **Orphaned uploads.** Images are uploaded the moment they're picked, so an image removed from the tray (or abandoned) before sending stays on disk or Cloudinary forever. The same applies to files of messages in a deleted channel (the rows cascade, the files don't). A future cleanup job could sweep files with no referencing `Attachment` row.
-3. **Main-window navigation on file drop.** This one **is** fixed as part of PRD 16.8 (the drop guard + `will-navigate`), since drag & drop makes it reachable.
+1. **Attachment URLs and Cloudinary `publicId`s were trusted from the client** (messages, DMs, custom emoji, channel icons), letting a modified client get other users' files, or any Cloudinary asset, deleted. → **PRD 16.8**.
+2. **Orphaned uploads**: files removed from the tray, abandoned, cancelled, or left behind by channel deletion were never deleted. → **PRD 16.9**.
+3. **Main-window navigation on file drop**: dropping a file anywhere on the window navigates the app away. → fixed inside **PRD 16.10** (drop guard + `will-navigate`), since drag & drop makes it easy to hit.
 
 ---
 
@@ -876,8 +1065,10 @@ Not part of `nextsteps.txt`; listed so they're tracked rather than silently igno
 | chore: dismiss warning from nsfw text channels | **16.1** |
 | chore: make the image blurring in nsfw text channels optional (per user) | **16.2** |
 | feat: autocomplete for emojis when typing them on text chats | **16.7** |
-| chore: improve image upload system (multiple, persistent preview, viewer) | **16.8** |
+| chore: improve image upload system (multiple, persistent preview, viewer) | **16.10** |
 | chore: group subsequent messages from the same user within an interval | **16.6** (+ enabling refactor **16.5**) |
 | chore: highlight the text chat currently open, with an eye icon | **16.3** |
 | feat: mute text channels (per user, faded in the tree) | **16.4** |
-| feat: message replies in general text chats | **16.9** |
+| feat: message replies in general text chats | **16.11** |
+| *(audit finding, added by the user)* upload URL/`publicId` trust | **16.8** |
+| *(audit finding, added by the user)* orphaned uploads | **16.9** |
