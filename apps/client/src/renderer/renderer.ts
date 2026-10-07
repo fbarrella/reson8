@@ -4297,10 +4297,23 @@ function buildChatMessageElement(tab: ChatTab, msg: ChatMessage): HTMLDivElement
     }
 
     // Reaction bar
-    const reactBar = buildReactionBar(msg.id, false, msg.userId, msg.reactions);
-    el.appendChild(reactBar);
-    attachEditButton(reactBar, msg, el);
-    attachPinButton(reactBar, msg, tab);
+    el.appendChild(buildReactionBar(msg.id, false, msg.reactions));
+
+    // Floating action toolbar (PRD 16.5). Insertion order is React, Edit,
+    // Pin, Delete — see buildMessageActions().
+    const toolbar = buildMessageActions(msg.id, false, msg.userId);
+    attachEditButton(toolbar, msg, el);
+    attachPinButton(toolbar, msg, tab);
+    el.appendChild(toolbar);
+
+    // Persistent pin marker, since the toolbar's own pin button is only
+    // visible on hover. tab.pinnedMessageId is set before history renders.
+    const pinIndicator = document.createElement("span");
+    pinIndicator.className = "msg-pin-indicator";
+    pinIndicator.setAttribute("aria-hidden", "true");
+    pinIndicator.innerHTML = PIN_ICON_SVG;
+    el.appendChild(pinIndicator);
+    el.classList.toggle("is-pinned", tab.pinnedMessageId === msg.id);
 
     return el;
 }
@@ -4623,8 +4636,8 @@ function buildDmMessageElement(tab: ChatTab, msg: DirectMessage): HTMLDivElement
     }
 
     // Reaction bar
-    const reactBar = buildReactionBar(msg.id, true, msg.senderId, msg.reactions);
-    el.appendChild(reactBar);
+    el.appendChild(buildReactionBar(msg.id, true, msg.reactions));
+    el.appendChild(buildMessageActions(msg.id, true, msg.senderId));
 
     return el;
 }
@@ -6098,10 +6111,17 @@ document.addEventListener("keydown", (e) => {
 });
 window.addEventListener("blur", hideReactionCard);
 
+const REACT_ICON_SVG = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>`;
+
+/**
+ * The reaction strip: only the reaction pills (plus a trailing "add
+ * reaction" button once at least one exists). With no reactions it is
+ * hidden by CSS and takes no space — the actions themselves live in the
+ * floating toolbar from buildMessageActions() (PRD 16.5).
+ */
 function buildReactionBar(
     msgId: string,
     isDm: boolean,
-    ownerId: string,
     reactions?: ReactionSummary[],
 ): HTMLDivElement {
     // A bar being (re)built means any open hover card may now describe a
@@ -6115,6 +6135,7 @@ function buildReactionBar(
     const myId = api.getInstanceId();
 
     if (reactions && reactions.length > 0) {
+        bar.classList.add("has-reactions");
         for (const r of reactions) {
             const pill = document.createElement("button");
             pill.className = "reaction-pill" + (r.userIds.includes(myId) ? " mine" : "");
@@ -6128,38 +6149,93 @@ function buildReactionBar(
             });
             bar.appendChild(pill);
         }
-    }
 
-    // Add react button (small smiley icon)
-    const btnReact = document.createElement("button");
-    btnReact.className = "btn-react";
-    btnReact.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>`;
-    btnReact.title = "Add reaction";
-    btnReact.addEventListener("click", (e) => {
-        e.stopPropagation();
-        openReactionPicker(msgId, isDm, btnReact);
-    });
-    bar.appendChild(btnReact);
-
-    // Delete button — own messages only (PRD 4.10)
-    if (ownerId === myId) {
-        const btnDelete = document.createElement("button");
-        btnDelete.className = "btn-delete-msg";
-        btnDelete.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>`;
-        btnDelete.title = "Delete message";
-        btnDelete.addEventListener("click", (e) => {
+        // Quick "add another reaction" — the usual chat-app affordance once
+        // the strip is visible anyway.
+        const btnAdd = document.createElement("button");
+        btnAdd.className = "reaction-add-btn";
+        btnAdd.innerHTML = REACT_ICON_SVG;
+        btnAdd.title = "Add reaction";
+        btnAdd.setAttribute("aria-label", "Add reaction");
+        btnAdd.addEventListener("click", (e) => {
             e.stopPropagation();
-            showDeleteMessageModal(msgId, isDm);
+            openReactionPicker(msgId, isDm, btnAdd);
         });
-        bar.appendChild(btnDelete);
+        bar.appendChild(btnAdd);
     }
 
     return bar;
 }
 
+/**
+ * The floating hover toolbar (PRD 16.5), left to right: React, [Reply —
+ * PRD 16.11], Edit (own, in-window), Pin (channels), Delete (own). This
+ * builds React and Delete; attachEditButton()/attachPinButton() slot theirs
+ * in before Delete so the order is deterministic regardless of call order.
+ */
+function buildMessageActions(msgId: string, isDm: boolean, ownerId: string): HTMLDivElement {
+    const toolbar = document.createElement("div");
+    toolbar.className = "msg-actions";
+    toolbar.setAttribute("role", "toolbar");
+    toolbar.setAttribute("aria-label", "Message actions");
+
+    const btnReact = document.createElement("button");
+    btnReact.type = "button";
+    btnReact.className = "btn-react";
+    btnReact.innerHTML = REACT_ICON_SVG;
+    btnReact.title = "Add reaction";
+    btnReact.setAttribute("aria-label", "Add reaction");
+    btnReact.addEventListener("click", (e) => {
+        e.stopPropagation();
+        openReactionPicker(msgId, isDm, btnReact);
+    });
+    toolbar.appendChild(btnReact);
+
+    // Delete button — own messages only (PRD 4.10)
+    if (ownerId === api.getInstanceId()) {
+        const btnDelete = document.createElement("button");
+        btnDelete.type = "button";
+        btnDelete.className = "btn-delete-msg";
+        btnDelete.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>`;
+        btnDelete.title = "Delete message";
+        btnDelete.setAttribute("aria-label", "Delete message");
+        btnDelete.addEventListener("click", (e) => {
+            e.stopPropagation();
+            showDeleteMessageModal(msgId, isDm);
+        });
+        toolbar.appendChild(btnDelete);
+    }
+
+    return toolbar;
+}
+
+/** Inserts a toolbar button just before Delete (or at the end when there is none). */
+function insertToolbarButton(toolbar: HTMLDivElement, button: HTMLButtonElement): void {
+    toolbar.insertBefore(button, toolbar.querySelector(".btn-delete-msg"));
+}
+
+// A message at the very top of the scroll area would clip its toolbar (it
+// floats ~14px above the message), so tuck it inside for those rows instead.
+let toolbarHoverMsg: Element | null = null;
+document.addEventListener("mouseover", (e) => {
+    if (!(e.target instanceof Element)) return;
+    const msg = e.target.closest(".chat-msg");
+    if (!msg || msg === toolbarHoverMsg) return;
+    toolbarHoverMsg = msg;
+    const container = msg.parentElement;
+    if (!container) return;
+    const room = msg.getBoundingClientRect().top - container.getBoundingClientRect().top;
+    msg.classList.toggle("actions-inside", room < 18);
+});
+
 function openReactionPicker(msgId: string, isDm: boolean, anchor: HTMLElement): void {
     reactionTargetMsgId = msgId;
     reactionTargetIsDm = isDm;
+
+    // Keep this message's toolbar showing while its picker is open, so it
+    // doesn't vanish as the pointer moves into the picker (PRD 16.5).
+    document.querySelectorAll(".chat-msg.actions-open").forEach((m) => m.classList.remove("actions-open"));
+    anchor.closest(".chat-msg")?.classList.add("actions-open");
 
     // Position the emoji picker near the anchor button
     const rect = anchor.getBoundingClientRect();
@@ -6169,6 +6245,10 @@ function openReactionPicker(msgId: string, isDm: boolean, anchor: HTMLElement): 
     emojiPicker.style.top = `${Math.max(4, rect.top - 390)}px`;
 
     emojiPicker.classList.add("visible");
+    // The toolbar sits at the message's right edge, so the picker's left edge
+    // can land past the window — pull it back inside once its width is known.
+    const maxLeft = window.innerWidth - emojiPicker.offsetWidth - 8;
+    emojiPicker.style.left = `${Math.max(8, Math.min(rect.left, maxLeft))}px`;
     emojiSearch.value = "";
     renderEmojiGrid();
     buildEmojiCategoryTabs();
@@ -6185,11 +6265,9 @@ function updateReactionBar(
     for (const bar of bars) {
         const parent = bar.parentElement;
         if (!parent) continue;
-        // Rebuild the bar — ownerId is read back from the message element's
-        // own data-msg-owner attribute (set at render time) since
-        // REACTION_UPDATED doesn't carry it.
-        const ownerId = parent.getAttribute("data-msg-owner") ?? "";
-        const newBar = buildReactionBar(msgId, isDm, ownerId, reactions);
+        // The bar holds only reactions now (owner-only buttons moved to the
+        // toolbar, which isn't rebuilt), so no owner lookup is needed.
+        const newBar = buildReactionBar(msgId, isDm, reactions);
         parent.replaceChild(newBar, bar);
     }
 }
@@ -6206,7 +6284,7 @@ api.on("reaction-updated", (data: { messageId: string; isDm: boolean; reactions:
 // round-trip failure.
 const EDIT_WINDOW_MS = 2 * 60 * 1000;
 
-function attachEditButton(bar: HTMLDivElement, msg: ChatMessage, el: HTMLDivElement): void {
+function attachEditButton(toolbar: HTMLDivElement, msg: ChatMessage, el: HTMLDivElement): void {
     const myId = api.getInstanceId();
     if (msg.userId !== myId || msg.attachmentUrl) return;
 
@@ -6231,7 +6309,9 @@ function attachEditButton(bar: HTMLDivElement, msg: ChatMessage, el: HTMLDivElem
         }
         startMessageEdit(el, msg);
     });
-    bar.appendChild(btnEdit);
+    btnEdit.type = "button";
+    btnEdit.setAttribute("aria-label", "Edit message");
+    insertToolbarButton(toolbar, btnEdit);
 
     // A message rendered well inside its edit window can still go stale
     // while the channel stays open (e.g. rendered at 30s old, the channel
@@ -6252,7 +6332,7 @@ const PIN_ICON_SVG = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none
 
 let pendingPinReplaceAction: (() => void) | null = null;
 
-function attachPinButton(bar: HTMLDivElement, msg: ChatMessage, tab: ChatTab): void {
+function attachPinButton(toolbar: HTMLDivElement, msg: ChatMessage, tab: ChatTab): void {
     const btnPin = document.createElement("button");
     btnPin.className = "btn-pin-msg";
     btnPin.innerHTML = PIN_ICON_SVG;
@@ -6288,7 +6368,9 @@ function attachPinButton(bar: HTMLDivElement, msg: ChatMessage, tab: ChatTab): v
         }
     });
 
-    bar.appendChild(btnPin);
+    btnPin.type = "button";
+    btnPin.setAttribute("aria-label", btnPin.title);
+    insertToolbarButton(toolbar, btnPin);
 }
 
 /** Updates a tab's pin bar + the affected message pin buttons' active state. */
@@ -6298,11 +6380,15 @@ function updatePinBarUI(tab: ChatTab, pinnedMessage: PinnedMessage | null): void
 
     for (const id of new Set([oldPinnedId, tab.pinnedMessageId])) {
         if (!id) continue;
-        const btn = tab.messagesEl.querySelector(`[data-msg-id="${id}"] .btn-pin-msg`);
+        const msgEl = tab.messagesEl.querySelector(`.chat-msg[data-msg-id="${id}"]`);
+        if (!msgEl) continue;
+        const active = id === tab.pinnedMessageId;
+        msgEl.classList.toggle("is-pinned", active);
+        const btn = msgEl.querySelector(".btn-pin-msg");
         if (btn) {
-            const active = id === tab.pinnedMessageId;
             btn.classList.toggle("active", active);
             btn.setAttribute("title", active ? "Unpin message" : "Pin message");
+            btn.setAttribute("aria-label", active ? "Unpin message" : "Pin message");
         }
     }
 
@@ -6782,6 +6868,7 @@ function closeEmojiPicker(): void {
     btnEmoji.classList.remove("active");
     // Reset reaction mode
     reactionTargetMsgId = null;
+    document.querySelectorAll(".chat-msg.actions-open").forEach((m) => m.classList.remove("actions-open"));
     // Reset positioning to default (for chat input picker)
     emojiPicker.style.position = "";
     emojiPicker.style.bottom = "";

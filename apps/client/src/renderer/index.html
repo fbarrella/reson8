@@ -790,9 +790,16 @@
     }
 
     .chat-msg {
-      padding: 3px 0;
+      position: relative; /* anchors the floating action toolbar (PRD 16.5) */
+      padding: 3px 6px;
+      margin: 0 -6px; /* the padding above gives the hover tint breathing room without shifting content */
+      border-radius: 4px;
       font-size: 13px;
       line-height: 1.4;
+    }
+
+    .chat-msg:hover {
+      background: rgba(255, 255, 255, 0.03);
     }
 
     .chat-msg .msg-time {
@@ -1022,7 +1029,31 @@
       align-items: center;
       gap: 4px;
       margin-top: 2px;
-      min-height: 20px;
+    }
+
+    /* The strip only takes space when the message actually has reactions
+       (PRD 16.5) — it used to reserve a fixed row on every message so the
+       hover-only action buttons had somewhere to appear. */
+    .msg-reactions:not(.has-reactions) {
+      display: none;
+    }
+
+    .reaction-add-btn {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 6px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--text-muted);
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .reaction-add-btn:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+      background: rgba(99, 102, 241, 0.1);
     }
 
     .reaction-pill {
@@ -1118,103 +1149,98 @@
       color: var(--text-muted);
     }
 
-    .btn-react {
-      background: none;
-      border: none;
-      color: var(--text-muted);
-      cursor: pointer;
+    /* ── Floating message action toolbar (PRD 16.5) ───────────────────
+       React / Reply / Edit / Pin / Delete live in one hover toolbar at the
+       message's top-right instead of inside the reaction strip. Shown on
+       hover, on keyboard focus within the message, and while this message's
+       reaction picker is open (.actions-open). */
+    .msg-actions {
+      position: absolute;
+      top: -14px;
+      right: 8px;
+      z-index: 2;
+      display: flex;
+      gap: 2px;
       padding: 2px;
-      border-radius: 4px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
       opacity: 0;
-      transition: all 0.15s;
+      pointer-events: none;
+      transition: opacity 0.12s;
+    }
+
+    .chat-msg:hover > .msg-actions,
+    .chat-msg:focus-within > .msg-actions,
+    .chat-msg.actions-open > .msg-actions {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    /* A message at the very top of the scroll area would clip the toolbar. */
+    .chat-msg.actions-inside > .msg-actions {
+      top: 2px;
+    }
+
+    .msg-actions button {
+      width: 26px;
+      height: 26px;
       display: flex;
       align-items: center;
+      justify-content: center;
+      padding: 0;
+      background: none;
+      border: none;
+      border-radius: 4px;
+      color: var(--text-muted);
+      cursor: pointer;
+      transition: all 0.15s;
     }
 
-    .chat-msg:hover .btn-react {
-      opacity: 0.6;
+    .msg-actions button svg {
+      width: 16px;
+      height: 16px;
     }
 
-    .btn-react:hover {
-      opacity: 1 !important;
+    .msg-actions button:hover {
       color: var(--accent);
-      background: rgba(99, 102, 241, 0.1);
+      background: rgba(255, 255, 255, 0.08);
     }
 
-    .btn-delete-msg {
-      background: none;
-      border: none;
-      color: var(--text-muted);
-      cursor: pointer;
-      padding: 2px;
-      border-radius: 4px;
-      opacity: 0;
-      transition: all 0.15s;
-      display: flex;
-      align-items: center;
-    }
-
-    .chat-msg:hover .btn-delete-msg {
-      opacity: 0.6;
-    }
-
-    .btn-delete-msg:hover {
-      opacity: 1 !important;
+    .msg-actions .btn-delete-msg:hover {
       color: var(--danger);
       background: rgba(239, 83, 80, 0.1);
     }
 
-    .btn-edit-msg {
-      background: none;
-      border: none;
-      color: var(--text-muted);
-      cursor: pointer;
-      padding: 2px;
-      border-radius: 4px;
-      opacity: 0;
-      transition: all 0.15s;
-      display: flex;
-      align-items: center;
-    }
-
-    .chat-msg:hover .btn-edit-msg {
-      opacity: 0.6;
-    }
-
-    .btn-edit-msg:hover {
-      opacity: 1 !important;
+    .msg-actions .btn-pin-msg.active {
       color: var(--accent);
-      background: rgba(99, 102, 241, 0.1);
     }
 
-    .btn-pin-msg {
-      background: none;
-      border: none;
-      color: var(--text-muted);
-      cursor: pointer;
-      padding: 2px;
-      border-radius: 4px;
-      opacity: 0;
-      transition: all 0.15s;
-      display: flex;
-      align-items: center;
-    }
-
-    .chat-msg:hover .btn-pin-msg {
-      opacity: 0.6;
-    }
-
-    .btn-pin-msg:hover {
-      opacity: 1 !important;
+    /* The toolbar is hidden until hover, so a pinned message keeps a small
+       persistent pin instead (the old always-visible active pin button). */
+    .msg-pin-indicator {
+      display: none;
+      position: absolute;
+      top: 5px;
+      right: 8px;
       color: var(--accent);
-      background: rgba(99, 102, 241, 0.1);
+      opacity: 0.8;
     }
 
-    /* A pinned message's own button stays visible even without hovering,
-       so it's clear at a glance which message is currently pinned. */
-    .btn-pin-msg.active {
-      opacity: 1;
-      color: var(--accent);
+    .msg-pin-indicator svg {
+      width: 12px;
+      height: 12px;
+    }
+
+    .chat-msg.is-pinned > .msg-pin-indicator {
+      display: block;
+    }
+
+    .chat-msg:hover > .msg-pin-indicator,
+    .chat-msg:focus-within > .msg-pin-indicator,
+    .chat-msg.actions-open > .msg-pin-indicator {
+      display: none;
     }
 
     /* Brief flash applied when jumping to a message via the pinned bar. */

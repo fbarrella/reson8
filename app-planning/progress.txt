@@ -636,3 +636,75 @@ Feature/Fix: PRD 16.4 — Mute text channels (per user, client-side)
 
   Next Step: PRD 16.5 — floating message action toolbar (foundation for
   grouping and replies).
+
+
+--- Entry: 07/10/2026 ---
+
+Feature/Fix: PRD 16.5 — Floating message action toolbar (foundation for 16.6 and 16.11)
+
+  Problem: Message actions (react, edit, pin, delete) were appended inside the
+  reaction strip, which had `min-height: 20px` on EVERY message so the
+  hover-only buttons had somewhere to appear. That reserved a fixed empty row
+  under each message, which defeats message grouping (PRD 16.6) and left no
+  home for the Reply button (PRD 16.11).
+
+  Solution: Structural refactor only — every existing action keeps working,
+  it just moves into a floating hover toolbar at the message's top-right
+  (user-approved, per print_discord_grouped_messages.png).
+
+  Client Changes:
+    - buildReactionBar(msgId, isDm, reactions) now builds ONLY the pills,
+      plus a trailing small "add reaction" button once at least one pill
+      exists. The strip is `display: none` unless it has `.has-reactions`, so
+      it takes no space until a reaction is added and "reinstates" its space
+      the moment one is (updateReactionBar() rebuilds it on reaction-updated).
+      min-height was removed. The old ownerId parameter and the owner lookup
+      in updateReactionBar() are gone since the strip no longer holds
+      owner-only buttons.
+    - New buildMessageActions(msgId, isDm, ownerId): a role="toolbar" with
+      React and (own messages) Delete. attachEditButton()/attachPinButton()
+      now take the toolbar and slot in through insertToolbarButton(), which
+      inserts before Delete, giving the deterministic order React, Edit, Pin,
+      Delete (PRD 16.11 will slot Reply right after React). Buttons keep their
+      btn-react / btn-edit-msg / btn-pin-msg / btn-delete-msg classes since
+      other code queries them; the edit button's 2-minute self-removal timer
+      is unchanged. All buttons got aria-labels and type="button".
+    - Visibility: the toolbar is absolute (top -14px, right 8px), hidden by
+      default, shown on `.chat-msg:hover`, `:focus-within` (keyboard access)
+      and `.actions-open`, which openReactionPicker() sets on the message so
+      the toolbar doesn't vanish as the pointer moves into the picker;
+      closeEmojiPicker() clears it. The picker's left edge is now clamped to
+      the window, since the toolbar sits at the message's right edge.
+    - A delegated mouseover adds `.actions-inside` (toolbar tucked inside at
+      top 2px) for a message within ~18px of its scroll container's top, so
+      the first message's toolbar isn't clipped.
+    - `.chat-msg` got position: relative, a faint hover tint, and 6px
+      padding balanced by -6px margin so the tint has breathing room without
+      shifting content.
+    - Pinned marker: the old `.btn-pin-msg.active` stayed visible without
+      hover to show which message is pinned; now that the toolbar is hidden,
+      a pinned message gets `.is-pinned` and a small persistent
+      `.msg-pin-indicator` (hidden while the toolbar shows). It is set at
+      build time from tab.pinnedMessageId and toggled by updatePinBarUI().
+    - The four per-button "opacity 0 until hover" CSS blocks were replaced by
+      toolbar-scoped rules. `attachMessageTruncation()` still inserts "See
+      more" before `.msg-reactions` (the strip is always in the DOM, just
+      hidden when empty).
+
+  Edge Cases Handled:
+    - Reaction hover card (PRD 15.11) unaffected: pills keep `.reaction-pill`
+      and the pillData WeakMap; hideReactionCard() still runs on every rebuild.
+    - Toolbar survives reaction updates (it is a separate element, never
+      replaced by updateReactionBar()).
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html
+    apps/client/src/renderer/renderer.ts
+
+  Verification:
+    npx tsc --noEmit in apps/client passes; npm run test:markdown passes. No
+    server or shared-types change. UI NOT exercised by Claude (touches every
+    message's DOM, so this item is the riskiest of the phase so far); manual
+    testing by the user in a channel AND a DM (checklist in PRD 16.5).
+
+  Next Step: PRD 16.6 — group consecutive messages, header layout, HH:MM times.
