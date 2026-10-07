@@ -14,17 +14,50 @@ export interface AudioSourceTarget {
   processName?: string
 }
 /**
- * Resolves an OS process id from an Electron `desktopCapturer` window
- * source id, formatted `"window:<HWND>:<id>"` on Windows (PRD 12.2's PID
- * resolution rule — parse the HWND out of `source.id` rather than
- * title-matching, which is fragile with duplicate window titles). Not
- * meaningful for `"screen:..."` sources, which have no associated window.
+ * Linux-only export (mirrors `resolve_pid_for_window_source_id`'s
+ * Windows-only pattern) — lists the `application.name` of every app
+ * currently producing audio. Exists because matching a shared *window* to
+ * its owning app by name/PID (what `start_capture` above tries first)
+ * fundamentally can't be made reliable here: confirmed live that
+ * `desktopCapturer`'s window sources carry no real per-window name at all
+ * under the Wayland/xdg-desktop-portal capture path (the portal doesn't
+ * expose one to the requesting app, by design, for sandboxing/privacy) —
+ * so there's no title or PID to match against in the first place, not
+ * just an imperfect one. The Linux/Wayland screen-share-audio consent
+ * flow (main.ts's `pick-audio-app-to-share`) uses this to offer an
+ * explicit choice instead of guessing.
  *
- * Windows-only: this function does not exist in the compiled addon on
- * Linux/macOS at all (see `mod windows` being `cfg`-gated in `lib.rs`) —
- * callers branch on `process.platform` before ever calling it (PRD 12.7).
+ * `exclude_pids` filters out Reson8's own audio-output stream(s) —
+ * confirmed live that this app's own Chromium audio process shows up in
+ * the unfiltered list (self-identified as "Reson8" or "Chromium"
+ * depending on which of its sub-processes actually opened the stream),
+ * which would otherwise let a user "share" their own app's audio back at
+ * itself. Filtering by PID (the caller passes every PID from Electron's
+ * own `app.getAppMetrics()` — main, renderer, GPU, audio service, etc.)
+ * rather than matching the name "Reson8"/"Chromium"/"Electron" is
+ * deliberate: a name-based filter would also hide a *real*, separate
+ * Chrome/Chromium browser window the user might legitimately want to
+ * share audio from, since Electron self-identifies with the same
+ * underlying engine name.
+ * Deliberately *not* dispatched through `detect_audio_server()` the way
+ * `start_capture` above is. Confirmed live: on a native-PipeWire system,
+ * ordinary desktop apps (Firefox, Electron/Chromium apps, ...) connect
+ * through PipeWire's PulseAudio-compatibility layer (`client.api:
+ * "pipewire-pulse"`, confirmed via each stream's own reported props), and
+ * that layer's nodes simply don't carry `application.process.id` in the
+ * plain PipeWire registry's `global` event at all — `pipewire_backend`'s
+ * listener saw every other prop (name, media.class, ...) correctly, just
+ * never a PID, for a stream `pw-dump` independently confirms *does* have
+ * one. The exact same information is reliably available through the
+ * PulseAudio protocol's own introspection API instead (`pulse_backend`
+ * already reads PID from it correctly, for `start_capture`'s Pulse-only-
+ * system fallback) — and that protocol socket exists here too, provided
+ * by `pipewire-pulse`, regardless of which backend `detect_audio_server`
+ * would pick for actual capture. So: always go through Pulse
+ * introspection for *listing*, since self-exclusion needs the PID to
+ * actually be present, not just the name.
  */
-export declare function resolvePidForWindowSourceId(sourceId: string): number | null
+export declare function listAudioProducingApps(excludePids: Array<number>): Array<string>
 export declare function platformSupportsCapture(): boolean
 export declare function startCapture(target: AudioSourceTarget, onFrame: (pcm: Buffer, sampleRate: number, channels: number) => void): CaptureHandle
 export declare class CaptureHandle {
