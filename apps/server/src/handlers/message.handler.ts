@@ -15,10 +15,17 @@ import type {
     SocketData,
     IMessage,
     IPinnedMessage,
+    IReplyPreview,
 } from "@reson8/shared-types";
 import { PermissionFlags } from "@reson8/shared-types";
 import { requirePermission } from "../middleware/permissions.middleware.js";
 import { claimUploads, UploadClaimError } from "../services/stored-file.service.js";
+import {
+    isChannelReplyAllowed,
+    loadReplyPreviews,
+    parseReplyToId,
+    replyPreviewFor,
+} from "../services/reply.service.js";
 import {
     attachmentFields,
     attachmentInclude,
@@ -56,6 +63,7 @@ type MessageWithRelations = {
     channelId: string;
     userId: string;
     content: string;
+    replyToId: string | null;
     /** Deprecated column — only a fallback for a row the backfill missed (PRD 16.10). */
     attachmentUrl: string | null;
     attachments: AttachmentRow[];
@@ -66,14 +74,20 @@ type MessageWithRelations = {
 };
 
 /** Maps a Prisma message row (with user + reactions included) to the wire DTO.
- *  `reactorNicknames` is the batch-loaded nickname lookup (PRD 15.11). */
-function toMessageDto(m: MessageWithRelations, reactorNicknames: ReadonlyMap<string, string>): IMessage {
+ *  `reactorNicknames` is the batch-loaded nickname lookup (PRD 15.11) and
+ *  `replyPreviews` the batch-loaded reply-snippet lookup (PRD 16.11). */
+function toMessageDto(
+    m: MessageWithRelations,
+    reactorNicknames: ReadonlyMap<string, string>,
+    replyPreviews: ReadonlyMap<string, IReplyPreview>,
+): IMessage {
     return {
         id: m.id,
         channelId: m.channelId,
         userId: m.userId,
         nickname: m.user.nickname,
         content: m.content,
+        replyTo: replyPreviewFor(m.replyToId, replyPreviews),
         ...attachmentFields(m.attachments, m.attachmentUrl),
         createdAt: m.createdAt.toISOString(),
         editedAt: m.editedAt?.toISOString() ?? null,
@@ -81,16 +95,19 @@ function toMessageDto(m: MessageWithRelations, reactorNicknames: ReadonlyMap<str
     };
 }
 
-/** Maps a whole fetched page, resolving every reactor's nickname in ONE query. */
+/** Maps a whole fetched page, resolving every reactor's nickname in ONE query and every reply snippet in ONE more. */
 async function toMessageDtos(
     prisma: FastifyInstance["prisma"],
     messages: MessageWithRelations[],
 ): Promise<IMessage[]> {
-    const nicknames = await loadReactorNicknames(
-        prisma,
-        messages.flatMap((m) => m.reactions.map((r) => r.userId)),
-    );
-    return messages.map((m) => toMessageDto(m, nicknames));
+    const [nicknames, replyPreviews] = await Promise.all([
+        loadReactorNicknames(
+            prisma,
+            messages.flatMap((m) => m.reactions.map((r) => r.userId)),
+        ),
+        loadReplyPreviews(prisma, "message", messages.map((m) => m.replyToId)),
+    ]);
+    return messages.map((m) => toMessageDto(m, nicknames, replyPreviews));
 }
 
 /**
@@ -118,6 +135,13 @@ export function registerMessageHandlers(
                     return;
                 }
                 const hasAttachment = claim.ids.length + claim.urls.length > 0;
+
+                const reply = parseReplyToId(payload.replyToId);
+                if ("error" in reply) {
+                    ack({ success: false, error: reply.error });
+                    return;
+                }
+                const { replyToId } = reply;
 
                 if ((!content || content.trim().length === 0) && !hasAttachment) {
                     ack({ success: false });
@@ -158,6 +182,20 @@ export function registerMessageHandlers(
                     return;
                 }
 
+                // A reply may only point into THIS channel, or at a message that
+                // has since been deleted (PRD 16.11) — never at another channel's
+                // message, whose text would then leak into the snippet.
+                if (replyToId) {
+                    const target = await app.prisma.message.findUnique({
+                        where: { id: replyToId },
+                        select: { channelId: true },
+                    });
+                    if (!isChannelReplyAllowed(target, channelId)) {
+                        ack({ success: false, error: "Invalid reply target" });
+                        return;
+                    }
+                }
+
                 // Persist message. Claiming the upload and creating the row
                 // share one transaction: a failed claim (someone else's file,
                 // already used, swept…) aborts the send, and a failed create
@@ -174,6 +212,7 @@ export function registerMessageHandlers(
                             channelId,
                             userId: socket.data.userId,
                             content: content?.trim() ?? "",
+                            replyToId,
                             // The ledger's url/public_id, in the order the client listed them.
                             attachments: {
                                 create: files.map((f, position) => ({ url: f.url, publicId: f.publicId, position })),
@@ -183,12 +222,14 @@ export function registerMessageHandlers(
                     });
                 });
 
+                const replyPreviews = await loadReplyPreviews(app.prisma, "message", [replyToId]);
                 const messageDto: IMessage = {
                     id: message.id,
                     channelId: message.channelId,
                     userId: message.userId,
                     nickname: socket.data.nickname,
                     content: message.content,
+                    replyTo: replyPreviewFor(replyToId, replyPreviews),
                     ...attachmentFields(message.attachments),
                     createdAt: message.createdAt.toISOString(),
                     editedAt: null,
@@ -458,12 +499,15 @@ export function registerMessageHandlers(
                     data: { content: trimmed, editedAt: new Date() },
                 });
 
+                // An edited reply is still a reply — keep its snippet in the broadcast.
+                const replyPreviews = await loadReplyPreviews(app.prisma, "message", [updated.replyToId]);
                 const messageDto: IMessage = {
                     id: updated.id,
                     channelId: updated.channelId,
                     userId: updated.userId,
                     nickname: socket.data.nickname,
                     content: updated.content,
+                    replyTo: replyPreviewFor(updated.replyToId, replyPreviews),
                     // Image messages can't be edited (checked above), so an edited message has none.
                     ...attachmentFields([]),
                     createdAt: updated.createdAt.toISOString(),

@@ -1357,3 +1357,153 @@ Feature/Fix: PRD 16.10 — Multi-image upload, persistent previews, preview view
 
   Next Step: PRD 16.11 — message replies (channels and DMs). Uses this
   composer: its reply bar goes at the top of #chat-composer.
+
+
+--- Entry: 07/10/2026 ---
+
+Feature/Fix: PRD 16.11 — Message replies (channels and DMs)
+
+  Problem: There was no way to answer a specific message. In a busy channel a
+  reply was just another line among many, and it was unclear what it answered.
+
+  Solution: Every message (channel and DM) has a Reply button in its hover
+  toolbar. Clicking it opens reply mode: a bar at the top of the composer
+  ("Replying to <nick>", with a cancel ✕) and an accent border on the message
+  being answered. The sent message shows a one-line snippet of the original
+  above its header, joined by a curved connector (per the Discord references);
+  clicking the snippet jumps to the original. Replies can be replied to, but a
+  snippet never nests: it shows only the message directly answered.
+
+  Database Changes: Message.replyToId and DirectMessage.replyToId, nullable.
+    Migration 20261009120000_add_message_replies (additive, no backfill). They
+    are PLAIN COLUMNS, deliberately NOT foreign keys: with ON DELETE SET NULL,
+    deleting the original would erase the fact that the message WAS a reply,
+    and the client wants to say "Original message was deleted". Lookups are one
+    batched primary-key query per page. NOT yet applied to the dev database:
+    `cd apps/server && npx prisma migrate deploy`.
+
+  Shared Types Changes (additive): IReplyPreview ({ id, deleted, userId?,
+    nickname?, content?, hasAttachments? }); `replyTo` on IMessage and
+    IDirectMessage; `replyToId` on SEND_MESSAGE / SEND_DIRECT_MESSAGE;
+    `aroundMessageId` on FETCH_DIRECT_MESSAGES.
+
+  Server Changes:
+    - services/reply.service.ts (NEW): truncateForPreview (collapses all
+      whitespace to single spaces, cuts at 200 CODE POINTS so an emoji is never
+      split, trims before the ellipsis), toReplyPreview / replyPreviewFor
+      (a missing original becomes { deleted: true } with none of its text),
+      parseReplyToId, isChannelReplyAllowed, dmInPair / isDmReplyAllowed, and
+      loadReplyPreviews (ONE query per page for every distinct target; counts
+      the new attachments table AND the deprecated column for hasAttachments).
+    - SEND_MESSAGE: a target that exists in ANOTHER channel is refused
+      ("Invalid reply target") because its text would leak into the snippet; one
+      that no longer exists is accepted and renders as deleted (the original may
+      have been deleted while the user typed). SEND_DIRECT_MESSAGE: an existing
+      target must belong to the same pair of users. A channel-message id used in
+      a DM reply matches no DM row, so it renders as deleted and leaks nothing.
+    - FETCH_MESSAGES, FETCH_DIRECT_MESSAGES and the EDIT_MESSAGE broadcast all
+      carry `replyTo` (an edited reply stays a reply).
+    - FETCH_DIRECT_MESSAGES gains `aroundMessageId`: the same half-before /
+      target / half-after window as channels, constrained to the conversation;
+      a DM outside it, or an unknown id, gets "Message not found".
+
+  Client Changes:
+    - Toolbar order is now React, Reply, Edit, Pin, Delete.
+    - Reply mode: replyTargets (Map keyed by tab id) so a draft belongs to its
+      own conversation; #reply-bar is the first child of #chat-composer;
+      switching tabs shows/hides it, closing a tab discards its draft. Enter
+      reply mode, send (clears the bar like the attachment tray and restores it
+      if the send fails), cancel with the ✕ or Escape. Escape reaches the reply
+      handler only if the emoji autocomplete did NOT consume it, so an open card
+      closes first and a second Escape cancels the reply (PRD 16.7 precedence).
+    - Snippet (buildReplySnippet): nick in accent + one line of plain text via
+      markdownToPlainText (never raw HTML), italic "Click to see attachment" with
+      an icon for an image-only original, and a muted italic non-clickable
+      "Original message was deleted" state (role/tabindex removed). It is
+      keyboard-operable (role=button, tabindex 0, Enter/Space). A reply sets
+      data-is-reply so it ALWAYS starts its own group with its header showing
+      (PRD 16.6 rule 5); the next plain message groups under it normally.
+    - Live: MESSAGE_EDITED refreshes snippets pointing at the edited message;
+      MESSAGE_DELETED turns them into the deleted state and cancels a reply
+      DRAFT that was answering it, with a toast.
+    - jumpToPinnedMessage became jumpToMessage(tabId, messageId) and now serves
+      channels AND DMs (DMs use the new aroundMessageId); the pinned bar calls
+      it unchanged.
+    - preload.ts: sendMessage / sendDirectMessage take replyToId;
+      fetchDirectMessages takes aroundMessageId.
+
+  Key Files Modified:
+    packages/shared-types/src/models.ts
+    packages/shared-types/src/socket-events.ts
+    apps/server/prisma/schema.prisma
+    apps/server/prisma/migrations/20261009120000_add_message_replies/migration.sql (NEW)
+    apps/server/src/services/reply.service.ts (NEW)
+    apps/server/src/handlers/message.handler.ts
+    apps/server/src/handlers/dm.handler.ts
+    apps/server/src/__tests__/reply.service.test.ts (NEW)
+    apps/client/src/renderer/index.html
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/preload.ts
+    (packages/shared-types and apps/server tsconfig.tsbuildinfo, per repo convention)
+
+  Verification:
+    - tsc: shared-types --build, server --noEmit, client --noEmit pass. Server
+      `npm run test`: 97/97 (19 new in reply.service.test.ts). Client
+      `test:markdown` passes.
+    - Migration on a throwaway DB with existing rows: existing messages/DMs get
+      NULL, and deleting an original leaves the reply's pointer intact (no FK).
+    - Real server end to end (32 checks, fresh scratch DB): snippet fields on the
+      broadcast; stored replyToId; non-replies are null; reply-to-reply shows the
+      directly-answered message and never nests; multi-line original collapsed to
+      one line; long original truncated; image-only original flagged
+      hasAttachments; history carries snippets; a deleted original leaves the
+      reply flagged deleted with none of its text, and the DB pointer stays;
+      replying to an already-deleted or never-existing id is accepted as
+      deleted; a cross-channel reply is refused and creates nothing; malformed
+      ids refused; a reply still needs text or an image; editing a reply keeps
+      its snippet, editing the original updates replies' snippets; DM replies in
+      both directions; a DM reply into a DIFFERENT conversation refused; a
+      channel-message id in a DM reply leaks nothing; DM history carries
+      snippets; the new DM aroundMessageId window (centred, 5 before / 5 after,
+      chronological, shorter at the very start, refused for another
+      conversation's DM or an unknown id, snippets included, normal latest-page
+      fetch unchanged).
+    - THE REAL APP (55 checks): rebuilt the client and drove the actual Electron
+      renderer over the DevTools protocol on a virtual display (own
+      --user-data-dir), against the real server, with a second socket playing
+      "Zed" live, plus screenshots I inspected. Covered: Reply button right after
+      React on every message; entering reply mode (bar text, accent highlight,
+      input focused, bar at the top of the composer); sending (bar and highlight
+      clear, snippet above the header with the right nick/text and the curved
+      connector, data-is-reply, own header, server pointer stored); a second
+      reply by the same author within 5 minutes NOT grouped, while a plain
+      message after it IS; multi-line / image-only / long originals; reply to a
+      reply never nests; clicking a snippet (and Enter) jumps and flashes the
+      original; Escape cancels; Escape with the emoji autocomplete open closes
+      only the card and a second Escape cancels the reply; the ✕ cancels;
+      Server Log hides the bar; another tab has its own independent draft;
+      coming back restores the right bar and highlight; closing a tab discards its
+      draft; a send the server refuses restores the draft and creates nothing; a
+      live edit of the original updates snippets; a live delete turns snippets
+      into "Original message was deleted" (muted, italic, no role/tabindex, click
+      does nothing), cancels a reply draft with a toast and removes the
+      highlight; reopening the channel restores snippets including the deleted
+      state; jumping to an original OUTSIDE the loaded page loads the window and
+      flashes it (channel and DM, via the new aroundMessageId); the pinned bar
+      still jumps; DM reply both directions with correct nicks; zero uncaught
+      page exceptions.
+    - Test bugs found and fixed along the way, none in the app: a log-truncation
+      assertion that ignored the (tested) trim-before-ellipsis rule; window
+      assertions that collided with a previous run's DMs; my own miscounts of
+      snippets (one reply points at the deleted message, five snippets in total)
+      and a 4-second toast measured after a slow check; and a DM lookup by
+      content alone that found another conversation's DM (the server correctly
+      refused it, which hung my test until I killed it and made the lookup
+      specific). Harness stopped, scratch DB dropped, dev DB never touched.
+      Scratch scripts not committed.
+    - NOT verified: a v2.4.0 client against this server (it ignores replyTo, so a
+      reply just shows as a normal message), and real typing latency/IME.
+
+  Next Step: Phase wrap-up, after your confirmation: /bump-version (expected
+  2.4.0 -> 2.5.0), release notes in app-planning/releases/v2.5.0.md, update the
+  three CLAUDE.md files and README.md, and archive the Phase 16 PRD.

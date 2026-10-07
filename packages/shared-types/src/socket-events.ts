@@ -127,6 +127,13 @@ export interface ClientToServerEvents {
             attachmentUrl?: string;
             /** @deprecated Ignored by v2.5.0+ servers: the public_id comes from the server's own upload record. */
             attachmentPublicId?: string;
+            /**
+             * Makes this message a reply to another message in the SAME channel
+             * (PRD 16.11). A target in a different channel is rejected; one that
+             * no longer exists is accepted and renders as "Original message was
+             * deleted".
+             */
+            replyToId?: string;
         },
         ack: (response: { success: boolean; messageId?: string; error?: string }) => void,
     ) => void;
@@ -176,13 +183,23 @@ export interface ClientToServerEvents {
             attachmentUrl?: string;
             /** @deprecated Ignored by v2.5.0+ servers: the public_id comes from the server's own upload record. */
             attachmentPublicId?: string;
+            /**
+             * Makes this DM a reply (PRD 16.11). A target that exists but belongs
+             * to a different conversation is rejected; a deleted one is accepted.
+             */
+            replyToId?: string;
         },
         ack: (response: { success: boolean; messageId?: string; error?: string }) => void,
     ) => void;
 
-    /** Client requests paginated DM history with another user. */
+    /**
+     * Client requests paginated DM history with another user. `aroundMessageId`
+     * fetches a window centred on that DM instead (PRD 16.11) — used to jump to
+     * a replied-to message outside the loaded page, the DM counterpart of
+     * FETCH_MESSAGES' `aroundMessageId`.
+     */
     FETCH_DIRECT_MESSAGES: (
-        payload: { partnerId: string; before?: string; limit?: number },
+        payload: { partnerId: string; before?: string; limit?: number; aroundMessageId?: string },
         ack: (response: { success: boolean; messages?: IDirectMessage[]; error?: string }) => void,
     ) => void;
 

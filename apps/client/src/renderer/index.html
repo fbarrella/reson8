@@ -1558,6 +1558,122 @@
       color: var(--accent);
     }
 
+    /* ── Reply mode (PRD 16.11) ─────────────────────────────────────────── */
+    #reply-bar {
+      display: none;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 6px 12px;
+      background: var(--bg-tertiary);
+      border-top: 1px solid var(--border);
+      font-size: 12px;
+      color: var(--text-secondary);
+      flex-shrink: 0;
+    }
+
+    #reply-bar.visible {
+      display: flex;
+    }
+
+    .reply-bar-nick {
+      color: var(--accent);
+      font-weight: 600;
+    }
+
+    #btn-reply-cancel {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 22px;
+      height: 22px;
+      padding: 0;
+      background: none;
+      border: none;
+      border-radius: 4px;
+      color: var(--text-muted);
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    #btn-reply-cancel:hover {
+      color: var(--text-primary);
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    /* The message being answered, while the reply bar is up. */
+    .chat-msg.msg-reply-target {
+      background: rgba(79, 195, 247, 0.08);
+      box-shadow: inset 3px 0 0 var(--accent);
+    }
+
+    /* The snippet above a reply (PRD 16.11): who it answers + one line of
+       their text, joined to the message below by a curved connector. */
+    .msg-reply {
+      position: relative;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+      margin: 0 0 2px 18px;
+      font-size: 12px;
+      line-height: 1.4;
+      color: var(--text-secondary);
+      cursor: pointer;
+    }
+
+    .msg-reply-spine {
+      position: absolute;
+      left: -14px;
+      top: 50%;
+      width: 10px;
+      height: calc(50% + 8px);
+      border-left: 2px solid var(--border);
+      border-top: 2px solid var(--border);
+      border-top-left-radius: 6px;
+      pointer-events: none;
+    }
+
+    .msg-reply-nick {
+      flex-shrink: 0;
+      color: var(--accent);
+      font-weight: 600;
+    }
+
+    .msg-reply-text {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+
+    .msg-reply:hover .msg-reply-text {
+      color: var(--text-primary);
+    }
+
+    .msg-reply-text.attachment {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-style: italic;
+    }
+
+    .msg-reply-text.attachment svg {
+      flex-shrink: 0;
+    }
+
+    /* The original was deleted: informational only, not a link. */
+    .msg-reply.deleted {
+      cursor: default;
+      font-style: italic;
+      color: var(--text-muted);
+    }
+
+    .msg-reply.deleted:hover .msg-reply-text {
+      color: var(--text-muted);
+    }
+
     #btn-send.blocked {
       opacity: 0.5;
       cursor: not-allowed;
@@ -3968,6 +4084,11 @@
       </div>
       <!-- Everything below the message list: [reply bar — PRD 16.11] → attachment tray → input bar (PRD 16.10) -->
       <div id="chat-composer">
+      <!-- Reply mode (PRD 16.11): shown while the user is answering a specific message -->
+      <div id="reply-bar" role="status">
+        <span class="reply-bar-label">Replying to <strong class="reply-bar-nick" id="reply-bar-nick"></strong></span>
+        <button type="button" id="btn-reply-cancel" title="Cancel reply (Esc)" aria-label="Cancel reply"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+      </div>
       <div id="attachment-tray" role="list" aria-label="Attached images"></div>
       <div id="chat-input-bar" style="position:relative;">
         <!-- Emoji Picker Panel (floating above input bar) -->

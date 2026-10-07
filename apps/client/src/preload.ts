@@ -793,13 +793,14 @@ const api = {
         channelId: string,
         content: string,
         attachments?: UploadedAttachment[],
+        replyToId?: string,
     ): Promise<{ success: boolean; messageId?: string; error?: string }> {
         return new Promise((resolve) => {
             if (!socket?.connected) {
                 resolve({ success: false });
                 return;
             }
-            socket.emit("SEND_MESSAGE", { channelId, content, ...attachmentPayload(attachments) }, resolve);
+            socket.emit("SEND_MESSAGE", { channelId, content, ...attachmentPayload(attachments), replyToId }, resolve);
         });
     },
 
@@ -923,13 +924,14 @@ const api = {
         recipientId: string,
         content: string,
         attachments?: UploadedAttachment[],
+        replyToId?: string,
     ): Promise<{ success: boolean; messageId?: string; error?: string }> {
         return new Promise((resolve) => {
             if (!socket?.connected) {
                 resolve({ success: false, error: "Not connected" });
                 return;
             }
-            socket.emit("SEND_DIRECT_MESSAGE", { recipientId, content, ...attachmentPayload(attachments) }, resolve);
+            socket.emit("SEND_DIRECT_MESSAGE", { recipientId, content, ...attachmentPayload(attachments), replyToId }, resolve);
         });
     },
 
@@ -947,6 +949,7 @@ const api = {
         partnerId: string,
         before?: string,
         limit?: number,
+        aroundMessageId?: string,
     ): Promise<{ success: boolean; messages?: IDirectMessage[]; error?: string }> {
         return new Promise((resolve) => {
             if (!socket?.connected) {
@@ -955,7 +958,7 @@ const api = {
             }
             socket.emit(
                 "FETCH_DIRECT_MESSAGES",
-                { partnerId, before, limit },
+                { partnerId, before, limit, aroundMessageId },
                 (res) => {
                     res.messages?.forEach(resolveMessageMedia);
                     resolve(res);

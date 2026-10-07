@@ -24,6 +24,16 @@ interface UploadResult {
     uploadId?: string;
 }
 
+/** The message a reply answers, as the server describes it (PRD 16.11). `deleted` = the original no longer exists. */
+interface ReplyPreview {
+    id: string;
+    deleted: boolean;
+    userId?: string;
+    nickname?: string;
+    content?: string;
+    hasAttachments?: boolean;
+}
+
 /**
  * Tells the server to throw away an upload that never got used (PRD 16.9).
  * Fire-and-forget on purpose: it must never block or fail the UI, and the
@@ -40,6 +50,8 @@ interface ChatMessage {
     userId: string;
     nickname: string;
     content: string;
+    /** Set when this message is a reply (PRD 16.11). */
+    replyTo?: ReplyPreview | null;
     /** The message's images, in order (PRD 16.10). */
     attachments?: { url: string }[];
     /** @deprecated The first image's URL — only used when `attachments` is absent (an older server). */
@@ -62,6 +74,8 @@ interface DirectMessage {
     senderNickname: string;
     receiverId: string;
     content: string;
+    /** Set when this DM is a reply (PRD 16.11). */
+    replyTo?: ReplyPreview | null;
     /** The message's images, in order (PRD 16.10). */
     attachments?: { url: string }[];
     /** @deprecated The first image's URL — only used when `attachments` is absent (an older server). */
@@ -764,7 +778,7 @@ interface Reson8Api {
     ): Promise<{ success: boolean; error?: string }>;
     moveChannel(channelId: string, newParentId: string | null): Promise<{ success: boolean; error?: string }>;
     deleteChannel(channelId: string): Promise<{ success: boolean; error?: string }>;
-    sendMessage(channelId: string, content: string, attachments?: UploadResult[]): Promise<{ success: boolean; messageId?: string; error?: string }>;
+    sendMessage(channelId: string, content: string, attachments?: UploadResult[], replyToId?: string): Promise<{ success: boolean; messageId?: string; error?: string }>;
     deleteMessage(messageId: string): Promise<{ success: boolean; error?: string }>;
     editMessage(messageId: string, content: string): Promise<{ success: boolean; error?: string }>;
     fetchMessages(channelId: string, before?: string, limit?: number, aroundMessageId?: string): Promise<{ success: boolean; messages?: ChatMessage[]; pinnedMessage?: PinnedMessage | null; error?: string }>;
@@ -776,9 +790,9 @@ interface Reson8Api {
     assignRole(userId: string, roleId: string, action: "add" | "remove"): Promise<{ success: boolean; error?: string }>;
     enumerateAudioDevices(): Promise<{ inputs: { deviceId: string; label: string }[]; outputs: { deviceId: string; label: string }[] }>;
     setAudioInputDevice(deviceId: string | null): void;
-    sendDirectMessage(recipientId: string, content: string, attachments?: UploadResult[]): Promise<{ success: boolean; messageId?: string; error?: string }>;
+    sendDirectMessage(recipientId: string, content: string, attachments?: UploadResult[], replyToId?: string): Promise<{ success: boolean; messageId?: string; error?: string }>;
     deleteDirectMessage(dmId: string): Promise<{ success: boolean; error?: string }>;
-    fetchDirectMessages(partnerId: string, before?: string, limit?: number): Promise<{ success: boolean; messages?: DirectMessage[]; error?: string }>;
+    fetchDirectMessages(partnerId: string, before?: string, limit?: number, aroundMessageId?: string): Promise<{ success: boolean; messages?: DirectMessage[]; error?: string }>;
     getOnlineUsers(): Promise<{ success: boolean; users?: { userId: string; nickname: string; isOnline: boolean }[]; error?: string }>;
     markDmsRead(partnerId: string): Promise<{ success: boolean; error?: string }>;
     getUnreadDmPartners(): Promise<{ success: boolean; partners?: { partnerId: string; partnerNickname: string; unreadCount: number }[]; error?: string }>;
@@ -920,6 +934,10 @@ interface PendingAttachment {
     publicId?: string;
 }
 let pendingAttachments: PendingAttachment[] = [];
+// Reply mode (PRD 16.11): the message each conversation's draft is answering.
+// Keyed by tab id, so a draft reply belongs to the conversation it was started
+// in — switching tabs hides the bar, coming back restores it.
+const replyTargets = new Map<string, { messageId: string; nickname: string }>();
 let serverBaseUrl: string = "";
 
 // Active speakers state
@@ -1042,6 +1060,9 @@ const eventLog = document.getElementById("event-log") as HTMLDivElement;
 const tabBar = document.getElementById("tab-bar") as HTMLDivElement;
 const tabContentArea = document.getElementById("tab-content-area") as HTMLDivElement;
 const chatComposer = document.getElementById("chat-composer") as HTMLDivElement;
+const replyBar = document.getElementById("reply-bar") as HTMLDivElement;
+const replyBarNick = document.getElementById("reply-bar-nick") as HTMLElement;
+const btnReplyCancel = document.getElementById("btn-reply-cancel") as HTMLButtonElement;
 const rightPane = document.getElementById("right-pane") as HTMLDivElement;
 const chatDropOverlay = document.getElementById("chat-drop-overlay") as HTMLDivElement;
 const chatInput = document.getElementById("chat-input") as HTMLTextAreaElement;
@@ -1520,7 +1541,7 @@ interface ChatTab {
      *  "Jump to Most Recent Message" button. */
     bottomSentinelEl: HTMLDivElement;
     jumpToRecentBtn: HTMLButtonElement;
-    /** False only after `jumpToPinnedMessage` loads a window that might not
+    /** False only after `jumpToMessage` loads a window that might not
      *  reach the channel's true latest message — set back to true once a
      *  live message arrives or a fresh latest-page fetch confirms it (PRD
      *  14.3). Everywhere else (initial load, normal live appends) the last
@@ -2911,6 +2932,10 @@ btnDeleteMessageConfirm.addEventListener("click", async () => {
 
 /** Removes a rendered message from every tab it might be showing in (a tab stays in the DOM, just hidden, when it isn't the active one). */
 function removeMessageElement(msgId: string): void {
+    // Snippets that point at it flip to "Original message was deleted", and a
+    // reply draft answering it is cancelled (PRD 16.11).
+    handleReplyOriginalDeleted(msgId);
+
     document.querySelectorAll(`.chat-msg[data-msg-id="${CSS.escape(msgId)}"]`).forEach((el) => {
         // Removing a group's head promotes the next line to head, and removing
         // a message between two same-author runs can merge them (PRD 16.6).
@@ -3880,6 +3905,7 @@ function switchTab(tabId: string): void {
     }
 
     updateViewingIndicator();
+    renderReplyBar();
 }
 
 function openChatTab(channelId: string, channelName: string): void {
@@ -3921,7 +3947,7 @@ function openChatTab(channelId: string, channelName: string): void {
     `;
     pinBarEl.addEventListener("click", () => {
         const msgId = pinBarEl.dataset.pinnedMsgId;
-        if (msgId) jumpToPinnedMessage(channelId, msgId);
+        if (msgId) jumpToMessage(channelId, msgId);
     });
     contentEl.appendChild(pinBarEl);
 
@@ -4046,6 +4072,7 @@ function closeTab(channelId: string): void {
     tab.tabEl.remove();
     tab.contentEl.remove();
     chatTabs.delete(channelId);
+    replyTargets.delete(channelId); // a draft reply dies with its conversation's tab (PRD 16.11)
 
     // If this was the active tab, switch to server log
     if (activeTabId === channelId) {
@@ -4124,9 +4151,9 @@ async function fetchAndRenderLatestPage(tab: ChatTab, unreadCountHint?: number):
 
 /**
  * "Jump to Most Recent Message" (PRD 14.3): when the true latest message
- * isn't currently loaded — the only case being after `jumpToPinnedMessage`
+ * isn't currently loaded — the only case being after `jumpToMessage`
  * showed a window that might not reach the present — rebuilds the tab from
- * a fresh latest-page fetch, mirroring `jumpToPinnedMessage`'s own
+ * a fresh latest-page fetch, mirroring `jumpToMessage`'s own
  * wipe-and-rebuild shape, rather than trying to scroll through a
  * potentially huge unloaded gap.
  */
@@ -4402,6 +4429,129 @@ function regroupFrom(startEl: Element | null): void {
     }
 }
 
+// ── Replies (PRD 16.11) ─────────────────────────────────────────────────────
+
+const REPLY_ICON_SVG = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/></svg>`;
+const REPLY_ATTACHMENT_ICON_SVG = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>`;
+
+/** Shows/hides the reply bar for the ACTIVE tab (a reply draft belongs to its own conversation). */
+function renderReplyBar(): void {
+    const target = replyTargets.get(activeTabId);
+    replyBar.classList.toggle("visible", !!target && activeTabId !== "server-log");
+    replyBarNick.textContent = target?.nickname ?? "";
+}
+
+/** Puts the accent highlight on the message a tab's reply draft is answering (and nowhere else in that tab). */
+function syncReplyHighlight(tabId: string): void {
+    const tab = chatTabs.get(tabId);
+    if (!tab) return;
+    tab.messagesEl.querySelectorAll(".msg-reply-target").forEach((el) => el.classList.remove("msg-reply-target"));
+    const target = replyTargets.get(tabId);
+    if (target) tab.messagesEl.querySelector(`.chat-msg[data-msg-id="${CSS.escape(target.messageId)}"]`)?.classList.add("msg-reply-target");
+}
+
+function startReply(tabId: string, messageId: string, nickname: string): void {
+    replyTargets.set(tabId, { messageId, nickname });
+    syncReplyHighlight(tabId);
+    renderReplyBar();
+    chatInput.focus();
+}
+
+function cancelReply(tabId: string = activeTabId): void {
+    if (!replyTargets.delete(tabId)) return;
+    syncReplyHighlight(tabId);
+    renderReplyBar();
+}
+
+btnReplyCancel.addEventListener("click", () => {
+    cancelReply();
+    chatInput.focus();
+});
+
+/** Fills in a snippet's text for a still-existing original: its plain text, or an "attachment" note for an image-only message. */
+function setReplySnippetText(box: Element, content: string | undefined, hasAttachments: boolean | undefined): void {
+    const text = box.querySelector(".msg-reply-text") as HTMLElement;
+    // The same one-line plain-text path as the pinned bar — never raw Markdown or HTML.
+    const plain = api.markdownToPlainText(content ?? "").replace(/\s+/g, " ").trim();
+    text.classList.remove("attachment");
+    if (plain) {
+        text.textContent = plain;
+    } else if (hasAttachments) {
+        text.classList.add("attachment");
+        text.innerHTML = `${REPLY_ATTACHMENT_ICON_SVG}<span>Click to see attachment</span>`;
+    } else {
+        text.textContent = "…";
+    }
+}
+
+/** Turns a snippet into the non-clickable "Original message was deleted" state. */
+function setReplySnippetDeleted(box: Element): void {
+    box.classList.add("deleted");
+    box.removeAttribute("role");
+    box.removeAttribute("tabindex");
+    box.removeAttribute("aria-label");
+    (box.querySelector(".msg-reply-nick") as HTMLElement).textContent = "";
+    const text = box.querySelector(".msg-reply-text") as HTMLElement;
+    text.classList.remove("attachment");
+    text.textContent = "Original message was deleted";
+}
+
+/** The snippet above a reply: nick + one line of the original, joined by a curved connector; a click jumps to it. */
+function buildReplySnippet(reply: ReplyPreview, tabId: string): HTMLDivElement {
+    const box = document.createElement("div");
+    box.className = "msg-reply";
+    box.dataset.replyToId = reply.id;
+    box.setAttribute("role", "button");
+    box.setAttribute("tabindex", "0");
+    box.setAttribute("aria-label", "Jump to replied message");
+    box.innerHTML = `<span class="msg-reply-spine"></span><span class="msg-reply-nick"></span><span class="msg-reply-text"></span>`;
+
+    if (reply.deleted) {
+        setReplySnippetDeleted(box);
+    } else {
+        (box.querySelector(".msg-reply-nick") as HTMLElement).textContent = reply.nickname ?? "Unknown";
+        setReplySnippetText(box, reply.content, reply.hasAttachments);
+    }
+
+    const jump = (): void => {
+        if (!box.classList.contains("deleted")) void jumpToMessage(tabId, reply.id);
+    };
+    box.addEventListener("click", jump);
+    box.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            jump();
+        }
+    });
+    return box;
+}
+
+/**
+ * A message another user (or we) deleted: any reply snippet pointing at it
+ * becomes "Original message was deleted" live, and a reply DRAFT that was
+ * answering it is cancelled with a toast (PRD 16.11).
+ */
+function handleReplyOriginalDeleted(msgId: string): void {
+    document.querySelectorAll(`.msg-reply[data-reply-to-id="${CSS.escape(msgId)}"]`).forEach(setReplySnippetDeleted);
+
+    let cancelled = false;
+    for (const [tabId, target] of [...replyTargets]) {
+        if (target.messageId !== msgId) continue;
+        replyTargets.delete(tabId);
+        syncReplyHighlight(tabId);
+        cancelled = true;
+    }
+    if (cancelled) {
+        renderReplyBar();
+        showToast("The message you were replying to was deleted.");
+    }
+}
+
+/** The original of some replies was edited: refresh their snippets' text (the nickname can't change). */
+function refreshReplySnippets(msgId: string, content: string): void {
+    document.querySelectorAll(`.msg-reply[data-reply-to-id="${CSS.escape(msgId)}"]:not(.deleted)`).forEach((box) => setReplySnippetText(box, content, false));
+}
+
 /**
  * The shared skeleton of a channel/DM message: header (nick + time) and body
  * (text + "(edited)"). Always renders the header and lets CSS hide it on
@@ -4415,6 +4565,10 @@ function buildMessageShell(opts: {
     createdAt: string;
     content: string;
     edited?: boolean;
+    /** The message this one replies to (PRD 16.11); its snippet goes above the header. */
+    replyTo?: ReplyPreview | null;
+    /** The tab this message is rendered in — a snippet click jumps within it. */
+    tabId: string;
 }): HTMLDivElement {
     const el = document.createElement("div");
     el.className = "chat-msg";
@@ -4430,6 +4584,13 @@ function buildMessageShell(opts: {
 
     if (opts.content) {
         setMessageBody(el.querySelector(".msg-text") as HTMLElement, opts.content);
+    }
+
+    // A reply always opens its own group with its header showing, under the
+    // snippet (PRD 16.6 rule 5 / 16.11) — applyGrouping() reads this flag.
+    if (opts.replyTo) {
+        el.dataset.isReply = "1";
+        el.prepend(buildReplySnippet(opts.replyTo, opts.tabId));
     }
     return el;
 }
@@ -4506,7 +4667,10 @@ function buildChatMessageElement(tab: ChatTab, msg: ChatMessage): HTMLDivElement
         createdAt: msg.createdAt,
         content: msg.content,
         edited: !!msg.editedAt,
+        replyTo: msg.replyTo,
+        tabId: tab.channelId,
     });
+    if (replyTargets.get(tab.channelId)?.messageId === msg.id) el.classList.add("msg-reply-target");
 
     // NSFW channels blur every image thumbnail (PRD 13.5; optional, PRD 16.2) —
     // only the full-screen viewer, opened by clicking through, shows it clearly.
@@ -4523,7 +4687,7 @@ function buildChatMessageElement(tab: ChatTab, msg: ChatMessage): HTMLDivElement
 
     // Floating action toolbar (PRD 16.5). Insertion order is React, Edit,
     // Pin, Delete — see buildMessageActions().
-    const toolbar = buildMessageActions(msg.id, false, msg.userId);
+    const toolbar = buildMessageActions(msg.id, false, msg.userId, msg.nickname, tab.channelId);
     attachEditButton(toolbar, msg, el);
     attachPinButton(toolbar, msg, tab);
     el.appendChild(toolbar);
@@ -4734,6 +4898,16 @@ async function sendChatMessage(): Promise<void> {
     chatInput.value = "";
     autosizeChatInput();
 
+    // Reply mode (PRD 16.11): the draft's target travels with the message and
+    // the bar clears at once, like the tray; a failed send puts it back.
+    const replyTabId = activeTabId;
+    const reply = replyTargets.get(replyTabId);
+    if (reply) {
+        replyTargets.delete(replyTabId);
+        syncReplyHighlight(replyTabId);
+        renderReplyBar();
+    }
+
     // Clear the tray right away (as before) but keep the batch — and its
     // local preview URLs — alive: they are only released once the send has
     // actually succeeded, so a failed send can put the images back.
@@ -4746,14 +4920,14 @@ async function sendChatMessage(): Promise<void> {
     if (activeTabId.startsWith("dm:")) {
         // DM tab — send direct message
         const recipientId = activeTabId.slice(3);
-        result = await api.sendDirectMessage(recipientId, content, attachments);
+        result = await api.sendDirectMessage(recipientId, content, attachments, reply?.messageId);
         if (!result.success) {
             log(`Failed to send DM: ${result.error ?? "Unknown error"}`, "error");
         }
     } else {
         // Channel tab — send channel message
         const channelId = activeTabId;
-        result = await api.sendMessage(channelId, content, attachments);
+        result = await api.sendMessage(channelId, content, attachments, reply?.messageId);
         if (!result.success) {
             log(`Failed to send message${result.error ? `: ${result.error}` : ""}`, "error");
         }
@@ -4763,6 +4937,12 @@ async function sendChatMessage(): Promise<void> {
         for (const a of batch) URL.revokeObjectURL(a.objectUrl);
     } else {
         restoreFailedBatch(batch, result.error);
+        // Put the reply draft back too, unless the user already started another there.
+        if (reply && !replyTargets.has(replyTabId)) {
+            replyTargets.set(replyTabId, reply);
+            syncReplyHighlight(replyTabId);
+            if (activeTabId === replyTabId) renderReplyBar();
+        }
     }
 }
 
@@ -4805,6 +4985,14 @@ chatInput.addEventListener("keydown", (e) => {
     // The emoji autocomplete gets first refusal: while its card is open,
     // Enter/Tab select instead of sending (PRD 16.7).
     if (handleEmojiAutocompleteKeydown(e)) return;
+
+    // Escape cancels reply mode (PRD 16.11). It only gets here when the
+    // emoji autocomplete did NOT consume it, so an open card closes first.
+    if (e.key === "Escape" && !e.isComposing && replyTargets.has(activeTabId)) {
+        e.preventDefault();
+        cancelReply(activeTabId);
+        return;
+    }
 
     // Enter sends, Shift+Enter inserts a newline; ignore the Enter that
     // confirms an IME composition.
@@ -5153,7 +5341,7 @@ api.on("message", (msg: ChatMessage) => {
         renderChatMessage(tab, msg);
         // A live message is by definition the channel's true latest right
         // now — resolves any earlier "might be missing newer messages"
-        // state from a `jumpToPinnedMessage` window rebuild (PRD 14.3).
+        // state from a `jumpToMessage` window rebuild (PRD 14.3).
         tab.atTrueLatest = true;
     }
 
@@ -5224,7 +5412,10 @@ function buildDmMessageElement(tab: ChatTab, msg: DirectMessage): HTMLDivElement
         nickname: msg.senderNickname,
         createdAt: msg.createdAt,
         content: msg.content,
+        replyTo: msg.replyTo,
+        tabId: tab.channelId,
     });
+    if (replyTargets.get(tab.channelId)?.messageId === msg.id) el.classList.add("msg-reply-target");
 
     const attachmentsEl = buildAttachmentsElement(
         getMessageAttachments(msg),
@@ -5235,7 +5426,7 @@ function buildDmMessageElement(tab: ChatTab, msg: DirectMessage): HTMLDivElement
 
     // Reaction bar
     el.appendChild(buildReactionBar(msg.id, true, msg.reactions));
-    el.appendChild(buildMessageActions(msg.id, true, msg.senderId));
+    el.appendChild(buildMessageActions(msg.id, true, msg.senderId, msg.senderNickname, tab.channelId));
 
     return el;
 }
@@ -6919,7 +7110,7 @@ function buildReactionBar(
  * builds React and Delete; attachEditButton()/attachPinButton() slot theirs
  * in before Delete so the order is deterministic regardless of call order.
  */
-function buildMessageActions(msgId: string, isDm: boolean, ownerId: string): HTMLDivElement {
+function buildMessageActions(msgId: string, isDm: boolean, ownerId: string, authorNickname: string, tabId: string): HTMLDivElement {
     const toolbar = document.createElement("div");
     toolbar.className = "msg-actions";
     toolbar.setAttribute("role", "toolbar");
@@ -6936,6 +7127,19 @@ function buildMessageActions(msgId: string, isDm: boolean, ownerId: string): HTM
         openReactionPicker(msgId, isDm, btnReact);
     });
     toolbar.appendChild(btnReact);
+
+    // Reply (PRD 16.11) — right after React; Edit/Pin slot in before Delete.
+    const btnReply = document.createElement("button");
+    btnReply.type = "button";
+    btnReply.className = "btn-reply-msg";
+    btnReply.innerHTML = REPLY_ICON_SVG;
+    btnReply.title = "Reply";
+    btnReply.setAttribute("aria-label", "Reply");
+    btnReply.addEventListener("click", (e) => {
+        e.stopPropagation();
+        startReply(tabId, msgId, authorNickname);
+    });
+    toolbar.appendChild(btnReply);
 
     // Delete button — own messages only (PRD 4.10)
     if (ownerId === api.getInstanceId()) {
@@ -7153,18 +7357,26 @@ function updatePinBarUI(tab: ChatTab, pinnedMessage: PinnedMessage | null): void
     }
 }
 
-/** Scrolls to and briefly highlights a pinned message, fetching a window
- *  around it first if it isn't within the currently-loaded page. */
-async function jumpToPinnedMessage(channelId: string, messageId: string): Promise<void> {
-    const tab = chatTabs.get(channelId);
+/**
+ * Scrolls to and briefly highlights a message in a tab, fetching a window
+ * around it first if it isn't within the currently-loaded page. Serves the
+ * pinned-message bar (PRD 11.5) and reply snippets (PRD 16.11), in channels
+ * AND DMs.
+ */
+async function jumpToMessage(tabId: string, messageId: string): Promise<void> {
+    const tab = chatTabs.get(tabId);
     if (!tab) return;
+    const isDm = tabId.startsWith("dm:");
+    const selector = `.chat-msg[data-msg-id="${CSS.escape(messageId)}"]`;
 
-    let el = tab.messagesEl.querySelector(`[data-msg-id="${messageId}"]`) as HTMLDivElement | null;
+    let el = tab.messagesEl.querySelector(selector) as HTMLDivElement | null;
 
     if (!el) {
-        const result = await api.fetchMessages(channelId, undefined, 50, messageId);
+        const result = isDm
+            ? await api.fetchDirectMessages(tabId.slice(3), undefined, 50, messageId)
+            : await api.fetchMessages(tabId, undefined, 50, messageId);
         if (!result.success || !result.messages) {
-            log("Couldn't load the pinned message", "error");
+            log("Couldn't load that message — it may have been deleted", "error");
             return;
         }
         tab.messagesEl.innerHTML = "";
@@ -7185,11 +7397,13 @@ async function jumpToPinnedMessage(channelId: string, messageId: string): Promis
         tab.hasMoreOlder = true;
         tab.loadingOlder = false;
 
-        for (const msg of result.messages) {
-            renderChatMessage(tab, msg);
+        if (isDm) {
+            for (const msg of result.messages as DirectMessage[]) renderDmMessage(tab, msg);
+        } else {
+            for (const msg of result.messages as ChatMessage[]) renderChatMessage(tab, msg);
         }
         tab.atTrueLatest = false;
-        el = tab.messagesEl.querySelector(`[data-msg-id="${messageId}"]`) as HTMLDivElement | null;
+        el = tab.messagesEl.querySelector(selector) as HTMLDivElement | null;
     }
 
     if (el) {
@@ -7543,6 +7757,8 @@ function applyMessageEdit(msg: ChatMessage): void {
         }
         ensureEditedLabel(el);
     });
+    // Replies to this message show its new text, as they would after a reload (PRD 16.11).
+    refreshReplySnippets(msg.id, msg.content);
 }
 
 api.on("message-edited", (msg: ChatMessage) => {
