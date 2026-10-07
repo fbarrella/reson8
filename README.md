@@ -8,7 +8,7 @@ A high-performance desktop communication platform inspired by TeamSpeak 3,
 built with modern technology for low-latency voice, hierarchical channel trees,
 and private server ownership.
 
-[![Version](https://img.shields.io/badge/version-2.4.0-blue.svg)](#)
+[![Version](https://img.shields.io/badge/version-2.5.0-blue.svg)](#)
 [![Electron](https://img.shields.io/badge/Electron-34-47848F?logo=electron&logoColor=white)](https://www.electronjs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D20-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
@@ -56,23 +56,29 @@ and private server ownership.
 - **Channel Management** — Create, rename, move, and delete channels on the fly, including re-parenting an existing channel to reorganize the tree without losing its history. Changes propagate to all clients in real-time.
 - **Custom Text Channel Icons** — Give any text channel its own icon in the channel tree — pick from the full curated emoji set, or upload and crop your own image.
 - **Drag & Drop Reordering** — Reorder channels within a category by dragging them into place.
-- **NSFW Channels** — Mark text channels as NSFW; members see a confirmation prompt before entering, and images posted there render blurred with a "click to reveal" overlay until opened in the full-screen viewer.
+- **NSFW Channels** — Mark text channels as NSFW; members see a confirmation prompt before entering (with a "Don't warn me again" switch, reversible in Settings → Application), and images posted there render blurred with a "click to reveal" overlay until opened in the full-screen viewer — a per-user setting lets you turn the blur off.
+- **Mute Text Channels** — Right-click a text channel to mute it just for you: it fades in the channel list and stops showing unread indicators (unmuting brings back anything you missed). Local to your client; no permission needed.
+- **Highlight for the Open Channel** — The text channel you're viewing is highlighted in the channel list with a small eye icon, so it's easy to find on busy servers.
 - **Real-Time Presence** — See who's online and in which channel, instantly updated across all connected clients — including promptly reflecting when someone quits the app, rather than showing them as online for a lingering delay, and staying correctly online through a quick network drop and reconnect.
 
 ### 💬 Text & Messaging
 - **Tabbed Text Chat** — Per-channel text messaging with rich formatting, file attachments, and message history. Always opens scrolled to the latest message, loading the next 20 older messages seamlessly as you scroll up rather than fetching the entire history at once.
 - **Jump to Most Recent Message** — A floating button appears whenever you've scrolled away from the latest message, jumping you straight back down with one click.
 - **Multi-Line Messages & Markdown** — Shift+Enter adds a new line, and messages render Discord-style Markdown: `**bold**`, `*italic*`, `__underline__`, `~~strikethrough~~`, quotes, lists, titles, `inline code`, code blocks, and auto-linked URLs. Raw HTML and masked links are never rendered.
-- **Edit & Delete Messages** — Fix a typo within 2 minutes of sending, or remove a message (and its attachment) entirely.
+- **Replies** — Press the Reply button on any message (channels and DMs) and answer it directly: a bar above the input shows who you're answering, and your message appears with a faded one-line snippet of the original on top. Click the snippet to jump to the original — even far back in the history — and it updates if the original is edited, or reads "Original message was deleted" if it's removed.
+- **Grouped Messages** — Consecutive messages from the same person within 5 minutes share one name and time (HH:MM, with the full date on hover) instead of repeating it; a reply always gets its own header.
+- **Floating Message Toolbar** — React, Reply, Edit, Pin and Delete live in a small toolbar that appears when you hover a message, so a message only takes extra room when it actually has reactions.
+- **Emoji Autocomplete** — Type `:` and a letter for a floating list of matching emoji (standard and custom) above your cursor; arrow keys, Enter or Tab (or a click) insert one, and a full name like `:red_heart:` turns into the emoji.
+- **Edit & Delete Messages** — Fix a typo within 2 minutes of sending, or remove a message (and all of its images) entirely.
 - **Unread Channel Indicators** — Text channels with unseen activity show a highlighted dot until you open them.
-- **Instant Upload Feedback** — Attachments show a live thumbnail and progress spinner the moment you pick them, with a one-click retry if the upload fails.
+- **Multi-Image Messages** — Attach up to 10 images per message from the paperclip, by pasting, or by dragging them onto the chat. They appear as large preview cards above the input that stay after uploading, each with a button to open it full size (zoom only), remove it, or retry a failed upload; sent images show as a tidy grid.
 - **Direct Messages** — Private 1-on-1 messaging with unread indicators, read receipts, and automatic tab management.
 - **Persistent DMs (Offline Access)** — DM conversations remain accessible even when the other user is offline.
 - **Date Sectioning** — Messages are grouped under `--- Month Day ---` dividers as you scroll through history, with the year added once a message predates the current one.
 - **Emoji Picker & Reactions** — Insert any of 550+ curated emojis into chat, or react directly to messages with persistent, tallied emoji pills. A message containing nothing but a single emoji renders at roughly 4x size.
 - **Reaction Hover Card** — Hover a reaction for a second to see the emoji enlarged, its name, and who reacted ("A, B, C and 2 others reacted with :red_heart:").
 - **Same Emoji on Every OS** — Reson8 bundles Google's Noto Color Emoji, so emoji (flags included) look identical on Windows, Linux and macOS.
-- **Image Viewer** — Open any image full-screen with an icon toolbar: zoom up to 200% of its real size (mouse wheel, drag to pan), copy the image or its link, open it in your browser, download it, and see who sent it and when.
+- **Image Viewer** — Open any image full-screen with an icon toolbar (a lighter, zoom-only version opens your pending attachments): zoom up to 200% of its real size (mouse wheel, drag to pan), copy the image or its link, open it in your browser, download it, and see who sent it and when.
 - **Custom Emoji** — Upload your own emoji with a built-in crop tool, or upload an animated GIF via a dedicated crop-free path to preserve the animation; new uploads are queued for admin approval before becoming usable server-wide.
 - **Link Previews** — URLs in chat auto-expand with title, description, and image. YouTube/video embeds supported; a hidden-browser fallback recovers previews from sites that block simple automated requests outright.
 - **Pinned Messages** — Admins can pin one message per text channel; a high-contrast dark-yellow bar above the chat shows a plain-text preview and jumps you straight to it (loading older history if needed), with a click.
@@ -82,6 +88,7 @@ and private server ownership.
 ### 🛡️ Administration & Security
 - **Role-Based Permissions** — Bitwise permission system with admin role management. Fine-grained access control.
 - **Server Password Protection** — Optional `SERVER_PRIVATE_PASSWORD` env var with client-side password input.
+- **Upload Ownership & Cleanup** — The server keeps its own record of every file it stores: only the uploader can attach a file (once) as a message image, emoji or channel icon, and the server never deletes anything a client merely points at. Unused uploads are cleaned up automatically (immediately when you remove a picked image, after 24 hours otherwise, and with a deleted channel); self-hosters can also run `npm run uploads:prune` — see "Maintenance" below.
 - **Kick & Ban** — Admin right-click to kick users from voice channels. Ban/Unban lives in the Settings → User Management tab, which lists every server user (online or not), so offline troublemakers can be banned too — persisted by instance ID. Your own row shows a disabled Ban button so the list stays consistent.
 
 ### 🖥️ Desktop Experience
@@ -326,17 +333,21 @@ reson8/
 │       │   │   ├── connection.handler.ts   # Join/leave/disconnect + ban check
 │       │   │   ├── voice.handler.ts        # WebRTC/mediasoup signaling (mic + screen share)
 │       │   │   ├── channel.handler.ts      # Channel CRUD
-│       │   │   ├── message.handler.ts      # Text messages
+│       │   │   ├── message.handler.ts      # Text messages (attachments, replies)
 │       │   │   ├── dm.handler.ts           # Direct messages + online users
 │       │   │   ├── admin.handler.ts        # Role management
 │       │   │   ├── nudge.handler.ts        # Nudge + server-wide settings (screen share toggle, etc.)
+│       │   │   ├── upload.handler.ts       # Upload tokens + discarding unused uploads
 │       │   │   └── moderation.handler.ts   # Kick & ban
-│       │   ├── services/       # mediasoup, presence, permissions, socket ownership, reactions
-│       │   ├── config/         # mediasoup, message-length, and version configuration
+│       │   ├── services/       # mediasoup, presence, permissions, socket ownership, reactions,
+│       │   │                   #   stored-file ledger, attachments, replies, upload sweeper
+│       │   ├── config/         # mediasoup, message-length, upload, and version configuration
 │       │   └── plugins/        # Prisma, Redis Fastify plugins
 │       ├── prisma/
 │       │   ├── schema.prisma   # Database schema
 │       │   └── seed.ts         # Default server + channels + roles
+│       ├── scripts/
+│       │   └── prune-orphan-uploads.mjs   # `npm run uploads:prune` — remove unreferenced files
 │       ├── Dockerfile
 │       └── entrypoint.sh
 ├── packages/
@@ -368,6 +379,7 @@ reson8/
 | 13 | **Voice Quality & Polish** — AI noise cancelling (DeepFilterNet3/WASM), a real noise-gate fade envelope, a mic volume slider, and an always-visible mic level meter; NSFW image blurring, chat date sectioning, animated custom emoji, bigger solo-emoji messages, and screen-share sound alerts; Ban moved to a renamed "User Management" tab (now works for offline users) and a single-instance app lock; a markdown-rendering "What's New" modal; plus fixes for a presence bug that left quit users showing online and a handful of smaller UI issues | ✅ Done |
 | 14 | **Chat & Channel Management, Voice Self-Monitoring** — Cursor-paginated chat history with infinite scroll-up and a "Jump to Most Recent Message" button; channel re-parenting, parent-channel renaming, and custom text-channel icons; a self-hear mic monitor and an adjustable noise-cancelling strength slider; a reorganized, decluttered Voice & Shortcuts tab; plus fixes for the chat scroll-position bug, the DM sound alert, the Settings modal's per-tab height, own-voice active-speaker latency, and rich link previews on bot-walled sites | ✅ Done |
 | 15 | **Rich Chat & Sturdier Connections** — Multi-line messages with Discord-style Markdown, a redesigned image viewer (zoom, copy, open in browser, "sent by"), a reaction hover card, bundled Google Noto emoji on every OS, remembered window size/position, a dark-yellow pinned bar and a disabled self-Ban button; plus fixes for users showing offline (and voice dropping a second time) after a quick reconnect, the own voice halo showing while muted, and the Windows re-launch freeze, and richer disconnect diagnostics | ✅ Done |
+| 16 | **Replies, Grouped Chat & Secure Uploads** — Message replies in channels and DMs with jump-to-original snippets, grouped messages with HH:MM times, a floating message toolbar, emoji autocomplete, multi-image messages (up to 10) with persistent previews, a preview viewer and drag & drop, NSFW warning/blur preferences, per-user channel muting and a highlight for the open channel; plus a security fix that stops the server trusting client-supplied file URLs (a stored-file ledger with upload tokens), and automatic cleanup of unused uploads | ✅ Done |
 
 ---
 

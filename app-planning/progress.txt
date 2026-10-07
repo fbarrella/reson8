@@ -1541,3 +1541,64 @@ Feature/Fix: Follow-up to PRD 16.11 — reply snippet spacing and fade
     inspected. Harness stopped, scratch DB dropped, dev DB untouched.
 
   Next Step: Phase 16 wrap-up (version bump, release notes, docs, archive the PRD).
+
+
+--- Entry: 07/10/2026 ---
+
+Feature/Fix: Phase 16 close-out — version bump to 2.5.0, release notes, documentation, PRD archived
+
+  Problem: Phase 16 (11 PRD items plus follow-up fixes) was complete and
+  hand-tested, and needed to be released and documented.
+
+  Solution:
+    - Version bump 2.4.0 -> 2.5.0 (minor: user-facing features, three additive
+      DB migrations, additive wire-format fields and a security fix, all
+      backward compatible) in the root, client and server package.json, the
+      README version badge and the root CLAUDE.md; package-lock.json regenerated
+      with `npm install --package-lock-only` (only the workspace versions
+      changed). shared-types stays on its own 0.1.0. A sweep for "2.4.0" found
+      nothing else live (the rest is history, a test description, and a
+      third-party crate version in packages/native-audio/Cargo.lock).
+    - New app-planning/releases/v2.5.0.md (every bullet traces to an entry
+      above). It carries two callouts that matter to users: update client and
+      server together (a v2.4.0 client cannot show NEW locally-stored images,
+      emoji or channel icons from a v2.5.0 server, shows only the first image of
+      a multi-image message and shows replies as plain messages), and server
+      admins need the three migrations (automatic in Docker, otherwise `npx
+      prisma migrate deploy`). The security fix is described at a high level
+      only, with no exploit steps.
+    - Documentation: root CLAUDE.md gains "Message layout, grouping & the hover
+      toolbar", "Replies", "Uploads — the stored-file ledger (security-
+      critical)" and "Composer" paragraphs, the data model additions, two new
+      Electron gotchas (never let the main window navigate; every inbound file
+      URL must go through resolveMediaUrl) and the Phase 16 entry in the
+      project history. apps/client/CLAUDE.md gains the attachment, reply,
+      targeted-DOM-update, per-user-preference and headless-testing (Xvfb +
+      DevTools protocol) conventions. apps/server/CLAUDE.md gains the ledger
+      rules, the reply rules, how to build and verify a migration with a
+      backfill on a throwaway database, and the dotenv gotcha for booting the
+      real server in tests. README: new feature bullets (replies, grouped
+      messages, toolbar, emoji autocomplete, multi-image messages, channel
+      muting, viewing highlight, NSFW options, upload ownership and cleanup),
+      the project structure and a roadmap row for Phase 16.
+    - app-planning/Reson8_Phase16_PRD.md moved to app-planning/archive/ (git mv).
+
+  Key Files Modified:
+    package.json, apps/client/package.json, apps/server/package.json,
+    package-lock.json
+    README.md, CLAUDE.md, apps/client/CLAUDE.md, apps/server/CLAUDE.md
+    app-planning/releases/v2.5.0.md (NEW)
+    app-planning/archive/Reson8_Phase16_PRD.md (moved)
+
+  Verification:
+    npx tsc --noEmit in apps/client and apps/server pass; server `npm run test`
+    97/97. Version references re-grepped after the edit.
+
+  Not done on purpose: condensing this log. progress.txt now holds 14 Phase 16
+  entries (~1,200 lines); the project convention is to condense them into a fifth
+  summary block and move the full text to archive/progress-phase-16.txt — see
+  the root CLAUDE.md's "Project history" note. Left for the start of the next
+  phase so it isn't done unasked.
+
+  Next Step: Review, commit and push the branch; then the next phase's
+  nextsteps.txt.
