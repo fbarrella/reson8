@@ -1189,3 +1189,171 @@ Feature/Fix: PRD 16.9 — Orphaned upload cleanup (discard, sweeper, channel del
   Next Step: PRD 16.10 — multi-image upload, persistent previews, preview
   viewer, drag and drop (adds the `attachments` table: update
   countFileReferences / collectChannelFileUrls to read it).
+
+
+--- Entry: 07/10/2026 ---
+
+Feature/Fix: PRD 16.10 — Multi-image upload, persistent previews, preview viewer, drag and drop
+
+  Problem: The composer could hold ONE image. Its preview was a 24px thumbnail
+  shown only while uploading, then collapsed to a "📎 filename ✕" line; the
+  image could not be viewed before sending; a message could carry only one
+  image (single attachmentUrl columns); and dropping a file anywhere on the
+  window made Chromium navigate the whole app to it.
+
+  Solution: Up to 10 images per message (Discord's limit) in a tray of large
+  cards above the input bar, previews that stay after upload, a limited
+  viewer to open each one, drag and drop and multi-paste, and an `attachments`
+  table so a message really holds several images.
+
+  Database Changes:
+    - New Attachment model (messageId OR dmId, url, publicId, position,
+      createdAt), same nullable-owner convention as Reaction, cascading with
+      its message/DM. Migration 20261008120000_add_attachments backfills every
+      existing single attachment as position 0 (URLs copied as stored, legacy
+      absolute ones included, so old messages display exactly as before).
+    - Expand/contract: Message/DirectMessage.attachmentUrl/attachmentPublicId
+      are KEPT but marked deprecated and no longer written (a rollback stays
+      non-destructive); reads fall back to them only for a row the backfill
+      missed. NOT yet applied to the dev database: `cd apps/server && npx prisma
+      migrate deploy`.
+
+  Shared Types Changes (additive): IAttachment, MAX_ATTACHMENTS_PER_MESSAGE
+    (10), `attachments` on IMessage / IDirectMessage; `attachmentUrl` is now
+    documented as deprecated and is ALWAYS the first image's URL, so a v2.4.0
+    client still shows a message's first image.
+
+  Server Changes:
+    - services/attachment.service.ts (NEW): normalizeAttachmentInput (ids or
+      the one legacy URL, max 10, de-duplicated, order kept), toAttachmentDtos
+      / attachmentFields (position order, never exposes publicId, legacy-column
+      fallback), attachmentUrlsToRelease, releaseAttachmentFiles.
+    - SEND_MESSAGE / SEND_DIRECT_MESSAGE claim up to 10 uploads and create the
+      message with its attachment rows in ONE transaction (all-or-nothing: a
+      single unclaimable upload aborts the whole send and un-claims the rest).
+      FETCH_MESSAGES / FETCH_DIRECT_MESSAGES include attachments. DELETE
+      releases EVERY file of the message after the row is gone. EDIT_MESSAGE
+      still refuses image messages (now sourced from attachments).
+    - stored-file.service.ts: countFileReferences and collectChannelFileUrls
+      now also read the attachments table (PRD 16.8/16.9 guards); the prune
+      script already detected the table via to_regclass, so it needed no change.
+
+  Client Changes:
+    - Composer: #chat-composer wraps [#attachment-tray, #chat-input-bar];
+      switchTab toggles the composer. The old #attachment-preview bar and its
+      CSS were removed.
+    - State/queue: pendingAttachments[] (uploading|ready|failed) is global, not
+      per tab, as before. Uploads start on pick, at most 3 at once. Object URLs
+      are kept until a card is removed or the send SUCCEEDS (that was the root
+      of the vanishing preview). Validation: image/* only, <= 5 MB each, cap 10,
+      each refusal a toast (file names HTML-escaped, since toasts use innerHTML).
+    - Cards: 156px wide, 140px thumbnail, filename ellipsized; eye (opens the
+      LOCAL file in the viewer, so it works mid-upload), trash (removes and
+      discards the upload on the server — PRD 16.9; an in-flight one is
+      discarded when it finishes) and, on failed cards only, retry. Failed
+      cards are red with a warning icon and their actions always visible.
+    - Viewer: openLightbox(url, { previewOnly }) adds .preview-only, which hides
+      copy image / copy link / open in browser / download, their separator and
+      the "sent by" pill; zoom, pan, keys, Escape and Close remain. Cleared on
+      close so a normal open is never affected.
+    - Sending: blocked with a toast while anything is uploading ("Waiting for
+      images to finish uploading…") or failed ("Remove or retry the failed
+      image first"); Send looks disabled. The tray clears immediately, as
+      before. If the send fails, the cards are restored (only if the tray is
+      still empty); on "no longer available" every card comes back FAILED with
+      the good uploads discarded, so Retry re-uploads the same files.
+    - Rendering: shared buildAttachmentsElement for channel AND DM messages.
+      One image looks exactly as before (max 300x200); two or more become a
+      grid of 150px square tiles, up to 3 columns. In an NSFW channel EACH
+      tile has its own blur wrap + overlay, so the PRD 16.2 setting still
+      covers every one. Each image re-sticks the scroll to the bottom on load
+      (PRD 14.1). The edit button stays hidden on any image message.
+    - Drag and drop: a window-level guard swallows file drops everywhere
+      (only drags carrying "Files" — the channel tree's text/plain reorder drag
+      is untouched); a dashed-border overlay ("Drop images to attach") shows
+      over the chat only on a chat tab while connected, with an enter/leave
+      counter so child elements can't make it flicker. Paste takes every image
+      on the clipboard.
+    - main.ts: will-navigate on the main window cancels any navigation away
+      from the app's own page (defense in depth).
+    - preload.ts: sendMessage / sendDirectMessage take an array; the payload
+      carries ALL ids plus the FIRST image's legacy url/public_id for an older
+      server; every attachment URL is resolved against the server address.
+    - The renderer has no module system, so MAX_ATTACHMENTS_PER_MESSAGE is
+      mirrored locally (10) rather than imported from shared-types.
+
+  Key Files Modified:
+    packages/shared-types/src/models.ts
+    packages/shared-types/src/socket-events.ts
+    apps/server/prisma/schema.prisma
+    apps/server/prisma/migrations/20261008120000_add_attachments/migration.sql (NEW)
+    apps/server/src/services/attachment.service.ts (NEW)
+    apps/server/src/services/stored-file.service.ts
+    apps/server/src/handlers/message.handler.ts
+    apps/server/src/handlers/dm.handler.ts
+    apps/server/src/__tests__/attachment.service.test.ts (NEW)
+    apps/client/src/renderer/index.html
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/preload.ts
+    apps/client/src/main.ts
+    (packages/shared-types and apps/server tsconfig.tsbuildinfo, per repo convention)
+
+  Verification:
+    - tsc: shared-types --build, server --noEmit, client --noEmit pass. Server
+      `npm run test`: 78/78 (14 new in attachment.service.test.ts). Client
+      `test:markdown` passes.
+    - Migration + backfill on a throwaway DB: all earlier migrations, sample
+      rows (legacy absolute URL, Cloudinary with public_id, text-only, already
+      relative, a DM), then the new one — 4 attachment rows, text-only skipped,
+      legacy columns still populated, and deleting a message cascades its rows.
+    - Real server end to end (34 checks, scratch DB): 3 images stored in the
+      requested order; the deprecated attachmentUrl is the first image; no
+      publicId in any DTO; the deprecated columns are not written; FETCH returns
+      the same list; exactly 10 accepted, 11 rejected without burning any
+      upload; a duplicated id attaches once; images with no text allowed; a
+      send including someone else's upload fails as a whole and un-claims the
+      sender's own upload (rollback); legacy single-URL send still works;
+      multi-image messages can't be edited, text ones can; deleting a 3-image
+      message removes all 3 files and rows; a 2-image DM end to end (delivery,
+      history, steal attempt refused, delete removes both); a row only the
+      deprecated column knows still renders, can't be edited, and releases its
+      file; deleting a channel removes every gallery file; the prune script keeps
+      a file referenced only through the attachments table.
+    - THE REAL APP (61 checks): built the client and drove the actual Electron
+      renderer over the DevTools protocol on a virtual display (Xvfb, no
+      WAYLAND_DISPLAY, own --user-data-dir so it could not touch a running
+      Reson8), against that real server, plus screenshots I inspected. Covered:
+      connecting through the UI; the composer hidden on the Server Log tab;
+      3 picked images -> 3 cards that stay after upload, 156px cards / 140px
+      thumbnails, tray above the input bar; the eye opens the viewer
+      preview-only (4 buttons, separator and pill hidden; zoom/close present),
+      Escape clears it, and a sent image opens the FULL viewer (copy, download,
+      "sent by"); trash removes a card and the server discards the upload;
+      sending a 2-image message -> 2-column grid of 150px tiles whose relative
+      URLs resolved against the server and loaded; a single image NOT in a
+      grid; no edit button on image messages; 12 picked -> 10 cards + toast;
+      a .txt file and a 6 MB image refused by toasts; uploads held via CDP
+      Fetch interception -> spinners, Send looks blocked, Enter shows the
+      "Waiting…" toast and sends nothing; uploads failed -> red card, visible
+      Retry, "Remove or retry…" toast, Retry succeeds; drag overlay appears,
+      hides, doesn't flicker on nested enter/leave, drop adds cards and is
+      handled; a text-only drag is ignored; no overlay or attach on the Server
+      Log tab; a file dropped on the channel tree is swallowed; a
+      renderer-initiated navigation to file:// is blocked by the main-process
+      will-navigate guard (page URL unchanged, still connected); paste of 2
+      images -> 2 cards; a send the server rejects ("no longer available")
+      restores both cards as failed, nothing is created, Retry re-uploads and
+      the second send succeeds; an NSFW channel's 3-image message has 3
+      separately blurred tiles and the blur setting off clears all 3; a 2-image
+      DM renders a grid, never blurred; reopening the channel reloads history
+      with the grids and images loading; zero uncaught page exceptions.
+    - First UI run had 4 FAILs that were test bugs, not app bugs (selector hit
+      older history; a CSS fade measured mid-transition); fixed in the test and
+      rerun clean on a fresh channel/user/Electron. Harness processes stopped,
+      scratch DB dropped, dev DB never touched. Scratch scripts not committed.
+    - NOT verified: native file-picker dialog (the input was fed a FileList),
+      a real OS drag from a file manager (events were synthesized with real
+      DataTransfer/File objects), a v2.4.0 client against this server.
+
+  Next Step: PRD 16.11 — message replies (channels and DMs). Uses this
+  composer: its reply bar goes at the top of #chat-composer.

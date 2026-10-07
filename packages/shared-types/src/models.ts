@@ -156,12 +156,23 @@ export interface IReactionSummary {
     users?: Array<{ userId: string; nickname: string }>;
 }
 
+/** One image on a message (PRD 16.10). The URL is server-relative for local-disk files ("/uploads/x.png") — resolve it against the server address. */
+export interface IAttachment {
+    url: string;
+}
+
+/** Most images one message can carry (PRD 16.10) — enforced by the server, mirrored by the client composer. */
+export const MAX_ATTACHMENTS_PER_MESSAGE = 10;
+
 export interface IMessage {
     id: string;
     channelId: string;
     userId: string;
     nickname: string;
     content: string;
+    /** The message's images, in order (PRD 16.10). */
+    attachments?: IAttachment[];
+    /** @deprecated Always `attachments[0]?.url ?? null`; kept so pre-v2.5.0 clients still show a message's first image. */
     attachmentUrl?: string | null;
     createdAt: string;
     editedAt?: string | null;
@@ -178,6 +189,9 @@ export interface IDirectMessage {
     senderNickname: string;
     receiverId: string;
     content: string;
+    /** The message's images, in order (PRD 16.10). */
+    attachments?: IAttachment[];
+    /** @deprecated Always `attachments[0]?.url ?? null`; kept so pre-v2.5.0 clients still show a message's first image. */
     attachmentUrl?: string | null;
     createdAt: string;
     readAt?: string | null;

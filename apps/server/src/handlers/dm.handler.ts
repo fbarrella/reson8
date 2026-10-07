@@ -17,12 +17,14 @@ import type {
     IDirectMessage,
 } from "@reson8/shared-types";
 import { PresenceService } from "../services/presence.service.js";
+import { claimUploads, UploadClaimError } from "../services/stored-file.service.js";
 import {
-    claimUploads,
-    parseClaimRequest,
-    releaseStoredFile,
-    UploadClaimError,
-} from "../services/stored-file.service.js";
+    attachmentFields,
+    attachmentInclude,
+    attachmentUrlsToRelease,
+    normalizeAttachmentInput,
+    releaseAttachmentFiles,
+} from "../services/attachment.service.js";
 import { DEFAULT_MAX_MESSAGE_LENGTH } from "../config/message.config.js";
 import { normalizeNewlines } from "../services/message-text.js";
 import { aggregateReactionRows, loadReactorNicknames } from "../services/reaction.service.js";
@@ -57,9 +59,9 @@ export function registerDMHandlers(
                 const { recipientId } = payload;
                 const content = normalizeNewlines(payload.content);
 
-                // Same claim-by-ledger-id scheme as channel messages (PRD 16.8);
+                // Same claim-by-ledger-id scheme as channel messages (PRD 16.8/16.10);
                 // the client's `attachmentPublicId` is never read.
-                const claim = parseClaimRequest(payload.attachmentIds, payload.attachmentUrl, 1);
+                const claim = normalizeAttachmentInput(payload);
                 if ("error" in claim) {
                     ack({ success: false, error: claim.error });
                     return;
@@ -101,7 +103,7 @@ export function registerDMHandlers(
 
                 // Persist DM — claim + create share one transaction (PRD 16.8)
                 const dm = await app.prisma.$transaction(async (tx) => {
-                    const [file] = await claimUploads(tx, {
+                    const files = await claimUploads(tx, {
                         ids: claim.ids,
                         urls: claim.urls,
                         kind: "MESSAGE_ATTACHMENT",
@@ -112,9 +114,11 @@ export function registerDMHandlers(
                             senderId: socket.data.userId,
                             receiverId: recipientId,
                             content: content?.trim() ?? "",
-                            attachmentUrl: file?.url ?? null,
-                            attachmentPublicId: file?.publicId ?? null,
+                            attachments: {
+                                create: files.map((f, position) => ({ url: f.url, publicId: f.publicId, position })),
+                            },
                         },
+                        include: { attachments: attachmentInclude },
                     });
                 });
 
@@ -124,7 +128,7 @@ export function registerDMHandlers(
                     senderNickname: socket.data.nickname,
                     receiverId: dm.receiverId,
                     content: dm.content,
-                    attachmentUrl: dm.attachmentUrl,
+                    ...attachmentFields(dm.attachments),
                     createdAt: dm.createdAt.toISOString(),
                     readAt: null,
                 };
@@ -180,6 +184,7 @@ export function registerDMHandlers(
                     include: {
                         sender: { select: { nickname: true } },
                         reactions: { select: { emoji: true, userId: true }, orderBy: { createdAt: "asc" } },
+                        attachments: attachmentInclude,
                     },
                 });
 
@@ -196,7 +201,7 @@ export function registerDMHandlers(
                     senderNickname: m.sender.nickname,
                     receiverId: m.receiverId,
                     content: m.content,
-                    attachmentUrl: m.attachmentUrl,
+                    ...attachmentFields(m.attachments, m.attachmentUrl),
                     createdAt: m.createdAt.toISOString(),
                     readAt: m.readAt?.toISOString() ?? null,
                     reactions: aggregateReactionRows(m.reactions, reactorNicknames),
@@ -350,6 +355,7 @@ export function registerDMHandlers(
 
                 const dm = await app.prisma.directMessage.findUnique({
                     where: { id: dmId },
+                    include: { attachments: attachmentInclude },
                 });
                 if (!dm) {
                     ack({ success: false, error: "Message not found" });
@@ -359,15 +365,17 @@ export function registerDMHandlers(
                     ack({ success: false, error: "You can only delete your own messages" });
                     return;
                 }
+                // Read before the row (and its attachment rows) go.
+                const filesToRelease = attachmentUrlsToRelease(dm.attachments, dm.attachmentUrl);
 
                 await app.prisma.directMessage.delete({ where: { id: dmId } });
 
                 ack({ success: true });
 
-                // Row gone — release its file via the upload ledger (PRD 16.8).
-                if (dm.attachmentUrl) {
-                    releaseStoredFile(app.prisma, dm.attachmentUrl).catch((err) =>
-                        app.log.warn({ err, dmId }, "Failed to release deleted DM's file"),
+                // Row gone — release ALL its files via the upload ledger (PRD 16.8/16.10).
+                if (filesToRelease.length > 0) {
+                    releaseAttachmentFiles(app.prisma, filesToRelease).catch((err) =>
+                        app.log.warn({ err, dmId }, "Failed to release deleted DM's files"),
                     );
                 }
 

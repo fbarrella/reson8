@@ -40,6 +40,9 @@ interface ChatMessage {
     userId: string;
     nickname: string;
     content: string;
+    /** The message's images, in order (PRD 16.10). */
+    attachments?: { url: string }[];
+    /** @deprecated The first image's URL — only used when `attachments` is absent (an older server). */
     attachmentUrl?: string | null;
     createdAt: string;
     editedAt?: string | null;
@@ -59,6 +62,9 @@ interface DirectMessage {
     senderNickname: string;
     receiverId: string;
     content: string;
+    /** The message's images, in order (PRD 16.10). */
+    attachments?: { url: string }[];
+    /** @deprecated The first image's URL — only used when `attachments` is absent (an older server). */
     attachmentUrl?: string | null;
     createdAt: string;
     readAt?: string | null;
@@ -758,7 +764,7 @@ interface Reson8Api {
     ): Promise<{ success: boolean; error?: string }>;
     moveChannel(channelId: string, newParentId: string | null): Promise<{ success: boolean; error?: string }>;
     deleteChannel(channelId: string): Promise<{ success: boolean; error?: string }>;
-    sendMessage(channelId: string, content: string, attachment?: UploadResult): Promise<{ success: boolean; messageId?: string; error?: string }>;
+    sendMessage(channelId: string, content: string, attachments?: UploadResult[]): Promise<{ success: boolean; messageId?: string; error?: string }>;
     deleteMessage(messageId: string): Promise<{ success: boolean; error?: string }>;
     editMessage(messageId: string, content: string): Promise<{ success: boolean; error?: string }>;
     fetchMessages(channelId: string, before?: string, limit?: number, aroundMessageId?: string): Promise<{ success: boolean; messages?: ChatMessage[]; pinnedMessage?: PinnedMessage | null; error?: string }>;
@@ -770,7 +776,7 @@ interface Reson8Api {
     assignRole(userId: string, roleId: string, action: "add" | "remove"): Promise<{ success: boolean; error?: string }>;
     enumerateAudioDevices(): Promise<{ inputs: { deviceId: string; label: string }[]; outputs: { deviceId: string; label: string }[] }>;
     setAudioInputDevice(deviceId: string | null): void;
-    sendDirectMessage(recipientId: string, content: string, attachment?: UploadResult): Promise<{ success: boolean; messageId?: string; error?: string }>;
+    sendDirectMessage(recipientId: string, content: string, attachments?: UploadResult[]): Promise<{ success: boolean; messageId?: string; error?: string }>;
     deleteDirectMessage(dmId: string): Promise<{ success: boolean; error?: string }>;
     fetchDirectMessages(partnerId: string, before?: string, limit?: number): Promise<{ success: boolean; messages?: DirectMessage[]; error?: string }>;
     getOnlineUsers(): Promise<{ success: boolean; users?: { userId: string; nickname: string; isOnline: boolean }[]; error?: string }>;
@@ -894,12 +900,26 @@ let isMuted = false;
 let isDeafened = false;
 let pttModeEnabled = localStorage.getItem("reson8-ptt-mode") === "true";
 
-// Attachment state
-let pendingAttachmentUrl: string | null = null;
-let pendingAttachmentPublicId: string | null = null;
-// The server's upload-ledger id for the pending image (PRD 16.8) — what the
-// server actually claims when the message is sent.
-let pendingAttachmentUploadId: string | null = null;
+// Attachment state (PRD 16.10): the composer's pending images. Global, not per
+// tab — a picked image survives switching tabs, as it always has.
+interface PendingAttachment {
+    id: string;
+    file: File;
+    /** Local preview, kept alive for the card and its viewer until the card is removed or the message is sent. */
+    objectUrl: string;
+    status: "uploading" | "ready" | "failed";
+    /** An upload has been started (a queued card is "uploading" but not started yet). */
+    started: boolean;
+    /** Removed by the user; if its upload is still in flight it is discarded when it resolves. */
+    removed?: boolean;
+    error?: string;
+    /** The server's upload-ledger id (PRD 16.8) — what the server claims on send. */
+    uploadId?: string;
+    /** Only used as the legacy fallback for a pre-v2.5.0 server that has no upload ids. */
+    url?: string;
+    publicId?: string;
+}
+let pendingAttachments: PendingAttachment[] = [];
 let serverBaseUrl: string = "";
 
 // Active speakers state
@@ -1021,7 +1041,9 @@ const channelTree = document.getElementById("channel-tree") as HTMLDivElement;
 const eventLog = document.getElementById("event-log") as HTMLDivElement;
 const tabBar = document.getElementById("tab-bar") as HTMLDivElement;
 const tabContentArea = document.getElementById("tab-content-area") as HTMLDivElement;
-const chatInputBar = document.getElementById("chat-input-bar") as HTMLDivElement;
+const chatComposer = document.getElementById("chat-composer") as HTMLDivElement;
+const rightPane = document.getElementById("right-pane") as HTMLDivElement;
+const chatDropOverlay = document.getElementById("chat-drop-overlay") as HTMLDivElement;
 const chatInput = document.getElementById("chat-input") as HTMLTextAreaElement;
 
 // Emoji autocomplete (PRD 16.7). Declared up here, not beside its logic: it
@@ -1053,7 +1075,7 @@ const emojiTabsBar = document.getElementById("emoji-tabs-bar") as HTMLDivElement
 const emojiCustomTabSlot = document.getElementById("emoji-custom-tab-slot") as HTMLDivElement;
 const emojiGridContainer = document.getElementById("emoji-grid-container") as HTMLDivElement;
 const fileInput = document.getElementById("file-input") as HTMLInputElement;
-const attachmentPreview = document.getElementById("attachment-preview") as HTMLDivElement;
+const attachmentTray = document.getElementById("attachment-tray") as HTMLDivElement;
 const imageLightboxModal = document.getElementById("image-lightbox-modal") as HTMLDivElement;
 const lightboxImage = document.getElementById("lightbox-image") as HTMLImageElement;
 const btnLightboxDownload = document.getElementById("btn-lightbox-download") as HTMLButtonElement;
@@ -3839,11 +3861,11 @@ function switchTab(tabId: string): void {
     tabEl?.classList.add("active");
     contentEl?.classList.add("active");
 
-    // Show/hide chat input bar
+    // Show/hide the composer (attachment tray + input bar)
     if (tabId === "server-log") {
-        chatInputBar.classList.remove("visible");
+        chatComposer.classList.remove("visible");
     } else {
-        chatInputBar.classList.add("visible");
+        chatComposer.classList.add("visible");
         chatInput.focus();
     }
 
@@ -4418,6 +4440,60 @@ function ensureEditedLabel(el: Element): void {
     el.querySelector(".msg-body")?.insertAdjacentHTML("beforeend", `<span class="msg-edited">(edited)</span>`);
 }
 
+/** The images to show for a message: the `attachments` list, or the first image of an older server's DTO (PRD 16.10). */
+function getMessageAttachments(msg: { attachments?: { url: string }[]; attachmentUrl?: string | null }): { url: string }[] {
+    if (msg.attachments && msg.attachments.length > 0) return msg.attachments;
+    return msg.attachmentUrl ? [{ url: msg.attachmentUrl }] : [];
+}
+
+/**
+ * Builds a message's image(s) (PRD 16.10), shared by channel and DM messages.
+ * One image looks exactly as it always has (max 300x200); two or more become
+ * a grid of square tiles. Every image opens the full viewer. In an NSFW
+ * channel EACH image gets its own blur wrap + overlay (PRD 13.5), which is
+ * what the "Blur images in NSFW channels" setting (PRD 16.2) switches off.
+ */
+function buildAttachmentsElement(attachments: { url: string }[], meta: LightboxMeta, nsfw: boolean): HTMLElement | null {
+    if (attachments.length === 0) return null;
+
+    const buildOne = (url: string): HTMLElement => {
+        const img = document.createElement("img");
+        img.src = url;
+        img.className = "msg-image";
+        img.loading = "lazy";
+        img.alt = "Shared image";
+        img.addEventListener("click", () => openLightbox(url, meta));
+        if (!nsfw) return img;
+
+        const wrap = document.createElement("div");
+        wrap.className = "msg-image-nsfw-wrap";
+        wrap.appendChild(img);
+        const overlay = document.createElement("div");
+        overlay.className = "msg-image-nsfw-overlay";
+        overlay.innerHTML = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><span>NSFW. Click to open image and reveal content.</span>`;
+        overlay.addEventListener("click", () => openLightbox(url, meta));
+        wrap.appendChild(overlay);
+        return wrap;
+    };
+
+    if (attachments.length === 1) return buildOne(attachments[0].url);
+
+    const grid = document.createElement("div");
+    grid.className = "msg-attachments";
+    grid.style.setProperty("--att-cols", String(Math.min(attachments.length, 3)));
+    for (const a of attachments) grid.appendChild(buildOne(a.url));
+    return grid;
+}
+
+/** Re-sticks the scroll to the bottom as each of a message's images finishes loading (PRD 14.1), if the user was already there. */
+function stickOnImageLoad(el: HTMLElement, tab: ChatTab, wasNearBottom: boolean): void {
+    el.querySelectorAll<HTMLImageElement>(".msg-image").forEach((img) => {
+        img.addEventListener("load", () => {
+            if (wasNearBottom) stickToBottom(tab);
+        });
+    });
+}
+
 /** Builds a channel message's DOM element without appending it or touching
  *  scroll state — shared by the forward-append path (`renderChatMessage`)
  *  and the backward-prepend path (`prependOlderMessages`, PRD 14.2). */
@@ -4432,32 +4508,15 @@ function buildChatMessageElement(tab: ChatTab, msg: ChatMessage): HTMLDivElement
         edited: !!msg.editedAt,
     });
 
-    if (msg.attachmentUrl) {
-        const img = document.createElement("img");
-        img.src = msg.attachmentUrl;
-        img.className = "msg-image";
-        img.loading = "lazy";
-        img.alt = "Shared image";
-        img.addEventListener("click", () => openLightbox(msg.attachmentUrl!, { senderNickname: msg.nickname, sentAt: msg.createdAt }));
-
-        // NSFW channels blur every image thumbnail permanently — only the
-        // full-screen lightbox (opened by clicking through) ever shows it
-        // clearly (PRD 13.5).
-        const channelNode = findChannelNodeById(currentTree, tab.channelId);
-        if (channelNode?.isNsfw) {
-            const wrap = document.createElement("div");
-            wrap.className = "msg-image-nsfw-wrap";
-            wrap.appendChild(img);
-            const overlay = document.createElement("div");
-            overlay.className = "msg-image-nsfw-overlay";
-            overlay.innerHTML = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><span>NSFW. Click to open image and reveal content.</span>`;
-            overlay.addEventListener("click", () => openLightbox(msg.attachmentUrl!, { senderNickname: msg.nickname, sentAt: msg.createdAt }));
-            wrap.appendChild(overlay);
-            el.appendChild(wrap);
-        } else {
-            el.appendChild(img);
-        }
-    }
+    // NSFW channels blur every image thumbnail (PRD 13.5; optional, PRD 16.2) —
+    // only the full-screen viewer, opened by clicking through, shows it clearly.
+    const channelNode = findChannelNodeById(currentTree, tab.channelId);
+    const attachmentsEl = buildAttachmentsElement(
+        getMessageAttachments(msg),
+        { senderNickname: msg.nickname, sentAt: msg.createdAt },
+        !!channelNode?.isNsfw,
+    );
+    if (attachmentsEl) el.appendChild(attachmentsEl);
 
     // Reaction bar
     el.appendChild(buildReactionBar(msg.id, false, msg.reactions));
@@ -4498,12 +4557,7 @@ function renderChatMessage(tab: ChatTab, msg: ChatMessage): void {
     // ends up visually short of the true bottom (PRD 14.1). Only re-stick
     // if the user was already at the bottom when this message arrived —
     // never yank someone reading older history.
-    if (msg.attachmentUrl) {
-        const img = el.querySelector<HTMLImageElement>(".msg-image");
-        img?.addEventListener("load", () => {
-            if (wasNearBottom) stickToBottom(tab);
-        });
-    }
+    stickOnImageLoad(el, tab, wasNearBottom);
 
     // Long-message truncation (Phase 12 sub-phase item 5) — must run after
     // appendChild, since scrollHeight/clientHeight need the element to
@@ -4663,32 +4717,84 @@ chatInput.addEventListener("input", autosizeChatInput);
 
 async function sendChatMessage(): Promise<void> {
     const content = chatInput.value.trim();
-    if ((!content && !pendingAttachmentUrl) || activeTabId === "server-log") return;
+    if (activeTabId === "server-log") return;
+
+    // Never send while images are still uploading or have failed (PRD 16.10).
+    if (pendingAttachments.some((a) => a.status === "uploading")) {
+        showToast("Waiting for images to finish uploading…");
+        return;
+    }
+    if (pendingAttachments.some((a) => a.status === "failed")) {
+        showToast("Remove or retry the failed image first");
+        return;
+    }
+    if (!content && pendingAttachments.length === 0) return;
     closeEmojiAutocomplete();
 
     chatInput.value = "";
     autosizeChatInput();
-    const attachmentUrl = pendingAttachmentUrl;
-    const attachmentPublicId = pendingAttachmentPublicId;
-    const attachmentUploadId = pendingAttachmentUploadId;
-    clearAttachmentPreview();
-    const attachment = attachmentUrl
-        ? { url: attachmentUrl, publicId: attachmentPublicId ?? undefined, uploadId: attachmentUploadId ?? undefined }
-        : undefined;
 
+    // Clear the tray right away (as before) but keep the batch — and its
+    // local preview URLs — alive: they are only released once the send has
+    // actually succeeded, so a failed send can put the images back.
+    const batch = pendingAttachments;
+    pendingAttachments = [];
+    renderAttachmentTray();
+    const attachments = batch.map((a) => ({ uploadId: a.uploadId, url: a.url, publicId: a.publicId }) as UploadResult);
+
+    let result: { success: boolean; error?: string };
     if (activeTabId.startsWith("dm:")) {
         // DM tab — send direct message
         const recipientId = activeTabId.slice(3);
-        const result = await api.sendDirectMessage(recipientId, content, attachment);
+        result = await api.sendDirectMessage(recipientId, content, attachments);
         if (!result.success) {
             log(`Failed to send DM: ${result.error ?? "Unknown error"}`, "error");
         }
     } else {
         // Channel tab — send channel message
         const channelId = activeTabId;
-        const result = await api.sendMessage(channelId, content, attachment);
+        result = await api.sendMessage(channelId, content, attachments);
         if (!result.success) {
             log(`Failed to send message${result.error ? `: ${result.error}` : ""}`, "error");
+        }
+    }
+
+    if (result.success) {
+        for (const a of batch) URL.revokeObjectURL(a.objectUrl);
+    } else {
+        restoreFailedBatch(batch, result.error);
+    }
+}
+
+/**
+ * A send failed after its images were taken out of the tray (PRD 16.10).
+ * "No longer available" means the server could not claim one of the uploads
+ * (swept after 24h, or already used): that whole send was rolled back, so free
+ * the still-good uploads and put every card back as FAILED — Retry re-uploads
+ * the same file. Any other error leaves the uploads valid, so the cards come
+ * back ready to resend. If the user has already picked new images meanwhile,
+ * the old batch is dropped (and its uploads discarded) rather than merged.
+ */
+function restoreFailedBatch(batch: PendingAttachment[], error?: string): void {
+    if (batch.length === 0) return;
+
+    if (/no longer available/i.test(error ?? "")) {
+        for (const a of batch) {
+            discardUpload(a.uploadId);
+            a.uploadId = a.url = a.publicId = undefined;
+            a.status = "failed";
+            a.started = true;
+            a.error = "Upload expired — retry to upload it again";
+        }
+    }
+
+    if (pendingAttachments.length === 0) {
+        pendingAttachments = batch;
+        renderAttachmentTray();
+    } else {
+        for (const a of batch) {
+            URL.revokeObjectURL(a.objectUrl);
+            discardUpload(a.uploadId);
         }
     }
 }
@@ -5120,15 +5226,12 @@ function buildDmMessageElement(tab: ChatTab, msg: DirectMessage): HTMLDivElement
         content: msg.content,
     });
 
-    if (msg.attachmentUrl) {
-        const img = document.createElement("img");
-        img.src = msg.attachmentUrl;
-        img.className = "msg-image";
-        img.loading = "lazy";
-        img.alt = "Shared image";
-        img.addEventListener("click", () => openLightbox(msg.attachmentUrl!, { senderNickname: msg.senderNickname, sentAt: msg.createdAt }));
-        el.appendChild(img);
-    }
+    const attachmentsEl = buildAttachmentsElement(
+        getMessageAttachments(msg),
+        { senderNickname: msg.senderNickname, sentAt: msg.createdAt },
+        false, // DM images are never blurred
+    );
+    if (attachmentsEl) el.appendChild(attachmentsEl);
 
     // Reaction bar
     el.appendChild(buildReactionBar(msg.id, true, msg.reactions));
@@ -5148,12 +5251,7 @@ function renderDmMessage(tab: ChatTab, msg: DirectMessage): void {
 
     if (wasNearBottom) stickToBottom(tab);
 
-    if (msg.attachmentUrl) {
-        const img = el.querySelector<HTMLImageElement>(".msg-image");
-        img?.addEventListener("load", () => {
-            if (wasNearBottom) stickToBottom(tab);
-        });
-    }
+    stickOnImageLoad(el, tab, wasNearBottom);
 
     // Async link preview injection
     if (msg.content) {
@@ -5937,146 +6035,273 @@ btnPttMode.addEventListener("click", () => {
     log("Voice input mode: Push-To-Talk", "info");
 });
 
-// ── Attachment / File Upload ──────────────────────────────────────────────
+// ── Attachments: picking, uploading, the tray (PRD 16.10) ───────────────────
+//
+// Images upload as soon as they are picked (up to MAX_CONCURRENT_UPLOADS at a
+// time), long before Send, and each one shows as a card in the tray ABOVE the
+// input bar — and stays there, with a preview, after its upload finishes. A
+// card can be opened full size (eye), removed (trash) or, if its upload failed,
+// retried. Removing an already-uploaded card discards the server's copy at
+// once (PRD 16.9).
+
+/** Mirrors `MAX_ATTACHMENTS_PER_MESSAGE` in shared-types (the renderer is a plain script and can't import it). */
+const MAX_ATTACHMENTS_PER_MESSAGE = 10;
+const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
+const MAX_CONCURRENT_UPLOADS = 3;
+let activeUploads = 0;
+let nextAttachmentId = 1;
+const attachmentCardEls = new Map<string, HTMLDivElement>();
 
 btnAttach.addEventListener("click", () => {
     fileInput.click();
 });
 
-fileInput.addEventListener("change", async () => {
-    const file = fileInput.files?.[0];
-    if (!file) return;
-    fileInput.value = ""; // reset for re-selection
-    await handleFileUpload(file);
+fileInput.addEventListener("change", () => {
+    const files = Array.from(fileInput.files ?? []);
+    fileInput.value = ""; // reset so picking the same file again still fires "change"
+    addFiles(files);
 });
 
-// Clipboard paste handler — detect pasted images
-chatInput.addEventListener("paste", async (e) => {
-    const items = e.clipboardData?.items;
-    if (!items) return;
-
-    for (const item of items) {
+// Clipboard paste — every pasted image becomes a card, not just the first
+chatInput.addEventListener("paste", (e) => {
+    const files: File[] = [];
+    for (const item of Array.from(e.clipboardData?.items ?? [])) {
         if (item.type.startsWith("image/")) {
-            e.preventDefault();
             const file = item.getAsFile();
-            if (file) {
-                await handleFileUpload(file);
-            }
-            return;
+            if (file) files.push(file);
         }
     }
+    if (files.length === 0) return;
+    e.preventDefault();
+    addFiles(files);
 });
 
-// Uploads happen up front (before Send is even clicked) — SEND_MESSAGE only
-// fires once an attachmentUrl already exists. So the "nothing shows until
-// upload finishes" gap this item fixes is entirely inside this function: the
-// moment a file is picked/pasted, show a local-blob thumbnail + spinner in
-// the attachment bar immediately (PRD 4.12), instead of only a text log line
-// while the network round-trip is in flight.
-let pendingAttachmentObjectUrl: string | null = null;
-
-function revokePendingAttachmentObjectUrl(): void {
-    if (pendingAttachmentObjectUrl) {
-        URL.revokeObjectURL(pendingAttachmentObjectUrl);
-        pendingAttachmentObjectUrl = null;
-    }
-}
-
-async function handleFileUpload(file: File): Promise<void> {
+/** Validates the picked files, adds a card for each acceptable one, and starts uploading. */
+function addFiles(files: File[]): void {
+    if (files.length === 0) return;
     if (!isConnected) {
         log("Not connected — cannot upload", "error");
         return;
     }
 
-    // Validate file type
-    if (!file.type.startsWith("image/")) {
-        log("Only image files are supported", "error");
-        return;
+    let overLimit = false;
+    for (const file of files) {
+        const name = escapeHtml(file.name);
+        if (!file.type.startsWith("image/")) {
+            showToast(`"${name}" isn't an image — only images can be attached`);
+            continue;
+        }
+        if (file.size > MAX_ATTACHMENT_BYTES) {
+            showToast(`"${name}" is too large (max 5 MB)`);
+            continue;
+        }
+        if (pendingAttachments.length >= MAX_ATTACHMENTS_PER_MESSAGE) {
+            overLimit = true;
+            continue;
+        }
+        pendingAttachments.push({
+            id: `att-${nextAttachmentId++}`,
+            file,
+            objectUrl: URL.createObjectURL(file),
+            status: "uploading",
+            started: false,
+        });
     }
+    if (overLimit) showToast(`You can attach up to ${MAX_ATTACHMENTS_PER_MESSAGE} images per message`);
 
-    // Validate size (5MB)
-    if (file.size > 5 * 1024 * 1024) {
-        log("Image too large (max 5MB)", "error");
-        return;
+    renderAttachmentTray();
+    pumpUploadQueue();
+}
+
+/** Starts queued uploads until MAX_CONCURRENT_UPLOADS are in flight. */
+function pumpUploadQueue(): void {
+    while (activeUploads < MAX_CONCURRENT_UPLOADS) {
+        const next = pendingAttachments.find((a) => a.status === "uploading" && !a.started);
+        if (!next) return;
+        next.started = true;
+        activeUploads++;
+        void runUpload(next).finally(() => {
+            activeUploads--;
+            pumpUploadQueue();
+        });
     }
+}
 
-    // Picking another image replaces the pending one — throw the old upload
-    // away instead of leaving it behind (PRD 16.9).
-    discardUpload(pendingAttachmentUploadId);
-    pendingAttachmentUrl = null;
-    pendingAttachmentPublicId = null;
-    pendingAttachmentUploadId = null;
-
-    revokePendingAttachmentObjectUrl();
-    pendingAttachmentObjectUrl = URL.createObjectURL(file);
-    showAttachmentUploading(file.name, pendingAttachmentObjectUrl);
-
+async function runUpload(att: PendingAttachment): Promise<void> {
     try {
-        const buffer = await file.arrayBuffer();
-        const result = await api.uploadFile(buffer, file.name, file.type);
-        pendingAttachmentUrl = result.url;
-        pendingAttachmentPublicId = result.publicId ?? null;
-        pendingAttachmentUploadId = result.uploadId ?? null;
-        revokePendingAttachmentObjectUrl();
-        showAttachmentPreview(file.name);
-        log(`Image ready to send: ${file.name}`, "success");
+        const buffer = await att.file.arrayBuffer();
+        const result = await api.uploadFile(buffer, att.file.name, att.file.type);
+        if (att.removed) {
+            // Removed while it was still uploading: throw the finished upload away (PRD 16.9).
+            discardUpload(result.uploadId);
+            return;
+        }
+        att.uploadId = result.uploadId;
+        att.url = result.url;
+        att.publicId = result.publicId;
+        att.status = "ready";
     } catch (err: any) {
-        log(`Upload failed: ${err.message}`, "error");
-        showAttachmentFailed(file.name, err.message, () => handleFileUpload(file));
+        if (att.removed) return;
+        att.status = "failed";
+        att.error = err?.message ?? "Upload failed";
+        log(`Upload failed: ${att.error}`, "error");
     }
+    renderAttachmentTray();
 }
 
-/** Instant local preview shown the moment a file is picked, before the upload round-trip even starts. */
-function showAttachmentUploading(fileName: string, previewObjectUrl: string): void {
-    attachmentPreview.classList.remove("attachment-failed");
-    attachmentPreview.innerHTML = `
-        <img class="attachment-thumb" src="${escapeHtml(previewObjectUrl)}" alt="">
-        <span class="attachment-name">📎 Uploading ${escapeHtml(fileName)}…</span>
-        <span class="attachment-spinner"></span>
-    `;
-    attachmentPreview.style.display = "flex";
+function removeAttachment(id: string): void {
+    const att = pendingAttachments.find((a) => a.id === id);
+    if (!att) return;
+    att.removed = true;
+    pendingAttachments = pendingAttachments.filter((a) => a !== att);
+    URL.revokeObjectURL(att.objectUrl);
+    discardUpload(att.uploadId); // already uploaded; an in-flight one is discarded when it resolves
+    renderAttachmentTray();
 }
 
-/** Ready-to-send state — unchanged from before this item, on purpose: only the uploading/failed states are new. */
-function showAttachmentPreview(fileName: string): void {
-    attachmentPreview.classList.remove("attachment-failed");
-    attachmentPreview.innerHTML = `
-        <span class="attachment-name">📎 ${escapeHtml(fileName)}</span>
-        <button class="attachment-remove" id="btn-remove-attachment">✕</button>
-    `;
-    attachmentPreview.style.display = "flex";
-    document.getElementById("btn-remove-attachment")?.addEventListener("click", discardPendingAttachment);
+function retryAttachment(id: string): void {
+    const att = pendingAttachments.find((a) => a.id === id);
+    if (!att || att.status !== "failed") return;
+    att.status = "uploading";
+    att.started = false;
+    att.error = undefined;
+    renderAttachmentTray();
+    pumpUploadQueue();
 }
 
-/** The ✕ on a ready attachment: drop it from the composer AND throw the already-uploaded file away (PRD 16.9). */
-function discardPendingAttachment(): void {
-    const uploadId = pendingAttachmentUploadId;
-    clearAttachmentPreview();
-    discardUpload(uploadId);
+const ATTACH_ICON_EYE = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>`;
+const ATTACH_ICON_TRASH = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>`;
+const ATTACH_ICON_RETRY = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>`;
+const ATTACH_ICON_WARN = `<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>`;
+
+/** One tray card, built once; `updateAttachmentCard` keeps it in sync afterwards. */
+function createAttachmentCard(att: PendingAttachment): HTMLDivElement {
+    const card = document.createElement("div");
+    card.className = "attach-card";
+    card.setAttribute("role", "listitem");
+
+    const actions = document.createElement("div");
+    actions.className = "attach-card-actions";
+    const mkBtn = (cls: string, label: string, icon: string, onClick: () => void): HTMLButtonElement => {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = cls;
+        b.innerHTML = icon;
+        b.title = label;
+        b.setAttribute("aria-label", label);
+        b.addEventListener("click", (e) => {
+            e.stopPropagation();
+            onClick();
+        });
+        return b;
+    };
+    // Preview opens the LOCAL file, so it works even while the upload is running.
+    actions.appendChild(mkBtn("attach-preview", "Preview image", ATTACH_ICON_EYE, () => openLightbox(att.objectUrl, { previewOnly: true })));
+    actions.appendChild(mkBtn("attach-retry", "Retry upload", ATTACH_ICON_RETRY, () => retryAttachment(att.id)));
+    actions.appendChild(mkBtn("attach-remove", "Remove image", ATTACH_ICON_TRASH, () => removeAttachment(att.id)));
+    card.appendChild(actions);
+
+    const thumb = document.createElement("div");
+    thumb.className = "attach-card-thumb";
+    const img = document.createElement("img");
+    img.src = att.objectUrl;
+    img.alt = "";
+    img.draggable = false;
+    thumb.appendChild(img);
+    const overlay = document.createElement("div");
+    overlay.className = "attach-card-overlay";
+    overlay.innerHTML = `<span class="attach-card-spinner"></span><span class="attach-card-warn">${ATTACH_ICON_WARN}</span>`;
+    thumb.appendChild(overlay);
+    card.appendChild(thumb);
+
+    const name = document.createElement("div");
+    name.className = "attach-card-name";
+    name.textContent = att.file.name;
+    name.title = att.file.name;
+    card.appendChild(name);
+
+    return card;
 }
 
-/** Failure state — surfaces the error instead of silently discarding the attempt, with a one-click retry (re-reads the same File object). */
-function showAttachmentFailed(fileName: string, errorMessage: string, onRetry: () => void): void {
-    attachmentPreview.classList.add("attachment-failed");
-    attachmentPreview.innerHTML = `
-        <span class="attachment-name">⚠️ ${escapeHtml(fileName)} failed: ${escapeHtml(errorMessage)}</span>
-        <button class="attachment-retry" id="btn-retry-attachment">Retry</button>
-        <button class="attachment-remove" id="btn-remove-attachment">✕</button>
-    `;
-    attachmentPreview.style.display = "flex";
-    document.getElementById("btn-retry-attachment")?.addEventListener("click", onRetry);
-    document.getElementById("btn-remove-attachment")?.addEventListener("click", clearAttachmentPreview);
+function updateAttachmentCard(card: HTMLDivElement, att: PendingAttachment): void {
+    card.classList.toggle("uploading", att.status === "uploading");
+    card.classList.toggle("failed", att.status === "failed");
+    card.title = att.status === "failed" ? att.error ?? "Upload failed" : "";
+    const retry = card.querySelector<HTMLButtonElement>(".attach-retry");
+    if (retry) retry.hidden = att.status !== "failed";
 }
 
-function clearAttachmentPreview(): void {
-    pendingAttachmentUrl = null;
-    pendingAttachmentPublicId = null;
-    pendingAttachmentUploadId = null;
-    revokePendingAttachmentObjectUrl();
-    attachmentPreview.classList.remove("attachment-failed");
-    attachmentPreview.style.display = "none";
-    attachmentPreview.innerHTML = "";
+/** Brings the tray's cards in line with `pendingAttachments` (add, update, remove, order). */
+function renderAttachmentTray(): void {
+    for (const [id, el] of attachmentCardEls) {
+        if (!pendingAttachments.some((a) => a.id === id)) {
+            el.remove();
+            attachmentCardEls.delete(id);
+        }
+    }
+    pendingAttachments.forEach((att, i) => {
+        let card = attachmentCardEls.get(att.id);
+        if (!card) {
+            card = createAttachmentCard(att);
+            attachmentCardEls.set(att.id, card);
+        }
+        updateAttachmentCard(card, att);
+        if (attachmentTray.children[i] !== card) attachmentTray.insertBefore(card, attachmentTray.children[i] ?? null);
+    });
+    attachmentTray.classList.toggle("has-items", pendingAttachments.length > 0);
+    // Send stays clickable (it explains itself with a toast) but looks disabled
+    // while any image is still uploading or has failed.
+    btnSend.classList.toggle("blocked", pendingAttachments.some((a) => a.status !== "ready"));
 }
+
+// ── Drag & drop images onto the chat (PRD 16.10) ────────────────────────────
+
+const dragHasFiles = (e: DragEvent): boolean => !!e.dataTransfer && Array.from(e.dataTransfer.types).includes("Files");
+const canDropImages = (): boolean => isConnected && activeTabId !== "server-log";
+let dragDepth = 0; // enter/leave counter: child elements fire their own leave events
+
+function resetDropZone(): void {
+    dragDepth = 0;
+    chatDropOverlay.classList.remove("visible");
+}
+
+// Always-on guard: Chromium's default for a dropped file is to NAVIGATE the
+// window to it, which would replace the whole app. Only drags that carry
+// files are touched — text/HTML drags, including the channel tree's own
+// reorder drag (text/plain), are left alone.
+document.addEventListener("dragover", (e) => {
+    if (dragHasFiles(e)) e.preventDefault();
+});
+document.addEventListener("drop", (e) => {
+    if (dragHasFiles(e)) e.preventDefault();
+    resetDropZone();
+});
+document.addEventListener("dragend", resetDropZone);
+window.addEventListener("blur", resetDropZone);
+
+rightPane.addEventListener("dragenter", (e) => {
+    if (!dragHasFiles(e)) return;
+    e.preventDefault();
+    dragDepth++;
+    if (canDropImages()) chatDropOverlay.classList.add("visible");
+});
+rightPane.addEventListener("dragover", (e) => {
+    if (!dragHasFiles(e)) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = canDropImages() ? "copy" : "none";
+});
+rightPane.addEventListener("dragleave", (e) => {
+    if (!dragHasFiles(e)) return;
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (dragDepth === 0) chatDropOverlay.classList.remove("visible");
+});
+rightPane.addEventListener("drop", (e) => {
+    if (!dragHasFiles(e)) return;
+    e.preventDefault();
+    const files = Array.from(e.dataTransfer?.files ?? []);
+    resetDropZone();
+    if (canDropImages()) addFiles(files);
+});
 
 // ── Lightbox (PRD 15.9) ────────────────────────────────────────────────
 //
@@ -6089,6 +6314,8 @@ function clearAttachmentPreview(): void {
 interface LightboxMeta {
     senderNickname?: string;
     sentAt?: string;
+    /** A preview of a picked, not-yet-sent image (PRD 16.10): zoom/pan/close only — no copy/link/open/download, no "sent by". */
+    previewOnly?: boolean;
 }
 
 const LIGHTBOX_MAX_SCALE = 2; // 200% of the image's natural pixel size
@@ -6211,6 +6438,7 @@ function openLightbox(imageUrl: string, meta?: LightboxMeta): void {
     lightbox.naturalW = 0;
     lightbox.naturalH = 0;
     lightboxImage.classList.remove("ready", "zoomed", "dragging");
+    imageLightboxModal.classList.toggle("preview-only", !!meta?.previewOnly);
 
     // "Sent by" pill — omitted entirely when a caller has no sender info.
     lightboxSender.textContent = "";
@@ -6253,7 +6481,7 @@ function openLightbox(imageUrl: string, meta?: LightboxMeta): void {
 }
 
 function closeLightbox(): void {
-    imageLightboxModal.classList.remove("visible");
+    imageLightboxModal.classList.remove("visible", "preview-only");
     lightboxImage.onload = null;
     lightboxImage.onerror = null;
     lightboxImage.src = "";
@@ -6804,7 +7032,7 @@ const EDIT_WINDOW_MS = 2 * 60 * 1000;
 
 function attachEditButton(toolbar: HTMLDivElement, msg: ChatMessage, el: HTMLDivElement): void {
     const myId = api.getInstanceId();
-    if (msg.userId !== myId || msg.attachmentUrl) return;
+    if (msg.userId !== myId || msg.attachmentUrl || (msg.attachments?.length ?? 0) > 0) return;
 
     // Previously always rendered the button and only checked the window on
     // click, surfacing the server's own rejection as an error log — the

@@ -68,21 +68,23 @@ interface UploadedAttachment {
 }
 
 /**
- * Outbound attachment fields: the ledger id a v2.5.0+ server claims, plus the
- * legacy URL/public_id so a pre-v2.5.0 server (which ignores the id) still
- * gets its attachment. A v2.5.0+ server ignores the legacy fields whenever an
- * id is present.
+ * Outbound attachment fields: the ledger ids a v2.5.0+ server claims (all of
+ * them, in display order — PRD 16.10), plus the FIRST image's legacy
+ * URL/public_id so a pre-v2.5.0 server (which ignores the ids, and only ever
+ * supported one image) still gets an attachment. A v2.5.0+ server ignores the
+ * legacy fields whenever ids are present.
  */
-function attachmentPayload(a?: UploadedAttachment): {
+function attachmentPayload(list?: UploadedAttachment[]): {
     attachmentIds?: string[];
     attachmentUrl?: string;
     attachmentPublicId?: string;
 } {
-    if (!a) return {};
+    if (!list || list.length === 0) return {};
+    const ids = list.map((a) => a.uploadId).filter((id): id is string => !!id);
     return {
-        attachmentIds: a.uploadId ? [a.uploadId] : undefined,
-        attachmentUrl: a.url,
-        attachmentPublicId: a.publicId,
+        attachmentIds: ids.length > 0 ? ids : undefined,
+        attachmentUrl: list[0].url,
+        attachmentPublicId: list[0].publicId,
     };
 }
 
@@ -131,8 +133,9 @@ function resolveMediaUrl<T extends string | null | undefined>(url: T): T {
     return url;
 }
 
-function resolveMessageMedia<T extends { attachmentUrl?: string | null }>(msg: T): T {
+function resolveMessageMedia<T extends { attachmentUrl?: string | null; attachments?: { url: string }[] }>(msg: T): T {
     if (msg?.attachmentUrl) msg.attachmentUrl = resolveMediaUrl(msg.attachmentUrl);
+    for (const a of msg?.attachments ?? []) a.url = resolveMediaUrl(a.url);
     return msg;
 }
 
@@ -789,14 +792,14 @@ const api = {
     sendMessage(
         channelId: string,
         content: string,
-        attachment?: UploadedAttachment,
+        attachments?: UploadedAttachment[],
     ): Promise<{ success: boolean; messageId?: string; error?: string }> {
         return new Promise((resolve) => {
             if (!socket?.connected) {
                 resolve({ success: false });
                 return;
             }
-            socket.emit("SEND_MESSAGE", { channelId, content, ...attachmentPayload(attachment) }, resolve);
+            socket.emit("SEND_MESSAGE", { channelId, content, ...attachmentPayload(attachments) }, resolve);
         });
     },
 
@@ -919,14 +922,14 @@ const api = {
     sendDirectMessage(
         recipientId: string,
         content: string,
-        attachment?: UploadedAttachment,
+        attachments?: UploadedAttachment[],
     ): Promise<{ success: boolean; messageId?: string; error?: string }> {
         return new Promise((resolve) => {
             if (!socket?.connected) {
                 resolve({ success: false, error: "Not connected" });
                 return;
             }
-            socket.emit("SEND_DIRECT_MESSAGE", { recipientId, content, ...attachmentPayload(attachment) }, resolve);
+            socket.emit("SEND_DIRECT_MESSAGE", { recipientId, content, ...attachmentPayload(attachments) }, resolve);
         });
     },
 

@@ -204,13 +204,16 @@ export async function claimUploads(
 export async function countFileReferences(prisma: PrismaClient, url: string): Promise<number> {
     const base = localUploadBasename(url);
     const cond: Prisma.StringFilter = base ? { endsWith: `/uploads/${base}` } : { equals: url };
-    const [messages, dms, emojis, icons] = await Promise.all([
+    // `attachments` is the source of truth since PRD 16.10; the deprecated
+    // message/DM columns still hold pre-migration values, so they count too.
+    const [attachments, messages, dms, emojis, icons] = await Promise.all([
+        prisma.attachment.count({ where: { url: cond } }),
         prisma.message.count({ where: { attachmentUrl: cond } }),
         prisma.directMessage.count({ where: { attachmentUrl: cond } }),
         prisma.customEmoji.count({ where: { imageUrl: cond } }),
         prisma.channel.count({ where: { iconUrl: cond } }),
     ]);
-    return messages + dms + emojis + icons;
+    return attachments + messages + dms + emojis + icons;
 }
 
 /**
@@ -316,7 +319,8 @@ export async function sweepUnclaimedUploads(
 
 /** The URLs of every file a channel would orphan when deleted: its messages' attachments and its own icon. */
 export async function collectChannelFileUrls(prisma: PrismaClient, channelId: string): Promise<string[]> {
-    const [messages, channel] = await Promise.all([
+    const [attachments, messages, channel] = await Promise.all([
+        prisma.attachment.findMany({ where: { message: { channelId } }, select: { url: true } }),
         prisma.message.findMany({
             where: { channelId, attachmentUrl: { not: null } },
             select: { attachmentUrl: true },
@@ -324,6 +328,7 @@ export async function collectChannelFileUrls(prisma: PrismaClient, channelId: st
         prisma.channel.findUnique({ where: { id: channelId }, select: { iconUrl: true } }),
     ]);
     const urls = new Set<string>();
+    for (const a of attachments) urls.add(a.url);
     for (const m of messages) if (m.attachmentUrl) urls.add(m.attachmentUrl);
     if (channel?.iconUrl) urls.add(channel.iconUrl);
     return [...urls];

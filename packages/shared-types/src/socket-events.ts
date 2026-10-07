@@ -121,9 +121,9 @@ export interface ClientToServerEvents {
         payload: {
             channelId: string;
             content: string;
-            /** Ledger ids from `/api/upload` (PRD 16.8). Preferred over the legacy fields below. */
+            /** Ledger ids from `/api/upload`, up to `MAX_ATTACHMENTS_PER_MESSAGE` (PRD 16.8/16.10), in display order. Preferred over the legacy fields below. */
             attachmentIds?: string[];
-            /** @deprecated Legacy (pre-v2.5.0) — claimed by URL when `attachmentIds` is absent. */
+            /** @deprecated Legacy (pre-v2.5.0) — claimed by URL when `attachmentIds` is absent. One image only. */
             attachmentUrl?: string;
             /** @deprecated Ignored by v2.5.0+ servers: the public_id comes from the server's own upload record. */
             attachmentPublicId?: string;
@@ -170,9 +170,9 @@ export interface ClientToServerEvents {
         payload: {
             recipientId: string;
             content: string;
-            /** Ledger ids from `/api/upload` (PRD 16.8). Preferred over the legacy fields below. */
+            /** Ledger ids from `/api/upload`, up to `MAX_ATTACHMENTS_PER_MESSAGE` (PRD 16.8/16.10), in display order. Preferred over the legacy fields below. */
             attachmentIds?: string[];
-            /** @deprecated Legacy (pre-v2.5.0) — claimed by URL when `attachmentIds` is absent. */
+            /** @deprecated Legacy (pre-v2.5.0) — claimed by URL when `attachmentIds` is absent. One image only. */
             attachmentUrl?: string;
             /** @deprecated Ignored by v2.5.0+ servers: the public_id comes from the server's own upload record. */
             attachmentPublicId?: string;

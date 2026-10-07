@@ -18,12 +18,15 @@ import type {
 } from "@reson8/shared-types";
 import { PermissionFlags } from "@reson8/shared-types";
 import { requirePermission } from "../middleware/permissions.middleware.js";
+import { claimUploads, UploadClaimError } from "../services/stored-file.service.js";
 import {
-    claimUploads,
-    parseClaimRequest,
-    releaseStoredFile,
-    UploadClaimError,
-} from "../services/stored-file.service.js";
+    attachmentFields,
+    attachmentInclude,
+    attachmentUrlsToRelease,
+    normalizeAttachmentInput,
+    releaseAttachmentFiles,
+    type AttachmentRow,
+} from "../services/attachment.service.js";
 import { DEFAULT_MAX_MESSAGE_LENGTH } from "../config/message.config.js";
 import { normalizeNewlines } from "../services/message-text.js";
 import { aggregateReactionRows, loadReactorNicknames } from "../services/reaction.service.js";
@@ -45,6 +48,7 @@ type TypedSocket = Socket<
 const messageInclude = {
     user: { select: { nickname: true } },
     reactions: { select: { emoji: true, userId: true }, orderBy: { createdAt: "asc" as const } },
+    attachments: attachmentInclude,
 };
 
 type MessageWithRelations = {
@@ -52,7 +56,9 @@ type MessageWithRelations = {
     channelId: string;
     userId: string;
     content: string;
+    /** Deprecated column — only a fallback for a row the backfill missed (PRD 16.10). */
     attachmentUrl: string | null;
+    attachments: AttachmentRow[];
     createdAt: Date;
     editedAt: Date | null;
     user: { nickname: string };
@@ -68,7 +74,7 @@ function toMessageDto(m: MessageWithRelations, reactorNicknames: ReadonlyMap<str
         userId: m.userId,
         nickname: m.user.nickname,
         content: m.content,
-        attachmentUrl: m.attachmentUrl,
+        ...attachmentFields(m.attachments, m.attachmentUrl),
         createdAt: m.createdAt.toISOString(),
         editedAt: m.editedAt?.toISOString() ?? null,
         reactions: aggregateReactionRows(m.reactions, reactorNicknames),
@@ -101,11 +107,12 @@ export function registerMessageHandlers(
                 const { channelId } = payload;
                 const content = normalizeNewlines(payload.content);
 
-                // Attachments are referenced by upload-ledger id (PRD 16.8);
-                // a legacy client's single URL is accepted too. The client's
-                // `attachmentPublicId` is deliberately never read: the real
-                // public_id comes from the server's own upload record.
-                const claim = parseClaimRequest(payload.attachmentIds, payload.attachmentUrl, 1);
+                // Attachments are referenced by upload-ledger id (PRD 16.8), up
+                // to MAX_ATTACHMENTS_PER_MESSAGE (PRD 16.10); a legacy client's
+                // single URL is accepted too. The client's `attachmentPublicId`
+                // is deliberately never read: the real public_id comes from the
+                // server's own upload record.
+                const claim = normalizeAttachmentInput(payload);
                 if ("error" in claim) {
                     ack({ success: false, error: claim.error });
                     return;
@@ -156,7 +163,7 @@ export function registerMessageHandlers(
                 // already used, swept…) aborts the send, and a failed create
                 // rolls the claim back.
                 const message = await app.prisma.$transaction(async (tx) => {
-                    const [file] = await claimUploads(tx, {
+                    const files = await claimUploads(tx, {
                         ids: claim.ids,
                         urls: claim.urls,
                         kind: "MESSAGE_ATTACHMENT",
@@ -167,9 +174,12 @@ export function registerMessageHandlers(
                             channelId,
                             userId: socket.data.userId,
                             content: content?.trim() ?? "",
-                            attachmentUrl: file?.url ?? null,
-                            attachmentPublicId: file?.publicId ?? null,
+                            // The ledger's url/public_id, in the order the client listed them.
+                            attachments: {
+                                create: files.map((f, position) => ({ url: f.url, publicId: f.publicId, position })),
+                            },
                         },
+                        include: { attachments: attachmentInclude },
                     });
                 });
 
@@ -179,7 +189,7 @@ export function registerMessageHandlers(
                     userId: message.userId,
                     nickname: socket.data.nickname,
                     content: message.content,
-                    attachmentUrl: message.attachmentUrl,
+                    ...attachmentFields(message.attachments),
                     createdAt: message.createdAt.toISOString(),
                     editedAt: null,
                 };
@@ -336,6 +346,7 @@ export function registerMessageHandlers(
 
                 const message = await app.prisma.message.findUnique({
                     where: { id: messageId },
+                    include: { attachments: attachmentInclude },
                 });
                 if (!message) {
                     ack({ success: false, error: "Message not found" });
@@ -345,6 +356,8 @@ export function registerMessageHandlers(
                     ack({ success: false, error: "You can only delete your own messages" });
                     return;
                 }
+                // Read before the row (and its attachment rows) go.
+                const filesToRelease = attachmentUrlsToRelease(message.attachments, message.attachmentUrl);
 
                 // Was this the channel's pinned message? Check before
                 // deleting — the FK's onDelete: SetNull clears it at the DB
@@ -360,13 +373,13 @@ export function registerMessageHandlers(
 
                 ack({ success: true });
 
-                // The row is gone — now release its file (DB first, so a
+                // The row is gone — now release ALL its files (DB first, so a
                 // failed delete never loses a file). Uses the upload ledger's
                 // own url/public_id and only deletes when nothing else still
-                // references it (PRD 16.8).
-                if (message.attachmentUrl) {
-                    releaseStoredFile(app.prisma, message.attachmentUrl).catch((err) =>
-                        app.log.warn({ err, messageId }, "Failed to release deleted message's file"),
+                // references each one (PRD 16.8/16.10).
+                if (filesToRelease.length > 0) {
+                    releaseAttachmentFiles(app.prisma, filesToRelease).catch((err) =>
+                        app.log.warn({ err, messageId }, "Failed to release deleted message's files"),
                     );
                 }
 
@@ -419,6 +432,7 @@ export function registerMessageHandlers(
 
                 const message = await app.prisma.message.findUnique({
                     where: { id: messageId },
+                    include: { attachments: { select: { id: true }, take: 1 } },
                 });
                 if (!message) {
                     ack({ success: false, error: "Message not found" });
@@ -428,7 +442,7 @@ export function registerMessageHandlers(
                     ack({ success: false, error: "You can only edit your own messages" });
                     return;
                 }
-                if (message.attachmentUrl) {
+                if (message.attachments.length > 0 || message.attachmentUrl) {
                     ack({ success: false, error: "Image messages cannot be edited" });
                     return;
                 }
@@ -450,7 +464,8 @@ export function registerMessageHandlers(
                     userId: updated.userId,
                     nickname: socket.data.nickname,
                     content: updated.content,
-                    attachmentUrl: updated.attachmentUrl,
+                    // Image messages can't be edited (checked above), so an edited message has none.
+                    ...attachmentFields([]),
                     createdAt: updated.createdAt.toISOString(),
                     editedAt: updated.editedAt?.toISOString() ?? null,
                 };
