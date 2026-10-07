@@ -1074,13 +1074,18 @@
     .reaction-add-btn {
       display: inline-flex;
       align-items: center;
-      padding: 2px 6px;
-      border-radius: 10px;
+      padding: 3px 8px;
+      border-radius: 12px;
       border: 1px solid var(--border);
       background: transparent;
       color: var(--text-muted);
       cursor: pointer;
       transition: all 0.15s;
+    }
+
+    .reaction-add-btn svg {
+      width: 16px;
+      height: 16px;
     }
 
     .reaction-add-btn:hover {
@@ -1092,13 +1097,13 @@
     .reaction-pill {
       display: inline-flex;
       align-items: center;
-      gap: 3px;
-      padding: 1px 6px;
-      border-radius: 10px;
+      gap: 4px;
+      padding: 2px 8px;
+      border-radius: 12px;
       border: 1px solid var(--border);
       background: transparent;
       color: var(--text-secondary);
-      font-size: 12px;
+      font-size: 15px;
       cursor: pointer;
       transition: all 0.15s;
       line-height: 1.3;
@@ -1254,7 +1259,7 @@
     }
 
     .reaction-count {
-      font-size: 10px;
+      font-size: 12px;
       font-variant-numeric: tabular-nums;
       color: var(--text-muted);
     }
@@ -3057,21 +3062,50 @@
       border-color: var(--accent);
     }
 
-    /* "Don't ask again" style checkbox row inside a confirmation modal (PRD 16.1). */
-    .modal-check-row {
+    /* "Don't ask again" switch row inside a confirmation modal (PRD 16.1).
+       Every selector is prefixed with .modal-content on purpose: that scope
+       has generic `label { display: block; margin-bottom }` and `input {
+       width: 100%; padding; margin-bottom }` rules which, at equal or lower
+       specificity, stretched the old plain checkbox onto its own line. The
+       switch itself reuses the Settings .toggle-switch component. */
+    .modal-content .modal-switch-row {
       display: flex;
       align-items: center;
-      gap: 8px;
-      margin: 12px 0 4px;
+      justify-content: space-between;
+      gap: 12px;
+      margin: 0 0 16px;
+      padding: 10px 12px;
+      border-radius: var(--radius);
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+    }
+
+    .modal-content .modal-switch-text {
+      flex: 1;
+      min-width: 0;
+      margin: 0;
       font-size: 12px;
+      line-height: 1.4;
       color: var(--text-secondary);
       cursor: pointer;
       user-select: none;
     }
 
-    .modal-check-row input {
-      accent-color: var(--accent);
-      cursor: pointer;
+    .modal-content .modal-switch-row .toggle-switch {
+      margin: 0;
+    }
+
+    .modal-content .modal-switch-row .toggle-switch input {
+      width: 0;
+      height: 0;
+      margin: 0;
+      padding: 0;
+      border: 0;
+    }
+
+    .modal-content .modal-switch-row .toggle-switch input:focus-visible + .toggle-slider {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
     }
 
     /* ── Toggle Switch ────────────────────────────────────────────── */
@@ -3894,10 +3928,13 @@
     <div class="modal-content">
       <h3>🔞 NSFW Channel</h3>
       <p><strong id="nsfw-confirm-channel-name"></strong> is marked as Not Safe For Work. Are you sure you want to open it?</p>
-      <label class="modal-check-row" for="chk-nsfw-dont-warn">
-        <input type="checkbox" id="chk-nsfw-dont-warn">
-        <span>Don't warn me again for NSFW channels</span>
-      </label>
+      <div class="modal-switch-row">
+        <label class="modal-switch-text" for="chk-nsfw-dont-warn">Don't warn me again for NSFW channels</label>
+        <label class="toggle-switch">
+          <input type="checkbox" id="chk-nsfw-dont-warn">
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
       <div class="modal-actions">
         <button class="btn btn-cancel" id="btn-nsfw-cancel">Cancel</button>
         <button class="btn btn-disconnect" id="btn-nsfw-confirm">Continue</button>

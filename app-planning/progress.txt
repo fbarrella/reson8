@@ -850,3 +850,44 @@ Feature/Fix: PRD 16.7 — Emoji autocomplete while typing :name
     user (checklist in PRD 16.7).
 
   Next Step: PRD 16.8 — server-side upload ownership (security fix).
+
+
+--- Entry: 07/10/2026 ---
+
+Feature/Fix: Follow-up fixes to PRD 16.1 (NSFW switch layout) and PRD 16.5/16.6 (reaction size)
+
+  Problem: (1) The "Don't warn me again" checkbox added by PRD 16.1 rendered
+  centered on its own line with its text on another line (reported with a
+  screenshot, app-planning/print_nsfw_fix.png). (2) After the grouped-message
+  layout, the reaction pills under messages looked too small.
+
+  Solution:
+    NSFW warning checkbox — root cause: the modal scope has generic rules,
+    `.modal-content label { display: block; margin-bottom: 4px }` and
+    `.modal-content input { width: 100%; padding; margin-bottom: 12px }`,
+    which outrank the single-class `.modal-check-row` flex rules, so the
+    checkbox was stretched across the modal and the label text fell below it.
+    Replaced with a switch row: the label text on the left (wraps naturally
+    at 12px/1.4 line-height) and the Settings `.toggle-switch` lever on the
+    right, inside a bordered card matching the Settings toggle rows. Every
+    new selector is scoped under `.modal-content` so it wins over those
+    generic rules, and the switch input gets a :focus-visible outline since
+    the visually-hidden input otherwise has no keyboard focus cue. The
+    checkbox id (chk-nsfw-dont-warn) and all JS are unchanged. The unused
+    .modal-check-row CSS was removed.
+
+    Reaction pills — `.reaction-pill` font-size 12px -> 15px, padding
+    1px 6px -> 2px 8px, gap 3 -> 4px, radius 10 -> 12px; `.reaction-count`
+    10px -> 12px; the trailing add-reaction button padding and icon (14 ->
+    16px) scaled to match. Custom emoji inside a pill are sized in em, so
+    they scale with the new font size (about 19px).
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html
+
+  Verification:
+    npx tsc --noEmit in apps/client passes (CSS/markup-only change). Visual
+    result NOT exercised by Claude; for the user to confirm against the
+    screenshot — the reaction size values (15px / 12px) are easy to tune.
+
+  Next Step: PRD 16.8 — server-side upload ownership (security fix).
