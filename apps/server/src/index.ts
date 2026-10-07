@@ -31,6 +31,7 @@ import { registerModerationHandlers } from "./handlers/moderation.handler.js";
 import { registerReactionHandlers } from "./handlers/reaction.handler.js";
 import { registerEmojiHandlers } from "./handlers/emoji.handler.js";
 import { registerNudgeHandlers } from "./handlers/nudge.handler.js";
+import { registerUploadHandlers } from "./handlers/upload.handler.js";
 import { registerUploadRoute } from "./routes/upload.route.js";
 import { MediasoupService } from "./services/mediasoup.service.js";
 
@@ -144,6 +145,7 @@ async function main(): Promise<void> {
     registerReactionHandlers(io, app);
     registerEmojiHandlers(io, app);
     registerNudgeHandlers(io, app);
+    registerUploadHandlers(io, app);
 
     // ── Start ──────────────────────────────────────────────────────────────
     try {

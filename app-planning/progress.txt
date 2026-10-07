@@ -891,3 +891,173 @@ Feature/Fix: Follow-up fixes to PRD 16.1 (NSFW switch layout) and PRD 16.5/16.6 
     screenshot — the reaction size values (15px / 12px) are easy to tune.
 
   Next Step: PRD 16.8 — server-side upload ownership (security fix).
+
+
+--- Entry: 07/10/2026 ---
+
+Feature/Fix: PRD 16.8 — Server-side upload ownership (stored-file ledger + upload tokens) [SECURITY]
+
+  Problem: The server trusted file URLs and Cloudinary public_ids sent by the
+  client — on SEND_MESSAGE / SEND_DIRECT_MESSAGE, CREATE_CUSTOM_EMOJI and
+  UPDATE_CHANNEL (icon) — then later DELETED whatever those values pointed at
+  (deleting a message/DM, an admin rejecting an emoji, replacing a channel
+  icon). A modified client could reference another user's already-posted file
+  from its own message and delete that message to get the victim's file
+  removed, pass an arbitrary public_id to cloudinary.destroy() (any asset in
+  the server's Cloudinary account), or submit an emoji pointing at someone's
+  image for an admin to reject. It could also post an external URL as an
+  "attachment" (a tracking pixel logging every viewer's IP).
+
+  Solution: The server now keeps its own record of every file it stores (the
+  `stored_files` ledger). Anything that wants to USE a file must claim it
+  there first; the URL/public_id that get persisted — and later deleted —
+  always come from the ledger, never from a client value.
+
+  Database Changes:
+    - New StoredFile model + StoredFileKind enum (MESSAGE_ATTACHMENT,
+      CUSTOM_EMOJI, CHANNEL_ICON): url (unique, canonical), publicId, kind,
+      ownerId (null = tokenless upload), claimedAt (null = unclaimed),
+      createdAt, index on (claimedAt, createdAt) for PRD 16.9's sweeper.
+    - Migration 20261007120000_add_stored_file_ledger, with a backfill: every
+      file already referenced by a message, DM, custom emoji or channel icon
+      becomes a claimed ledger row. Legacy absolute local URLs are normalized
+      to "/uploads/<file>" (regexp_replace); the same file under two hosts
+      collapses to one row (ON CONFLICT DO NOTHING); Cloudinary URLs and
+      public_ids pass through. NOT yet applied to the dev database (see
+      Verification / Next Step).
+
+  Server Changes:
+    - routes/upload.route.ts: authenticates BEFORE reading the multipart body
+      (Authorization: Bearer <token>; unknown/expired/malformed token -> 401;
+      no header -> accepted as ownerless while ALLOW_TOKENLESS_UPLOADS is
+      true), then records the file in the ledger and replies { url, publicId,
+      uploadId }. If recording fails the stored file is removed. Each route
+      passes its kind.
+    - handlers/upload.handler.ts (NEW): REQUEST_UPLOAD_TOKEN. Mints a random
+      32-byte token mapped to the socket's userId in Redis, stored under the
+      SHA-256 of the token (a Redis dump holds no usable tokens), 10-minute
+      TTL. Refused for viewer sockets and sockets that haven't joined.
+    - services/stored-file.service.ts (NEW): claimUploads() is one atomic
+      `UPDATE ... WHERE claimedAt IS NULL AND kind = ? AND (ownerId = me OR
+      ownerId IS NULL) RETURNING` — a compare-and-set, so concurrent claims
+      can't both win and there's no read-then-write window. It runs on the
+      SAME transaction client as the write that uses the file (message, DM,
+      emoji, channel update), so a failed write rolls the claim back and a
+      failed claim aborts the write. releaseStoredFile() runs AFTER the
+      referencing row is removed (DB first) and deletes the physical file only
+      if the file is in the ledger (a URL the server never stored is never
+      touched) and nothing else still references it (matched by file name, so
+      relative and legacy absolute forms both count). Also: normalizeUploadUrl,
+      parseClaimRequest, token helpers, UploadClaimError.
+    - message/dm/emoji/channel handlers: SEND_MESSAGE, SEND_DIRECT_MESSAGE,
+      CREATE_CUSTOM_EMOJI and UPDATE_CHANNEL claim by id (legacy single-URL
+      accepted for pre-v2.5.0 clients, claimed by URL under the same rules);
+      the client's attachmentPublicId / imagePublicId / iconPublicId are never
+      read. DELETE_MESSAGE, DELETE_DIRECT_MESSAGE, emoji rejection and icon
+      replacement now release via the ledger instead of calling
+      deleteAttachment() with row values. A claim failure acks "Attachment is
+      no longer available. Please re-attach it." Max one attachment per
+      message for now (PRD 16.10 raises it).
+    - config/upload.config.ts (NEW): ALLOW_TOKENLESS_UPLOADS, token TTL/prefix.
+
+  Shared Types Changes (all additive): REQUEST_UPLOAD_TOKEN event;
+    attachmentIds on SEND_MESSAGE / SEND_DIRECT_MESSAGE; imageUploadId on
+    CREATE_CUSTOM_EMOJI (imageUrl now optional); iconUploadId on UPDATE_CHANNEL;
+    legacy fields marked @deprecated.
+
+  Client Changes:
+    - preload.ts: getUploadToken() (cached until 1 minute before expiry;
+      5-second timeout because a pre-v2.5.0 server never answers the event, in
+      which case the upload simply goes out tokenless); uploadTo() sends the
+      bearer token, refreshes once and retries on a 401, and returns uploadId;
+      the cached token is dropped on every new socket. sendMessage /
+      sendDirectMessage / createCustomEmoji / updateChannel send the ledger id
+      AND the legacy URL/public_id fields, so a v2.5.0 client still works
+      against a v2.4.0 server.
+    - preload.ts: resolveMediaUrl() turns a server-relative "/uploads/x" into
+      an absolute URL on the connected server, applied at every inbound entry
+      point (MESSAGE_RECEIVED/EDITED, DIRECT_MESSAGE_RECEIVED, FETCH_MESSAGES,
+      FETCH_DIRECT_MESSAGES, GET_APPROVED/PENDING_EMOJIS,
+      CUSTOM_EMOJI_APPROVED, the channel tree's iconUrl). Absolute URLs
+      (Cloudinary, rows stored before v2.5.0) and protocol-relative "//host"
+      are left alone.
+    - renderer.ts: holds pendingAttachmentUploadId alongside the pending
+      image and passes the upload result through to send / emoji / icon calls.
+
+  DESIGN DECISION found during implementation (PRD 16.8 updated): the old
+  client composed ABSOLUTE URLs and the server stored them, so any scheme that
+  stores a client-composed URL lets a client pick the host of a stored
+  attachment (the external-URL hole). The server therefore stores the
+  host-independent path and clients resolve it. Consequence, stated plainly:
+  v2.4.0 clients will NOT display NEW locally-stored images, custom emoji or
+  channel icons from a v2.5.0 server (Cloudinary files and everything stored
+  before the upgrade are unaffected). This replaces the PRD's original
+  "v2.4.0 clients keep working" promise and must be said in the release notes.
+  Side finding, from reading the code (not reproduced against the old build):
+  local-disk deletion of message/DM images has never worked, because
+  deleteAttachment() requires a path starting with "/uploads/" and the stored
+  value was absolute. The ledger fixes this.
+
+  Key Files Modified:
+    packages/shared-types/src/socket-events.ts
+    apps/server/prisma/schema.prisma
+    apps/server/prisma/migrations/20261007120000_add_stored_file_ledger/migration.sql (NEW)
+    apps/server/src/config/upload.config.ts (NEW)
+    apps/server/src/services/stored-file.service.ts (NEW)
+    apps/server/src/handlers/upload.handler.ts (NEW)
+    apps/server/src/routes/upload.route.ts
+    apps/server/src/handlers/message.handler.ts
+    apps/server/src/handlers/dm.handler.ts
+    apps/server/src/handlers/emoji.handler.ts
+    apps/server/src/handlers/channel.handler.ts
+    apps/server/src/index.ts
+    apps/server/src/__tests__/stored-file.service.test.ts (NEW)
+    apps/client/src/preload.ts
+    apps/client/src/renderer/renderer.ts
+    app-planning/Reson8_Phase16_PRD.md (compatibility section revised)
+    (packages/shared-types and apps/server tsconfig.tsbuildinfo, per repo convention)
+
+  Verification:
+    - tsc: shared-types --build, server --noEmit and client --noEmit pass.
+      Server `npm run test`: 53/53 (18 new, covering URL normalization, token
+      hashing/extraction/round-trip with a fake Redis, claim-request parsing,
+      claim ordering and the claim-count assertion).
+    - Migration + backfill, run on a THROWAWAY database (never the dev DB):
+      all migrations applied in order, sample data inserted, then the new
+      migration — 7 ledger rows from a mixed set (absolute local URLs
+      normalized, one file under two hosts collapsed to one row, Cloudinary
+      ids kept, text-only messages skipped, already-relative kept). Then
+      `prisma migrate deploy` on a fresh DB also applied everything cleanly.
+    - Ledger against real Postgres (19 checks): one-shot claim, owner check,
+      ownerless claim, kind check, 8 concurrent claims -> exactly one wins,
+      rollback un-claims, legacy absolute URL claims the relative row,
+      external / never-uploaded URLs rejected, request order kept, release
+      refuses while a message still references the file (relative AND legacy
+      absolute forms), refuses untracked URLs, deletes file + row when
+      unreferenced.
+    - Full server end to end (46 checks): booted the REAL server on a spare
+      port against a fresh scratch DB and drove it with socket.io-client +
+      multipart HTTP: token issue (viewer / not-joined refused), 401 on
+      unknown and malformed tokens, tokenless legacy upload accepted and
+      ownerless, owned uploads, Bob cannot attach Alice's pending upload, the
+      attacker routes (reuse by id, by absolute URL, external URL) all fail
+      and create no message, forged public_ids ignored on message / emoji /
+      icon, legacy URL-based send still works, deleting a message / DM /
+      rejecting an emoji / replacing an icon really removes the file from disk
+      and the ledger row, kind mismatch rejected, duplicate emoji name doesn't
+      burn the upload, permission check on icons intact.
+    - Client logic (16 checks): the real getUploadToken / uploadTo /
+      resolveMediaUrl / attachmentPayload code extracted from preload.ts and
+      run against that live server: token cached, attributed to the user, a
+      rejected token refreshed once and retried, silent server -> tokenless
+      fallback, URL resolution (relative, absolute, protocol-relative, null,
+      nested tree, emoji).
+    - NOT verified by Claude: the real Electron UI (a chat image, emoji upload
+      and channel icon through the actual app). The scratch scripts are not
+      committed (no harness for them in the repo).
+    - The migration has NOT been applied to the dev database. To apply:
+      `cd apps/server && npm run db:migrate`. Docker deployments apply it
+      automatically on start. Until applied, a dev server on the new code will
+      fail on upload/send because the stored_files table doesn't exist.
+
+  Next Step: PRD 16.9 — orphaned upload cleanup (needs this ledger).

@@ -17,7 +17,12 @@ import type {
 import { PermissionFlags } from "@reson8/shared-types";
 import { buildChannelTree } from "../services/channel-tree.service.js";
 import { requirePermission } from "../middleware/permissions.middleware.js";
-import { deleteAttachment } from "../services/storage.service.js";
+import {
+    claimUploads,
+    normalizeUploadUrl,
+    releaseStoredFile,
+    UploadClaimError,
+} from "../services/stored-file.service.js";
 
 type TypedIO = SocketIOServer<
     ClientToServerEvents,
@@ -174,7 +179,9 @@ export function registerChannelHandlers(
         // ── UPDATE_CHANNEL ──────────────────────────────────────────────────
         socket.on("UPDATE_CHANNEL", async (payload, ack) => {
             try {
-                const { channelId, name, position, isNsfw, iconEmoji, iconUrl, iconPublicId } = payload;
+                // `iconPublicId` is intentionally NOT read (PRD 16.8): the real
+                // public_id comes from the server's own upload record.
+                const { channelId, name, position, isNsfw, iconEmoji, iconUrl, iconUploadId } = payload;
 
                 // Permission check: MANAGE_CHANNELS
                 const allowed = await requirePermission(
@@ -198,22 +205,22 @@ export function registerChannelHandlers(
                 // — look up type (plus the current icon, for cleanup) when
                 // either is part of this update, so a stray value on a voice
                 // channel is silently ignored rather than stored.
-                const isIconUpdate = iconEmoji !== undefined || iconUrl !== undefined;
+                const isIconUpdate = iconEmoji !== undefined || iconUrl !== undefined || iconUploadId !== undefined;
                 let previousIconUrl: string | null = null;
-                let previousIconPublicId: string | null = null;
-                let newIconUrl: string | null = null;
+                // Set when this update attaches an uploaded image: the claim
+                // runs inside the same transaction as the channel update below.
+                let iconClaim: { ids: string[]; urls: string[] } | null = null;
 
                 if (isNsfw !== undefined || isIconUpdate) {
                     const existing = await app.prisma.channel.findUnique({
                         where: { id: channelId },
-                        select: { type: true, iconUrl: true, iconPublicId: true },
+                        select: { type: true, iconUrl: true },
                     });
                     if (existing?.type === "TEXT") {
                         if (isNsfw !== undefined) data.isNsfw = isNsfw;
 
                         if (isIconUpdate) {
                             previousIconUrl = existing.iconUrl;
-                            previousIconPublicId = existing.iconPublicId;
 
                             // iconEmoji and iconUrl are mutually exclusive —
                             // setting one always clears the other. Neither
@@ -222,11 +229,14 @@ export function registerChannelHandlers(
                                 data.iconEmoji = iconEmoji;
                                 data.iconUrl = null;
                                 data.iconPublicId = null;
-                            } else if (iconUrl) {
-                                data.iconUrl = iconUrl;
-                                data.iconPublicId = iconPublicId ?? null;
+                            } else if (iconUploadId || iconUrl) {
+                                // iconUrl/iconPublicId are filled in from the
+                                // claimed upload record below, never from the
+                                // client's values.
                                 data.iconEmoji = null;
-                                newIconUrl = iconUrl;
+                                iconClaim = iconUploadId
+                                    ? { ids: [iconUploadId], urls: [] }
+                                    : { ids: [], urls: [normalizeUploadUrl(iconUrl as string)] };
                             } else {
                                 data.iconEmoji = null;
                                 data.iconUrl = null;
@@ -241,18 +251,34 @@ export function registerChannelHandlers(
                     return;
                 }
 
-                const channel = await app.prisma.channel.update({
-                    where: { id: channelId },
-                    data,
+                // Claim the uploaded icon (if any) and update the channel in
+                // one transaction, so a failed claim changes nothing.
+                let newIconUrl: string | null = null;
+                const channel = await app.prisma.$transaction(async (tx) => {
+                    if (iconClaim) {
+                        const [file] = await claimUploads(tx, {
+                            ...iconClaim,
+                            kind: "CHANNEL_ICON",
+                            userId: socket.data.userId,
+                        });
+                        data.iconUrl = file.url;
+                        data.iconPublicId = file.publicId;
+                        newIconUrl = file.url;
+                    }
+                    return tx.channel.update({
+                        where: { id: channelId },
+                        data,
+                    });
                 });
 
                 ack({ success: true });
 
-                // Clean up an orphaned previous upload if this update
-                // replaced or cleared it (switching to emoji, uploading a
-                // new image, or resetting to default) — never blocks the ack.
+                // Release an orphaned previous upload if this update replaced
+                // or cleared it (switching to emoji, uploading a new image, or
+                // resetting to default) via the upload ledger — never blocks
+                // the ack, and the channel row no longer references it.
                 if (isIconUpdate && previousIconUrl && previousIconUrl !== newIconUrl) {
-                    await deleteAttachment(previousIconUrl, previousIconPublicId ?? undefined).catch(() => {});
+                    await releaseStoredFile(app.prisma, previousIconUrl).catch(() => {});
                 }
 
                 await broadcastTreeUpdate(app, io, channel.serverId);
@@ -262,6 +288,10 @@ export function registerChannelHandlers(
                     "Channel updated",
                 );
             } catch (err) {
+                if (err instanceof UploadClaimError) {
+                    ack({ success: false, error: err.message });
+                    return;
+                }
                 app.log.error({ err }, "Error in UPDATE_CHANNEL");
                 ack({ success: false, error: "Failed to update channel" });
             }

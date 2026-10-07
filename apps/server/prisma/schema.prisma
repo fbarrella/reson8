@@ -277,3 +277,34 @@ model CustomEmoji {
   @@unique([serverId, name])
   @@map("custom_emojis")
 }
+
+
+// ── Stored-file ledger (PRD 16.8) ────────────────────────────────────────────
+// The server's own record of every file it stores. Message, emoji and
+// channel-icon rows reference files only through a claim on this ledger — a
+// claim is atomic, one-shot, owner-checked and kind-checked — and physical
+// deletion only ever uses THIS table's url/publicId, never a client-supplied
+// value. Without it a modified client could get other users' files (or any
+// Cloudinary asset) deleted by referencing them from its own message/emoji.
+
+enum StoredFileKind {
+  MESSAGE_ATTACHMENT
+  CUSTOM_EMOJI
+  CHANNEL_ICON
+}
+
+model StoredFile {
+  id        String         @id @default(uuid())
+  // Canonical form: "/uploads/<file>" for local-disk storage (host-independent;
+  // clients resolve it against the server address), the absolute https URL for
+  // Cloudinary.
+  url       String         @unique
+  publicId  String? // Cloudinary public_id — null for local-disk storage
+  kind      StoredFileKind
+  ownerId   String? // uploader's instance id; null = tokenless (pre-v2.5.0 client) upload
+  claimedAt DateTime? // null = uploaded but not attached to anything yet
+  createdAt DateTime       @default(now())
+
+  @@index([claimedAt, createdAt]) // the unclaimed-upload sweeper's query (PRD 16.9)
+  @@map("stored_files")
+}

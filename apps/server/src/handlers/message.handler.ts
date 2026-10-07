@@ -18,7 +18,12 @@ import type {
 } from "@reson8/shared-types";
 import { PermissionFlags } from "@reson8/shared-types";
 import { requirePermission } from "../middleware/permissions.middleware.js";
-import { deleteAttachment } from "../services/storage.service.js";
+import {
+    claimUploads,
+    parseClaimRequest,
+    releaseStoredFile,
+    UploadClaimError,
+} from "../services/stored-file.service.js";
 import { DEFAULT_MAX_MESSAGE_LENGTH } from "../config/message.config.js";
 import { normalizeNewlines } from "../services/message-text.js";
 import { aggregateReactionRows, loadReactorNicknames } from "../services/reaction.service.js";
@@ -93,10 +98,21 @@ export function registerMessageHandlers(
         // ── SEND_MESSAGE ───────────────────────────────────────────────────
         socket.on("SEND_MESSAGE", async (payload, ack) => {
             try {
-                const { channelId, attachmentUrl, attachmentPublicId } = payload;
+                const { channelId } = payload;
                 const content = normalizeNewlines(payload.content);
 
-                if ((!content || content.trim().length === 0) && !attachmentUrl) {
+                // Attachments are referenced by upload-ledger id (PRD 16.8);
+                // a legacy client's single URL is accepted too. The client's
+                // `attachmentPublicId` is deliberately never read: the real
+                // public_id comes from the server's own upload record.
+                const claim = parseClaimRequest(payload.attachmentIds, payload.attachmentUrl, 1);
+                if ("error" in claim) {
+                    ack({ success: false, error: claim.error });
+                    return;
+                }
+                const hasAttachment = claim.ids.length + claim.urls.length > 0;
+
+                if ((!content || content.trim().length === 0) && !hasAttachment) {
                     ack({ success: false });
                     return;
                 }
@@ -135,15 +151,26 @@ export function registerMessageHandlers(
                     return;
                 }
 
-                // Persist message
-                const message = await app.prisma.message.create({
-                    data: {
-                        channelId,
+                // Persist message. Claiming the upload and creating the row
+                // share one transaction: a failed claim (someone else's file,
+                // already used, swept…) aborts the send, and a failed create
+                // rolls the claim back.
+                const message = await app.prisma.$transaction(async (tx) => {
+                    const [file] = await claimUploads(tx, {
+                        ids: claim.ids,
+                        urls: claim.urls,
+                        kind: "MESSAGE_ATTACHMENT",
                         userId: socket.data.userId,
-                        content: content?.trim() ?? "",
-                        attachmentUrl: attachmentUrl ?? null,
-                        attachmentPublicId: attachmentPublicId ?? null,
-                    },
+                    });
+                    return tx.message.create({
+                        data: {
+                            channelId,
+                            userId: socket.data.userId,
+                            content: content?.trim() ?? "",
+                            attachmentUrl: file?.url ?? null,
+                            attachmentPublicId: file?.publicId ?? null,
+                        },
+                    });
                 });
 
                 const messageDto: IMessage = {
@@ -179,6 +206,10 @@ export function registerMessageHandlers(
                     "Message sent",
                 );
             } catch (err) {
+                if (err instanceof UploadClaimError) {
+                    ack({ success: false, error: err.message });
+                    return;
+                }
                 app.log.error({ err }, "Error in SEND_MESSAGE");
                 ack({ success: false });
             }
@@ -315,10 +346,6 @@ export function registerMessageHandlers(
                     return;
                 }
 
-                if (message.attachmentUrl) {
-                    await deleteAttachment(message.attachmentUrl, message.attachmentPublicId);
-                }
-
                 // Was this the channel's pinned message? Check before
                 // deleting — the FK's onDelete: SetNull clears it at the DB
                 // level automatically, but connected clients still need to
@@ -332,6 +359,16 @@ export function registerMessageHandlers(
                 await app.prisma.message.delete({ where: { id: messageId } });
 
                 ack({ success: true });
+
+                // The row is gone — now release its file (DB first, so a
+                // failed delete never loses a file). Uses the upload ledger's
+                // own url/public_id and only deletes when nothing else still
+                // references it (PRD 16.8).
+                if (message.attachmentUrl) {
+                    releaseStoredFile(app.prisma, message.attachmentUrl).catch((err) =>
+                        app.log.warn({ err, messageId }, "Failed to release deleted message's file"),
+                    );
+                }
 
                 io.to(`server:${socket.data.serverId}`).emit("MESSAGE_DELETED", {
                     channelId: message.channelId,

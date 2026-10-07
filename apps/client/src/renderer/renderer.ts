@@ -17,6 +17,13 @@ interface ReactionSummary {
     users?: Array<{ userId: string; nickname: string }>;
 }
 
+/** Result of an upload (PRD 16.8): `uploadId` is the server's ledger id, which the server claims when the file is used. */
+interface UploadResult {
+    url: string;
+    publicId?: string;
+    uploadId?: string;
+}
+
 interface ChatMessage {
     id: string;
     channelId: string;
@@ -732,6 +739,7 @@ interface Reson8Api {
             iconEmoji?: string | null;
             iconUrl?: string | null;
             iconPublicId?: string | null;
+            iconUploadId?: string;
         },
     ): Promise<{ success: boolean; error?: string }>;
     reorderChannels(
@@ -740,7 +748,7 @@ interface Reson8Api {
     ): Promise<{ success: boolean; error?: string }>;
     moveChannel(channelId: string, newParentId: string | null): Promise<{ success: boolean; error?: string }>;
     deleteChannel(channelId: string): Promise<{ success: boolean; error?: string }>;
-    sendMessage(channelId: string, content: string, attachmentUrl?: string, attachmentPublicId?: string): Promise<{ success: boolean; messageId?: string; error?: string }>;
+    sendMessage(channelId: string, content: string, attachment?: UploadResult): Promise<{ success: boolean; messageId?: string; error?: string }>;
     deleteMessage(messageId: string): Promise<{ success: boolean; error?: string }>;
     editMessage(messageId: string, content: string): Promise<{ success: boolean; error?: string }>;
     fetchMessages(channelId: string, before?: string, limit?: number, aroundMessageId?: string): Promise<{ success: boolean; messages?: ChatMessage[]; pinnedMessage?: PinnedMessage | null; error?: string }>;
@@ -752,7 +760,7 @@ interface Reson8Api {
     assignRole(userId: string, roleId: string, action: "add" | "remove"): Promise<{ success: boolean; error?: string }>;
     enumerateAudioDevices(): Promise<{ inputs: { deviceId: string; label: string }[]; outputs: { deviceId: string; label: string }[] }>;
     setAudioInputDevice(deviceId: string | null): void;
-    sendDirectMessage(recipientId: string, content: string, attachmentUrl?: string, attachmentPublicId?: string): Promise<{ success: boolean; messageId?: string; error?: string }>;
+    sendDirectMessage(recipientId: string, content: string, attachment?: UploadResult): Promise<{ success: boolean; messageId?: string; error?: string }>;
     deleteDirectMessage(dmId: string): Promise<{ success: boolean; error?: string }>;
     fetchDirectMessages(partnerId: string, before?: string, limit?: number): Promise<{ success: boolean; messages?: DirectMessage[]; error?: string }>;
     getOnlineUsers(): Promise<{ success: boolean; users?: { userId: string; nickname: string; isOnline: boolean }[]; error?: string }>;
@@ -762,7 +770,7 @@ interface Reson8Api {
     banUser(userId: string): Promise<{ success: boolean; error?: string }>;
     unbanUser(userId: string): Promise<{ success: boolean; error?: string }>;
     getBannedUsers(): Promise<{ success: boolean; users?: { userId: string; nickname: string; bannedAt: string }[]; error?: string }>;
-    uploadFile(fileBuffer: ArrayBuffer, fileName: string, mimeType: string): Promise<{ url: string; publicId?: string }>;
+    uploadFile(fileBuffer: ArrayBuffer, fileName: string, mimeType: string): Promise<UploadResult>;
     downloadImage(url: string): void;
     setCustomEmojis(list: Array<{ name: string; imageUrl: string }>): void;
     renderMarkdown(text: string): { html: string; block: boolean };
@@ -784,10 +792,10 @@ interface Reson8Api {
     getLatency(): number;
     getClockOffset(): number;
     toggleReaction(messageId: string, emoji: string, isDm: boolean): Promise<{ success: boolean; error?: string }>;
-    uploadEmojiFile(fileBuffer: ArrayBuffer, fileName: string, mimeType: string): Promise<{ url: string; publicId?: string }>;
-    uploadAnimatedEmojiFile(fileBuffer: ArrayBuffer, fileName: string, mimeType: string): Promise<{ url: string; publicId?: string }>;
-    uploadChannelIcon(fileBuffer: ArrayBuffer, fileName: string, mimeType: string): Promise<{ url: string; publicId?: string }>;
-    createCustomEmoji(name: string, imageUrl: string, imagePublicId?: string, isAnimated?: boolean): Promise<{ success: boolean; emojiId?: string; error?: string }>;
+    uploadEmojiFile(fileBuffer: ArrayBuffer, fileName: string, mimeType: string): Promise<UploadResult>;
+    uploadAnimatedEmojiFile(fileBuffer: ArrayBuffer, fileName: string, mimeType: string): Promise<UploadResult>;
+    uploadChannelIcon(fileBuffer: ArrayBuffer, fileName: string, mimeType: string): Promise<UploadResult>;
+    createCustomEmoji(name: string, image: UploadResult, isAnimated?: boolean): Promise<{ success: boolean; emojiId?: string; error?: string }>;
     getApprovedEmojis(): Promise<{ success: boolean; emojis?: CustomEmoji[]; error?: string }>;
     getPendingEmojis(): Promise<{ success: boolean; emojis?: CustomEmoji[]; error?: string }>;
     reviewCustomEmoji(emojiId: string, decision: "APPROVED" | "REJECTED"): Promise<{ success: boolean; error?: string }>;
@@ -878,6 +886,9 @@ let pttModeEnabled = localStorage.getItem("reson8-ptt-mode") === "true";
 // Attachment state
 let pendingAttachmentUrl: string | null = null;
 let pendingAttachmentPublicId: string | null = null;
+// The server's upload-ledger id for the pending image (PRD 16.8) — what the
+// server actually claims when the message is sent.
+let pendingAttachmentUploadId: string | null = null;
 let serverBaseUrl: string = "";
 
 // Active speakers state
@@ -4648,19 +4659,23 @@ async function sendChatMessage(): Promise<void> {
     autosizeChatInput();
     const attachmentUrl = pendingAttachmentUrl;
     const attachmentPublicId = pendingAttachmentPublicId;
+    const attachmentUploadId = pendingAttachmentUploadId;
     clearAttachmentPreview();
+    const attachment = attachmentUrl
+        ? { url: attachmentUrl, publicId: attachmentPublicId ?? undefined, uploadId: attachmentUploadId ?? undefined }
+        : undefined;
 
     if (activeTabId.startsWith("dm:")) {
         // DM tab — send direct message
         const recipientId = activeTabId.slice(3);
-        const result = await api.sendDirectMessage(recipientId, content, attachmentUrl ?? undefined, attachmentPublicId ?? undefined);
+        const result = await api.sendDirectMessage(recipientId, content, attachment);
         if (!result.success) {
             log(`Failed to send DM: ${result.error ?? "Unknown error"}`, "error");
         }
     } else {
         // Channel tab — send channel message
         const channelId = activeTabId;
-        const result = await api.sendMessage(channelId, content, attachmentUrl ?? undefined, attachmentPublicId ?? undefined);
+        const result = await api.sendMessage(channelId, content, attachment);
         if (!result.success) {
             log(`Failed to send message${result.error ? `: ${result.error}` : ""}`, "error");
         }
@@ -5983,6 +5998,7 @@ async function handleFileUpload(file: File): Promise<void> {
         const result = await api.uploadFile(buffer, file.name, file.type);
         pendingAttachmentUrl = result.url;
         pendingAttachmentPublicId = result.publicId ?? null;
+        pendingAttachmentUploadId = result.uploadId ?? null;
         revokePendingAttachmentObjectUrl();
         showAttachmentPreview(file.name);
         log(`Image ready to send: ${file.name}`, "success");
@@ -6030,6 +6046,7 @@ function showAttachmentFailed(fileName: string, errorMessage: string, onRetry: (
 function clearAttachmentPreview(): void {
     pendingAttachmentUrl = null;
     pendingAttachmentPublicId = null;
+    pendingAttachmentUploadId = null;
     revokePendingAttachmentObjectUrl();
     attachmentPreview.classList.remove("attachment-failed");
     attachmentPreview.style.display = "none";
@@ -7708,7 +7725,7 @@ btnEmojiUploadConfirm.addEventListener("click", async () => {
 
         const buffer = await blob.arrayBuffer();
         const uploadResult = await api.uploadEmojiFile(buffer, `${name}.png`, "image/png");
-        const createResult = await api.createCustomEmoji(name, uploadResult.url, uploadResult.publicId);
+        const createResult = await api.createCustomEmoji(name, uploadResult);
 
         if (createResult.success) {
             log(`Emoji ":${name}:" submitted for admin approval`, "success");
@@ -7784,7 +7801,7 @@ btnEmojiAnimatedUploadConfirm.addEventListener("click", async () => {
     try {
         const buffer = await emojiAnimatedFile.arrayBuffer();
         const uploadResult = await api.uploadAnimatedEmojiFile(buffer, `${name}.gif`, "image/gif");
-        const createResult = await api.createCustomEmoji(name, uploadResult.url, uploadResult.publicId, true);
+        const createResult = await api.createCustomEmoji(name, uploadResult, true);
 
         if (createResult.success) {
             log(`Animated emoji ":${name}:" submitted for admin approval`, "success");
@@ -8016,6 +8033,8 @@ btnChannelIconUploadConfirm.addEventListener("click", async () => {
         const buffer = await blob.arrayBuffer();
         const uploadResult = await api.uploadChannelIcon(buffer, "channel-icon.png", "image/png");
         const updateResult = await api.updateChannel(channelId, {
+            iconUploadId: uploadResult.uploadId,
+            // Legacy fields, for a pre-v2.5.0 server; a v2.5.0+ server uses the id.
             iconUrl: uploadResult.url,
             iconPublicId: uploadResult.publicId ?? null,
         });

@@ -17,7 +17,12 @@ import type {
     IDirectMessage,
 } from "@reson8/shared-types";
 import { PresenceService } from "../services/presence.service.js";
-import { deleteAttachment } from "../services/storage.service.js";
+import {
+    claimUploads,
+    parseClaimRequest,
+    releaseStoredFile,
+    UploadClaimError,
+} from "../services/stored-file.service.js";
 import { DEFAULT_MAX_MESSAGE_LENGTH } from "../config/message.config.js";
 import { normalizeNewlines } from "../services/message-text.js";
 import { aggregateReactionRows, loadReactorNicknames } from "../services/reaction.service.js";
@@ -49,10 +54,19 @@ export function registerDMHandlers(
         // ── SEND_DIRECT_MESSAGE ────────────────────────────────────────────
         socket.on("SEND_DIRECT_MESSAGE", async (payload, ack) => {
             try {
-                const { recipientId, attachmentUrl, attachmentPublicId } = payload;
+                const { recipientId } = payload;
                 const content = normalizeNewlines(payload.content);
 
-                if ((!content || content.trim().length === 0) && !attachmentUrl) {
+                // Same claim-by-ledger-id scheme as channel messages (PRD 16.8);
+                // the client's `attachmentPublicId` is never read.
+                const claim = parseClaimRequest(payload.attachmentIds, payload.attachmentUrl, 1);
+                if ("error" in claim) {
+                    ack({ success: false, error: claim.error });
+                    return;
+                }
+                const hasAttachment = claim.ids.length + claim.urls.length > 0;
+
+                if ((!content || content.trim().length === 0) && !hasAttachment) {
                     ack({ success: false, error: "Message content is empty" });
                     return;
                 }
@@ -85,15 +99,23 @@ export function registerDMHandlers(
                     return;
                 }
 
-                // Persist DM
-                const dm = await app.prisma.directMessage.create({
-                    data: {
-                        senderId: socket.data.userId,
-                        receiverId: recipientId,
-                        content: content?.trim() ?? "",
-                        attachmentUrl: attachmentUrl ?? null,
-                        attachmentPublicId: attachmentPublicId ?? null,
-                    },
+                // Persist DM — claim + create share one transaction (PRD 16.8)
+                const dm = await app.prisma.$transaction(async (tx) => {
+                    const [file] = await claimUploads(tx, {
+                        ids: claim.ids,
+                        urls: claim.urls,
+                        kind: "MESSAGE_ATTACHMENT",
+                        userId: socket.data.userId,
+                    });
+                    return tx.directMessage.create({
+                        data: {
+                            senderId: socket.data.userId,
+                            receiverId: recipientId,
+                            content: content?.trim() ?? "",
+                            attachmentUrl: file?.url ?? null,
+                            attachmentPublicId: file?.publicId ?? null,
+                        },
+                    });
                 });
 
                 const dmDto: IDirectMessage = {
@@ -124,6 +146,10 @@ export function registerDMHandlers(
                     "Direct message sent",
                 );
             } catch (err) {
+                if (err instanceof UploadClaimError) {
+                    ack({ success: false, error: err.message });
+                    return;
+                }
                 app.log.error({ err }, "Error in SEND_DIRECT_MESSAGE");
                 ack({ success: false, error: "Failed to send direct message" });
             }
@@ -334,13 +360,16 @@ export function registerDMHandlers(
                     return;
                 }
 
-                if (dm.attachmentUrl) {
-                    await deleteAttachment(dm.attachmentUrl, dm.attachmentPublicId);
-                }
-
                 await app.prisma.directMessage.delete({ where: { id: dmId } });
 
                 ack({ success: true });
+
+                // Row gone — release its file via the upload ledger (PRD 16.8).
+                if (dm.attachmentUrl) {
+                    releaseStoredFile(app.prisma, dm.attachmentUrl).catch((err) =>
+                        app.log.warn({ err, dmId }, "Failed to release deleted DM's file"),
+                    );
+                }
 
                 // Notify both participants' sockets (mirrors SEND_DIRECT_MESSAGE's delivery pattern)
                 for (const [, s] of io.sockets.sockets) {

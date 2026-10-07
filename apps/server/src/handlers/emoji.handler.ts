@@ -21,7 +21,12 @@ import type {
 } from "@reson8/shared-types";
 import { PermissionFlags } from "@reson8/shared-types";
 import { requirePermission } from "../middleware/permissions.middleware.js";
-import { deleteAttachment } from "../services/storage.service.js";
+import {
+    claimUploads,
+    parseClaimRequest,
+    releaseStoredFile,
+    UploadClaimError,
+} from "../services/stored-file.service.js";
 
 type TypedIO = SocketIOServer<
     ClientToServerEvents,
@@ -69,14 +74,26 @@ export function registerEmojiHandlers(
         // ── CREATE_CUSTOM_EMOJI ──────────────────────────────────────────────
         socket.on("CREATE_CUSTOM_EMOJI", async (payload, ack) => {
             try {
-                const { name, imageUrl, imagePublicId, isAnimated } = payload;
+                const { name, isAnimated } = payload;
                 const serverId = socket.data.serverId;
 
                 if (!NAME_PATTERN.test(name)) {
                     ack({ success: false, error: "Name must be 2-32 letters, numbers, or underscores" });
                     return;
                 }
-                if (!imageUrl) {
+                // The image is referenced by upload-ledger id (PRD 16.8); a
+                // legacy client's URL is accepted too. `imagePublicId` is
+                // never read — the real public_id comes from the upload record.
+                const claim = parseClaimRequest(
+                    payload.imageUploadId !== undefined ? [payload.imageUploadId] : undefined,
+                    payload.imageUrl,
+                    1,
+                );
+                if ("error" in claim) {
+                    ack({ success: false, error: claim.error });
+                    return;
+                }
+                if (claim.ids.length + claim.urls.length === 0) {
                     ack({ success: false, error: "Missing image" });
                     return;
                 }
@@ -89,15 +106,26 @@ export function registerEmojiHandlers(
                     return;
                 }
 
-                const emoji = await app.prisma.customEmoji.create({
-                    data: {
-                        serverId,
-                        name,
-                        imageUrl,
-                        imagePublicId: imagePublicId ?? null,
-                        uploadedBy: socket.data.userId,
-                        isAnimated: isAnimated ?? false,
-                    },
+                // Claim + create in one transaction: if the create fails (e.g.
+                // the name was taken a moment ago) the claim rolls back too,
+                // so the upload isn't burned.
+                const emoji = await app.prisma.$transaction(async (tx) => {
+                    const [file] = await claimUploads(tx, {
+                        ids: claim.ids,
+                        urls: claim.urls,
+                        kind: "CUSTOM_EMOJI",
+                        userId: socket.data.userId,
+                    });
+                    return tx.customEmoji.create({
+                        data: {
+                            serverId,
+                            name,
+                            imageUrl: file.url,
+                            imagePublicId: file.publicId,
+                            uploadedBy: socket.data.userId,
+                            isAnimated: isAnimated ?? false,
+                        },
+                    });
                 });
 
                 ack({ success: true, emojiId: emoji.id });
@@ -107,6 +135,10 @@ export function registerEmojiHandlers(
                     "Custom emoji submitted for review",
                 );
             } catch (err) {
+                if (err instanceof UploadClaimError) {
+                    ack({ success: false, error: err.message });
+                    return;
+                }
                 app.log.error({ err }, "Error in CREATE_CUSTOM_EMOJI");
                 ack({ success: false, error: "Failed to submit emoji" });
             }
@@ -198,9 +230,13 @@ export function registerEmojiHandlers(
                         emoji: toDto(updated),
                     });
                 } else {
-                    await deleteAttachment(emoji.imageUrl, emoji.imagePublicId);
+                    // Row first, then release its file via the upload ledger —
+                    // never delete a URL/public_id taken from the emoji row itself.
                     await app.prisma.customEmoji.delete({ where: { id: emojiId } });
                     ack({ success: true });
+                    releaseStoredFile(app.prisma, emoji.imageUrl).catch((err) =>
+                        app.log.warn({ err, emojiId }, "Failed to release rejected emoji's file"),
+                    );
                 }
 
                 app.log.info(

@@ -16,7 +16,16 @@
  *   1. Local filesystem (default) — saves to ./uploads/
  *   2. Cloudinary CDN — activated when CLOUDINARY_* env vars are present.
  *
- * Returns { url: string, publicId?: string } on success.
+ * Returns { url, publicId?, uploadId } on success. `uploadId` is the stored-file
+ * ledger id (PRD 16.8): attach the upload to a message/emoji/icon by sending
+ * that id over the socket. Local-disk `url`s are the host-independent path
+ * ("/uploads/<file>"); clients resolve them against the server address.
+ *
+ * Authorization: send `Authorization: Bearer <token>` with a token from the
+ * socket's REQUEST_UPLOAD_TOKEN. The upload is then recorded as owned by that
+ * user and only they can attach it. Requests with no header (clients older
+ * than v2.5.0) are accepted while ALLOW_TOKENLESS_UPLOADS is true, recorded
+ * ownerless; a header with an unknown/expired token is always a 401.
  */
 
 import { randomUUID } from "node:crypto";
@@ -24,7 +33,11 @@ import { createWriteStream, existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import type { StoredFileKind } from "@prisma/client";
 import { v2 as cloudinary } from "cloudinary";
+import { ALLOW_TOKENLESS_UPLOADS } from "../config/upload.config.js";
+import { extractBearerToken, recordStoredFile, resolveUploadTokenOwner } from "../services/stored-file.service.js";
+import { deleteAttachment } from "../services/storage.service.js";
 
 const ALLOWED_MIME_TYPES = new Set([
     "image/jpeg",
@@ -104,17 +117,47 @@ async function saveLocally(buffer: Buffer, fileName: string): Promise<string> {
 }
 
 /**
- * Shared body for both upload routes — validates MIME type, streams the
- * file into a buffer while enforcing `maxSize`, then stores it via
- * whichever backend is configured.
+ * Resolves who is uploading from the bearer token, or replies 401 and
+ * returns null. Runs BEFORE the multipart body is read, so an unauthorized
+ * request never gets as far as buffering a file.
+ */
+async function authenticateUpload(
+    app: FastifyInstance,
+    request: FastifyRequest,
+    reply: FastifyReply,
+): Promise<{ ownerId: string | null } | null> {
+    if (request.headers.authorization !== undefined) {
+        const token = extractBearerToken(request.headers.authorization);
+        const userId = token ? await resolveUploadTokenOwner(app.redis, token) : null;
+        if (!userId) {
+            reply.status(401).send({ error: "Upload session expired" });
+            return null;
+        }
+        return { ownerId: userId };
+    }
+    if (!ALLOW_TOKENLESS_UPLOADS) {
+        reply.status(401).send({ error: "Upload token required" });
+        return null;
+    }
+    return { ownerId: null };
+}
+
+/**
+ * Shared body for all upload routes — authenticates, validates MIME type,
+ * streams the file into a buffer while enforcing `maxSize`, stores it via
+ * whichever backend is configured, then records it in the stored-file ledger.
  */
 async function handleUpload(
     app: FastifyInstance,
     request: FastifyRequest,
     reply: FastifyReply,
     maxSize: number,
+    kind: StoredFileKind,
     allowedMimeTypes: Set<string> = ALLOWED_MIME_TYPES,
 ): Promise<void> {
+    const auth = await authenticateUpload(app, request, reply);
+    if (!auth) return;
+
     const data = await request.file();
     if (!data) {
         reply.status(400).send({ error: "No file uploaded" });
@@ -158,8 +201,18 @@ async function handleUpload(
         url = await saveLocally(buffer, originalName);
     }
 
-    app.log.info({ url, size: buffer.length, mime: data.mimetype }, "File uploaded");
-    reply.send({ url, publicId });
+    // Record the file in the ledger. If that fails the file would be an
+    // untracked orphan, so remove it before surfacing the error.
+    let uploadId: string;
+    try {
+        ({ id: uploadId } = await recordStoredFile(app.prisma, { url, publicId, kind, ownerId: auth.ownerId }));
+    } catch (err) {
+        await deleteAttachment(url, publicId).catch(() => {});
+        throw err;
+    }
+
+    app.log.info({ url, size: buffer.length, mime: data.mimetype, kind, uploadId }, "File uploaded");
+    reply.send({ url, publicId, uploadId });
 }
 
 /**
@@ -168,7 +221,7 @@ async function handleUpload(
 export async function registerUploadRoute(app: FastifyInstance): Promise<void> {
     app.post("/api/upload", async (request, reply) => {
         try {
-            await handleUpload(app, request, reply, MAX_FILE_SIZE);
+            await handleUpload(app, request, reply, MAX_FILE_SIZE, "MESSAGE_ATTACHMENT");
         } catch (err) {
             app.log.error({ err }, "Error in /api/upload");
             reply.status(500).send({ error: "Upload failed" });
@@ -177,7 +230,7 @@ export async function registerUploadRoute(app: FastifyInstance): Promise<void> {
 
     app.post("/api/upload/emoji", async (request, reply) => {
         try {
-            await handleUpload(app, request, reply, MAX_EMOJI_FILE_SIZE);
+            await handleUpload(app, request, reply, MAX_EMOJI_FILE_SIZE, "CUSTOM_EMOJI");
         } catch (err) {
             app.log.error({ err }, "Error in /api/upload/emoji");
             reply.status(500).send({ error: "Upload failed" });
@@ -188,7 +241,7 @@ export async function registerUploadRoute(app: FastifyInstance): Promise<void> {
     // client-side crop/resize, so it gets its own (larger) size cap.
     app.post("/api/upload/emoji-animated", async (request, reply) => {
         try {
-            await handleUpload(app, request, reply, MAX_ANIMATED_EMOJI_FILE_SIZE, ANIMATED_EMOJI_MIME_TYPES);
+            await handleUpload(app, request, reply, MAX_ANIMATED_EMOJI_FILE_SIZE, "CUSTOM_EMOJI", ANIMATED_EMOJI_MIME_TYPES);
         } catch (err) {
             app.log.error({ err }, "Error in /api/upload/emoji-animated");
             reply.status(500).send({ error: "Upload failed" });
@@ -202,7 +255,7 @@ export async function registerUploadRoute(app: FastifyInstance): Promise<void> {
     // check, so this endpoint only needs to accept and store the file.
     app.post("/api/upload/channel-icon", async (request, reply) => {
         try {
-            await handleUpload(app, request, reply, MAX_EMOJI_FILE_SIZE);
+            await handleUpload(app, request, reply, MAX_EMOJI_FILE_SIZE, "CHANNEL_ICON");
         } catch (err) {
             app.log.error({ err }, "Error in /api/upload/channel-icon");
             reply.status(500).send({ error: "Upload failed" });

@@ -629,11 +629,24 @@ The **kind** check prevents cross-purpose reuse (e.g. a chat upload can't become
 - `preload.ts`: `uploadFile`/`uploadEmojiFile`/`uploadEmojiAnimatedFile`/`uploadChannelIcon` return `uploadId` as well. `sendMessage`/`sendDirectMessage` send `attachmentIds`; `createCustomEmoji` and `updateChannel` send the new id fields.
 - `renderer.ts`: keep `pendingAttachmentUploadId` alongside the existing pending state and pass it on send. The emoji crop/animated flows and the channel-icon flow pass their upload ids.
 
-### Backward Compatibility (v2.4.0 clients on a v2.5.0 server)
+### Backward Compatibility (revised during implementation, 07/10/2026)
 
-Tokenless uploads are still accepted, recorded **ownerless**, and claimable **by URL, once**. The exploit is closed for old clients too, because every attack above relies on referencing a file **already in use**, and a claimed file can never be claimed again.
+Implementation found two facts that changed this section's original promise ("v2.4.0 clients keep working"):
 
-The only residual window is that someone could claim another user's *ownerless, not-yet-sent* upload first, which requires guessing a random-UUID URL that only the uploader knows. A single config constant `ALLOW_TOKENLESS_UPLOADS = true` (`src/config/upload.config.ts`) makes "require tokens" a one-line change for a later phase, once v2.4.0 clients are gone.
+1. **The old client stored ABSOLUTE URLs.** `preload.ts`'s upload helper prepended the client's own server address to the relative `/uploads/x.png` the server returned, and sent that absolute URL back when sending. The server persisted it. So any scheme where the server stores a URL the *client* composed lets a client choose the host of a stored attachment, which is exactly the external-URL / tracking-pixel hole (attack 4 above). The server cannot safely compute its own public base URL either (LAN vs WAN addresses, TLS-terminating tunnels), and a Host header is attacker-controlled.
+2. **Local-disk deletion never worked for those rows.** `deleteAttachment()` only deletes when the URL starts with `/uploads/`, which an absolute URL never does. (Established by reading the code; not reproduced against the old build.) Cloudinary deletion worked. The ledger fixes this as a side effect, since it stores the canonical path.
+
+**Decision:** the ledger's canonical `url` is the **host-independent path** (`/uploads/<file>`) for local-disk storage (Cloudinary stays an absolute https URL). The server persists and broadcasts exactly that; v2.5.0 clients turn it into an absolute URL against the server they are connected to, at every point where a payload enters the preload (messages, DMs, edits, history pages, emoji lists, the channel tree).
+
+| Combination | Result |
+|:---|:---|
+| v2.5.0 client ↔ v2.5.0 server | Full behavior |
+| **v2.5.0 client ↔ v2.4.0 server** | Works: the client sends the legacy `attachmentUrl`/`attachmentPublicId` (and `imageUrl`, `iconUrl`) alongside the new ids, falls back to a tokenless upload when the server never answers `REQUEST_UPLOAD_TOKEN` (5s timeout), and resolves URLs only when they are server-relative (a v2.4.0 server only sends absolute ones). |
+| **v2.4.0 client ↔ v2.5.0 server** | Uploads still work (tokenless, ownerless, claimed once by URL). **New locally-stored images, custom emoji and channel icons will not display on v2.4.0 clients** (they receive `/uploads/…` and cannot resolve it). Cloudinary-hosted files, and everything stored before the upgrade, are unaffected. Updating the client fixes it. |
+
+The client/server version-mismatch warning from Phase 12 already tells v2.4.0 users to update. The release notes must say so plainly (see the wrap-up checklist).
+
+Tokenless uploads remain accepted, ownerless and claimable once by URL, behind `ALLOW_TOKENLESS_UPLOADS = true` (`src/config/upload.config.ts`); requiring tokens is a one-line change once v2.4.0 clients are gone. Every attack above relies on referencing a file *already in use*, and a claimed file can never be claimed again, so the exploit is closed even for tokenless clients. The only residual window is claiming another user's ownerless, not-yet-sent upload before they send it, which requires guessing its random-UUID file name.
 
 ### Honest Scope Note
 
@@ -1015,7 +1028,7 @@ Shared touch points to watch:
 - **Settings → Application "Content" section** is touched by 16.1 and 16.2.
 - **Every upload/delete path** (`upload.route.ts`, message/DM/emoji/channel handlers) is touched by 16.8, 16.9 and 16.10. After 16.10, re-run 16.8's exploit-regression checks and 16.9's discard/sweeper checks against multi-image messages.
 
-Wrap-up after 16.11 (only after user confirmation): `/bump-version` (expected **2.4.0 → 2.5.0**, minor); release notes `app-planning/releases/v2.5.0.md` (mention that v2.4.0 clients see only the first image of multi-image messages and no reply snippets, and recommend updating; describe the upload security fix at a high level, without a step-by-step exploit, and the new `npm run uploads:prune` maintenance command for self-hosters); update the root, client, and server `CLAUDE.md` files (the `StoredFile` ledger and "never persist or delete a client-supplied URL/publicId" rule, upload tokens, the sweeper, the new `Attachment` model + expand/contract note, `stored-file.service.ts`/`upload-sweeper.ts`/`reply.service.ts`/`attachment.service.ts`, the toolbar and grouping conventions, the `will-navigate` guard, the new `reson8-*` keys) and `README.md` (features + roadmap row 16); move this PRD to `archive/`.
+Wrap-up after 16.11 (only after user confirmation): `/bump-version` (expected **2.4.0 → 2.5.0**, minor); release notes `app-planning/releases/v2.5.0.md` (mention that v2.4.0 clients cannot display NEW locally-stored images, custom emoji and channel icons from a v2.5.0 server (Cloudinary files and older content are fine), see only the first image of multi-image messages and no reply snippets, and recommend updating; describe the upload security fix at a high level, without a step-by-step exploit, and the new `npm run uploads:prune` maintenance command for self-hosters); update the root, client, and server `CLAUDE.md` files (the `StoredFile` ledger and "never persist or delete a client-supplied URL/publicId" rule, upload tokens, the sweeper, the new `Attachment` model + expand/contract note, `stored-file.service.ts`/`upload-sweeper.ts`/`reply.service.ts`/`attachment.service.ts`, the toolbar and grouping conventions, the `will-navigate` guard, the new `reson8-*` keys) and `README.md` (features + roadmap row 16); move this PRD to `archive/`.
 
 ---
 
