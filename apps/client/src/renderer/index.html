@@ -312,6 +312,22 @@
       color: #fff;
     }
 
+    /* The text channel whose chat tab is currently shown (PRD 16.3). One
+       step above the hover tint, below the joined-voice .active style. Kept
+       separate from .active, which only ever means "connected voice channel". */
+    .tree-channel.viewing,
+    .tree-channel.viewing:hover {
+      background: rgba(79, 195, 247, 0.12);
+    }
+
+    .tree-channel .ch-viewing-icon {
+      display: inline-flex;
+      align-items: center;
+      flex-shrink: 0;
+      color: var(--text-muted);
+      opacity: 0.75;
+    }
+
     .tree-channel .ch-icon {
       font-size: 14px;
       flex-shrink: 0;

@@ -537,3 +537,46 @@ Feature/Fix: PRD 16.2 — Optional image blurring in NSFW channels (per user)
     (checklist in PRD 16.2).
 
   Next Step: PRD 16.3 — highlight the text channel being viewed (eye icon).
+
+
+--- Entry: 07/10/2026 ---
+
+Feature/Fix: PRD 16.3 — Highlight the text channel being viewed (eye icon)
+
+  Problem: On busy servers there was no indication in the channel tree of
+  which text channel's chat tab was currently open. Text channels never got
+  the .active class (that only marks the connected voice channel), so the
+  open chat looked identical to every other row.
+
+  Solution: The text channel whose tab is the active tab now gets a
+  `.viewing` highlight (one step above the hover tint, below the joined-voice
+  .active style) plus a small muted eye SVG at the far right of the row,
+  with a "You're viewing this channel" tooltip.
+
+  Client Changes:
+    - New `.tree-channel.viewing` class, deliberately separate from `.active`
+      so the voice-channel semantics are untouched; `.viewing:hover` keeps the
+      same background so hovering doesn't flicker it lighter/darker.
+    - renderer.ts: createViewingIcon() builds the eye span (aria-label
+      "Currently viewing"); renderChannel() adds the class + icon when
+      node.id === activeTabId (text channels only), appended last so the
+      name's flex:1 pushes it to the right of any unread dot / NSFW badge.
+    - updateViewingIndicator() is a targeted DOM update, NOT renderTree():
+      a full re-render would lose collapsed-category state (same reason
+      markChannelUnread() avoids it). It clears the previous row, then marks
+      the row matching activeTabId; the Server Log and DM tabs match no
+      `.tree-channel[data-channel-id]` row, so they just clear the highlight.
+    - Called at the end of switchTab(); closeTab() already routes through
+      switchTab("server-log") when the active tab is closed, and any full
+      renderTree() re-derives the state from activeTabId in renderChannel().
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html
+    apps/client/src/renderer/renderer.ts
+
+  Verification:
+    npx tsc --noEmit in apps/client passes. No server or shared-types
+    change. UI behavior not exercised by Claude; manual testing by the user
+    (checklist in PRD 16.3).
+
+  Next Step: PRD 16.4 — mute text channels (per user, client-side).

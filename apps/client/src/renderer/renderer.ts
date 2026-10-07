@@ -1700,6 +1700,34 @@ function renderCategory(node: TreeNode, siblings: TreeNode[]): HTMLDivElement {
     return category;
 }
 
+/** Muted eye shown at the right of the text channel whose tab is being viewed (PRD 16.3). */
+function createViewingIcon(): HTMLSpanElement {
+    const icon = document.createElement("span");
+    icon.className = "ch-viewing-icon";
+    icon.title = "You're viewing this channel";
+    icon.setAttribute("aria-label", "Currently viewing");
+    icon.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>`;
+    return icon;
+}
+
+/**
+ * Moves the "viewing" highlight + eye to the row of the active chat tab
+ * (PRD 16.3). A targeted DOM update, not renderTree(): a full re-render
+ * would lose collapsed-category state (same reason markChannelUnread()
+ * avoids it). Only text-channel rows carry data-channel-id, so the Server
+ * Log and DM tabs simply match nothing and clear the highlight.
+ */
+function updateViewingIndicator(): void {
+    channelTree.querySelectorAll(".tree-channel.viewing").forEach((el) => {
+        el.classList.remove("viewing");
+        el.querySelector(".ch-viewing-icon")?.remove();
+    });
+    const row = channelTree.querySelector(`.tree-channel[data-channel-id="${CSS.escape(activeTabId)}"]`);
+    if (!row) return;
+    row.classList.add("viewing");
+    row.appendChild(createViewingIcon());
+}
+
 function renderChannel(node: TreeNode, siblings: TreeNode[]): HTMLDivElement {
     const channel = document.createElement("div");
     channel.className = "tree-channel";
@@ -1762,6 +1790,12 @@ function renderChannel(node: TreeNode, siblings: TreeNode[]): HTMLDivElement {
         ${timerBadge}
         ${countBadge}
     `;
+
+    // Viewing highlight (PRD 16.3) — appended last so it sits at the far right.
+    if (!isVoice && node.id === activeTabId) {
+        channel.classList.add("viewing");
+        channel.appendChild(createViewingIcon());
+    }
 
     channel.addEventListener("click", () => handleChannelClick(node));
     attachChannelDragHandlers(channel, node, siblings);
@@ -3657,6 +3691,8 @@ function switchTab(tabId: string): void {
     if (tab?.initialLoadDone) {
         tab.messagesEl.scrollTop = tab.messagesEl.scrollHeight;
     }
+
+    updateViewingIndicator();
 }
 
 function openChatTab(channelId: string, channelName: string): void {
