@@ -783,3 +783,70 @@ Feature/Fix: PRD 16.6 — Group consecutive messages, header layout, HH:MM times
     (checklist in PRD 16.6).
 
   Next Step: PRD 16.7 — emoji autocomplete while typing :name.
+
+
+--- Entry: 07/10/2026 ---
+
+Feature/Fix: PRD 16.7 — Emoji autocomplete while typing :name
+
+  Problem: Emoji could only be inserted through the picker. Custom emoji could
+  be typed as :name: but only if the user remembered the exact name, and
+  Unicode emoji had no typed form at all.
+
+  Solution: Typing ":" followed by a letter in the chat box opens a floating
+  card just above the colon (per print_discord_emoji_autocomplete.png) with
+  emoji on the left and :name: on the right, covering both custom and Unicode
+  emoji. It filters as the user types and closes on no match, a closing colon,
+  whitespace, blur, tab switch, send, or the emoji picker opening.
+
+  Client Changes:
+    - Trigger: /(?:^|[\s([{"'])(:([a-zA-Z][a-zA-Z0-9_+-]{0,31}))$/ against the
+      text before the caret, so "http://x", "10:30" and "a:b" never trigger.
+      Group 1 is ":query", group 2 is "query". Ignored during IME composition.
+    - Search (searchEmojiForAutocomplete): ranked name prefix, name-word
+      prefix, keyword prefix (how ":laug" finds 🤣, like the reference's
+      :rofl:), then substring; ties favour custom emoji, then shorter names;
+      max 10. The Unicode index is built once lazily; the custom list is read
+      live. toEmojiSnakeName() is now shared with emojiShortName() (reaction
+      card) so both name an emoji identically.
+    - Card: one shared #emoji-autocomplete element (header "Emoji matching
+      :query", rows with glyph/<img> + name, role=listbox/option with
+      aria-activedescendant on the textarea). Opens upward, left-aligned to the
+      colon, clamped inside the window, max-height fitted to the space above.
+      The colon's coordinates come from a local mirror-div helper
+      (getTextareaCharCoords) instead of a dependency (no bundler).
+    - Keys: Up/Down move (wrapping), Enter/Tab select WITHOUT sending (the
+      handler runs first in the chatInput keydown), Escape closes only the card
+      (stopPropagation, so PRD 16.11's reply cancel won't also fire),
+      Shift+Enter closes the card and inserts a newline. Mouse: hover
+      highlights, mousedown is prevented so the textarea keeps focus.
+    - Selecting inserts the emoji CHARACTER for Unicode (only custom :name:
+      text renders as an emoji) and :name: for custom, plus a trailing space
+      unless whitespace already follows. Typing the closing ":" of a complete
+      Unicode name (":red_heart:") converts it in place; custom names are left
+      as typed since they already render.
+    - State/element refs live next to chatInput at the top of the file, not
+      beside the logic, because switchTab()/sendChatMessage() call
+      closeEmojiAutocomplete() and can run before the later section evaluates
+      (a const TDZ otherwise).
+    - Out of scope: the inline message-edit textarea and the picker's own
+      search box (the module takes the textarea from chatInput only).
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html
+    apps/client/src/renderer/renderer.ts
+
+  Verification:
+    npx tsc --noEmit in apps/client passes. The real search/ranking and the
+    open/closed trigger regexes were extracted from renderer.ts and run
+    against the real EMOJI_DATA in a scratch script (not committed): 22/22
+    pass, including ":laug" finding 🤣, the no-trigger cases, and the exact
+    replacement spans. That script CAUGHT A REAL BUG before commit: the code
+    indexed the regex capture groups as if group 2 included the colon, giving
+    a wrong query and colon index (typecheck cannot see this) — fixed, and
+    the span assertions added. NOT verified by Claude: the card's on-screen
+    positioning (mirror-div coordinates need real layout), keyboard flow in
+    the real textarea, and the window-edge clamping; manual testing by the
+    user (checklist in PRD 16.7).
+
+  Next Step: PRD 16.8 — server-side upload ownership (security fix).

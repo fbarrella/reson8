@@ -1001,6 +1001,26 @@ const tabBar = document.getElementById("tab-bar") as HTMLDivElement;
 const tabContentArea = document.getElementById("tab-content-area") as HTMLDivElement;
 const chatInputBar = document.getElementById("chat-input-bar") as HTMLDivElement;
 const chatInput = document.getElementById("chat-input") as HTMLTextAreaElement;
+
+// Emoji autocomplete (PRD 16.7). Declared up here, not beside its logic: it
+// is closed from switchTab()/sendChatMessage(), which can run before the
+// section further down has been evaluated.
+const emojiAutocompleteEl = document.getElementById("emoji-autocomplete") as HTMLDivElement;
+const emojiAcHeader = document.getElementById("emoji-ac-header") as HTMLDivElement;
+const emojiAcList = document.getElementById("emoji-ac-list") as HTMLDivElement;
+interface EmojiAcItem {
+    /** What gets inserted: the emoji character, or `:name:` for a custom emoji. */
+    insert: string;
+    /** Shown to the right: always `:name:`. */
+    label: string;
+    emoji?: string;
+    imageUrl?: string;
+}
+let emojiAcOpen = false;
+let emojiAcItems: EmojiAcItem[] = [];
+let emojiAcActive = 0;
+let emojiAcColonIndex = 0; // index of the ":" that opened the card
+let emojiAcQuery = "";
 const btnSend = document.getElementById("btn-send") as HTMLButtonElement;
 const btnAttach = document.getElementById("btn-attach") as HTMLButtonElement;
 const btnEmoji = document.getElementById("btn-emoji") as HTMLButtonElement;
@@ -3785,6 +3805,7 @@ function switchTab(tabId: string): void {
 
     // Close emoji picker on tab switch
     closeEmojiPicker();
+    closeEmojiAutocomplete();
 
     // Deactivate all tabs and content
     tabBar.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
@@ -4621,6 +4642,7 @@ chatInput.addEventListener("input", autosizeChatInput);
 async function sendChatMessage(): Promise<void> {
     const content = chatInput.value.trim();
     if ((!content && !pendingAttachmentUrl) || activeTabId === "server-log") return;
+    closeEmojiAutocomplete();
 
     chatInput.value = "";
     autosizeChatInput();
@@ -4648,12 +4670,342 @@ async function sendChatMessage(): Promise<void> {
 btnSend.addEventListener("click", () => sendChatMessage());
 
 chatInput.addEventListener("keydown", (e) => {
+    // The emoji autocomplete gets first refusal: while its card is open,
+    // Enter/Tab select instead of sending (PRD 16.7).
+    if (handleEmojiAutocompleteKeydown(e)) return;
+
     // Enter sends, Shift+Enter inserts a newline; ignore the Enter that
     // confirms an IME composition.
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
         e.preventDefault();
         sendChatMessage();
     }
+});
+
+// ── Emoji Autocomplete (PRD 16.7) ───────────────────────────────────────────
+// Typing ":" + a letter opens a card above the colon listing matching emoji
+// (custom and Unicode). Enter/Tab/click select; Unicode emoji insert as the
+// character itself (only custom :name: text renders as an emoji), custom emoji
+// insert as `:name:`. Typing the closing ":" of a fully-known Unicode name
+// (":red_heart:") converts it in place.
+
+const EMOJI_AC_MAX_RESULTS = 10;
+// The colon must start the text or follow whitespace/an opening bracket or
+// quote, so "http://x", "10:30" and "a:b" never trigger. The first char after
+// it must be a letter.
+const EMOJI_AC_OPEN_RE = /(?:^|[\s([{"'])(:([a-zA-Z][a-zA-Z0-9_+-]{0,31}))$/;
+const EMOJI_AC_CLOSED_RE = /(?:^|[\s([{"'])(:([a-zA-Z][a-zA-Z0-9_+-]{1,31}):)$/;
+
+interface UnicodeEmojiIndexEntry {
+    emoji: string;
+    name: string; // snake_case, no colons
+    words: string[];
+    keywords: string[];
+}
+let unicodeEmojiIndex: UnicodeEmojiIndexEntry[] | null = null;
+let unicodeEmojiBySnake: Map<string, string> | null = null;
+
+/** Built once, lazily — the Unicode dataset never changes at runtime. */
+function getUnicodeEmojiIndex(): UnicodeEmojiIndexEntry[] {
+    if (!unicodeEmojiIndex) {
+        unicodeEmojiIndex = EMOJI_DATA.map((e) => {
+            const name = toEmojiSnakeName(e.name);
+            return { emoji: e.emoji, name, words: name.split("_"), keywords: e.keywords.map((k) => k.toLowerCase()) };
+        });
+        unicodeEmojiBySnake = new Map();
+        for (const e of unicodeEmojiIndex) {
+            if (!unicodeEmojiBySnake.has(e.name)) unicodeEmojiBySnake.set(e.name, e.emoji);
+        }
+    }
+    return unicodeEmojiIndex;
+}
+
+/**
+ * Ranked search: name prefix, then a name word's prefix, then a keyword
+ * prefix (how ":laug" finds 🤣 via its "laugh" keyword), then name substring.
+ * Ties: custom emoji first (server-specific, hard to discover otherwise),
+ * then shorter names. Custom list is read live — it can change at runtime.
+ */
+function searchEmojiForAutocomplete(rawQuery: string): EmojiAcItem[] {
+    const q = rawQuery.toLowerCase();
+    const scored: { item: EmojiAcItem; rank: number; custom: boolean; len: number }[] = [];
+
+    for (const ce of customEmojis) {
+        const name = ce.name.toLowerCase();
+        let rank = -1;
+        if (name.startsWith(q)) rank = 0;
+        else if (name.split("_").some((w) => w.startsWith(q))) rank = 1;
+        else if (name.includes(q)) rank = 3;
+        if (rank >= 0) {
+            scored.push({ item: { insert: `:${ce.name}:`, label: `:${ce.name}:`, imageUrl: ce.imageUrl }, rank, custom: true, len: name.length });
+        }
+    }
+
+    for (const e of getUnicodeEmojiIndex()) {
+        let rank = -1;
+        if (e.name.startsWith(q)) rank = 0;
+        else if (e.words.some((w) => w.startsWith(q))) rank = 1;
+        else if (e.keywords.some((k) => k.startsWith(q))) rank = 2;
+        else if (e.name.includes(q)) rank = 3;
+        if (rank >= 0) {
+            scored.push({ item: { insert: e.emoji, label: `:${e.name}:`, emoji: e.emoji }, rank, custom: false, len: e.name.length });
+        }
+    }
+
+    scored.sort((a, b) => a.rank - b.rank || Number(b.custom) - Number(a.custom) || a.len - b.len);
+    return scored.slice(0, EMOJI_AC_MAX_RESULTS).map((s) => s.item);
+}
+
+const EMOJI_AC_MIRROR_PROPS = [
+    "direction", "borderTopWidth", "borderRightWidth", "borderBottomWidth", "borderLeftWidth", "borderStyle",
+    "paddingTop", "paddingRight", "paddingBottom", "paddingLeft", "fontStyle", "fontVariant", "fontWeight",
+    "fontStretch", "fontSize", "fontSizeAdjust", "lineHeight", "fontFamily", "textAlign", "textTransform",
+    "textIndent", "letterSpacing", "wordSpacing", "tabSize",
+] as const;
+
+/**
+ * Viewport coordinates of the character at `index` inside a <textarea>, via
+ * the standard "mirror div" technique: an off-screen div with identical text
+ * metrics and wrapping, with a marker span at the index. A local helper
+ * rather than a dependency — the renderer has no bundler.
+ */
+function getTextareaCharCoords(ta: HTMLTextAreaElement, index: number): { left: number; top: number } {
+    const cs = getComputedStyle(ta);
+    const mirror = document.createElement("div");
+    const ms = mirror.style;
+    for (const prop of EMOJI_AC_MIRROR_PROPS) {
+        (ms as unknown as Record<string, string>)[prop] = cs[prop] as string;
+    }
+    ms.position = "absolute";
+    ms.visibility = "hidden";
+    ms.top = "0";
+    ms.left = "-9999px";
+    ms.overflow = "hidden";
+    ms.whiteSpace = "pre-wrap";
+    ms.wordWrap = "break-word";
+    ms.boxSizing = "border-box";
+    // clientWidth excludes a scrollbar (which narrows the textarea's text
+    // area) and the borders; add the borders back for border-box.
+    ms.width = `${ta.clientWidth + parseFloat(cs.borderLeftWidth) + parseFloat(cs.borderRightWidth)}px`;
+
+    mirror.textContent = ta.value.substring(0, index);
+    const marker = document.createElement("span");
+    marker.textContent = ta.value.substring(index) || ".";
+    mirror.appendChild(marker);
+    document.body.appendChild(mirror);
+
+    const left = marker.offsetLeft + parseFloat(cs.borderLeftWidth);
+    const top = marker.offsetTop + parseFloat(cs.borderTopWidth);
+    mirror.remove();
+
+    const rect = ta.getBoundingClientRect();
+    return { left: rect.left + left - ta.scrollLeft, top: rect.top + top - ta.scrollTop };
+}
+
+function renderEmojiAutocomplete(): void {
+    emojiAcHeader.textContent = `Emoji matching :${emojiAcQuery}`;
+    emojiAcList.textContent = "";
+    emojiAcItems.forEach((item, i) => {
+        const row = document.createElement("div");
+        row.className = "emoji-ac-item" + (i === emojiAcActive ? " active" : "");
+        row.id = `emoji-ac-item-${i}`;
+        row.setAttribute("role", "option");
+        row.setAttribute("aria-selected", String(i === emojiAcActive));
+
+        const glyph = document.createElement("span");
+        glyph.className = "emoji-ac-glyph";
+        if (item.imageUrl) {
+            const img = document.createElement("img");
+            img.src = item.imageUrl;
+            img.alt = item.label;
+            glyph.appendChild(img);
+        } else {
+            glyph.textContent = item.emoji ?? "";
+        }
+        const name = document.createElement("span");
+        name.className = "emoji-ac-name";
+        name.textContent = item.label;
+        row.append(glyph, name);
+
+        // mousedown must not steal focus from the textarea (it would blur +
+        // close the card before the click lands).
+        row.addEventListener("mousedown", (e) => e.preventDefault());
+        row.addEventListener("mouseenter", () => setEmojiAutocompleteActive(i, false));
+        row.addEventListener("click", () => selectEmojiAutocompleteItem(i));
+        emojiAcList.appendChild(row);
+    });
+    chatInput.setAttribute("aria-activedescendant", `emoji-ac-item-${emojiAcActive}`);
+}
+
+function setEmojiAutocompleteActive(index: number, scroll: boolean): void {
+    if (index === emojiAcActive) return;
+    emojiAcActive = index;
+    emojiAcList.querySelectorAll(".emoji-ac-item").forEach((el, i) => {
+        el.classList.toggle("active", i === index);
+        el.setAttribute("aria-selected", String(i === index));
+    });
+    chatInput.setAttribute("aria-activedescendant", `emoji-ac-item-${index}`);
+    if (scroll) emojiAcList.children[index]?.scrollIntoView({ block: "nearest" });
+}
+
+/** Opens the card above the colon, kept fully inside the window. */
+function positionEmojiAutocomplete(): void {
+    const colon = getTextareaCharCoords(chatInput, emojiAcColonIndex);
+    const margin = 8;
+
+    // It opens upward (the input sits at the bottom of the window); in a tiny
+    // window shrink the card rather than push it off the top.
+    const roomAbove = colon.top - 6 - margin;
+    emojiAutocompleteEl.style.maxHeight = `${Math.max(120, Math.min(320, roomAbove))}px`;
+
+    const width = emojiAutocompleteEl.offsetWidth;
+    const height = emojiAutocompleteEl.offsetHeight;
+    const left = Math.max(margin, Math.min(colon.left, window.innerWidth - width - margin));
+    const top = Math.max(margin, colon.top - 6 - height);
+    emojiAutocompleteEl.style.left = `${left}px`;
+    emojiAutocompleteEl.style.top = `${top}px`;
+}
+
+function closeEmojiAutocomplete(): void {
+    if (!emojiAcOpen) return;
+    emojiAcOpen = false;
+    emojiAcItems = [];
+    emojiAutocompleteEl.classList.remove("visible");
+    chatInput.setAttribute("aria-expanded", "false");
+    chatInput.removeAttribute("aria-activedescendant");
+}
+
+/** Re-evaluates the text before the caret: open, refresh or close the card. */
+function updateEmojiAutocomplete(): void {
+    if (chatInput.selectionStart !== chatInput.selectionEnd) {
+        closeEmojiAutocomplete();
+        return;
+    }
+    const caret = chatInput.selectionStart ?? chatInput.value.length;
+    const match = EMOJI_AC_OPEN_RE.exec(chatInput.value.slice(0, caret));
+    if (!match) {
+        closeEmojiAutocomplete();
+        return;
+    }
+
+    // Group 1 is ":query" (colon included), group 2 is just "query".
+    const query = match[2];
+    const items = searchEmojiForAutocomplete(query);
+    if (items.length === 0) {
+        closeEmojiAutocomplete();
+        return;
+    }
+
+    const colonIndex = caret - match[1].length;
+    const queryChanged = !emojiAcOpen || query !== emojiAcQuery || colonIndex !== emojiAcColonIndex;
+    emojiAcColonIndex = colonIndex;
+    emojiAcQuery = query;
+    emojiAcItems = items;
+    if (queryChanged) emojiAcActive = 0;
+
+    if (!emojiAcOpen) {
+        // Only one emoji surface at a time (the picker in reaction mode is a
+        // different flow, but it never coexists with typing anyway).
+        if (emojiPicker.classList.contains("visible")) closeEmojiPicker();
+        emojiAcOpen = true;
+        chatInput.setAttribute("aria-expanded", "true");
+        chatInput.setAttribute("aria-controls", "emoji-autocomplete");
+    }
+    renderEmojiAutocomplete();
+    emojiAutocompleteEl.classList.add("visible");
+    positionEmojiAutocomplete();
+}
+
+/** Replaces the typed ":query" with the chosen emoji (plus a trailing space). */
+function selectEmojiAutocompleteItem(index: number): void {
+    const item = emojiAcItems[index];
+    if (!item) return;
+    const caret = chatInput.selectionStart ?? chatInput.value.length;
+    const nextChar = chatInput.value.charAt(caret);
+    const suffix = nextChar === "" || !/\s/.test(nextChar) ? " " : "";
+    chatInput.setRangeText(item.insert + suffix, emojiAcColonIndex, caret, "end");
+    closeEmojiAutocomplete();
+    autosizeChatInput();
+    chatInput.focus();
+}
+
+/**
+ * Typing the closing ":" of a complete Unicode name (":red_heart:") swaps it
+ * for the emoji character in place. Custom names are left as typed — they
+ * already render from `:name:` text. Returns true when it converted.
+ */
+function convertClosedEmojiShortcode(): boolean {
+    const caret = chatInput.selectionStart ?? chatInput.value.length;
+    const match = EMOJI_AC_CLOSED_RE.exec(chatInput.value.slice(0, caret));
+    if (!match) return false;
+    getUnicodeEmojiIndex();
+    // Group 1 is ":name:" (both colons), group 2 is just "name".
+    const emoji = unicodeEmojiBySnake?.get(match[2].toLowerCase());
+    if (!emoji) return false;
+    chatInput.setRangeText(emoji, caret - match[1].length, caret, "end");
+    autosizeChatInput();
+    return true;
+}
+
+/** Returns true when the key was consumed by the open card. */
+function handleEmojiAutocompleteKeydown(e: KeyboardEvent): boolean {
+    if (!emojiAcOpen || e.isComposing) return false;
+    switch (e.key) {
+        case "ArrowDown":
+            e.preventDefault();
+            setEmojiAutocompleteActive((emojiAcActive + 1) % emojiAcItems.length, true);
+            return true;
+        case "ArrowUp":
+            e.preventDefault();
+            setEmojiAutocompleteActive((emojiAcActive - 1 + emojiAcItems.length) % emojiAcItems.length, true);
+            return true;
+        case "Enter":
+            if (e.shiftKey) {
+                closeEmojiAutocomplete(); // Shift+Enter: plain newline, handled by the browser
+                return false;
+            }
+            e.preventDefault(); // select — must NOT also send the message
+            selectEmojiAutocompleteItem(emojiAcActive);
+            return true;
+        case "Tab":
+            e.preventDefault();
+            selectEmojiAutocompleteItem(emojiAcActive);
+            return true;
+        case "Escape":
+            e.preventDefault();
+            e.stopPropagation(); // closes only the card (PRD 16.11's reply cancel must not also fire)
+            closeEmojiAutocomplete();
+            return true;
+        default:
+            return false;
+    }
+}
+
+chatInput.setAttribute("aria-autocomplete", "list");
+chatInput.setAttribute("aria-expanded", "false");
+// Grabbing the card's scrollbar (or its header) must not blur the textarea,
+// which would close the card mid-interaction.
+emojiAutocompleteEl.addEventListener("mousedown", (e) => e.preventDefault());
+
+chatInput.addEventListener("input", (e) => {
+    if ((e as InputEvent).isComposing) return; // wait for the IME to commit
+    if ((e as InputEvent).data === ":" && convertClosedEmojiShortcode()) {
+        closeEmojiAutocomplete();
+        return;
+    }
+    updateEmojiAutocomplete();
+});
+// Caret moves that don't fire "input": clicking, Home/End, and Left/Right
+// (Up/Down/Enter/Tab/Escape are consumed by the card itself while it's open).
+chatInput.addEventListener("click", updateEmojiAutocomplete);
+chatInput.addEventListener("keyup", (e) => {
+    if (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "Home" || e.key === "End") {
+        updateEmojiAutocomplete();
+    }
+});
+chatInput.addEventListener("blur", closeEmojiAutocomplete);
+window.addEventListener("resize", () => {
+    if (emojiAcOpen) positionEmojiAutocomplete();
 });
 
 // ── Server Log Tab Click ──────────────────────────────────────────────────
@@ -6059,12 +6411,18 @@ let reactionCardAnchor = { x: 0, y: 0 };
 /** Unicode emoji -> `:snake_case_name:`, built once from the picker's dataset
  *  (variation selectors stripped so "❤" and "❤️" resolve the same). */
 let emojiNameLookup: Map<string, string> | null = null;
+
+/** "face with tears of joy" -> "face_with_tears_of_joy" (shared by the reaction
+ *  card and the emoji autocomplete, so both name an emoji identically). */
+function toEmojiSnakeName(name: string): string {
+    return name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+}
+
 function emojiShortName(emoji: string): string | null {
     if (!emojiNameLookup) {
         emojiNameLookup = new Map();
         for (const entry of EMOJI_DATA) {
-            const snake = entry.name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
-            emojiNameLookup.set(entry.emoji.replace(/\uFE0F/g, ""), `:${snake}:`);
+            emojiNameLookup.set(entry.emoji.replace(/\uFE0F/g, ""), `:${toEmojiSnakeName(entry.name)}:`);
         }
     }
     return emojiNameLookup.get(emoji.replace(/\uFE0F/g, "")) ?? null;
@@ -6991,6 +7349,7 @@ function closeEmojiPicker(): void {
 }
 
 function openEmojiPicker(): void {
+    closeEmojiAutocomplete();
     emojiPicker.classList.add("visible");
     btnEmoji.classList.add("active");
     emojiSearch.value = "";
