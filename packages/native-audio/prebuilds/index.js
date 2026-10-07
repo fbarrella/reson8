@@ -310,9 +310,9 @@ if (!nativeBinding) {
   throw new Error(`Failed to load native binding`)
 }
 
-const { resolvePidForWindowSourceId, platformSupportsCapture, CaptureHandle, startCapture } = nativeBinding
+const { listAudioProducingApps, platformSupportsCapture, CaptureHandle, startCapture } = nativeBinding
 
-module.exports.resolvePidForWindowSourceId = resolvePidForWindowSourceId
+module.exports.listAudioProducingApps = listAudioProducingApps
 module.exports.platformSupportsCapture = platformSupportsCapture
 module.exports.CaptureHandle = CaptureHandle
 module.exports.startCapture = startCapture

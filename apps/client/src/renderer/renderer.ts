@@ -17,12 +17,44 @@ interface ReactionSummary {
     users?: Array<{ userId: string; nickname: string }>;
 }
 
+/** Result of an upload (PRD 16.8): `uploadId` is the server's ledger id, which the server claims when the file is used. */
+interface UploadResult {
+    url: string;
+    publicId?: string;
+    uploadId?: string;
+}
+
+/** The message a reply answers, as the server describes it (PRD 16.11). `deleted` = the original no longer exists. */
+interface ReplyPreview {
+    id: string;
+    deleted: boolean;
+    userId?: string;
+    nickname?: string;
+    content?: string;
+    hasAttachments?: boolean;
+}
+
+/**
+ * Tells the server to throw away an upload that never got used (PRD 16.9).
+ * Fire-and-forget on purpose: it must never block or fail the UI, and the
+ * server's hourly sweep catches anything this misses.
+ */
+function discardUpload(uploadId: string | null | undefined): void {
+    if (!uploadId) return;
+    api.discardUpload(uploadId).catch(() => {});
+}
+
 interface ChatMessage {
     id: string;
     channelId: string;
     userId: string;
     nickname: string;
     content: string;
+    /** Set when this message is a reply (PRD 16.11). */
+    replyTo?: ReplyPreview | null;
+    /** The message's images, in order (PRD 16.10). */
+    attachments?: { url: string }[];
+    /** @deprecated The first image's URL — only used when `attachments` is absent (an older server). */
     attachmentUrl?: string | null;
     createdAt: string;
     editedAt?: string | null;
@@ -42,6 +74,11 @@ interface DirectMessage {
     senderNickname: string;
     receiverId: string;
     content: string;
+    /** Set when this DM is a reply (PRD 16.11). */
+    replyTo?: ReplyPreview | null;
+    /** The message's images, in order (PRD 16.10). */
+    attachments?: { url: string }[];
+    /** @deprecated The first image's URL — only used when `attachments` is absent (an older server). */
     attachmentUrl?: string | null;
     createdAt: string;
     readAt?: string | null;
@@ -732,6 +769,7 @@ interface Reson8Api {
             iconEmoji?: string | null;
             iconUrl?: string | null;
             iconPublicId?: string | null;
+            iconUploadId?: string;
         },
     ): Promise<{ success: boolean; error?: string }>;
     reorderChannels(
@@ -740,7 +778,7 @@ interface Reson8Api {
     ): Promise<{ success: boolean; error?: string }>;
     moveChannel(channelId: string, newParentId: string | null): Promise<{ success: boolean; error?: string }>;
     deleteChannel(channelId: string): Promise<{ success: boolean; error?: string }>;
-    sendMessage(channelId: string, content: string, attachmentUrl?: string, attachmentPublicId?: string): Promise<{ success: boolean; messageId?: string; error?: string }>;
+    sendMessage(channelId: string, content: string, attachments?: UploadResult[], replyToId?: string): Promise<{ success: boolean; messageId?: string; error?: string }>;
     deleteMessage(messageId: string): Promise<{ success: boolean; error?: string }>;
     editMessage(messageId: string, content: string): Promise<{ success: boolean; error?: string }>;
     fetchMessages(channelId: string, before?: string, limit?: number, aroundMessageId?: string): Promise<{ success: boolean; messages?: ChatMessage[]; pinnedMessage?: PinnedMessage | null; error?: string }>;
@@ -752,9 +790,9 @@ interface Reson8Api {
     assignRole(userId: string, roleId: string, action: "add" | "remove"): Promise<{ success: boolean; error?: string }>;
     enumerateAudioDevices(): Promise<{ inputs: { deviceId: string; label: string }[]; outputs: { deviceId: string; label: string }[] }>;
     setAudioInputDevice(deviceId: string | null): void;
-    sendDirectMessage(recipientId: string, content: string, attachmentUrl?: string, attachmentPublicId?: string): Promise<{ success: boolean; messageId?: string; error?: string }>;
+    sendDirectMessage(recipientId: string, content: string, attachments?: UploadResult[], replyToId?: string): Promise<{ success: boolean; messageId?: string; error?: string }>;
     deleteDirectMessage(dmId: string): Promise<{ success: boolean; error?: string }>;
-    fetchDirectMessages(partnerId: string, before?: string, limit?: number): Promise<{ success: boolean; messages?: DirectMessage[]; error?: string }>;
+    fetchDirectMessages(partnerId: string, before?: string, limit?: number, aroundMessageId?: string): Promise<{ success: boolean; messages?: DirectMessage[]; error?: string }>;
     getOnlineUsers(): Promise<{ success: boolean; users?: { userId: string; nickname: string; isOnline: boolean }[]; error?: string }>;
     markDmsRead(partnerId: string): Promise<{ success: boolean; error?: string }>;
     getUnreadDmPartners(): Promise<{ success: boolean; partners?: { partnerId: string; partnerNickname: string; unreadCount: number }[]; error?: string }>;
@@ -762,7 +800,7 @@ interface Reson8Api {
     banUser(userId: string): Promise<{ success: boolean; error?: string }>;
     unbanUser(userId: string): Promise<{ success: boolean; error?: string }>;
     getBannedUsers(): Promise<{ success: boolean; users?: { userId: string; nickname: string; bannedAt: string }[]; error?: string }>;
-    uploadFile(fileBuffer: ArrayBuffer, fileName: string, mimeType: string): Promise<{ url: string; publicId?: string }>;
+    uploadFile(fileBuffer: ArrayBuffer, fileName: string, mimeType: string): Promise<UploadResult>;
     downloadImage(url: string): void;
     setCustomEmojis(list: Array<{ name: string; imageUrl: string }>): void;
     renderMarkdown(text: string): { html: string; block: boolean };
@@ -784,10 +822,11 @@ interface Reson8Api {
     getLatency(): number;
     getClockOffset(): number;
     toggleReaction(messageId: string, emoji: string, isDm: boolean): Promise<{ success: boolean; error?: string }>;
-    uploadEmojiFile(fileBuffer: ArrayBuffer, fileName: string, mimeType: string): Promise<{ url: string; publicId?: string }>;
-    uploadAnimatedEmojiFile(fileBuffer: ArrayBuffer, fileName: string, mimeType: string): Promise<{ url: string; publicId?: string }>;
-    uploadChannelIcon(fileBuffer: ArrayBuffer, fileName: string, mimeType: string): Promise<{ url: string; publicId?: string }>;
-    createCustomEmoji(name: string, imageUrl: string, imagePublicId?: string, isAnimated?: boolean): Promise<{ success: boolean; emojiId?: string; error?: string }>;
+    uploadEmojiFile(fileBuffer: ArrayBuffer, fileName: string, mimeType: string): Promise<UploadResult>;
+    uploadAnimatedEmojiFile(fileBuffer: ArrayBuffer, fileName: string, mimeType: string): Promise<UploadResult>;
+    uploadChannelIcon(fileBuffer: ArrayBuffer, fileName: string, mimeType: string): Promise<UploadResult>;
+    discardUpload(uploadId: string): Promise<{ success: boolean; error?: string }>;
+    createCustomEmoji(name: string, image: UploadResult, isAnimated?: boolean): Promise<{ success: boolean; emojiId?: string; error?: string }>;
     getApprovedEmojis(): Promise<{ success: boolean; emojis?: CustomEmoji[]; error?: string }>;
     getPendingEmojis(): Promise<{ success: boolean; emojis?: CustomEmoji[]; error?: string }>;
     reviewCustomEmoji(emojiId: string, decision: "APPROVED" | "REJECTED"): Promise<{ success: boolean; error?: string }>;
@@ -875,9 +914,30 @@ let isMuted = false;
 let isDeafened = false;
 let pttModeEnabled = localStorage.getItem("reson8-ptt-mode") === "true";
 
-// Attachment state
-let pendingAttachmentUrl: string | null = null;
-let pendingAttachmentPublicId: string | null = null;
+// Attachment state (PRD 16.10): the composer's pending images. Global, not per
+// tab — a picked image survives switching tabs, as it always has.
+interface PendingAttachment {
+    id: string;
+    file: File;
+    /** Local preview, kept alive for the card and its viewer until the card is removed or the message is sent. */
+    objectUrl: string;
+    status: "uploading" | "ready" | "failed";
+    /** An upload has been started (a queued card is "uploading" but not started yet). */
+    started: boolean;
+    /** Removed by the user; if its upload is still in flight it is discarded when it resolves. */
+    removed?: boolean;
+    error?: string;
+    /** The server's upload-ledger id (PRD 16.8) — what the server claims on send. */
+    uploadId?: string;
+    /** Only used as the legacy fallback for a pre-v2.5.0 server that has no upload ids. */
+    url?: string;
+    publicId?: string;
+}
+let pendingAttachments: PendingAttachment[] = [];
+// Reply mode (PRD 16.11): the message each conversation's draft is answering.
+// Keyed by tab id, so a draft reply belongs to the conversation it was started
+// in — switching tabs hides the bar, coming back restores it.
+const replyTargets = new Map<string, { messageId: string; nickname: string }>();
 let serverBaseUrl: string = "";
 
 // Active speakers state
@@ -999,8 +1059,33 @@ const channelTree = document.getElementById("channel-tree") as HTMLDivElement;
 const eventLog = document.getElementById("event-log") as HTMLDivElement;
 const tabBar = document.getElementById("tab-bar") as HTMLDivElement;
 const tabContentArea = document.getElementById("tab-content-area") as HTMLDivElement;
-const chatInputBar = document.getElementById("chat-input-bar") as HTMLDivElement;
+const chatComposer = document.getElementById("chat-composer") as HTMLDivElement;
+const replyBar = document.getElementById("reply-bar") as HTMLDivElement;
+const replyBarNick = document.getElementById("reply-bar-nick") as HTMLElement;
+const btnReplyCancel = document.getElementById("btn-reply-cancel") as HTMLButtonElement;
+const rightPane = document.getElementById("right-pane") as HTMLDivElement;
+const chatDropOverlay = document.getElementById("chat-drop-overlay") as HTMLDivElement;
 const chatInput = document.getElementById("chat-input") as HTMLTextAreaElement;
+
+// Emoji autocomplete (PRD 16.7). Declared up here, not beside its logic: it
+// is closed from switchTab()/sendChatMessage(), which can run before the
+// section further down has been evaluated.
+const emojiAutocompleteEl = document.getElementById("emoji-autocomplete") as HTMLDivElement;
+const emojiAcHeader = document.getElementById("emoji-ac-header") as HTMLDivElement;
+const emojiAcList = document.getElementById("emoji-ac-list") as HTMLDivElement;
+interface EmojiAcItem {
+    /** What gets inserted: the emoji character, or `:name:` for a custom emoji. */
+    insert: string;
+    /** Shown to the right: always `:name:`. */
+    label: string;
+    emoji?: string;
+    imageUrl?: string;
+}
+let emojiAcOpen = false;
+let emojiAcItems: EmojiAcItem[] = [];
+let emojiAcActive = 0;
+let emojiAcColonIndex = 0; // index of the ":" that opened the card
+let emojiAcQuery = "";
 const btnSend = document.getElementById("btn-send") as HTMLButtonElement;
 const btnAttach = document.getElementById("btn-attach") as HTMLButtonElement;
 const btnEmoji = document.getElementById("btn-emoji") as HTMLButtonElement;
@@ -1011,7 +1096,7 @@ const emojiTabsBar = document.getElementById("emoji-tabs-bar") as HTMLDivElement
 const emojiCustomTabSlot = document.getElementById("emoji-custom-tab-slot") as HTMLDivElement;
 const emojiGridContainer = document.getElementById("emoji-grid-container") as HTMLDivElement;
 const fileInput = document.getElementById("file-input") as HTMLInputElement;
-const attachmentPreview = document.getElementById("attachment-preview") as HTMLDivElement;
+const attachmentTray = document.getElementById("attachment-tray") as HTMLDivElement;
 const imageLightboxModal = document.getElementById("image-lightbox-modal") as HTMLDivElement;
 const lightboxImage = document.getElementById("lightbox-image") as HTMLImageElement;
 const btnLightboxDownload = document.getElementById("btn-lightbox-download") as HTMLButtonElement;
@@ -1233,7 +1318,59 @@ const nsfwConfirmModal = document.getElementById("nsfw-confirm-modal") as HTMLDi
 const nsfwConfirmChannelName = document.getElementById("nsfw-confirm-channel-name") as HTMLElement;
 const btnNsfwCancel = document.getElementById("btn-nsfw-cancel") as HTMLButtonElement;
 const btnNsfwConfirm = document.getElementById("btn-nsfw-confirm") as HTMLButtonElement;
+const chkNsfwDontWarn = document.getElementById("chk-nsfw-dont-warn") as HTMLInputElement;
+const chkNsfwWarn = document.getElementById("chk-nsfw-warn") as HTMLInputElement;
+const chkNsfwBlur = document.getElementById("chk-nsfw-blur") as HTMLInputElement;
 let pendingNsfwChannel: TreeNode | null = null;
+
+// "Don't warn me again" (PRD 16.1): one global per-install preference, stored
+// under a reson8-* key like every other client preference. Anything other
+// than an explicit "true" dismissal means warn — the safe default, also used
+// when storage is unavailable.
+const NSFW_WARNING_DISMISSED_KEY = "reson8-nsfw-warning-dismissed";
+
+function isNsfwWarningEnabled(): boolean {
+    try {
+        return localStorage.getItem(NSFW_WARNING_DISMISSED_KEY) !== "true";
+    } catch {
+        return true;
+    }
+}
+
+function setNsfwWarningEnabled(enabled: boolean): void {
+    try {
+        if (enabled) localStorage.removeItem(NSFW_WARNING_DISMISSED_KEY);
+        else localStorage.setItem(NSFW_WARNING_DISMISSED_KEY, "true");
+    } catch {
+        /* storage unavailable — the preference just won't persist */
+    }
+}
+
+// "Blur images in NSFW channels" (PRD 16.2): per-user, on by default. Only an
+// explicit "false" turns it off; also falls back to on if storage is unavailable.
+const NSFW_BLUR_KEY = "reson8-nsfw-blur-images";
+
+function isNsfwBlurEnabled(): boolean {
+    try {
+        return localStorage.getItem(NSFW_BLUR_KEY) !== "false";
+    } catch {
+        return true;
+    }
+}
+
+function setNsfwBlurEnabled(enabled: boolean): void {
+    try {
+        localStorage.setItem(NSFW_BLUR_KEY, String(enabled));
+    } catch {
+        /* storage unavailable — the preference just won't persist */
+    }
+    applyNsfwBlurPreference();
+}
+
+/** Pure CSS switch — see `body.nsfw-blur-off` in index.html. Applies live to every rendered message. */
+function applyNsfwBlurPreference(): void {
+    document.body.classList.toggle("nsfw-blur-off", !isNsfwBlurEnabled());
+}
 
 // ── Pin-Replace Confirmation Modal (PRD 11.5) ───────────────────────────────
 const pinReplaceConfirmModal = document.getElementById("pin-replace-confirm-modal") as HTMLDivElement;
@@ -1404,7 +1541,7 @@ interface ChatTab {
      *  "Jump to Most Recent Message" button. */
     bottomSentinelEl: HTMLDivElement;
     jumpToRecentBtn: HTMLButtonElement;
-    /** False only after `jumpToPinnedMessage` loads a window that might not
+    /** False only after `jumpToMessage` loads a window that might not
      *  reach the channel's true latest message — set back to true once a
      *  live message arrives or a fresh latest-page fetch confirms it (PRD
      *  14.3). Everywhere else (initial load, normal live appends) the last
@@ -1648,6 +1785,128 @@ function renderCategory(node: TreeNode, siblings: TreeNode[]): HTMLDivElement {
     return category;
 }
 
+// ── Muted text channels (PRD 16.4) ─────────────────────────────────────────
+// A purely local, per-user preference — no server round trip, no permission.
+// Stored as { [serverId]: channelId[] } so connecting to another Reson8
+// server never mixes lists. Unread state keeps being tracked while muted
+// (unreadChannelIds / the server's read cursor are untouched); muting only
+// suppresses how it's painted, so unmuting reveals what arrived meanwhile.
+const MUTED_CHANNELS_KEY = "reson8-muted-channels";
+let mutedChannelIds = new Set<string>();
+let mutedChannelsServerId: string | null = null;
+
+function readMutedChannelsStore(): Record<string, string[]> {
+    try {
+        const parsed = JSON.parse(localStorage.getItem(MUTED_CHANNELS_KEY) ?? "{}");
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+        const clean: Record<string, string[]> = {};
+        for (const [serverId, ids] of Object.entries(parsed)) {
+            if (Array.isArray(ids)) clean[serverId] = ids.filter((id): id is string => typeof id === "string");
+        }
+        return clean;
+    } catch {
+        return {}; // missing, malformed or storage unavailable — treat as empty
+    }
+}
+
+function persistMutedChannels(): void {
+    if (!mutedChannelsServerId) return;
+    try {
+        const store = readMutedChannelsStore();
+        if (mutedChannelIds.size > 0) store[mutedChannelsServerId] = [...mutedChannelIds];
+        else delete store[mutedChannelsServerId];
+        localStorage.setItem(MUTED_CHANNELS_KEY, JSON.stringify(store));
+    } catch {
+        /* storage unavailable — the mute just won't persist */
+    }
+}
+
+/** Loads the current server's muted set once per server (idempotent). */
+function ensureMutedChannelsLoaded(serverId: string): void {
+    if (mutedChannelsServerId === serverId) return;
+    mutedChannelsServerId = serverId;
+    mutedChannelIds = new Set(readMutedChannelsStore()[serverId] ?? []);
+}
+
+/** Drops muted ids whose channel no longer exists, so deleted channels don't accumulate. */
+function pruneMutedChannels(tree: TreeNode[]): void {
+    if (tree.length === 0 || mutedChannelIds.size === 0) return; // an empty tree is a transient state, never prune on it
+    const existing = new Set<string>();
+    const walk = (nodes: TreeNode[]): void => {
+        for (const n of nodes) {
+            existing.add(n.id);
+            walk(n.children);
+        }
+    };
+    walk(tree);
+    let changed = false;
+    for (const id of [...mutedChannelIds]) {
+        if (!existing.has(id)) {
+            mutedChannelIds.delete(id);
+            changed = true;
+        }
+    }
+    if (changed) persistMutedChannels();
+}
+
+function isChannelMuted(channelId: string): boolean {
+    return mutedChannelIds.has(channelId);
+}
+
+function setChannelMuted(channelId: string, muted: boolean): void {
+    if (muted) mutedChannelIds.add(channelId);
+    else mutedChannelIds.delete(channelId);
+    persistMutedChannels();
+    applyChannelMuteState(channelId);
+}
+
+/** Targeted DOM update (no renderTree(), which would reset collapsed categories). */
+function applyChannelMuteState(channelId: string): void {
+    const el = channelTree.querySelector(`.tree-channel[data-channel-id="${CSS.escape(channelId)}"]`);
+    if (!el) return;
+    const muted = isChannelMuted(channelId);
+    el.classList.toggle("muted", muted);
+
+    const showUnread = unreadChannelIds.has(channelId) && !muted;
+    el.classList.toggle("unread", showUnread);
+    const dot = el.querySelector(".unread-dot");
+    if (showUnread && !dot) {
+        const newDot = document.createElement("span");
+        newDot.className = "unread-dot";
+        el.querySelector(".ch-name")?.after(newDot);
+    } else if (!showUnread) {
+        dot?.remove();
+    }
+}
+
+/** Muted eye shown at the right of the text channel whose tab is being viewed (PRD 16.3). */
+function createViewingIcon(): HTMLSpanElement {
+    const icon = document.createElement("span");
+    icon.className = "ch-viewing-icon";
+    icon.title = "You're viewing this channel";
+    icon.setAttribute("aria-label", "Currently viewing");
+    icon.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>`;
+    return icon;
+}
+
+/**
+ * Moves the "viewing" highlight + eye to the row of the active chat tab
+ * (PRD 16.3). A targeted DOM update, not renderTree(): a full re-render
+ * would lose collapsed-category state (same reason markChannelUnread()
+ * avoids it). Only text-channel rows carry data-channel-id, so the Server
+ * Log and DM tabs simply match nothing and clear the highlight.
+ */
+function updateViewingIndicator(): void {
+    channelTree.querySelectorAll(".tree-channel.viewing").forEach((el) => {
+        el.classList.remove("viewing");
+        el.querySelector(".ch-viewing-icon")?.remove();
+    });
+    const row = channelTree.querySelector(`.tree-channel[data-channel-id="${CSS.escape(activeTabId)}"]`);
+    if (!row) return;
+    row.classList.add("viewing");
+    row.appendChild(createViewingIcon());
+}
+
 function renderChannel(node: TreeNode, siblings: TreeNode[]): HTMLDivElement {
     const channel = document.createElement("div");
     channel.className = "tree-channel";
@@ -1698,9 +1957,14 @@ function renderChannel(node: TreeNode, siblings: TreeNode[]): HTMLDivElement {
     if (!isVoice) {
         channel.dataset.channelId = node.id;
         if (node.hasUnread && node.id !== activeTabId) unreadChannelIds.add(node.id);
-        if (unreadChannelIds.has(node.id)) channel.classList.add("unread");
+        // A muted channel (PRD 16.4) is faded and never paints unread visuals,
+        // though the unread set above keeps tracking it.
+        if (isChannelMuted(node.id)) channel.classList.add("muted");
+        else if (unreadChannelIds.has(node.id)) channel.classList.add("unread");
     }
-    const unreadDot = !isVoice && unreadChannelIds.has(node.id) ? `<span class="unread-dot"></span>` : "";
+    const unreadDot = !isVoice && unreadChannelIds.has(node.id) && !isChannelMuted(node.id)
+        ? `<span class="unread-dot"></span>`
+        : "";
 
     channel.innerHTML = `
         ${iconHtml}
@@ -1711,9 +1975,15 @@ function renderChannel(node: TreeNode, siblings: TreeNode[]): HTMLDivElement {
         ${countBadge}
     `;
 
+    // Viewing highlight (PRD 16.3) — appended last so it sits at the far right.
+    if (!isVoice && node.id === activeTabId) {
+        channel.classList.add("viewing");
+        channel.appendChild(createViewingIcon());
+    }
+
     channel.addEventListener("click", () => handleChannelClick(node));
     attachChannelDragHandlers(channel, node, siblings);
-    attachChannelContextMenu(channel, node);
+    attachChannelContextMenu(channel, node, !isVoice);
 
     return channel;
 }
@@ -1728,7 +1998,7 @@ function renderChannel(node: TreeNode, siblings: TreeNode[]): HTMLDivElement {
  * the menu is shown to everyone and a rejected action surfaces via the
  * existing "insufficient_perms.mp3" pattern.
  */
-function attachChannelContextMenu(el: HTMLElement, node: TreeNode): void {
+function attachChannelContextMenu(el: HTMLElement, node: TreeNode, canMute = false): void {
     const isVoice = node.type === "VOICE";
 
     el.addEventListener("contextmenu", (e) => {
@@ -1742,13 +2012,25 @@ function attachChannelContextMenu(el: HTMLElement, node: TreeNode): void {
         menu.style.left = `${e.clientX}px`;
         menu.style.top = `${e.clientY}px`;
 
+        // Mute is personal (client-side, no permission) and only offered on an
+        // openable text channel — never voice channels or category rows (PRD 16.4).
+        const muteItem = canMute
+            ? `<button class="channel-ctx-menu-item ctx-mute-btn">${isChannelMuted(node.id) ? "🔔 Unmute Channel" : "🔕 Mute Channel"}</button><div class="ctx-menu-divider"></div>`
+            : "";
+
         menu.innerHTML = `
+            ${muteItem}
             <button class="channel-ctx-menu-item ctx-rename-btn">✏️ Rename</button>
             <button class="channel-ctx-menu-item ctx-move-btn">📁 Move to…</button>
             ${!isVoice ? `<button class="channel-ctx-menu-item ctx-icon-btn">🖼️ Set Icon</button>` : ""}
             ${!isVoice ? `<button class="channel-ctx-menu-item ctx-nsfw-toggle-btn">🔞 ${node.isNsfw ? "Unmark" : "Mark"} as NSFW</button>` : ""}
             <button class="ctx-delete-channel-btn">🗑️ Delete Channel</button>
         `;
+
+        menu.querySelector(".ctx-mute-btn")?.addEventListener("click", () => {
+            menu.remove();
+            setChannelMuted(node.id, !isChannelMuted(node.id));
+        });
 
         menu.querySelector(".ctx-rename-btn")?.addEventListener("click", () => {
             menu.remove();
@@ -2044,10 +2326,13 @@ async function handleChannelClick(node: TreeNode): Promise<void> {
             isJoiningChannel = false;
         }
     } else {
-        // Text channel — open (or focus) a chat tab, prompting first if NSFW
-        if (node.isNsfw) {
+        // Text channel — open (or focus) a chat tab, prompting first if NSFW.
+        // An already-open tab was confirmed when it was opened, so
+        // re-focusing it from the tree doesn't prompt again (PRD 16.1).
+        if (node.isNsfw && isNsfwWarningEnabled() && !chatTabs.has(node.id)) {
             pendingNsfwChannel = node;
             nsfwConfirmChannelName.textContent = node.name;
+            chkNsfwDontWarn.checked = false; // never pre-ticked
             nsfwConfirmModal.classList.add("visible");
             return;
         }
@@ -2599,6 +2884,8 @@ nsfwConfirmModal.addEventListener("click", (e) => {
 
 btnNsfwConfirm.addEventListener("click", () => {
     nsfwConfirmModal.classList.remove("visible");
+    // Only an explicit Continue persists the tick — Cancel/backdrop discard it.
+    if (chkNsfwDontWarn.checked) setNsfwWarningEnabled(false);
     if (pendingNsfwChannel) {
         openChatTab(pendingNsfwChannel.id, pendingNsfwChannel.name);
         pendingNsfwChannel = null;
@@ -2645,7 +2932,18 @@ btnDeleteMessageConfirm.addEventListener("click", async () => {
 
 /** Removes a rendered message from every tab it might be showing in (a tab stays in the DOM, just hidden, when it isn't the active one). */
 function removeMessageElement(msgId: string): void {
-    document.querySelectorAll(`.chat-msg[data-msg-id="${CSS.escape(msgId)}"]`).forEach((el) => el.remove());
+    // Snippets that point at it flip to "Original message was deleted", and a
+    // reply draft answering it is cancelled (PRD 16.11).
+    handleReplyOriginalDeleted(msgId);
+
+    document.querySelectorAll(`.chat-msg[data-msg-id="${CSS.escape(msgId)}"]`).forEach((el) => {
+        // Removing a group's head promotes the next line to head, and removing
+        // a message between two same-author runs can merge them (PRD 16.6).
+        let next = el.nextElementSibling;
+        el.remove();
+        while (next && !next.classList.contains("chat-msg")) next = next.nextElementSibling;
+        regroupFrom(next);
+    });
 }
 
 api.on("message-deleted", (payload: { channelId: string; messageId: string }) => {
@@ -2755,6 +3053,8 @@ api.on("disconnected", (data?: { reason?: string }) => {
     currentChannelId = null;
     currentServerId = "";
     currentTree = [];
+    mutedChannelIds = new Set();
+    mutedChannelsServerId = null;
     customEmojis = [];
     api.setCustomEmojis(customEmojis);
     previousOccupantIds = new Set();
@@ -2893,6 +3193,8 @@ api.on("user-banned", () => {
 });
 
 api.on("channel-tree", (data: { serverId: string; tree: TreeNode[] }) => {
+    ensureMutedChannelsLoaded(data.serverId);
+    pruneMutedChannels(data.tree);
     renderTree(data.tree);
     syncOpenTabNames(data.tree);
 });
@@ -3572,6 +3874,7 @@ function switchTab(tabId: string): void {
 
     // Close emoji picker on tab switch
     closeEmojiPicker();
+    closeEmojiAutocomplete();
 
     // Deactivate all tabs and content
     tabBar.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
@@ -3583,11 +3886,11 @@ function switchTab(tabId: string): void {
     tabEl?.classList.add("active");
     contentEl?.classList.add("active");
 
-    // Show/hide chat input bar
+    // Show/hide the composer (attachment tray + input bar)
     if (tabId === "server-log") {
-        chatInputBar.classList.remove("visible");
+        chatComposer.classList.remove("visible");
     } else {
-        chatInputBar.classList.add("visible");
+        chatComposer.classList.add("visible");
         chatInput.focus();
     }
 
@@ -3600,6 +3903,9 @@ function switchTab(tabId: string): void {
     if (tab?.initialLoadDone) {
         tab.messagesEl.scrollTop = tab.messagesEl.scrollHeight;
     }
+
+    updateViewingIndicator();
+    renderReplyBar();
 }
 
 function openChatTab(channelId: string, channelName: string): void {
@@ -3641,7 +3947,7 @@ function openChatTab(channelId: string, channelName: string): void {
     `;
     pinBarEl.addEventListener("click", () => {
         const msgId = pinBarEl.dataset.pinnedMsgId;
-        if (msgId) jumpToPinnedMessage(channelId, msgId);
+        if (msgId) jumpToMessage(channelId, msgId);
     });
     contentEl.appendChild(pinBarEl);
 
@@ -3766,6 +4072,7 @@ function closeTab(channelId: string): void {
     tab.tabEl.remove();
     tab.contentEl.remove();
     chatTabs.delete(channelId);
+    replyTargets.delete(channelId); // a draft reply dies with its conversation's tab (PRD 16.11)
 
     // If this was the active tab, switch to server log
     if (activeTabId === channelId) {
@@ -3844,9 +4151,9 @@ async function fetchAndRenderLatestPage(tab: ChatTab, unreadCountHint?: number):
 
 /**
  * "Jump to Most Recent Message" (PRD 14.3): when the true latest message
- * isn't currently loaded — the only case being after `jumpToPinnedMessage`
+ * isn't currently loaded — the only case being after `jumpToMessage`
  * showed a window that might not reach the present — rebuilds the tab from
- * a fresh latest-page fetch, mirroring `jumpToPinnedMessage`'s own
+ * a fresh latest-page fetch, mirroring `jumpToMessage`'s own
  * wipe-and-rebuild shape, rather than trying to scroll through a
  * potentially huge unloaded gap.
  */
@@ -4038,61 +4345,361 @@ function trackOldestOnFirstAppend(tab: ChatTab, createdAt: string): void {
     tab.oldestRenderedDateKey = computeDayKey(new Date(createdAt));
 }
 
+// ── Message grouping + shared message shell (PRD 16.6) ─────────────────────
+// A message is a "continuation" (no header) when it directly follows a
+// message from the same author and lands within GROUP_WINDOW_MS of the FIRST
+// message of that group — so a group never spans more than 5 minutes and the
+// header's time stays meaningful. Anything that isn't a .chat-msg between two
+// messages (date divider, "Unread Messages" separator, the sentinels) breaks
+// the group naturally.
+const GROUP_WINDOW_MS = 5 * 60 * 1000;
+
+/** The pure grouping rule — kept free of the DOM so it's easy to reason about. */
+function shouldGroupMessage(
+    prev: { ownerId: string; createdMs: number; groupStartMs: number } | null,
+    cur: { ownerId: string; createdMs: number; isReply: boolean },
+): boolean {
+    if (!prev || cur.isReply) return false; // a reply always opens its own group (PRD 16.11)
+    if (prev.ownerId !== cur.ownerId) return false;
+    if (cur.createdMs < prev.createdMs) return false; // clock skew: never group backwards
+    return cur.createdMs - prev.groupStartMs < GROUP_WINDOW_MS; // NaN compares false -> not grouped
+}
+
+/** "23:32" in the user's locale (12h/24h as their OS prefers) — seconds dropped on purpose. */
+function formatMessageTime(iso: string): string {
+    return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function formatMessageFullDate(iso: string): string {
+    return new Date(iso).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
+}
+
+/**
+ * Recomputes one message element's group state from its previous sibling and
+ * writes it back (classes + data attributes). Returns whether anything
+ * changed, which `regroupFrom()` uses to stop cascading.
+ */
+function applyGrouping(el: HTMLElement): boolean {
+    const prevEl = el.previousElementSibling as HTMLElement | null;
+    const prev = prevEl?.classList.contains("chat-msg")
+        ? {
+            ownerId: prevEl.dataset.msgOwner ?? "",
+            createdMs: Date.parse(prevEl.dataset.createdAt ?? ""),
+            groupStartMs: Date.parse(prevEl.dataset.groupStart ?? ""),
+        }
+        : null;
+
+    const grouped = shouldGroupMessage(prev, {
+        ownerId: el.dataset.msgOwner ?? "",
+        createdMs: Date.parse(el.dataset.createdAt ?? ""),
+        isReply: el.dataset.isReply === "1",
+    });
+    const groupStart = grouped ? (prevEl!.dataset.groupStart ?? "") : (el.dataset.createdAt ?? "");
+
+    const changed = el.dataset.grouped !== (grouped ? "1" : "0") || el.dataset.groupStart !== groupStart;
+    el.dataset.grouped = grouped ? "1" : "0";
+    el.dataset.groupStart = groupStart;
+    el.classList.toggle("msg-continuation", grouped);
+    el.classList.toggle("msg-group-start", !grouped);
+
+    // A continuation has no visible time, so its full date/time is a tooltip.
+    if (grouped && el.dataset.createdAt) el.title = formatMessageFullDate(el.dataset.createdAt);
+    else el.removeAttribute("title");
+    return changed;
+}
+
+/**
+ * Re-evaluates grouping from `startEl` forward. The start element is always
+ * recomputed; after that it keeps going only while elements actually change,
+ * since a changed group start can cascade (a former continuation may now
+ * fall outside the 5-minute window and become a head). Used after a prepend
+ * (the page junction), and after a delete (a head removed promotes the next
+ * line; a removed in-between message can merge two runs).
+ */
+function regroupFrom(startEl: Element | null): void {
+    let el = startEl;
+    let first = true;
+    while (el) {
+        if (el.classList.contains("chat-msg")) {
+            const changed = applyGrouping(el as HTMLElement);
+            if (!first && !changed) break;
+            first = false;
+        }
+        el = el.nextElementSibling;
+    }
+}
+
+// ── Replies (PRD 16.11) ─────────────────────────────────────────────────────
+
+const REPLY_ICON_SVG = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/></svg>`;
+const REPLY_ATTACHMENT_ICON_SVG = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>`;
+
+/** Shows/hides the reply bar for the ACTIVE tab (a reply draft belongs to its own conversation). */
+function renderReplyBar(): void {
+    const target = replyTargets.get(activeTabId);
+    replyBar.classList.toggle("visible", !!target && activeTabId !== "server-log");
+    replyBarNick.textContent = target?.nickname ?? "";
+}
+
+/** Puts the accent highlight on the message a tab's reply draft is answering (and nowhere else in that tab). */
+function syncReplyHighlight(tabId: string): void {
+    const tab = chatTabs.get(tabId);
+    if (!tab) return;
+    tab.messagesEl.querySelectorAll(".msg-reply-target").forEach((el) => el.classList.remove("msg-reply-target"));
+    const target = replyTargets.get(tabId);
+    if (target) tab.messagesEl.querySelector(`.chat-msg[data-msg-id="${CSS.escape(target.messageId)}"]`)?.classList.add("msg-reply-target");
+}
+
+function startReply(tabId: string, messageId: string, nickname: string): void {
+    replyTargets.set(tabId, { messageId, nickname });
+    syncReplyHighlight(tabId);
+    renderReplyBar();
+    chatInput.focus();
+}
+
+function cancelReply(tabId: string = activeTabId): void {
+    if (!replyTargets.delete(tabId)) return;
+    syncReplyHighlight(tabId);
+    renderReplyBar();
+}
+
+btnReplyCancel.addEventListener("click", () => {
+    cancelReply();
+    chatInput.focus();
+});
+
+/** Fills in a snippet's text for a still-existing original: its plain text, or an "attachment" note for an image-only message. */
+function setReplySnippetText(box: Element, content: string | undefined, hasAttachments: boolean | undefined): void {
+    const text = box.querySelector(".msg-reply-text") as HTMLElement;
+    // The same one-line plain-text path as the pinned bar — never raw Markdown or HTML.
+    const plain = api.markdownToPlainText(content ?? "").replace(/\s+/g, " ").trim();
+    text.classList.remove("attachment");
+    if (plain) {
+        text.textContent = plain;
+    } else if (hasAttachments) {
+        text.classList.add("attachment");
+        text.innerHTML = `${REPLY_ATTACHMENT_ICON_SVG}<span>Click to see attachment</span>`;
+    } else {
+        text.textContent = "…";
+    }
+}
+
+/** Turns a snippet into the non-clickable "Original message was deleted" state. */
+function setReplySnippetDeleted(box: Element): void {
+    box.classList.add("deleted");
+    box.removeAttribute("role");
+    box.removeAttribute("tabindex");
+    box.removeAttribute("aria-label");
+    (box.querySelector(".msg-reply-nick") as HTMLElement).textContent = "";
+    const text = box.querySelector(".msg-reply-text") as HTMLElement;
+    text.classList.remove("attachment");
+    text.textContent = "Original message was deleted";
+}
+
+/** The snippet above a reply: nick + one line of the original, joined by a curved connector; a click jumps to it. */
+function buildReplySnippet(reply: ReplyPreview, tabId: string): HTMLDivElement {
+    const box = document.createElement("div");
+    box.className = "msg-reply";
+    box.dataset.replyToId = reply.id;
+    box.setAttribute("role", "button");
+    box.setAttribute("tabindex", "0");
+    box.setAttribute("aria-label", "Jump to replied message");
+    box.innerHTML = `<span class="msg-reply-spine"></span><span class="msg-reply-nick"></span><span class="msg-reply-text"></span>`;
+
+    if (reply.deleted) {
+        setReplySnippetDeleted(box);
+    } else {
+        (box.querySelector(".msg-reply-nick") as HTMLElement).textContent = reply.nickname ?? "Unknown";
+        setReplySnippetText(box, reply.content, reply.hasAttachments);
+    }
+
+    const jump = (): void => {
+        if (!box.classList.contains("deleted")) void jumpToMessage(tabId, reply.id);
+    };
+    box.addEventListener("click", jump);
+    box.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            jump();
+        }
+    });
+    return box;
+}
+
+/**
+ * A message another user (or we) deleted: any reply snippet pointing at it
+ * becomes "Original message was deleted" live, and a reply DRAFT that was
+ * answering it is cancelled with a toast (PRD 16.11).
+ */
+function handleReplyOriginalDeleted(msgId: string): void {
+    document.querySelectorAll(`.msg-reply[data-reply-to-id="${CSS.escape(msgId)}"]`).forEach(setReplySnippetDeleted);
+
+    let cancelled = false;
+    for (const [tabId, target] of [...replyTargets]) {
+        if (target.messageId !== msgId) continue;
+        replyTargets.delete(tabId);
+        syncReplyHighlight(tabId);
+        cancelled = true;
+    }
+    if (cancelled) {
+        renderReplyBar();
+        showToast("The message you were replying to was deleted.");
+    }
+}
+
+/** The original of some replies was edited: refresh their snippets' text (the nickname can't change). */
+function refreshReplySnippets(msgId: string, content: string): void {
+    document.querySelectorAll(`.msg-reply[data-reply-to-id="${CSS.escape(msgId)}"]:not(.deleted)`).forEach((box) => setReplySnippetText(box, content, false));
+}
+
+/**
+ * The shared skeleton of a channel/DM message: header (nick + time) and body
+ * (text + "(edited)"). Always renders the header and lets CSS hide it on
+ * continuations, so regrouping is only a class toggle.
+ */
+function buildMessageShell(opts: {
+    kind: "channel" | "dm";
+    id: string;
+    ownerId: string;
+    nickname: string;
+    createdAt: string;
+    content: string;
+    edited?: boolean;
+    /** The message this one replies to (PRD 16.11); its snippet goes above the header. */
+    replyTo?: ReplyPreview | null;
+    /** The tab this message is rendered in — a snippet click jumps within it. */
+    tabId: string;
+}): HTMLDivElement {
+    const el = document.createElement("div");
+    el.className = "chat-msg";
+    el.setAttribute("data-msg-id", opts.id);
+    el.setAttribute("data-msg-type", opts.kind);
+    el.setAttribute("data-msg-owner", opts.ownerId);
+    el.setAttribute("data-created-at", opts.createdAt);
+
+    const editedLabel = opts.edited ? `<span class="msg-edited">(edited)</span>` : "";
+    const text = opts.content ? `<span class="msg-text"></span>` : "";
+    el.innerHTML = `<div class="msg-header"><span class="msg-nick">${escapeHtml(opts.nickname)}</span><span class="msg-time" title="${escapeHtml(formatMessageFullDate(opts.createdAt))}">${formatMessageTime(opts.createdAt)}</span></div>`
+        + `<div class="msg-body">${text}${editedLabel}</div>`;
+
+    if (opts.content) {
+        setMessageBody(el.querySelector(".msg-text") as HTMLElement, opts.content);
+    }
+
+    // A reply always opens its own group with its header showing, under the
+    // snippet (PRD 16.6 rule 5 / 16.11) — applyGrouping() reads this flag.
+    if (opts.replyTo) {
+        el.dataset.isReply = "1";
+        el.prepend(buildReplySnippet(opts.replyTo, opts.tabId));
+    }
+    return el;
+}
+
+/** Adds the "(edited)" label to the end of a message's body if it isn't there yet. */
+function ensureEditedLabel(el: Element): void {
+    if (el.querySelector(".msg-edited")) return;
+    el.querySelector(".msg-body")?.insertAdjacentHTML("beforeend", `<span class="msg-edited">(edited)</span>`);
+}
+
+/** The images to show for a message: the `attachments` list, or the first image of an older server's DTO (PRD 16.10). */
+function getMessageAttachments(msg: { attachments?: { url: string }[]; attachmentUrl?: string | null }): { url: string }[] {
+    if (msg.attachments && msg.attachments.length > 0) return msg.attachments;
+    return msg.attachmentUrl ? [{ url: msg.attachmentUrl }] : [];
+}
+
+/**
+ * Builds a message's image(s) (PRD 16.10), shared by channel and DM messages.
+ * One image looks exactly as it always has (max 300x200); two or more become
+ * a grid of square tiles. Every image opens the full viewer. In an NSFW
+ * channel EACH image gets its own blur wrap + overlay (PRD 13.5), which is
+ * what the "Blur images in NSFW channels" setting (PRD 16.2) switches off.
+ */
+function buildAttachmentsElement(attachments: { url: string }[], meta: LightboxMeta, nsfw: boolean): HTMLElement | null {
+    if (attachments.length === 0) return null;
+
+    const buildOne = (url: string): HTMLElement => {
+        const img = document.createElement("img");
+        img.src = url;
+        img.className = "msg-image";
+        img.loading = "lazy";
+        img.alt = "Shared image";
+        img.addEventListener("click", () => openLightbox(url, meta));
+        if (!nsfw) return img;
+
+        const wrap = document.createElement("div");
+        wrap.className = "msg-image-nsfw-wrap";
+        wrap.appendChild(img);
+        const overlay = document.createElement("div");
+        overlay.className = "msg-image-nsfw-overlay";
+        overlay.innerHTML = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><span>NSFW. Click to open image and reveal content.</span>`;
+        overlay.addEventListener("click", () => openLightbox(url, meta));
+        wrap.appendChild(overlay);
+        return wrap;
+    };
+
+    if (attachments.length === 1) return buildOne(attachments[0].url);
+
+    const grid = document.createElement("div");
+    grid.className = "msg-attachments";
+    grid.style.setProperty("--att-cols", String(Math.min(attachments.length, 3)));
+    for (const a of attachments) grid.appendChild(buildOne(a.url));
+    return grid;
+}
+
+/** Re-sticks the scroll to the bottom as each of a message's images finishes loading (PRD 14.1), if the user was already there. */
+function stickOnImageLoad(el: HTMLElement, tab: ChatTab, wasNearBottom: boolean): void {
+    el.querySelectorAll<HTMLImageElement>(".msg-image").forEach((img) => {
+        img.addEventListener("load", () => {
+            if (wasNearBottom) stickToBottom(tab);
+        });
+    });
+}
+
 /** Builds a channel message's DOM element without appending it or touching
  *  scroll state — shared by the forward-append path (`renderChatMessage`)
  *  and the backward-prepend path (`prependOlderMessages`, PRD 14.2). */
 function buildChatMessageElement(tab: ChatTab, msg: ChatMessage): HTMLDivElement {
-    const el = document.createElement("div");
-    el.className = "chat-msg";
-    el.setAttribute("data-msg-id", msg.id);
-    el.setAttribute("data-msg-type", "channel");
-    el.setAttribute("data-msg-owner", msg.userId);
+    const el = buildMessageShell({
+        kind: "channel",
+        id: msg.id,
+        ownerId: msg.userId,
+        nickname: msg.nickname,
+        createdAt: msg.createdAt,
+        content: msg.content,
+        edited: !!msg.editedAt,
+        replyTo: msg.replyTo,
+        tabId: tab.channelId,
+    });
+    if (replyTargets.get(tab.channelId)?.messageId === msg.id) el.classList.add("msg-reply-target");
 
-    const time = new Date(msg.createdAt).toLocaleTimeString();
-    const editedLabel = msg.editedAt ? `<span class="msg-edited">(edited)</span>` : "";
-    let html = `<span class="msg-time">${time}</span>${editedLabel}<span class="msg-nick">${escapeHtml(msg.nickname)}</span>`;
-
-    if (msg.content) {
-        html += `<span class="msg-text"></span>`;
-    }
-
-    el.innerHTML = html;
-    if (msg.content) {
-        setMessageBody(el.querySelector(".msg-text") as HTMLElement, msg.content);
-    }
-
-    if (msg.attachmentUrl) {
-        const img = document.createElement("img");
-        img.src = msg.attachmentUrl;
-        img.className = "msg-image";
-        img.loading = "lazy";
-        img.alt = "Shared image";
-        img.addEventListener("click", () => openLightbox(msg.attachmentUrl!, { senderNickname: msg.nickname, sentAt: msg.createdAt }));
-
-        // NSFW channels blur every image thumbnail permanently — only the
-        // full-screen lightbox (opened by clicking through) ever shows it
-        // clearly (PRD 13.5).
-        const channelNode = findChannelNodeById(currentTree, tab.channelId);
-        if (channelNode?.isNsfw) {
-            const wrap = document.createElement("div");
-            wrap.className = "msg-image-nsfw-wrap";
-            wrap.appendChild(img);
-            const overlay = document.createElement("div");
-            overlay.className = "msg-image-nsfw-overlay";
-            overlay.innerHTML = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><span>NSFW. Click to open image and reveal content.</span>`;
-            overlay.addEventListener("click", () => openLightbox(msg.attachmentUrl!, { senderNickname: msg.nickname, sentAt: msg.createdAt }));
-            wrap.appendChild(overlay);
-            el.appendChild(wrap);
-        } else {
-            el.appendChild(img);
-        }
-    }
+    // NSFW channels blur every image thumbnail (PRD 13.5; optional, PRD 16.2) —
+    // only the full-screen viewer, opened by clicking through, shows it clearly.
+    const channelNode = findChannelNodeById(currentTree, tab.channelId);
+    const attachmentsEl = buildAttachmentsElement(
+        getMessageAttachments(msg),
+        { senderNickname: msg.nickname, sentAt: msg.createdAt },
+        !!channelNode?.isNsfw,
+    );
+    if (attachmentsEl) el.appendChild(attachmentsEl);
 
     // Reaction bar
-    const reactBar = buildReactionBar(msg.id, false, msg.userId, msg.reactions);
-    el.appendChild(reactBar);
-    attachEditButton(reactBar, msg, el);
-    attachPinButton(reactBar, msg, tab);
+    el.appendChild(buildReactionBar(msg.id, false, msg.reactions));
+
+    // Floating action toolbar (PRD 16.5). Insertion order is React, Edit,
+    // Pin, Delete — see buildMessageActions().
+    const toolbar = buildMessageActions(msg.id, false, msg.userId, msg.nickname, tab.channelId);
+    attachEditButton(toolbar, msg, el);
+    attachPinButton(toolbar, msg, tab);
+    el.appendChild(toolbar);
+
+    // Persistent pin marker, since the toolbar's own pin button is only
+    // visible on hover. tab.pinnedMessageId is set before history renders.
+    const pinIndicator = document.createElement("span");
+    pinIndicator.className = "msg-pin-indicator";
+    pinIndicator.setAttribute("aria-hidden", "true");
+    pinIndicator.innerHTML = PIN_ICON_SVG;
+    el.appendChild(pinIndicator);
+    el.classList.toggle("is-pinned", tab.pinnedMessageId === msg.id);
 
     return el;
 }
@@ -4103,6 +4710,7 @@ function renderChatMessage(tab: ChatTab, msg: ChatMessage): void {
     maybeInsertDateDivider(tab, new Date(msg.createdAt));
     const el = buildChatMessageElement(tab, msg);
     tab.bottomSentinelEl.insertAdjacentElement("beforebegin", el);
+    applyGrouping(el); // after insertion: needs the previous sibling (PRD 16.6)
     trackOldestOnFirstAppend(tab, msg.createdAt);
 
     if (wasNearBottom) stickToBottom(tab);
@@ -4113,12 +4721,7 @@ function renderChatMessage(tab: ChatTab, msg: ChatMessage): void {
     // ends up visually short of the true bottom (PRD 14.1). Only re-stick
     // if the user was already at the bottom when this message arrived —
     // never yank someone reading older history.
-    if (msg.attachmentUrl) {
-        const img = el.querySelector<HTMLImageElement>(".msg-image");
-        img?.addEventListener("load", () => {
-            if (wasNearBottom) stickToBottom(tab);
-        });
-    }
+    stickOnImageLoad(el, tab, wasNearBottom);
 
     // Long-message truncation (Phase 12 sub-phase item 5) — must run after
     // appendChild, since scrollHeight/clientHeight need the element to
@@ -4197,6 +4800,11 @@ function prependOlderMessages(tab: ChatTab, messages: ChatMessage[] | DirectMess
         }
     }
 
+    // Group the whole prepended page in forward order, then keep cascading
+    // into the previously-first message: it may now continue the page's last
+    // message (or a former group head may now be a continuation) (PRD 16.6).
+    regroupFrom(tab.topSentinelEl.nextElementSibling);
+
     tab.oldestRenderedDateKey = entries[0].dayKey;
     tab.oldestLoadedTimestamp = messages[0].createdAt;
 }
@@ -4273,27 +4881,100 @@ chatInput.addEventListener("input", autosizeChatInput);
 
 async function sendChatMessage(): Promise<void> {
     const content = chatInput.value.trim();
-    if ((!content && !pendingAttachmentUrl) || activeTabId === "server-log") return;
+    if (activeTabId === "server-log") return;
+
+    // Never send while images are still uploading or have failed (PRD 16.10).
+    if (pendingAttachments.some((a) => a.status === "uploading")) {
+        showToast("Waiting for images to finish uploading…");
+        return;
+    }
+    if (pendingAttachments.some((a) => a.status === "failed")) {
+        showToast("Remove or retry the failed image first");
+        return;
+    }
+    if (!content && pendingAttachments.length === 0) return;
+    closeEmojiAutocomplete();
 
     chatInput.value = "";
     autosizeChatInput();
-    const attachmentUrl = pendingAttachmentUrl;
-    const attachmentPublicId = pendingAttachmentPublicId;
-    clearAttachmentPreview();
 
+    // Reply mode (PRD 16.11): the draft's target travels with the message and
+    // the bar clears at once, like the tray; a failed send puts it back.
+    const replyTabId = activeTabId;
+    const reply = replyTargets.get(replyTabId);
+    if (reply) {
+        replyTargets.delete(replyTabId);
+        syncReplyHighlight(replyTabId);
+        renderReplyBar();
+    }
+
+    // Clear the tray right away (as before) but keep the batch — and its
+    // local preview URLs — alive: they are only released once the send has
+    // actually succeeded, so a failed send can put the images back.
+    const batch = pendingAttachments;
+    pendingAttachments = [];
+    renderAttachmentTray();
+    const attachments = batch.map((a) => ({ uploadId: a.uploadId, url: a.url, publicId: a.publicId }) as UploadResult);
+
+    let result: { success: boolean; error?: string };
     if (activeTabId.startsWith("dm:")) {
         // DM tab — send direct message
         const recipientId = activeTabId.slice(3);
-        const result = await api.sendDirectMessage(recipientId, content, attachmentUrl ?? undefined, attachmentPublicId ?? undefined);
+        result = await api.sendDirectMessage(recipientId, content, attachments, reply?.messageId);
         if (!result.success) {
             log(`Failed to send DM: ${result.error ?? "Unknown error"}`, "error");
         }
     } else {
         // Channel tab — send channel message
         const channelId = activeTabId;
-        const result = await api.sendMessage(channelId, content, attachmentUrl ?? undefined, attachmentPublicId ?? undefined);
+        result = await api.sendMessage(channelId, content, attachments, reply?.messageId);
         if (!result.success) {
             log(`Failed to send message${result.error ? `: ${result.error}` : ""}`, "error");
+        }
+    }
+
+    if (result.success) {
+        for (const a of batch) URL.revokeObjectURL(a.objectUrl);
+    } else {
+        restoreFailedBatch(batch, result.error);
+        // Put the reply draft back too, unless the user already started another there.
+        if (reply && !replyTargets.has(replyTabId)) {
+            replyTargets.set(replyTabId, reply);
+            syncReplyHighlight(replyTabId);
+            if (activeTabId === replyTabId) renderReplyBar();
+        }
+    }
+}
+
+/**
+ * A send failed after its images were taken out of the tray (PRD 16.10).
+ * "No longer available" means the server could not claim one of the uploads
+ * (swept after 24h, or already used): that whole send was rolled back, so free
+ * the still-good uploads and put every card back as FAILED — Retry re-uploads
+ * the same file. Any other error leaves the uploads valid, so the cards come
+ * back ready to resend. If the user has already picked new images meanwhile,
+ * the old batch is dropped (and its uploads discarded) rather than merged.
+ */
+function restoreFailedBatch(batch: PendingAttachment[], error?: string): void {
+    if (batch.length === 0) return;
+
+    if (/no longer available/i.test(error ?? "")) {
+        for (const a of batch) {
+            discardUpload(a.uploadId);
+            a.uploadId = a.url = a.publicId = undefined;
+            a.status = "failed";
+            a.started = true;
+            a.error = "Upload expired — retry to upload it again";
+        }
+    }
+
+    if (pendingAttachments.length === 0) {
+        pendingAttachments = batch;
+        renderAttachmentTray();
+    } else {
+        for (const a of batch) {
+            URL.revokeObjectURL(a.objectUrl);
+            discardUpload(a.uploadId);
         }
     }
 }
@@ -4301,12 +4982,350 @@ async function sendChatMessage(): Promise<void> {
 btnSend.addEventListener("click", () => sendChatMessage());
 
 chatInput.addEventListener("keydown", (e) => {
+    // The emoji autocomplete gets first refusal: while its card is open,
+    // Enter/Tab select instead of sending (PRD 16.7).
+    if (handleEmojiAutocompleteKeydown(e)) return;
+
+    // Escape cancels reply mode (PRD 16.11). It only gets here when the
+    // emoji autocomplete did NOT consume it, so an open card closes first.
+    if (e.key === "Escape" && !e.isComposing && replyTargets.has(activeTabId)) {
+        e.preventDefault();
+        cancelReply(activeTabId);
+        return;
+    }
+
     // Enter sends, Shift+Enter inserts a newline; ignore the Enter that
     // confirms an IME composition.
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
         e.preventDefault();
         sendChatMessage();
     }
+});
+
+// ── Emoji Autocomplete (PRD 16.7) ───────────────────────────────────────────
+// Typing ":" + a letter opens a card above the colon listing matching emoji
+// (custom and Unicode). Enter/Tab/click select; Unicode emoji insert as the
+// character itself (only custom :name: text renders as an emoji), custom emoji
+// insert as `:name:`. Typing the closing ":" of a fully-known Unicode name
+// (":red_heart:") converts it in place.
+
+const EMOJI_AC_MAX_RESULTS = 10;
+// The colon must start the text or follow whitespace/an opening bracket or
+// quote, so "http://x", "10:30" and "a:b" never trigger. The first char after
+// it must be a letter.
+const EMOJI_AC_OPEN_RE = /(?:^|[\s([{"'])(:([a-zA-Z][a-zA-Z0-9_+-]{0,31}))$/;
+const EMOJI_AC_CLOSED_RE = /(?:^|[\s([{"'])(:([a-zA-Z][a-zA-Z0-9_+-]{1,31}):)$/;
+
+interface UnicodeEmojiIndexEntry {
+    emoji: string;
+    name: string; // snake_case, no colons
+    words: string[];
+    keywords: string[];
+}
+let unicodeEmojiIndex: UnicodeEmojiIndexEntry[] | null = null;
+let unicodeEmojiBySnake: Map<string, string> | null = null;
+
+/** Built once, lazily — the Unicode dataset never changes at runtime. */
+function getUnicodeEmojiIndex(): UnicodeEmojiIndexEntry[] {
+    if (!unicodeEmojiIndex) {
+        unicodeEmojiIndex = EMOJI_DATA.map((e) => {
+            const name = toEmojiSnakeName(e.name);
+            return { emoji: e.emoji, name, words: name.split("_"), keywords: e.keywords.map((k) => k.toLowerCase()) };
+        });
+        unicodeEmojiBySnake = new Map();
+        for (const e of unicodeEmojiIndex) {
+            if (!unicodeEmojiBySnake.has(e.name)) unicodeEmojiBySnake.set(e.name, e.emoji);
+        }
+    }
+    return unicodeEmojiIndex;
+}
+
+/**
+ * Ranked search: name prefix, then a name word's prefix, then a keyword
+ * prefix (how ":laug" finds 🤣 via its "laugh" keyword), then name substring.
+ * Ties: custom emoji first (server-specific, hard to discover otherwise),
+ * then shorter names. Custom list is read live — it can change at runtime.
+ */
+function searchEmojiForAutocomplete(rawQuery: string): EmojiAcItem[] {
+    const q = rawQuery.toLowerCase();
+    const scored: { item: EmojiAcItem; rank: number; custom: boolean; len: number }[] = [];
+
+    for (const ce of customEmojis) {
+        const name = ce.name.toLowerCase();
+        let rank = -1;
+        if (name.startsWith(q)) rank = 0;
+        else if (name.split("_").some((w) => w.startsWith(q))) rank = 1;
+        else if (name.includes(q)) rank = 3;
+        if (rank >= 0) {
+            scored.push({ item: { insert: `:${ce.name}:`, label: `:${ce.name}:`, imageUrl: ce.imageUrl }, rank, custom: true, len: name.length });
+        }
+    }
+
+    for (const e of getUnicodeEmojiIndex()) {
+        let rank = -1;
+        if (e.name.startsWith(q)) rank = 0;
+        else if (e.words.some((w) => w.startsWith(q))) rank = 1;
+        else if (e.keywords.some((k) => k.startsWith(q))) rank = 2;
+        else if (e.name.includes(q)) rank = 3;
+        if (rank >= 0) {
+            scored.push({ item: { insert: e.emoji, label: `:${e.name}:`, emoji: e.emoji }, rank, custom: false, len: e.name.length });
+        }
+    }
+
+    scored.sort((a, b) => a.rank - b.rank || Number(b.custom) - Number(a.custom) || a.len - b.len);
+    return scored.slice(0, EMOJI_AC_MAX_RESULTS).map((s) => s.item);
+}
+
+const EMOJI_AC_MIRROR_PROPS = [
+    "direction", "borderTopWidth", "borderRightWidth", "borderBottomWidth", "borderLeftWidth", "borderStyle",
+    "paddingTop", "paddingRight", "paddingBottom", "paddingLeft", "fontStyle", "fontVariant", "fontWeight",
+    "fontStretch", "fontSize", "fontSizeAdjust", "lineHeight", "fontFamily", "textAlign", "textTransform",
+    "textIndent", "letterSpacing", "wordSpacing", "tabSize",
+] as const;
+
+/**
+ * Viewport coordinates of the character at `index` inside a <textarea>, via
+ * the standard "mirror div" technique: an off-screen div with identical text
+ * metrics and wrapping, with a marker span at the index. A local helper
+ * rather than a dependency — the renderer has no bundler.
+ */
+function getTextareaCharCoords(ta: HTMLTextAreaElement, index: number): { left: number; top: number } {
+    const cs = getComputedStyle(ta);
+    const mirror = document.createElement("div");
+    const ms = mirror.style;
+    for (const prop of EMOJI_AC_MIRROR_PROPS) {
+        (ms as unknown as Record<string, string>)[prop] = cs[prop] as string;
+    }
+    ms.position = "absolute";
+    ms.visibility = "hidden";
+    ms.top = "0";
+    ms.left = "-9999px";
+    ms.overflow = "hidden";
+    ms.whiteSpace = "pre-wrap";
+    ms.wordWrap = "break-word";
+    ms.boxSizing = "border-box";
+    // clientWidth excludes a scrollbar (which narrows the textarea's text
+    // area) and the borders; add the borders back for border-box.
+    ms.width = `${ta.clientWidth + parseFloat(cs.borderLeftWidth) + parseFloat(cs.borderRightWidth)}px`;
+
+    mirror.textContent = ta.value.substring(0, index);
+    const marker = document.createElement("span");
+    marker.textContent = ta.value.substring(index) || ".";
+    mirror.appendChild(marker);
+    document.body.appendChild(mirror);
+
+    const left = marker.offsetLeft + parseFloat(cs.borderLeftWidth);
+    const top = marker.offsetTop + parseFloat(cs.borderTopWidth);
+    mirror.remove();
+
+    const rect = ta.getBoundingClientRect();
+    return { left: rect.left + left - ta.scrollLeft, top: rect.top + top - ta.scrollTop };
+}
+
+function renderEmojiAutocomplete(): void {
+    emojiAcHeader.textContent = `Emoji matching :${emojiAcQuery}`;
+    emojiAcList.textContent = "";
+    emojiAcItems.forEach((item, i) => {
+        const row = document.createElement("div");
+        row.className = "emoji-ac-item" + (i === emojiAcActive ? " active" : "");
+        row.id = `emoji-ac-item-${i}`;
+        row.setAttribute("role", "option");
+        row.setAttribute("aria-selected", String(i === emojiAcActive));
+
+        const glyph = document.createElement("span");
+        glyph.className = "emoji-ac-glyph";
+        if (item.imageUrl) {
+            const img = document.createElement("img");
+            img.src = item.imageUrl;
+            img.alt = item.label;
+            glyph.appendChild(img);
+        } else {
+            glyph.textContent = item.emoji ?? "";
+        }
+        const name = document.createElement("span");
+        name.className = "emoji-ac-name";
+        name.textContent = item.label;
+        row.append(glyph, name);
+
+        // mousedown must not steal focus from the textarea (it would blur +
+        // close the card before the click lands).
+        row.addEventListener("mousedown", (e) => e.preventDefault());
+        row.addEventListener("mouseenter", () => setEmojiAutocompleteActive(i, false));
+        row.addEventListener("click", () => selectEmojiAutocompleteItem(i));
+        emojiAcList.appendChild(row);
+    });
+    chatInput.setAttribute("aria-activedescendant", `emoji-ac-item-${emojiAcActive}`);
+}
+
+function setEmojiAutocompleteActive(index: number, scroll: boolean): void {
+    if (index === emojiAcActive) return;
+    emojiAcActive = index;
+    emojiAcList.querySelectorAll(".emoji-ac-item").forEach((el, i) => {
+        el.classList.toggle("active", i === index);
+        el.setAttribute("aria-selected", String(i === index));
+    });
+    chatInput.setAttribute("aria-activedescendant", `emoji-ac-item-${index}`);
+    if (scroll) emojiAcList.children[index]?.scrollIntoView({ block: "nearest" });
+}
+
+/** Opens the card above the colon, kept fully inside the window. */
+function positionEmojiAutocomplete(): void {
+    const colon = getTextareaCharCoords(chatInput, emojiAcColonIndex);
+    const margin = 8;
+
+    // It opens upward (the input sits at the bottom of the window); in a tiny
+    // window shrink the card rather than push it off the top.
+    const roomAbove = colon.top - 6 - margin;
+    emojiAutocompleteEl.style.maxHeight = `${Math.max(120, Math.min(320, roomAbove))}px`;
+
+    const width = emojiAutocompleteEl.offsetWidth;
+    const height = emojiAutocompleteEl.offsetHeight;
+    const left = Math.max(margin, Math.min(colon.left, window.innerWidth - width - margin));
+    const top = Math.max(margin, colon.top - 6 - height);
+    emojiAutocompleteEl.style.left = `${left}px`;
+    emojiAutocompleteEl.style.top = `${top}px`;
+}
+
+function closeEmojiAutocomplete(): void {
+    if (!emojiAcOpen) return;
+    emojiAcOpen = false;
+    emojiAcItems = [];
+    emojiAutocompleteEl.classList.remove("visible");
+    chatInput.setAttribute("aria-expanded", "false");
+    chatInput.removeAttribute("aria-activedescendant");
+}
+
+/** Re-evaluates the text before the caret: open, refresh or close the card. */
+function updateEmojiAutocomplete(): void {
+    if (chatInput.selectionStart !== chatInput.selectionEnd) {
+        closeEmojiAutocomplete();
+        return;
+    }
+    const caret = chatInput.selectionStart ?? chatInput.value.length;
+    const match = EMOJI_AC_OPEN_RE.exec(chatInput.value.slice(0, caret));
+    if (!match) {
+        closeEmojiAutocomplete();
+        return;
+    }
+
+    // Group 1 is ":query" (colon included), group 2 is just "query".
+    const query = match[2];
+    const items = searchEmojiForAutocomplete(query);
+    if (items.length === 0) {
+        closeEmojiAutocomplete();
+        return;
+    }
+
+    const colonIndex = caret - match[1].length;
+    const queryChanged = !emojiAcOpen || query !== emojiAcQuery || colonIndex !== emojiAcColonIndex;
+    emojiAcColonIndex = colonIndex;
+    emojiAcQuery = query;
+    emojiAcItems = items;
+    if (queryChanged) emojiAcActive = 0;
+
+    if (!emojiAcOpen) {
+        // Only one emoji surface at a time (the picker in reaction mode is a
+        // different flow, but it never coexists with typing anyway).
+        if (emojiPicker.classList.contains("visible")) closeEmojiPicker();
+        emojiAcOpen = true;
+        chatInput.setAttribute("aria-expanded", "true");
+        chatInput.setAttribute("aria-controls", "emoji-autocomplete");
+    }
+    renderEmojiAutocomplete();
+    emojiAutocompleteEl.classList.add("visible");
+    positionEmojiAutocomplete();
+}
+
+/** Replaces the typed ":query" with the chosen emoji (plus a trailing space). */
+function selectEmojiAutocompleteItem(index: number): void {
+    const item = emojiAcItems[index];
+    if (!item) return;
+    const caret = chatInput.selectionStart ?? chatInput.value.length;
+    const nextChar = chatInput.value.charAt(caret);
+    const suffix = nextChar === "" || !/\s/.test(nextChar) ? " " : "";
+    chatInput.setRangeText(item.insert + suffix, emojiAcColonIndex, caret, "end");
+    closeEmojiAutocomplete();
+    autosizeChatInput();
+    chatInput.focus();
+}
+
+/**
+ * Typing the closing ":" of a complete Unicode name (":red_heart:") swaps it
+ * for the emoji character in place. Custom names are left as typed — they
+ * already render from `:name:` text. Returns true when it converted.
+ */
+function convertClosedEmojiShortcode(): boolean {
+    const caret = chatInput.selectionStart ?? chatInput.value.length;
+    const match = EMOJI_AC_CLOSED_RE.exec(chatInput.value.slice(0, caret));
+    if (!match) return false;
+    getUnicodeEmojiIndex();
+    // Group 1 is ":name:" (both colons), group 2 is just "name".
+    const emoji = unicodeEmojiBySnake?.get(match[2].toLowerCase());
+    if (!emoji) return false;
+    chatInput.setRangeText(emoji, caret - match[1].length, caret, "end");
+    autosizeChatInput();
+    return true;
+}
+
+/** Returns true when the key was consumed by the open card. */
+function handleEmojiAutocompleteKeydown(e: KeyboardEvent): boolean {
+    if (!emojiAcOpen || e.isComposing) return false;
+    switch (e.key) {
+        case "ArrowDown":
+            e.preventDefault();
+            setEmojiAutocompleteActive((emojiAcActive + 1) % emojiAcItems.length, true);
+            return true;
+        case "ArrowUp":
+            e.preventDefault();
+            setEmojiAutocompleteActive((emojiAcActive - 1 + emojiAcItems.length) % emojiAcItems.length, true);
+            return true;
+        case "Enter":
+            if (e.shiftKey) {
+                closeEmojiAutocomplete(); // Shift+Enter: plain newline, handled by the browser
+                return false;
+            }
+            e.preventDefault(); // select — must NOT also send the message
+            selectEmojiAutocompleteItem(emojiAcActive);
+            return true;
+        case "Tab":
+            e.preventDefault();
+            selectEmojiAutocompleteItem(emojiAcActive);
+            return true;
+        case "Escape":
+            e.preventDefault();
+            e.stopPropagation(); // closes only the card (PRD 16.11's reply cancel must not also fire)
+            closeEmojiAutocomplete();
+            return true;
+        default:
+            return false;
+    }
+}
+
+chatInput.setAttribute("aria-autocomplete", "list");
+chatInput.setAttribute("aria-expanded", "false");
+// Grabbing the card's scrollbar (or its header) must not blur the textarea,
+// which would close the card mid-interaction.
+emojiAutocompleteEl.addEventListener("mousedown", (e) => e.preventDefault());
+
+chatInput.addEventListener("input", (e) => {
+    if ((e as InputEvent).isComposing) return; // wait for the IME to commit
+    if ((e as InputEvent).data === ":" && convertClosedEmojiShortcode()) {
+        closeEmojiAutocomplete();
+        return;
+    }
+    updateEmojiAutocomplete();
+});
+// Caret moves that don't fire "input": clicking, Home/End, and Left/Right
+// (Up/Down/Enter/Tab/Escape are consumed by the card itself while it's open).
+chatInput.addEventListener("click", updateEmojiAutocomplete);
+chatInput.addEventListener("keyup", (e) => {
+    if (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "Home" || e.key === "End") {
+        updateEmojiAutocomplete();
+    }
+});
+chatInput.addEventListener("blur", closeEmojiAutocomplete);
+window.addEventListener("resize", () => {
+    if (emojiAcOpen) positionEmojiAutocomplete();
 });
 
 // ── Server Log Tab Click ──────────────────────────────────────────────────
@@ -4322,7 +5341,7 @@ api.on("message", (msg: ChatMessage) => {
         renderChatMessage(tab, msg);
         // A live message is by definition the channel's true latest right
         // now — resolves any earlier "might be missing newer messages"
-        // state from a `jumpToPinnedMessage` window rebuild (PRD 14.3).
+        // state from a `jumpToMessage` window rebuild (PRD 14.3).
         tab.atTrueLatest = true;
     }
 
@@ -4338,6 +5357,7 @@ api.on("message", (msg: ChatMessage) => {
 function markChannelUnread(channelId: string): void {
     if (unreadChannelIds.has(channelId)) return;
     unreadChannelIds.add(channelId);
+    if (isChannelMuted(channelId)) return; // still tracked, just not painted (PRD 16.4)
 
     const el = channelTree.querySelector(`.tree-channel[data-channel-id="${CSS.escape(channelId)}"]`);
     if (!el || el.classList.contains("unread")) return;
@@ -4385,37 +5405,28 @@ function markChannelRead(channelId: string): void {
  *  never had long-message truncation (unlike channel messages) — preserved
  *  as-is here, not a gap introduced by this refactor. */
 function buildDmMessageElement(tab: ChatTab, msg: DirectMessage): HTMLDivElement {
-    const el = document.createElement("div");
-    el.className = "chat-msg";
-    el.setAttribute("data-msg-id", msg.id);
-    el.setAttribute("data-msg-type", "dm");
-    el.setAttribute("data-msg-owner", msg.senderId);
+    const el = buildMessageShell({
+        kind: "dm",
+        id: msg.id,
+        ownerId: msg.senderId,
+        nickname: msg.senderNickname,
+        createdAt: msg.createdAt,
+        content: msg.content,
+        replyTo: msg.replyTo,
+        tabId: tab.channelId,
+    });
+    if (replyTargets.get(tab.channelId)?.messageId === msg.id) el.classList.add("msg-reply-target");
 
-    const time = new Date(msg.createdAt).toLocaleTimeString();
-    let html = `<span class="msg-time">${time}</span><span class="msg-nick">${escapeHtml(msg.senderNickname)}</span>`;
-
-    if (msg.content) {
-        html += `<span class="msg-text"></span>`;
-    }
-
-    el.innerHTML = html;
-    if (msg.content) {
-        setMessageBody(el.querySelector(".msg-text") as HTMLElement, msg.content);
-    }
-
-    if (msg.attachmentUrl) {
-        const img = document.createElement("img");
-        img.src = msg.attachmentUrl;
-        img.className = "msg-image";
-        img.loading = "lazy";
-        img.alt = "Shared image";
-        img.addEventListener("click", () => openLightbox(msg.attachmentUrl!, { senderNickname: msg.senderNickname, sentAt: msg.createdAt }));
-        el.appendChild(img);
-    }
+    const attachmentsEl = buildAttachmentsElement(
+        getMessageAttachments(msg),
+        { senderNickname: msg.senderNickname, sentAt: msg.createdAt },
+        false, // DM images are never blurred
+    );
+    if (attachmentsEl) el.appendChild(attachmentsEl);
 
     // Reaction bar
-    const reactBar = buildReactionBar(msg.id, true, msg.senderId, msg.reactions);
-    el.appendChild(reactBar);
+    el.appendChild(buildReactionBar(msg.id, true, msg.reactions));
+    el.appendChild(buildMessageActions(msg.id, true, msg.senderId, msg.senderNickname, tab.channelId));
 
     return el;
 }
@@ -4426,16 +5437,12 @@ function renderDmMessage(tab: ChatTab, msg: DirectMessage): void {
     maybeInsertDateDivider(tab, new Date(msg.createdAt));
     const el = buildDmMessageElement(tab, msg);
     tab.bottomSentinelEl.insertAdjacentElement("beforebegin", el);
+    applyGrouping(el); // after insertion: needs the previous sibling (PRD 16.6)
     trackOldestOnFirstAppend(tab, msg.createdAt);
 
     if (wasNearBottom) stickToBottom(tab);
 
-    if (msg.attachmentUrl) {
-        const img = el.querySelector<HTMLImageElement>(".msg-image");
-        img?.addEventListener("load", () => {
-            if (wasNearBottom) stickToBottom(tab);
-        });
-    }
+    stickOnImageLoad(el, tab, wasNearBottom);
 
     // Async link preview injection
     if (msg.content) {
@@ -4702,6 +5709,9 @@ async function openSettingsPanel(): Promise<void> {
     // the live re-check below is still in flight — the client already knows
     // the answer and shouldn't need a round trip to render correctly.
     applySettingsTabVisibility();
+    // The NSFW modal can change this preference while Settings is closed.
+    chkNsfwWarn.checked = isNsfwWarningEnabled();
+    chkNsfwBlur.checked = isNsfwBlurEnabled();
     adminModal.classList.add("visible");
 
     // Populate audio devices
@@ -5216,130 +6226,273 @@ btnPttMode.addEventListener("click", () => {
     log("Voice input mode: Push-To-Talk", "info");
 });
 
-// ── Attachment / File Upload ──────────────────────────────────────────────
+// ── Attachments: picking, uploading, the tray (PRD 16.10) ───────────────────
+//
+// Images upload as soon as they are picked (up to MAX_CONCURRENT_UPLOADS at a
+// time), long before Send, and each one shows as a card in the tray ABOVE the
+// input bar — and stays there, with a preview, after its upload finishes. A
+// card can be opened full size (eye), removed (trash) or, if its upload failed,
+// retried. Removing an already-uploaded card discards the server's copy at
+// once (PRD 16.9).
+
+/** Mirrors `MAX_ATTACHMENTS_PER_MESSAGE` in shared-types (the renderer is a plain script and can't import it). */
+const MAX_ATTACHMENTS_PER_MESSAGE = 10;
+const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
+const MAX_CONCURRENT_UPLOADS = 3;
+let activeUploads = 0;
+let nextAttachmentId = 1;
+const attachmentCardEls = new Map<string, HTMLDivElement>();
 
 btnAttach.addEventListener("click", () => {
     fileInput.click();
 });
 
-fileInput.addEventListener("change", async () => {
-    const file = fileInput.files?.[0];
-    if (!file) return;
-    fileInput.value = ""; // reset for re-selection
-    await handleFileUpload(file);
+fileInput.addEventListener("change", () => {
+    const files = Array.from(fileInput.files ?? []);
+    fileInput.value = ""; // reset so picking the same file again still fires "change"
+    addFiles(files);
 });
 
-// Clipboard paste handler — detect pasted images
-chatInput.addEventListener("paste", async (e) => {
-    const items = e.clipboardData?.items;
-    if (!items) return;
-
-    for (const item of items) {
+// Clipboard paste — every pasted image becomes a card, not just the first
+chatInput.addEventListener("paste", (e) => {
+    const files: File[] = [];
+    for (const item of Array.from(e.clipboardData?.items ?? [])) {
         if (item.type.startsWith("image/")) {
-            e.preventDefault();
             const file = item.getAsFile();
-            if (file) {
-                await handleFileUpload(file);
-            }
-            return;
+            if (file) files.push(file);
         }
     }
+    if (files.length === 0) return;
+    e.preventDefault();
+    addFiles(files);
 });
 
-// Uploads happen up front (before Send is even clicked) — SEND_MESSAGE only
-// fires once an attachmentUrl already exists. So the "nothing shows until
-// upload finishes" gap this item fixes is entirely inside this function: the
-// moment a file is picked/pasted, show a local-blob thumbnail + spinner in
-// the attachment bar immediately (PRD 4.12), instead of only a text log line
-// while the network round-trip is in flight.
-let pendingAttachmentObjectUrl: string | null = null;
-
-function revokePendingAttachmentObjectUrl(): void {
-    if (pendingAttachmentObjectUrl) {
-        URL.revokeObjectURL(pendingAttachmentObjectUrl);
-        pendingAttachmentObjectUrl = null;
-    }
-}
-
-async function handleFileUpload(file: File): Promise<void> {
+/** Validates the picked files, adds a card for each acceptable one, and starts uploading. */
+function addFiles(files: File[]): void {
+    if (files.length === 0) return;
     if (!isConnected) {
         log("Not connected — cannot upload", "error");
         return;
     }
 
-    // Validate file type
-    if (!file.type.startsWith("image/")) {
-        log("Only image files are supported", "error");
-        return;
+    let overLimit = false;
+    for (const file of files) {
+        const name = escapeHtml(file.name);
+        if (!file.type.startsWith("image/")) {
+            showToast(`"${name}" isn't an image — only images can be attached`);
+            continue;
+        }
+        if (file.size > MAX_ATTACHMENT_BYTES) {
+            showToast(`"${name}" is too large (max 5 MB)`);
+            continue;
+        }
+        if (pendingAttachments.length >= MAX_ATTACHMENTS_PER_MESSAGE) {
+            overLimit = true;
+            continue;
+        }
+        pendingAttachments.push({
+            id: `att-${nextAttachmentId++}`,
+            file,
+            objectUrl: URL.createObjectURL(file),
+            status: "uploading",
+            started: false,
+        });
     }
+    if (overLimit) showToast(`You can attach up to ${MAX_ATTACHMENTS_PER_MESSAGE} images per message`);
 
-    // Validate size (5MB)
-    if (file.size > 5 * 1024 * 1024) {
-        log("Image too large (max 5MB)", "error");
-        return;
+    renderAttachmentTray();
+    pumpUploadQueue();
+}
+
+/** Starts queued uploads until MAX_CONCURRENT_UPLOADS are in flight. */
+function pumpUploadQueue(): void {
+    while (activeUploads < MAX_CONCURRENT_UPLOADS) {
+        const next = pendingAttachments.find((a) => a.status === "uploading" && !a.started);
+        if (!next) return;
+        next.started = true;
+        activeUploads++;
+        void runUpload(next).finally(() => {
+            activeUploads--;
+            pumpUploadQueue();
+        });
     }
+}
 
-    revokePendingAttachmentObjectUrl();
-    pendingAttachmentObjectUrl = URL.createObjectURL(file);
-    showAttachmentUploading(file.name, pendingAttachmentObjectUrl);
-
+async function runUpload(att: PendingAttachment): Promise<void> {
     try {
-        const buffer = await file.arrayBuffer();
-        const result = await api.uploadFile(buffer, file.name, file.type);
-        pendingAttachmentUrl = result.url;
-        pendingAttachmentPublicId = result.publicId ?? null;
-        revokePendingAttachmentObjectUrl();
-        showAttachmentPreview(file.name);
-        log(`Image ready to send: ${file.name}`, "success");
+        const buffer = await att.file.arrayBuffer();
+        const result = await api.uploadFile(buffer, att.file.name, att.file.type);
+        if (att.removed) {
+            // Removed while it was still uploading: throw the finished upload away (PRD 16.9).
+            discardUpload(result.uploadId);
+            return;
+        }
+        att.uploadId = result.uploadId;
+        att.url = result.url;
+        att.publicId = result.publicId;
+        att.status = "ready";
     } catch (err: any) {
-        log(`Upload failed: ${err.message}`, "error");
-        showAttachmentFailed(file.name, err.message, () => handleFileUpload(file));
+        if (att.removed) return;
+        att.status = "failed";
+        att.error = err?.message ?? "Upload failed";
+        log(`Upload failed: ${att.error}`, "error");
     }
+    renderAttachmentTray();
 }
 
-/** Instant local preview shown the moment a file is picked, before the upload round-trip even starts. */
-function showAttachmentUploading(fileName: string, previewObjectUrl: string): void {
-    attachmentPreview.classList.remove("attachment-failed");
-    attachmentPreview.innerHTML = `
-        <img class="attachment-thumb" src="${escapeHtml(previewObjectUrl)}" alt="">
-        <span class="attachment-name">📎 Uploading ${escapeHtml(fileName)}…</span>
-        <span class="attachment-spinner"></span>
-    `;
-    attachmentPreview.style.display = "flex";
+function removeAttachment(id: string): void {
+    const att = pendingAttachments.find((a) => a.id === id);
+    if (!att) return;
+    att.removed = true;
+    pendingAttachments = pendingAttachments.filter((a) => a !== att);
+    URL.revokeObjectURL(att.objectUrl);
+    discardUpload(att.uploadId); // already uploaded; an in-flight one is discarded when it resolves
+    renderAttachmentTray();
 }
 
-/** Ready-to-send state — unchanged from before this item, on purpose: only the uploading/failed states are new. */
-function showAttachmentPreview(fileName: string): void {
-    attachmentPreview.classList.remove("attachment-failed");
-    attachmentPreview.innerHTML = `
-        <span class="attachment-name">📎 ${escapeHtml(fileName)}</span>
-        <button class="attachment-remove" id="btn-remove-attachment">✕</button>
-    `;
-    attachmentPreview.style.display = "flex";
-    document.getElementById("btn-remove-attachment")?.addEventListener("click", clearAttachmentPreview);
+function retryAttachment(id: string): void {
+    const att = pendingAttachments.find((a) => a.id === id);
+    if (!att || att.status !== "failed") return;
+    att.status = "uploading";
+    att.started = false;
+    att.error = undefined;
+    renderAttachmentTray();
+    pumpUploadQueue();
 }
 
-/** Failure state — surfaces the error instead of silently discarding the attempt, with a one-click retry (re-reads the same File object). */
-function showAttachmentFailed(fileName: string, errorMessage: string, onRetry: () => void): void {
-    attachmentPreview.classList.add("attachment-failed");
-    attachmentPreview.innerHTML = `
-        <span class="attachment-name">⚠️ ${escapeHtml(fileName)} failed: ${escapeHtml(errorMessage)}</span>
-        <button class="attachment-retry" id="btn-retry-attachment">Retry</button>
-        <button class="attachment-remove" id="btn-remove-attachment">✕</button>
-    `;
-    attachmentPreview.style.display = "flex";
-    document.getElementById("btn-retry-attachment")?.addEventListener("click", onRetry);
-    document.getElementById("btn-remove-attachment")?.addEventListener("click", clearAttachmentPreview);
+const ATTACH_ICON_EYE = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>`;
+const ATTACH_ICON_TRASH = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>`;
+const ATTACH_ICON_RETRY = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>`;
+const ATTACH_ICON_WARN = `<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>`;
+
+/** One tray card, built once; `updateAttachmentCard` keeps it in sync afterwards. */
+function createAttachmentCard(att: PendingAttachment): HTMLDivElement {
+    const card = document.createElement("div");
+    card.className = "attach-card";
+    card.setAttribute("role", "listitem");
+
+    const actions = document.createElement("div");
+    actions.className = "attach-card-actions";
+    const mkBtn = (cls: string, label: string, icon: string, onClick: () => void): HTMLButtonElement => {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = cls;
+        b.innerHTML = icon;
+        b.title = label;
+        b.setAttribute("aria-label", label);
+        b.addEventListener("click", (e) => {
+            e.stopPropagation();
+            onClick();
+        });
+        return b;
+    };
+    // Preview opens the LOCAL file, so it works even while the upload is running.
+    actions.appendChild(mkBtn("attach-preview", "Preview image", ATTACH_ICON_EYE, () => openLightbox(att.objectUrl, { previewOnly: true })));
+    actions.appendChild(mkBtn("attach-retry", "Retry upload", ATTACH_ICON_RETRY, () => retryAttachment(att.id)));
+    actions.appendChild(mkBtn("attach-remove", "Remove image", ATTACH_ICON_TRASH, () => removeAttachment(att.id)));
+    card.appendChild(actions);
+
+    const thumb = document.createElement("div");
+    thumb.className = "attach-card-thumb";
+    const img = document.createElement("img");
+    img.src = att.objectUrl;
+    img.alt = "";
+    img.draggable = false;
+    thumb.appendChild(img);
+    const overlay = document.createElement("div");
+    overlay.className = "attach-card-overlay";
+    overlay.innerHTML = `<span class="attach-card-spinner"></span><span class="attach-card-warn">${ATTACH_ICON_WARN}</span>`;
+    thumb.appendChild(overlay);
+    card.appendChild(thumb);
+
+    const name = document.createElement("div");
+    name.className = "attach-card-name";
+    name.textContent = att.file.name;
+    name.title = att.file.name;
+    card.appendChild(name);
+
+    return card;
 }
 
-function clearAttachmentPreview(): void {
-    pendingAttachmentUrl = null;
-    pendingAttachmentPublicId = null;
-    revokePendingAttachmentObjectUrl();
-    attachmentPreview.classList.remove("attachment-failed");
-    attachmentPreview.style.display = "none";
-    attachmentPreview.innerHTML = "";
+function updateAttachmentCard(card: HTMLDivElement, att: PendingAttachment): void {
+    card.classList.toggle("uploading", att.status === "uploading");
+    card.classList.toggle("failed", att.status === "failed");
+    card.title = att.status === "failed" ? att.error ?? "Upload failed" : "";
+    const retry = card.querySelector<HTMLButtonElement>(".attach-retry");
+    if (retry) retry.hidden = att.status !== "failed";
 }
+
+/** Brings the tray's cards in line with `pendingAttachments` (add, update, remove, order). */
+function renderAttachmentTray(): void {
+    for (const [id, el] of attachmentCardEls) {
+        if (!pendingAttachments.some((a) => a.id === id)) {
+            el.remove();
+            attachmentCardEls.delete(id);
+        }
+    }
+    pendingAttachments.forEach((att, i) => {
+        let card = attachmentCardEls.get(att.id);
+        if (!card) {
+            card = createAttachmentCard(att);
+            attachmentCardEls.set(att.id, card);
+        }
+        updateAttachmentCard(card, att);
+        if (attachmentTray.children[i] !== card) attachmentTray.insertBefore(card, attachmentTray.children[i] ?? null);
+    });
+    attachmentTray.classList.toggle("has-items", pendingAttachments.length > 0);
+    // Send stays clickable (it explains itself with a toast) but looks disabled
+    // while any image is still uploading or has failed.
+    btnSend.classList.toggle("blocked", pendingAttachments.some((a) => a.status !== "ready"));
+}
+
+// ── Drag & drop images onto the chat (PRD 16.10) ────────────────────────────
+
+const dragHasFiles = (e: DragEvent): boolean => !!e.dataTransfer && Array.from(e.dataTransfer.types).includes("Files");
+const canDropImages = (): boolean => isConnected && activeTabId !== "server-log";
+let dragDepth = 0; // enter/leave counter: child elements fire their own leave events
+
+function resetDropZone(): void {
+    dragDepth = 0;
+    chatDropOverlay.classList.remove("visible");
+}
+
+// Always-on guard: Chromium's default for a dropped file is to NAVIGATE the
+// window to it, which would replace the whole app. Only drags that carry
+// files are touched — text/HTML drags, including the channel tree's own
+// reorder drag (text/plain), are left alone.
+document.addEventListener("dragover", (e) => {
+    if (dragHasFiles(e)) e.preventDefault();
+});
+document.addEventListener("drop", (e) => {
+    if (dragHasFiles(e)) e.preventDefault();
+    resetDropZone();
+});
+document.addEventListener("dragend", resetDropZone);
+window.addEventListener("blur", resetDropZone);
+
+rightPane.addEventListener("dragenter", (e) => {
+    if (!dragHasFiles(e)) return;
+    e.preventDefault();
+    dragDepth++;
+    if (canDropImages()) chatDropOverlay.classList.add("visible");
+});
+rightPane.addEventListener("dragover", (e) => {
+    if (!dragHasFiles(e)) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = canDropImages() ? "copy" : "none";
+});
+rightPane.addEventListener("dragleave", (e) => {
+    if (!dragHasFiles(e)) return;
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (dragDepth === 0) chatDropOverlay.classList.remove("visible");
+});
+rightPane.addEventListener("drop", (e) => {
+    if (!dragHasFiles(e)) return;
+    e.preventDefault();
+    const files = Array.from(e.dataTransfer?.files ?? []);
+    resetDropZone();
+    if (canDropImages()) addFiles(files);
+});
 
 // ── Lightbox (PRD 15.9) ────────────────────────────────────────────────
 //
@@ -5352,6 +6505,8 @@ function clearAttachmentPreview(): void {
 interface LightboxMeta {
     senderNickname?: string;
     sentAt?: string;
+    /** A preview of a picked, not-yet-sent image (PRD 16.10): zoom/pan/close only — no copy/link/open/download, no "sent by". */
+    previewOnly?: boolean;
 }
 
 const LIGHTBOX_MAX_SCALE = 2; // 200% of the image's natural pixel size
@@ -5474,6 +6629,7 @@ function openLightbox(imageUrl: string, meta?: LightboxMeta): void {
     lightbox.naturalW = 0;
     lightbox.naturalH = 0;
     lightboxImage.classList.remove("ready", "zoomed", "dragging");
+    imageLightboxModal.classList.toggle("preview-only", !!meta?.previewOnly);
 
     // "Sent by" pill — omitted entirely when a caller has no sender info.
     lightboxSender.textContent = "";
@@ -5516,7 +6672,7 @@ function openLightbox(imageUrl: string, meta?: LightboxMeta): void {
 }
 
 function closeLightbox(): void {
-    imageLightboxModal.classList.remove("visible");
+    imageLightboxModal.classList.remove("visible", "preview-only");
     lightboxImage.onload = null;
     lightboxImage.onerror = null;
     lightboxImage.src = "";
@@ -5716,12 +6872,18 @@ let reactionCardAnchor = { x: 0, y: 0 };
 /** Unicode emoji -> `:snake_case_name:`, built once from the picker's dataset
  *  (variation selectors stripped so "❤" and "❤️" resolve the same). */
 let emojiNameLookup: Map<string, string> | null = null;
+
+/** "face with tears of joy" -> "face_with_tears_of_joy" (shared by the reaction
+ *  card and the emoji autocomplete, so both name an emoji identically). */
+function toEmojiSnakeName(name: string): string {
+    return name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+}
+
 function emojiShortName(emoji: string): string | null {
     if (!emojiNameLookup) {
         emojiNameLookup = new Map();
         for (const entry of EMOJI_DATA) {
-            const snake = entry.name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
-            emojiNameLookup.set(entry.emoji.replace(/\uFE0F/g, ""), `:${snake}:`);
+            emojiNameLookup.set(entry.emoji.replace(/\uFE0F/g, ""), `:${toEmojiSnakeName(entry.name)}:`);
         }
     }
     return emojiNameLookup.get(emoji.replace(/\uFE0F/g, "")) ?? null;
@@ -5886,10 +7048,17 @@ document.addEventListener("keydown", (e) => {
 });
 window.addEventListener("blur", hideReactionCard);
 
+const REACT_ICON_SVG = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>`;
+
+/**
+ * The reaction strip: only the reaction pills (plus a trailing "add
+ * reaction" button once at least one exists). With no reactions it is
+ * hidden by CSS and takes no space — the actions themselves live in the
+ * floating toolbar from buildMessageActions() (PRD 16.5).
+ */
 function buildReactionBar(
     msgId: string,
     isDm: boolean,
-    ownerId: string,
     reactions?: ReactionSummary[],
 ): HTMLDivElement {
     // A bar being (re)built means any open hover card may now describe a
@@ -5903,6 +7072,7 @@ function buildReactionBar(
     const myId = api.getInstanceId();
 
     if (reactions && reactions.length > 0) {
+        bar.classList.add("has-reactions");
         for (const r of reactions) {
             const pill = document.createElement("button");
             pill.className = "reaction-pill" + (r.userIds.includes(myId) ? " mine" : "");
@@ -5916,38 +7086,106 @@ function buildReactionBar(
             });
             bar.appendChild(pill);
         }
-    }
 
-    // Add react button (small smiley icon)
-    const btnReact = document.createElement("button");
-    btnReact.className = "btn-react";
-    btnReact.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>`;
-    btnReact.title = "Add reaction";
-    btnReact.addEventListener("click", (e) => {
-        e.stopPropagation();
-        openReactionPicker(msgId, isDm, btnReact);
-    });
-    bar.appendChild(btnReact);
-
-    // Delete button — own messages only (PRD 4.10)
-    if (ownerId === myId) {
-        const btnDelete = document.createElement("button");
-        btnDelete.className = "btn-delete-msg";
-        btnDelete.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>`;
-        btnDelete.title = "Delete message";
-        btnDelete.addEventListener("click", (e) => {
+        // Quick "add another reaction" — the usual chat-app affordance once
+        // the strip is visible anyway.
+        const btnAdd = document.createElement("button");
+        btnAdd.className = "reaction-add-btn";
+        btnAdd.innerHTML = REACT_ICON_SVG;
+        btnAdd.title = "Add reaction";
+        btnAdd.setAttribute("aria-label", "Add reaction");
+        btnAdd.addEventListener("click", (e) => {
             e.stopPropagation();
-            showDeleteMessageModal(msgId, isDm);
+            openReactionPicker(msgId, isDm, btnAdd);
         });
-        bar.appendChild(btnDelete);
+        bar.appendChild(btnAdd);
     }
 
     return bar;
 }
 
+/**
+ * The floating hover toolbar (PRD 16.5), left to right: React, [Reply —
+ * PRD 16.11], Edit (own, in-window), Pin (channels), Delete (own). This
+ * builds React and Delete; attachEditButton()/attachPinButton() slot theirs
+ * in before Delete so the order is deterministic regardless of call order.
+ */
+function buildMessageActions(msgId: string, isDm: boolean, ownerId: string, authorNickname: string, tabId: string): HTMLDivElement {
+    const toolbar = document.createElement("div");
+    toolbar.className = "msg-actions";
+    toolbar.setAttribute("role", "toolbar");
+    toolbar.setAttribute("aria-label", "Message actions");
+
+    const btnReact = document.createElement("button");
+    btnReact.type = "button";
+    btnReact.className = "btn-react";
+    btnReact.innerHTML = REACT_ICON_SVG;
+    btnReact.title = "Add reaction";
+    btnReact.setAttribute("aria-label", "Add reaction");
+    btnReact.addEventListener("click", (e) => {
+        e.stopPropagation();
+        openReactionPicker(msgId, isDm, btnReact);
+    });
+    toolbar.appendChild(btnReact);
+
+    // Reply (PRD 16.11) — right after React; Edit/Pin slot in before Delete.
+    const btnReply = document.createElement("button");
+    btnReply.type = "button";
+    btnReply.className = "btn-reply-msg";
+    btnReply.innerHTML = REPLY_ICON_SVG;
+    btnReply.title = "Reply";
+    btnReply.setAttribute("aria-label", "Reply");
+    btnReply.addEventListener("click", (e) => {
+        e.stopPropagation();
+        startReply(tabId, msgId, authorNickname);
+    });
+    toolbar.appendChild(btnReply);
+
+    // Delete button — own messages only (PRD 4.10)
+    if (ownerId === api.getInstanceId()) {
+        const btnDelete = document.createElement("button");
+        btnDelete.type = "button";
+        btnDelete.className = "btn-delete-msg";
+        btnDelete.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>`;
+        btnDelete.title = "Delete message";
+        btnDelete.setAttribute("aria-label", "Delete message");
+        btnDelete.addEventListener("click", (e) => {
+            e.stopPropagation();
+            showDeleteMessageModal(msgId, isDm);
+        });
+        toolbar.appendChild(btnDelete);
+    }
+
+    return toolbar;
+}
+
+/** Inserts a toolbar button just before Delete (or at the end when there is none). */
+function insertToolbarButton(toolbar: HTMLDivElement, button: HTMLButtonElement): void {
+    toolbar.insertBefore(button, toolbar.querySelector(".btn-delete-msg"));
+}
+
+// A message at the very top of the scroll area would clip its toolbar (it
+// floats ~14px above the message), so tuck it inside for those rows instead.
+let toolbarHoverMsg: Element | null = null;
+document.addEventListener("mouseover", (e) => {
+    if (!(e.target instanceof Element)) return;
+    const msg = e.target.closest(".chat-msg");
+    if (!msg || msg === toolbarHoverMsg) return;
+    toolbarHoverMsg = msg;
+    const container = msg.parentElement;
+    if (!container) return;
+    const room = msg.getBoundingClientRect().top - container.getBoundingClientRect().top;
+    msg.classList.toggle("actions-inside", room < 18);
+});
+
 function openReactionPicker(msgId: string, isDm: boolean, anchor: HTMLElement): void {
     reactionTargetMsgId = msgId;
     reactionTargetIsDm = isDm;
+
+    // Keep this message's toolbar showing while its picker is open, so it
+    // doesn't vanish as the pointer moves into the picker (PRD 16.5).
+    document.querySelectorAll(".chat-msg.actions-open").forEach((m) => m.classList.remove("actions-open"));
+    anchor.closest(".chat-msg")?.classList.add("actions-open");
 
     // Position the emoji picker near the anchor button
     const rect = anchor.getBoundingClientRect();
@@ -5957,6 +7195,10 @@ function openReactionPicker(msgId: string, isDm: boolean, anchor: HTMLElement): 
     emojiPicker.style.top = `${Math.max(4, rect.top - 390)}px`;
 
     emojiPicker.classList.add("visible");
+    // The toolbar sits at the message's right edge, so the picker's left edge
+    // can land past the window — pull it back inside once its width is known.
+    const maxLeft = window.innerWidth - emojiPicker.offsetWidth - 8;
+    emojiPicker.style.left = `${Math.max(8, Math.min(rect.left, maxLeft))}px`;
     emojiSearch.value = "";
     renderEmojiGrid();
     buildEmojiCategoryTabs();
@@ -5973,11 +7215,9 @@ function updateReactionBar(
     for (const bar of bars) {
         const parent = bar.parentElement;
         if (!parent) continue;
-        // Rebuild the bar — ownerId is read back from the message element's
-        // own data-msg-owner attribute (set at render time) since
-        // REACTION_UPDATED doesn't carry it.
-        const ownerId = parent.getAttribute("data-msg-owner") ?? "";
-        const newBar = buildReactionBar(msgId, isDm, ownerId, reactions);
+        // The bar holds only reactions now (owner-only buttons moved to the
+        // toolbar, which isn't rebuilt), so no owner lookup is needed.
+        const newBar = buildReactionBar(msgId, isDm, reactions);
         parent.replaceChild(newBar, bar);
     }
 }
@@ -5994,9 +7234,9 @@ api.on("reaction-updated", (data: { messageId: string; isDm: boolean; reactions:
 // round-trip failure.
 const EDIT_WINDOW_MS = 2 * 60 * 1000;
 
-function attachEditButton(bar: HTMLDivElement, msg: ChatMessage, el: HTMLDivElement): void {
+function attachEditButton(toolbar: HTMLDivElement, msg: ChatMessage, el: HTMLDivElement): void {
     const myId = api.getInstanceId();
-    if (msg.userId !== myId || msg.attachmentUrl) return;
+    if (msg.userId !== myId || msg.attachmentUrl || (msg.attachments?.length ?? 0) > 0) return;
 
     // Previously always rendered the button and only checked the window on
     // click, surfacing the server's own rejection as an error log — the
@@ -6019,7 +7259,9 @@ function attachEditButton(bar: HTMLDivElement, msg: ChatMessage, el: HTMLDivElem
         }
         startMessageEdit(el, msg);
     });
-    bar.appendChild(btnEdit);
+    btnEdit.type = "button";
+    btnEdit.setAttribute("aria-label", "Edit message");
+    insertToolbarButton(toolbar, btnEdit);
 
     // A message rendered well inside its edit window can still go stale
     // while the channel stays open (e.g. rendered at 30s old, the channel
@@ -6040,7 +7282,7 @@ const PIN_ICON_SVG = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none
 
 let pendingPinReplaceAction: (() => void) | null = null;
 
-function attachPinButton(bar: HTMLDivElement, msg: ChatMessage, tab: ChatTab): void {
+function attachPinButton(toolbar: HTMLDivElement, msg: ChatMessage, tab: ChatTab): void {
     const btnPin = document.createElement("button");
     btnPin.className = "btn-pin-msg";
     btnPin.innerHTML = PIN_ICON_SVG;
@@ -6076,7 +7318,9 @@ function attachPinButton(bar: HTMLDivElement, msg: ChatMessage, tab: ChatTab): v
         }
     });
 
-    bar.appendChild(btnPin);
+    btnPin.type = "button";
+    btnPin.setAttribute("aria-label", btnPin.title);
+    insertToolbarButton(toolbar, btnPin);
 }
 
 /** Updates a tab's pin bar + the affected message pin buttons' active state. */
@@ -6086,11 +7330,15 @@ function updatePinBarUI(tab: ChatTab, pinnedMessage: PinnedMessage | null): void
 
     for (const id of new Set([oldPinnedId, tab.pinnedMessageId])) {
         if (!id) continue;
-        const btn = tab.messagesEl.querySelector(`[data-msg-id="${id}"] .btn-pin-msg`);
+        const msgEl = tab.messagesEl.querySelector(`.chat-msg[data-msg-id="${id}"]`);
+        if (!msgEl) continue;
+        const active = id === tab.pinnedMessageId;
+        msgEl.classList.toggle("is-pinned", active);
+        const btn = msgEl.querySelector(".btn-pin-msg");
         if (btn) {
-            const active = id === tab.pinnedMessageId;
             btn.classList.toggle("active", active);
             btn.setAttribute("title", active ? "Unpin message" : "Pin message");
+            btn.setAttribute("aria-label", active ? "Unpin message" : "Pin message");
         }
     }
 
@@ -6109,18 +7357,26 @@ function updatePinBarUI(tab: ChatTab, pinnedMessage: PinnedMessage | null): void
     }
 }
 
-/** Scrolls to and briefly highlights a pinned message, fetching a window
- *  around it first if it isn't within the currently-loaded page. */
-async function jumpToPinnedMessage(channelId: string, messageId: string): Promise<void> {
-    const tab = chatTabs.get(channelId);
+/**
+ * Scrolls to and briefly highlights a message in a tab, fetching a window
+ * around it first if it isn't within the currently-loaded page. Serves the
+ * pinned-message bar (PRD 11.5) and reply snippets (PRD 16.11), in channels
+ * AND DMs.
+ */
+async function jumpToMessage(tabId: string, messageId: string): Promise<void> {
+    const tab = chatTabs.get(tabId);
     if (!tab) return;
+    const isDm = tabId.startsWith("dm:");
+    const selector = `.chat-msg[data-msg-id="${CSS.escape(messageId)}"]`;
 
-    let el = tab.messagesEl.querySelector(`[data-msg-id="${messageId}"]`) as HTMLDivElement | null;
+    let el = tab.messagesEl.querySelector(selector) as HTMLDivElement | null;
 
     if (!el) {
-        const result = await api.fetchMessages(channelId, undefined, 50, messageId);
+        const result = isDm
+            ? await api.fetchDirectMessages(tabId.slice(3), undefined, 50, messageId)
+            : await api.fetchMessages(tabId, undefined, 50, messageId);
         if (!result.success || !result.messages) {
-            log("Couldn't load the pinned message", "error");
+            log("Couldn't load that message — it may have been deleted", "error");
             return;
         }
         tab.messagesEl.innerHTML = "";
@@ -6141,11 +7397,13 @@ async function jumpToPinnedMessage(channelId: string, messageId: string): Promis
         tab.hasMoreOlder = true;
         tab.loadingOlder = false;
 
-        for (const msg of result.messages) {
-            renderChatMessage(tab, msg);
+        if (isDm) {
+            for (const msg of result.messages as DirectMessage[]) renderDmMessage(tab, msg);
+        } else {
+            for (const msg of result.messages as ChatMessage[]) renderChatMessage(tab, msg);
         }
         tab.atTrueLatest = false;
-        el = tab.messagesEl.querySelector(`[data-msg-id="${messageId}"]`) as HTMLDivElement | null;
+        el = tab.messagesEl.querySelector(selector) as HTMLDivElement | null;
     }
 
     if (el) {
@@ -6461,9 +7719,7 @@ function startMessageEdit(el: HTMLDivElement, msg: ChatMessage): void {
         newTextEl.className = "msg-text";
         setMessageBody(newTextEl, newContent);
         input.replaceWith(newTextEl);
-        if (!el.querySelector(".msg-edited")) {
-            el.querySelector(".msg-time")?.insertAdjacentHTML("afterend", `<span class="msg-edited">(edited)</span>`);
-        }
+        ensureEditedLabel(el);
         // Re-evaluate truncation against the new content — an edit can
         // just as easily make a short message long as vice versa. Drop
         // any stale "See more" button from before the edit first, since
@@ -6499,10 +7755,10 @@ function applyMessageEdit(msg: ChatMessage): void {
             el.querySelector(".btn-see-more")?.remove();
             attachMessageTruncation(el as HTMLDivElement, textEl);
         }
-        if (!el.querySelector(".msg-edited")) {
-            el.querySelector(".msg-time")?.insertAdjacentHTML("afterend", `<span class="msg-edited">(edited)</span>`);
-        }
+        ensureEditedLabel(el);
     });
+    // Replies to this message show its new text, as they would after a reload (PRD 16.11).
+    refreshReplySnippets(msg.id, msg.content);
 }
 
 api.on("message-edited", (msg: ChatMessage) => {
@@ -6570,6 +7826,7 @@ function closeEmojiPicker(): void {
     btnEmoji.classList.remove("active");
     // Reset reaction mode
     reactionTargetMsgId = null;
+    document.querySelectorAll(".chat-msg.actions-open").forEach((m) => m.classList.remove("actions-open"));
     // Reset positioning to default (for chat input picker)
     emojiPicker.style.position = "";
     emojiPicker.style.bottom = "";
@@ -6578,6 +7835,7 @@ function closeEmojiPicker(): void {
 }
 
 function openEmojiPicker(): void {
+    closeEmojiAutocomplete();
     emojiPicker.classList.add("visible");
     btnEmoji.classList.add("active");
     emojiSearch.value = "";
@@ -6936,13 +8194,21 @@ btnEmojiUploadConfirm.addEventListener("click", async () => {
 
         const buffer = await blob.arrayBuffer();
         const uploadResult = await api.uploadEmojiFile(buffer, `${name}.png`, "image/png");
-        const createResult = await api.createCustomEmoji(name, uploadResult.url, uploadResult.publicId);
-
-        if (createResult.success) {
-            log(`Emoji ":${name}:" submitted for admin approval`, "success");
-            closeEmojiUploadModal();
-        } else {
-            log(`Failed to submit emoji: ${createResult.error}`, "error");
+        // The file is uploaded before the emoji is submitted, so if the
+        // submit fails (name taken, connection lost…) it must be discarded
+        // rather than left behind (PRD 16.9).
+        let submitted = false;
+        try {
+            const createResult = await api.createCustomEmoji(name, uploadResult);
+            submitted = createResult.success;
+            if (createResult.success) {
+                log(`Emoji ":${name}:" submitted for admin approval`, "success");
+                closeEmojiUploadModal();
+            } else {
+                log(`Failed to submit emoji: ${createResult.error}`, "error");
+            }
+        } finally {
+            if (!submitted) discardUpload(uploadResult.uploadId);
         }
     } catch (err: any) {
         log(`Emoji upload failed: ${err.message}`, "error");
@@ -7012,13 +8278,18 @@ btnEmojiAnimatedUploadConfirm.addEventListener("click", async () => {
     try {
         const buffer = await emojiAnimatedFile.arrayBuffer();
         const uploadResult = await api.uploadAnimatedEmojiFile(buffer, `${name}.gif`, "image/gif");
-        const createResult = await api.createCustomEmoji(name, uploadResult.url, uploadResult.publicId, true);
-
-        if (createResult.success) {
-            log(`Animated emoji ":${name}:" submitted for admin approval`, "success");
-            closeAnimatedEmojiUploadModal();
-        } else {
-            log(`Failed to submit emoji: ${createResult.error}`, "error");
+        let submitted = false; // discard the uploaded file if the submit fails (PRD 16.9)
+        try {
+            const createResult = await api.createCustomEmoji(name, uploadResult, true);
+            submitted = createResult.success;
+            if (createResult.success) {
+                log(`Animated emoji ":${name}:" submitted for admin approval`, "success");
+                closeAnimatedEmojiUploadModal();
+            } else {
+                log(`Failed to submit emoji: ${createResult.error}`, "error");
+            }
+        } finally {
+            if (!submitted) discardUpload(uploadResult.uploadId);
         }
     } catch (err: any) {
         log(`Emoji upload failed: ${err.message}`, "error");
@@ -7243,17 +8514,25 @@ btnChannelIconUploadConfirm.addEventListener("click", async () => {
 
         const buffer = await blob.arrayBuffer();
         const uploadResult = await api.uploadChannelIcon(buffer, "channel-icon.png", "image/png");
-        const updateResult = await api.updateChannel(channelId, {
-            iconUrl: uploadResult.url,
-            iconPublicId: uploadResult.publicId ?? null,
-        });
+        let applied = false; // discard the uploaded file if the update fails (PRD 16.9)
+        try {
+            const updateResult = await api.updateChannel(channelId, {
+                iconUploadId: uploadResult.uploadId,
+                // Legacy fields, for a pre-v2.5.0 server; a v2.5.0+ server uses the id.
+                iconUrl: uploadResult.url,
+                iconPublicId: uploadResult.publicId ?? null,
+            });
+            applied = updateResult.success;
 
-        if (updateResult.success) {
-            log("Channel icon updated", "success");
-            closeChannelIconModal();
-        } else {
-            log(`Failed to update channel icon: ${updateResult.error}`, "error");
-            if (updateResult.error && /permission|denied/i.test(updateResult.error)) SoundAlert.play("insufficient_perms.mp3");
+            if (updateResult.success) {
+                log("Channel icon updated", "success");
+                closeChannelIconModal();
+            } else {
+                log(`Failed to update channel icon: ${updateResult.error}`, "error");
+                if (updateResult.error && /permission|denied/i.test(updateResult.error)) SoundAlert.play("insufficient_perms.mp3");
+            }
+        } finally {
+            if (!applied) discardUpload(uploadResult.uploadId);
         }
     } catch (err: any) {
         log(`Channel icon upload failed: ${err.message}`, "error");
@@ -7332,6 +8611,21 @@ chkMuteAlerts.checked = soundAlertsMuted;
 chkMuteAlerts.addEventListener("change", () => {
     soundAlertsMuted = chkMuteAlerts.checked;
     localStorage.setItem("reson8-mute-alerts", String(soundAlertsMuted));
+});
+
+// ── Content Preferences (PRD 16.1) ────────────────────────────────────────
+
+chkNsfwWarn.checked = isNsfwWarningEnabled();
+
+chkNsfwWarn.addEventListener("change", () => {
+    setNsfwWarningEnabled(chkNsfwWarn.checked);
+});
+
+chkNsfwBlur.checked = isNsfwBlurEnabled();
+applyNsfwBlurPreference();
+
+chkNsfwBlur.addEventListener("change", () => {
+    setNsfwBlurEnabled(chkNsfwBlur.checked);
 });
 
 // ── Audio Tab Volume Sliders (PRD 10.2) ────────────────────────────────────

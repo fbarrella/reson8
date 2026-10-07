@@ -531,6 +531,15 @@ function createWindow(): void {
         return { action: "deny" };
     });
 
+    // The main window must never navigate away from the app's own page
+    // (PRD 16.10) — a dropped file or a stray link would otherwise replace the
+    // whole UI with the file/page. This is defense in depth: the renderer also
+    // swallows file drops, and legitimate external links already go through
+    // setWindowOpenHandler above. (Not emitted for reloads or loadFile().)
+    mainWindow.webContents.on("will-navigate", (event, url) => {
+        if (url !== mainWindow?.webContents.getURL()) event.preventDefault();
+    });
+
     // ── Right-click context menu ─────────────────────────────────────────
     mainWindow.webContents.on("context-menu", (_event, params) => {
         const menu = Menu.buildFromTemplate([

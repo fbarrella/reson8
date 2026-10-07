@@ -98,6 +98,14 @@ export interface ClientToServerEvents {
             iconEmoji?: string | null;
             iconUrl?: string | null;
             iconPublicId?: string | null;
+            /**
+             * Ledger id returned by `/api/upload/channel-icon` (PRD 16.8).
+             * Preferred over `iconUrl`/`iconPublicId`, which are legacy
+             * (pre-v2.5.0 clients): the server claims the upload by id and
+             * takes the file's real URL/public_id from its own record,
+             * ignoring `iconPublicId` entirely.
+             */
+            iconUploadId?: string;
         },
         ack: (response: { success: boolean; error?: string }) => void,
     ) => void;
@@ -110,7 +118,23 @@ export interface ClientToServerEvents {
 
     /** Client sends a text message to their current channel. */
     SEND_MESSAGE: (
-        payload: { channelId: string; content: string; attachmentUrl?: string; attachmentPublicId?: string },
+        payload: {
+            channelId: string;
+            content: string;
+            /** Ledger ids from `/api/upload`, up to `MAX_ATTACHMENTS_PER_MESSAGE` (PRD 16.8/16.10), in display order. Preferred over the legacy fields below. */
+            attachmentIds?: string[];
+            /** @deprecated Legacy (pre-v2.5.0) — claimed by URL when `attachmentIds` is absent. One image only. */
+            attachmentUrl?: string;
+            /** @deprecated Ignored by v2.5.0+ servers: the public_id comes from the server's own upload record. */
+            attachmentPublicId?: string;
+            /**
+             * Makes this message a reply to another message in the SAME channel
+             * (PRD 16.11). A target in a different channel is rejected; one that
+             * no longer exists is accepted and renders as "Original message was
+             * deleted".
+             */
+            replyToId?: string;
+        },
         ack: (response: { success: boolean; messageId?: string; error?: string }) => void,
     ) => void;
 
@@ -150,13 +174,32 @@ export interface ClientToServerEvents {
 
     /** Client sends a direct message to another user. */
     SEND_DIRECT_MESSAGE: (
-        payload: { recipientId: string; content: string; attachmentUrl?: string; attachmentPublicId?: string },
+        payload: {
+            recipientId: string;
+            content: string;
+            /** Ledger ids from `/api/upload`, up to `MAX_ATTACHMENTS_PER_MESSAGE` (PRD 16.8/16.10), in display order. Preferred over the legacy fields below. */
+            attachmentIds?: string[];
+            /** @deprecated Legacy (pre-v2.5.0) — claimed by URL when `attachmentIds` is absent. One image only. */
+            attachmentUrl?: string;
+            /** @deprecated Ignored by v2.5.0+ servers: the public_id comes from the server's own upload record. */
+            attachmentPublicId?: string;
+            /**
+             * Makes this DM a reply (PRD 16.11). A target that exists but belongs
+             * to a different conversation is rejected; a deleted one is accepted.
+             */
+            replyToId?: string;
+        },
         ack: (response: { success: boolean; messageId?: string; error?: string }) => void,
     ) => void;
 
-    /** Client requests paginated DM history with another user. */
+    /**
+     * Client requests paginated DM history with another user. `aroundMessageId`
+     * fetches a window centred on that DM instead (PRD 16.11) — used to jump to
+     * a replied-to message outside the loaded page, the DM counterpart of
+     * FETCH_MESSAGES' `aroundMessageId`.
+     */
     FETCH_DIRECT_MESSAGES: (
-        payload: { partnerId: string; before?: string; limit?: number },
+        payload: { partnerId: string; before?: string; limit?: number; aroundMessageId?: string },
         ack: (response: { success: boolean; messages?: IDirectMessage[]; error?: string }) => void,
     ) => void;
 
@@ -329,7 +372,16 @@ export interface ClientToServerEvents {
     /** Submits an uploaded emoji image for admin review — already-cropped
      *  for a static emoji, or a raw GIF buffer when `isAnimated` (PRD 13.13). */
     CREATE_CUSTOM_EMOJI: (
-        payload: { name: string; imageUrl: string; imagePublicId?: string; isAnimated?: boolean },
+        payload: {
+            name: string;
+            /** Ledger id from `/api/upload/emoji[-animated]` (PRD 16.8). Preferred over the legacy fields below. */
+            imageUploadId?: string;
+            /** @deprecated Legacy (pre-v2.5.0) — claimed by URL when `imageUploadId` is absent. */
+            imageUrl?: string;
+            /** @deprecated Ignored by v2.5.0+ servers: the public_id comes from the server's own upload record. */
+            imagePublicId?: string;
+            isAnimated?: boolean;
+        },
         ack: (response: { success: boolean; emojiId?: string; error?: string }) => void,
     ) => void;
 
@@ -390,6 +442,33 @@ export interface ClientToServerEvents {
     // ── Screen Share Viewing (PRD 12.13) ──────────────────────────────────
     // Emitted only by a Viewer window's own second ("viewer"-role) socket —
     // see `SocketData.role`'s doc comment for the full dual-socket design.
+
+    /**
+     * Issues a short-lived bearer token (PRD 16.8) for the HTTP upload
+     * routes. The socket is the only place the server knows who a client is,
+     * so this is how an upload gets attributed to a user: the token maps to
+     * the requesting `userId` server-side (Redis, hashed, ~10 minutes), and
+     * each upload it authorizes is recorded as owned by that user — only
+     * the owner can later attach it to a message, emoji or channel icon.
+     * One token covers any number of uploads until it expires. Refused for
+     * viewer sockets and before joining a server.
+     */
+    REQUEST_UPLOAD_TOKEN: (
+        ack: (response: { success: boolean; token?: string; expiresInSec?: number; error?: string }) => void,
+    ) => void;
+
+    /**
+     * Throws away an upload the user no longer wants before it was ever
+     * attached to anything (PRD 16.9) — e.g. they removed a picked image from
+     * the composer, or cancelled an emoji/icon flow after the file uploaded.
+     * Only the uploader's own UNCLAIMED uploads can be discarded; anything
+     * already in use, or owned by someone else, is refused. Best effort: a
+     * missed discard is caught by the server's hourly unclaimed-upload sweep.
+     */
+    DISCARD_UPLOAD: (
+        payload: { uploadId: string },
+        ack: (response: { success: boolean; error?: string }) => void,
+    ) => void;
 
     /**
      * Resolves this viewer socket's `userId` from the same persisted

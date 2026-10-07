@@ -60,24 +60,123 @@ let clockOffsetMs: number = 0;
 let lastVoiceChannelId: string | null = null;
 let voiceRejoinInFlight = false;
 
+/** What the renderer holds for a finished upload (PRD 16.8). `uploadId` is the server's ledger id. */
+interface UploadedAttachment {
+    uploadId?: string;
+    url?: string;
+    publicId?: string;
+}
+
+/**
+ * Outbound attachment fields: the ledger ids a v2.5.0+ server claims (all of
+ * them, in display order — PRD 16.10), plus the FIRST image's legacy
+ * URL/public_id so a pre-v2.5.0 server (which ignores the ids, and only ever
+ * supported one image) still gets an attachment. A v2.5.0+ server ignores the
+ * legacy fields whenever ids are present.
+ */
+function attachmentPayload(list?: UploadedAttachment[]): {
+    attachmentIds?: string[];
+    attachmentUrl?: string;
+    attachmentPublicId?: string;
+} {
+    if (!list || list.length === 0) return {};
+    const ids = list.map((a) => a.uploadId).filter((id): id is string => !!id);
+    return {
+        attachmentIds: ids.length > 0 ? ids : undefined,
+        attachmentUrl: list[0].url,
+        attachmentPublicId: list[0].publicId,
+    };
+}
+
+// ── Upload authorization (PRD 16.8) ───────────────────────────────────────
+// The HTTP upload routes don't know who is calling; the socket does. A short-
+// lived bearer token minted over the socket attributes each upload to this
+// user server-side, so only this user can later attach it to a message, emoji
+// or channel icon. Cached until a minute before it expires.
+
+let uploadToken: { token: string; expiresAt: number } | null = null;
+
+/** Returns a valid upload token, or null when the server doesn't issue one (an older server, or not joined). */
+async function getUploadToken(forceRefresh = false): Promise<string | null> {
+    if (!forceRefresh && uploadToken && uploadToken.expiresAt - Date.now() > 60_000) {
+        return uploadToken.token;
+    }
+    uploadToken = null;
+    const s = socket;
+    if (!s?.connected) return null;
+
+    // A timeout, because a pre-v2.5.0 server doesn't know this event and
+    // would never call the ack back.
+    return new Promise((resolve) => {
+        s.timeout(5000).emit("REQUEST_UPLOAD_TOKEN", (err, res) => {
+            if (err || !res?.success || !res.token) {
+                resolve(null);
+                return;
+            }
+            uploadToken = { token: res.token, expiresAt: Date.now() + (res.expiresInSec ?? 600) * 1000 };
+            resolve(res.token);
+        });
+    });
+}
+
+/**
+ * Turns a server-relative media path ("/uploads/x.png") into an absolute URL
+ * on the server this client is connected to. The server stores local-disk
+ * files by their host-independent path (PRD 16.8), so every inbound payload
+ * that carries a file URL passes through here. Absolute URLs (Cloudinary,
+ * or rows stored before v2.5.0) are returned unchanged.
+ */
+function resolveMediaUrl<T extends string | null | undefined>(url: T): T {
+    if (typeof url === "string" && url.startsWith("/") && !url.startsWith("//") && serverBaseUrl) {
+        return `${serverBaseUrl}${url}` as T;
+    }
+    return url;
+}
+
+function resolveMessageMedia<T extends { attachmentUrl?: string | null; attachments?: { url: string }[] }>(msg: T): T {
+    if (msg?.attachmentUrl) msg.attachmentUrl = resolveMediaUrl(msg.attachmentUrl);
+    for (const a of msg?.attachments ?? []) a.url = resolveMediaUrl(a.url);
+    return msg;
+}
+
+function resolveEmojiMedia<T extends { imageUrl: string }>(emoji: T): T {
+    if (emoji?.imageUrl) emoji.imageUrl = resolveMediaUrl(emoji.imageUrl);
+    return emoji;
+}
+
+function resolveTreeMedia(nodes: Array<{ iconUrl?: string | null; children?: any[] }> | undefined): void {
+    for (const node of nodes ?? []) {
+        if (node.iconUrl) node.iconUrl = resolveMediaUrl(node.iconUrl);
+        if (node.children?.length) resolveTreeMedia(node.children);
+    }
+}
+
 async function uploadTo(
     endpoint: string,
     fileBuffer: ArrayBuffer,
     fileName: string,
     mimeType: string,
-): Promise<{ url: string; publicId?: string }> {
+): Promise<{ url: string; publicId?: string; uploadId?: string }> {
     if (!serverBaseUrl) {
         throw new Error("Not connected to a server");
     }
 
-    const formData = new FormData();
-    const blob = new Blob([fileBuffer], { type: mimeType });
-    formData.append("file", blob, fileName);
+    const send = (token: string | null): Promise<Response> => {
+        const formData = new FormData();
+        formData.append("file", new Blob([fileBuffer], { type: mimeType }), fileName);
+        return fetch(`${serverBaseUrl}${endpoint}`, {
+            method: "POST",
+            body: formData,
+            headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        });
+    };
 
-    const response = await fetch(`${serverBaseUrl}${endpoint}`, {
-        method: "POST",
-        body: formData,
-    });
+    let response = await send(await getUploadToken());
+    if (response.status === 401) {
+        // Token expired or was rejected — mint a fresh one and retry once.
+        const fresh = await getUploadToken(true);
+        if (fresh) response = await send(fresh);
+    }
 
     if (!response.ok) {
         const errBody = await response.json().catch(() => ({ error: "Upload failed" }));
@@ -295,6 +394,7 @@ const api = {
 
         const serverUrl = port ? `http://${host}:${port}` : `http://${host}`;
         serverBaseUrl = serverUrl;
+        uploadToken = null; // a token belongs to the previous connection (PRD 16.8)
         socket = io(serverUrl, {
             transports: ["websocket"],
             reconnection: true,
@@ -382,13 +482,16 @@ const api = {
         // Channel & presence events
         socket.on("USER_JOINED", (payload) => emit("user-joined", payload));
         socket.on("USER_LEFT", (payload) => emit("user-left", payload));
-        socket.on("CHANNEL_TREE_UPDATE", (payload) => emit("channel-tree", payload));
+        socket.on("CHANNEL_TREE_UPDATE", (payload) => {
+            resolveTreeMedia(payload.tree);
+            emit("channel-tree", payload);
+        });
         socket.on("PRESENCE_UPDATE", (payload) => emit("presence", payload));
-        socket.on("MESSAGE_RECEIVED", (payload) => emit("message", payload));
-        socket.on("DIRECT_MESSAGE_RECEIVED", (payload) => emit("dm-received", payload));
+        socket.on("MESSAGE_RECEIVED", (payload) => emit("message", resolveMessageMedia(payload)));
+        socket.on("DIRECT_MESSAGE_RECEIVED", (payload) => emit("dm-received", resolveMessageMedia(payload)));
         socket.on("MESSAGE_DELETED", (payload) => emit("message-deleted", payload));
         socket.on("DIRECT_MESSAGE_DELETED", (payload) => emit("dm-deleted", payload));
-        socket.on("MESSAGE_EDITED", (payload) => emit("message-edited", payload));
+        socket.on("MESSAGE_EDITED", (payload) => emit("message-edited", resolveMessageMedia(payload)));
         socket.on("CHANNEL_DELETED", (payload) => emit("channel-deleted", payload));
         socket.on("ERROR", (payload) => emit("error", payload));
         socket.on("ACTIVE_SPEAKERS", (payload) => emit("active-speakers", payload));
@@ -396,7 +499,10 @@ const api = {
         socket.on("CHANNEL_USER_KICKED", (payload) => emit("channel-user-kicked", payload));
         socket.on("USER_BANNED", () => emit("user-banned", null));
         socket.on("REACTION_UPDATED", (payload) => emit("reaction-updated", payload));
-        socket.on("CUSTOM_EMOJI_APPROVED", (payload) => emit("custom-emoji-approved", payload));
+        socket.on("CUSTOM_EMOJI_APPROVED", (payload) => {
+            if (payload.emoji) resolveEmojiMedia(payload.emoji);
+            emit("custom-emoji-approved", payload);
+        });
         socket.on("NUDGE_RECEIVED", (payload) => emit("nudge-received", payload));
         socket.on("SERVER_SETTINGS_UPDATED", (payload) => emit("server-settings-updated", payload));
         socket.on("CHANNEL_PIN_UPDATED", (payload) => emit("channel-pin-updated", payload));
@@ -629,6 +735,7 @@ const api = {
             iconEmoji?: string | null;
             iconUrl?: string | null;
             iconPublicId?: string | null;
+            iconUploadId?: string;
         },
     ): Promise<{ success: boolean; error?: string }> {
         return new Promise((resolve) => {
@@ -685,15 +792,15 @@ const api = {
     sendMessage(
         channelId: string,
         content: string,
-        attachmentUrl?: string,
-        attachmentPublicId?: string,
+        attachments?: UploadedAttachment[],
+        replyToId?: string,
     ): Promise<{ success: boolean; messageId?: string; error?: string }> {
         return new Promise((resolve) => {
             if (!socket?.connected) {
                 resolve({ success: false });
                 return;
             }
-            socket.emit("SEND_MESSAGE", { channelId, content, attachmentUrl, attachmentPublicId }, resolve);
+            socket.emit("SEND_MESSAGE", { channelId, content, ...attachmentPayload(attachments), replyToId }, resolve);
         });
     },
 
@@ -731,7 +838,10 @@ const api = {
             socket.emit(
                 "FETCH_MESSAGES",
                 { channelId, before, limit, aroundMessageId },
-                resolve,
+                (res) => {
+                    res.messages?.forEach(resolveMessageMedia);
+                    resolve(res);
+                },
             );
         });
     },
@@ -813,15 +923,15 @@ const api = {
     sendDirectMessage(
         recipientId: string,
         content: string,
-        attachmentUrl?: string,
-        attachmentPublicId?: string,
+        attachments?: UploadedAttachment[],
+        replyToId?: string,
     ): Promise<{ success: boolean; messageId?: string; error?: string }> {
         return new Promise((resolve) => {
             if (!socket?.connected) {
                 resolve({ success: false, error: "Not connected" });
                 return;
             }
-            socket.emit("SEND_DIRECT_MESSAGE", { recipientId, content, attachmentUrl, attachmentPublicId }, resolve);
+            socket.emit("SEND_DIRECT_MESSAGE", { recipientId, content, ...attachmentPayload(attachments), replyToId }, resolve);
         });
     },
 
@@ -839,6 +949,7 @@ const api = {
         partnerId: string,
         before?: string,
         limit?: number,
+        aroundMessageId?: string,
     ): Promise<{ success: boolean; messages?: IDirectMessage[]; error?: string }> {
         return new Promise((resolve) => {
             if (!socket?.connected) {
@@ -847,8 +958,11 @@ const api = {
             }
             socket.emit(
                 "FETCH_DIRECT_MESSAGES",
-                { partnerId, before, limit },
-                resolve,
+                { partnerId, before, limit, aroundMessageId },
+                (res) => {
+                    res.messages?.forEach(resolveMessageMedia);
+                    resolve(res);
+                },
             );
         });
     },
@@ -931,7 +1045,7 @@ const api = {
         fileBuffer: ArrayBuffer,
         fileName: string,
         mimeType: string,
-    ): Promise<{ url: string; publicId?: string }> {
+    ): Promise<{ url: string; publicId?: string; uploadId?: string }> {
         return uploadTo("/api/upload", fileBuffer, fileName, mimeType);
     },
 
@@ -939,7 +1053,7 @@ const api = {
         fileBuffer: ArrayBuffer,
         fileName: string,
         mimeType: string,
-    ): Promise<{ url: string; publicId?: string }> {
+    ): Promise<{ url: string; publicId?: string; uploadId?: string }> {
         return uploadTo("/api/upload/emoji", fileBuffer, fileName, mimeType);
     },
 
@@ -947,7 +1061,7 @@ const api = {
         fileBuffer: ArrayBuffer,
         fileName: string,
         mimeType: string,
-    ): Promise<{ url: string; publicId?: string }> {
+    ): Promise<{ url: string; publicId?: string; uploadId?: string }> {
         return uploadTo("/api/upload/emoji-animated", fileBuffer, fileName, mimeType);
     },
 
@@ -955,8 +1069,25 @@ const api = {
         fileBuffer: ArrayBuffer,
         fileName: string,
         mimeType: string,
-    ): Promise<{ url: string; publicId?: string }> {
+    ): Promise<{ url: string; publicId?: string; uploadId?: string }> {
         return uploadTo("/api/upload/channel-icon", fileBuffer, fileName, mimeType);
+    },
+
+    /**
+     * Throws away an upload that was never attached to anything (PRD 16.9) —
+     * best effort: a pre-v2.5.0 server never answers, so this times out, and
+     * the server's hourly sweep catches whatever a discard misses.
+     */
+    discardUpload(uploadId: string): Promise<{ success: boolean; error?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.timeout(5000).emit("DISCARD_UPLOAD", { uploadId }, (err, res) => {
+                resolve(err ? { success: false, error: "No response" } : res);
+            });
+        });
     },
 
     // ── Image Download ───────────────────────────────────────────────────
@@ -1291,8 +1422,7 @@ const api = {
 
     createCustomEmoji(
         name: string,
-        imageUrl: string,
-        imagePublicId?: string,
+        image: UploadedAttachment & { url: string },
         isAnimated?: boolean,
     ): Promise<{ success: boolean; emojiId?: string; error?: string }> {
         return new Promise((resolve) => {
@@ -1300,7 +1430,13 @@ const api = {
                 resolve({ success: false, error: "Not connected" });
                 return;
             }
-            socket.emit("CREATE_CUSTOM_EMOJI", { name, imageUrl, imagePublicId, isAnimated }, resolve);
+            // imageUploadId is what a v2.5.0+ server uses; imageUrl/imagePublicId
+            // are sent too so a pre-v2.5.0 server still works.
+            socket.emit(
+                "CREATE_CUSTOM_EMOJI",
+                { name, imageUploadId: image.uploadId, imageUrl: image.url, imagePublicId: image.publicId, isAnimated },
+                resolve,
+            );
         });
     },
 
@@ -1310,7 +1446,10 @@ const api = {
                 resolve({ success: false, error: "Not connected" });
                 return;
             }
-            socket.emit("GET_APPROVED_EMOJIS", resolve);
+            socket.emit("GET_APPROVED_EMOJIS", (res) => {
+                res.emojis?.forEach(resolveEmojiMedia);
+                resolve(res);
+            });
         });
     },
 
@@ -1320,7 +1459,10 @@ const api = {
                 resolve({ success: false, error: "Not connected" });
                 return;
             }
-            socket.emit("GET_PENDING_EMOJIS", resolve);
+            socket.emit("GET_PENDING_EMOJIS", (res) => {
+                res.emojis?.forEach(resolveEmojiMedia);
+                resolve(res);
+            });
         });
     },
 

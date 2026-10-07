@@ -15,10 +15,25 @@ import type {
     SocketData,
     IMessage,
     IPinnedMessage,
+    IReplyPreview,
 } from "@reson8/shared-types";
 import { PermissionFlags } from "@reson8/shared-types";
 import { requirePermission } from "../middleware/permissions.middleware.js";
-import { deleteAttachment } from "../services/storage.service.js";
+import { claimUploads, UploadClaimError } from "../services/stored-file.service.js";
+import {
+    isChannelReplyAllowed,
+    loadReplyPreviews,
+    parseReplyToId,
+    replyPreviewFor,
+} from "../services/reply.service.js";
+import {
+    attachmentFields,
+    attachmentInclude,
+    attachmentUrlsToRelease,
+    normalizeAttachmentInput,
+    releaseAttachmentFiles,
+    type AttachmentRow,
+} from "../services/attachment.service.js";
 import { DEFAULT_MAX_MESSAGE_LENGTH } from "../config/message.config.js";
 import { normalizeNewlines } from "../services/message-text.js";
 import { aggregateReactionRows, loadReactorNicknames } from "../services/reaction.service.js";
@@ -40,6 +55,7 @@ type TypedSocket = Socket<
 const messageInclude = {
     user: { select: { nickname: true } },
     reactions: { select: { emoji: true, userId: true }, orderBy: { createdAt: "asc" as const } },
+    attachments: attachmentInclude,
 };
 
 type MessageWithRelations = {
@@ -47,7 +63,10 @@ type MessageWithRelations = {
     channelId: string;
     userId: string;
     content: string;
+    replyToId: string | null;
+    /** Deprecated column — only a fallback for a row the backfill missed (PRD 16.10). */
     attachmentUrl: string | null;
+    attachments: AttachmentRow[];
     createdAt: Date;
     editedAt: Date | null;
     user: { nickname: string };
@@ -55,31 +74,40 @@ type MessageWithRelations = {
 };
 
 /** Maps a Prisma message row (with user + reactions included) to the wire DTO.
- *  `reactorNicknames` is the batch-loaded nickname lookup (PRD 15.11). */
-function toMessageDto(m: MessageWithRelations, reactorNicknames: ReadonlyMap<string, string>): IMessage {
+ *  `reactorNicknames` is the batch-loaded nickname lookup (PRD 15.11) and
+ *  `replyPreviews` the batch-loaded reply-snippet lookup (PRD 16.11). */
+function toMessageDto(
+    m: MessageWithRelations,
+    reactorNicknames: ReadonlyMap<string, string>,
+    replyPreviews: ReadonlyMap<string, IReplyPreview>,
+): IMessage {
     return {
         id: m.id,
         channelId: m.channelId,
         userId: m.userId,
         nickname: m.user.nickname,
         content: m.content,
-        attachmentUrl: m.attachmentUrl,
+        replyTo: replyPreviewFor(m.replyToId, replyPreviews),
+        ...attachmentFields(m.attachments, m.attachmentUrl),
         createdAt: m.createdAt.toISOString(),
         editedAt: m.editedAt?.toISOString() ?? null,
         reactions: aggregateReactionRows(m.reactions, reactorNicknames),
     };
 }
 
-/** Maps a whole fetched page, resolving every reactor's nickname in ONE query. */
+/** Maps a whole fetched page, resolving every reactor's nickname in ONE query and every reply snippet in ONE more. */
 async function toMessageDtos(
     prisma: FastifyInstance["prisma"],
     messages: MessageWithRelations[],
 ): Promise<IMessage[]> {
-    const nicknames = await loadReactorNicknames(
-        prisma,
-        messages.flatMap((m) => m.reactions.map((r) => r.userId)),
-    );
-    return messages.map((m) => toMessageDto(m, nicknames));
+    const [nicknames, replyPreviews] = await Promise.all([
+        loadReactorNicknames(
+            prisma,
+            messages.flatMap((m) => m.reactions.map((r) => r.userId)),
+        ),
+        loadReplyPreviews(prisma, "message", messages.map((m) => m.replyToId)),
+    ]);
+    return messages.map((m) => toMessageDto(m, nicknames, replyPreviews));
 }
 
 /**
@@ -93,10 +121,29 @@ export function registerMessageHandlers(
         // ── SEND_MESSAGE ───────────────────────────────────────────────────
         socket.on("SEND_MESSAGE", async (payload, ack) => {
             try {
-                const { channelId, attachmentUrl, attachmentPublicId } = payload;
+                const { channelId } = payload;
                 const content = normalizeNewlines(payload.content);
 
-                if ((!content || content.trim().length === 0) && !attachmentUrl) {
+                // Attachments are referenced by upload-ledger id (PRD 16.8), up
+                // to MAX_ATTACHMENTS_PER_MESSAGE (PRD 16.10); a legacy client's
+                // single URL is accepted too. The client's `attachmentPublicId`
+                // is deliberately never read: the real public_id comes from the
+                // server's own upload record.
+                const claim = normalizeAttachmentInput(payload);
+                if ("error" in claim) {
+                    ack({ success: false, error: claim.error });
+                    return;
+                }
+                const hasAttachment = claim.ids.length + claim.urls.length > 0;
+
+                const reply = parseReplyToId(payload.replyToId);
+                if ("error" in reply) {
+                    ack({ success: false, error: reply.error });
+                    return;
+                }
+                const { replyToId } = reply;
+
+                if ((!content || content.trim().length === 0) && !hasAttachment) {
                     ack({ success: false });
                     return;
                 }
@@ -135,24 +182,55 @@ export function registerMessageHandlers(
                     return;
                 }
 
-                // Persist message
-                const message = await app.prisma.message.create({
-                    data: {
-                        channelId,
+                // A reply may only point into THIS channel, or at a message that
+                // has since been deleted (PRD 16.11) — never at another channel's
+                // message, whose text would then leak into the snippet.
+                if (replyToId) {
+                    const target = await app.prisma.message.findUnique({
+                        where: { id: replyToId },
+                        select: { channelId: true },
+                    });
+                    if (!isChannelReplyAllowed(target, channelId)) {
+                        ack({ success: false, error: "Invalid reply target" });
+                        return;
+                    }
+                }
+
+                // Persist message. Claiming the upload and creating the row
+                // share one transaction: a failed claim (someone else's file,
+                // already used, swept…) aborts the send, and a failed create
+                // rolls the claim back.
+                const message = await app.prisma.$transaction(async (tx) => {
+                    const files = await claimUploads(tx, {
+                        ids: claim.ids,
+                        urls: claim.urls,
+                        kind: "MESSAGE_ATTACHMENT",
                         userId: socket.data.userId,
-                        content: content?.trim() ?? "",
-                        attachmentUrl: attachmentUrl ?? null,
-                        attachmentPublicId: attachmentPublicId ?? null,
-                    },
+                    });
+                    return tx.message.create({
+                        data: {
+                            channelId,
+                            userId: socket.data.userId,
+                            content: content?.trim() ?? "",
+                            replyToId,
+                            // The ledger's url/public_id, in the order the client listed them.
+                            attachments: {
+                                create: files.map((f, position) => ({ url: f.url, publicId: f.publicId, position })),
+                            },
+                        },
+                        include: { attachments: attachmentInclude },
+                    });
                 });
 
+                const replyPreviews = await loadReplyPreviews(app.prisma, "message", [replyToId]);
                 const messageDto: IMessage = {
                     id: message.id,
                     channelId: message.channelId,
                     userId: message.userId,
                     nickname: socket.data.nickname,
                     content: message.content,
-                    attachmentUrl: message.attachmentUrl,
+                    replyTo: replyPreviewFor(replyToId, replyPreviews),
+                    ...attachmentFields(message.attachments),
                     createdAt: message.createdAt.toISOString(),
                     editedAt: null,
                 };
@@ -179,6 +257,10 @@ export function registerMessageHandlers(
                     "Message sent",
                 );
             } catch (err) {
+                if (err instanceof UploadClaimError) {
+                    ack({ success: false, error: err.message });
+                    return;
+                }
                 app.log.error({ err }, "Error in SEND_MESSAGE");
                 ack({ success: false });
             }
@@ -305,6 +387,7 @@ export function registerMessageHandlers(
 
                 const message = await app.prisma.message.findUnique({
                     where: { id: messageId },
+                    include: { attachments: attachmentInclude },
                 });
                 if (!message) {
                     ack({ success: false, error: "Message not found" });
@@ -314,10 +397,8 @@ export function registerMessageHandlers(
                     ack({ success: false, error: "You can only delete your own messages" });
                     return;
                 }
-
-                if (message.attachmentUrl) {
-                    await deleteAttachment(message.attachmentUrl, message.attachmentPublicId);
-                }
+                // Read before the row (and its attachment rows) go.
+                const filesToRelease = attachmentUrlsToRelease(message.attachments, message.attachmentUrl);
 
                 // Was this the channel's pinned message? Check before
                 // deleting — the FK's onDelete: SetNull clears it at the DB
@@ -332,6 +413,16 @@ export function registerMessageHandlers(
                 await app.prisma.message.delete({ where: { id: messageId } });
 
                 ack({ success: true });
+
+                // The row is gone — now release ALL its files (DB first, so a
+                // failed delete never loses a file). Uses the upload ledger's
+                // own url/public_id and only deletes when nothing else still
+                // references each one (PRD 16.8/16.10).
+                if (filesToRelease.length > 0) {
+                    releaseAttachmentFiles(app.prisma, filesToRelease).catch((err) =>
+                        app.log.warn({ err, messageId }, "Failed to release deleted message's files"),
+                    );
+                }
 
                 io.to(`server:${socket.data.serverId}`).emit("MESSAGE_DELETED", {
                     channelId: message.channelId,
@@ -382,6 +473,7 @@ export function registerMessageHandlers(
 
                 const message = await app.prisma.message.findUnique({
                     where: { id: messageId },
+                    include: { attachments: { select: { id: true }, take: 1 } },
                 });
                 if (!message) {
                     ack({ success: false, error: "Message not found" });
@@ -391,7 +483,7 @@ export function registerMessageHandlers(
                     ack({ success: false, error: "You can only edit your own messages" });
                     return;
                 }
-                if (message.attachmentUrl) {
+                if (message.attachments.length > 0 || message.attachmentUrl) {
                     ack({ success: false, error: "Image messages cannot be edited" });
                     return;
                 }
@@ -407,13 +499,17 @@ export function registerMessageHandlers(
                     data: { content: trimmed, editedAt: new Date() },
                 });
 
+                // An edited reply is still a reply — keep its snippet in the broadcast.
+                const replyPreviews = await loadReplyPreviews(app.prisma, "message", [updated.replyToId]);
                 const messageDto: IMessage = {
                     id: updated.id,
                     channelId: updated.channelId,
                     userId: updated.userId,
                     nickname: socket.data.nickname,
                     content: updated.content,
-                    attachmentUrl: updated.attachmentUrl,
+                    replyTo: replyPreviewFor(updated.replyToId, replyPreviews),
+                    // Image messages can't be edited (checked above), so an edited message has none.
+                    ...attachmentFields([]),
                     createdAt: updated.createdAt.toISOString(),
                     editedAt: updated.editedAt?.toISOString() ?? null,
                 };

@@ -58,7 +58,7 @@ model Channel {
   position        Int         @default(0)
   maxUsers        Int? // null = unlimited
   isNsfw          Boolean     @default(false) // text channels only — client prompts before opening
-  pinnedMessageId String? @unique // text channels only — one pinned message per channel
+  pinnedMessageId String?     @unique // text channels only — one pinned message per channel
   iconEmoji       String? // text channels only — custom tree icon (PRD 14.7), mutually exclusive with iconUrl
   iconUrl         String? // text channels only — uploaded custom icon image, mutually exclusive with iconEmoji
   iconPublicId    String? // Cloudinary public_id for iconUrl — null for local-disk storage
@@ -162,15 +162,24 @@ model Message {
   channelId          String
   userId             String
   content            String
+  // The message this one replies to (PRD 16.11). A plain column — deliberately NOT a
+  // foreign key: with `onDelete: SetNull` deleting the original would erase the fact
+  // that this message WAS a reply, and the client wants to say "Original message was
+  // deleted". Looked up in one batched query per page, by primary key.
+  replyToId          String?
+  // @deprecated (PRD 16.10) — superseded by `attachments`. Kept (expand/contract) so a
+  // rollback is non-destructive; no longer written or read. The migration backfilled
+  // every existing value into `attachments`.
   attachmentUrl      String?
   attachmentPublicId String? // Cloudinary public_id — null for local-disk storage or text-only messages
   createdAt          DateTime  @default(now())
   editedAt           DateTime? // set when the author edits within the 2-minute window
 
-  channel         Channel    @relation("ChannelMessages", fields: [channelId], references: [id], onDelete: Cascade)
-  user            User       @relation(fields: [userId], references: [id], onDelete: Cascade)
-  reactions       Reaction[] @relation("MessageReactions")
-  pinnedInChannel Channel?   @relation("ChannelPinnedMessage")
+  channel         Channel      @relation("ChannelMessages", fields: [channelId], references: [id], onDelete: Cascade)
+  user            User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reactions       Reaction[]   @relation("MessageReactions")
+  attachments     Attachment[] @relation("MessageAttachments")
+  pinnedInChannel Channel?     @relation("ChannelPinnedMessage")
 
   @@index([channelId, createdAt])
   @@map("messages")
@@ -185,14 +194,18 @@ model DirectMessage {
   senderId           String
   receiverId         String
   content            String
+  // The DM this one replies to (PRD 16.11) — a plain column, see Message.replyToId.
+  replyToId          String?
+  // @deprecated (PRD 16.10) — see Message.attachmentUrl.
   attachmentUrl      String?
   attachmentPublicId String? // Cloudinary public_id — null for local-disk storage or text-only messages
   createdAt          DateTime  @default(now())
   readAt             DateTime?
 
-  sender    User       @relation("SentDMs", fields: [senderId], references: [id], onDelete: Cascade)
-  receiver  User       @relation("ReceivedDMs", fields: [receiverId], references: [id], onDelete: Cascade)
-  reactions Reaction[] @relation("DmReactions")
+  sender      User         @relation("SentDMs", fields: [senderId], references: [id], onDelete: Cascade)
+  receiver    User         @relation("ReceivedDMs", fields: [receiverId], references: [id], onDelete: Cascade)
+  reactions   Reaction[]   @relation("DmReactions")
+  attachments Attachment[] @relation("DmAttachments")
 
   @@index([senderId, receiverId, createdAt])
   @@index([receiverId, senderId, createdAt])
@@ -276,4 +289,56 @@ model CustomEmoji {
 
   @@unique([serverId, name])
   @@map("custom_emojis")
+}
+
+// ── Stored-file ledger (PRD 16.8) ────────────────────────────────────────────
+// The server's own record of every file it stores. Message, emoji and
+// channel-icon rows reference files only through a claim on this ledger — a
+// claim is atomic, one-shot, owner-checked and kind-checked — and physical
+// deletion only ever uses THIS table's url/publicId, never a client-supplied
+// value. Without it a modified client could get other users' files (or any
+// Cloudinary asset) deleted by referencing them from its own message/emoji.
+
+enum StoredFileKind {
+  MESSAGE_ATTACHMENT
+  CUSTOM_EMOJI
+  CHANNEL_ICON
+}
+
+model StoredFile {
+  id        String         @id @default(uuid())
+  // Canonical form: "/uploads/<file>" for local-disk storage (host-independent;
+  // clients resolve it against the server address), the absolute https URL for
+  // Cloudinary.
+  url       String         @unique
+  publicId  String? // Cloudinary public_id — null for local-disk storage
+  kind      StoredFileKind
+  ownerId   String? // uploader's instance id; null = tokenless (pre-v2.5.0 client) upload
+  claimedAt DateTime? // null = uploaded but not attached to anything yet
+  createdAt DateTime       @default(now())
+
+  @@index([claimedAt, createdAt]) // the unclaimed-upload sweeper's query (PRD 16.9)
+  @@map("stored_files")
+}
+
+// ── Message attachments (PRD 16.10) ──────────────────────────────────────────
+// One row per image on a message or DM, in display order. Mirrors Reaction's
+// "nullable messageId OR dmId" convention. The single source of truth for what
+// a message shows; Message/DirectMessage.attachmentUrl are deprecated.
+
+model Attachment {
+  id        String   @id @default(uuid())
+  messageId String?
+  dmId      String?
+  url       String // as stored: "/uploads/<file>" for new local-disk files, absolute for Cloudinary and pre-v2.5.0 rows
+  publicId  String? // Cloudinary public_id — null for local-disk storage
+  position  Int // order within the message, 0-based
+  createdAt DateTime @default(now())
+
+  message       Message?       @relation("MessageAttachments", fields: [messageId], references: [id], onDelete: Cascade)
+  directMessage DirectMessage? @relation("DmAttachments", fields: [dmId], references: [id], onDelete: Cascade)
+
+  @@index([messageId])
+  @@index([dmId])
+  @@map("attachments")
 }

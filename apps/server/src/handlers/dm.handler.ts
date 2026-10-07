@@ -9,6 +9,7 @@
 
 import type { Server as SocketIOServer, Socket } from "socket.io";
 import type { FastifyInstance } from "fastify";
+import type { Prisma } from "@prisma/client";
 import type {
     ClientToServerEvents,
     ServerToClientEvents,
@@ -17,7 +18,21 @@ import type {
     IDirectMessage,
 } from "@reson8/shared-types";
 import { PresenceService } from "../services/presence.service.js";
-import { deleteAttachment } from "../services/storage.service.js";
+import { claimUploads, UploadClaimError } from "../services/stored-file.service.js";
+import {
+    dmInPair,
+    isDmReplyAllowed,
+    loadReplyPreviews,
+    parseReplyToId,
+    replyPreviewFor,
+} from "../services/reply.service.js";
+import {
+    attachmentFields,
+    attachmentInclude,
+    attachmentUrlsToRelease,
+    normalizeAttachmentInput,
+    releaseAttachmentFiles,
+} from "../services/attachment.service.js";
 import { DEFAULT_MAX_MESSAGE_LENGTH } from "../config/message.config.js";
 import { normalizeNewlines } from "../services/message-text.js";
 import { aggregateReactionRows, loadReactorNicknames } from "../services/reaction.service.js";
@@ -49,10 +64,26 @@ export function registerDMHandlers(
         // ── SEND_DIRECT_MESSAGE ────────────────────────────────────────────
         socket.on("SEND_DIRECT_MESSAGE", async (payload, ack) => {
             try {
-                const { recipientId, attachmentUrl, attachmentPublicId } = payload;
+                const { recipientId } = payload;
                 const content = normalizeNewlines(payload.content);
 
-                if ((!content || content.trim().length === 0) && !attachmentUrl) {
+                // Same claim-by-ledger-id scheme as channel messages (PRD 16.8/16.10);
+                // the client's `attachmentPublicId` is never read.
+                const claim = normalizeAttachmentInput(payload);
+                if ("error" in claim) {
+                    ack({ success: false, error: claim.error });
+                    return;
+                }
+                const hasAttachment = claim.ids.length + claim.urls.length > 0;
+
+                const reply = parseReplyToId(payload.replyToId);
+                if ("error" in reply) {
+                    ack({ success: false, error: reply.error });
+                    return;
+                }
+                const { replyToId } = reply;
+
+                if ((!content || content.trim().length === 0) && !hasAttachment) {
                     ack({ success: false, error: "Message content is empty" });
                     return;
                 }
@@ -85,24 +116,51 @@ export function registerDMHandlers(
                     return;
                 }
 
-                // Persist DM
-                const dm = await app.prisma.directMessage.create({
-                    data: {
-                        senderId: socket.data.userId,
-                        receiverId: recipientId,
-                        content: content?.trim() ?? "",
-                        attachmentUrl: attachmentUrl ?? null,
-                        attachmentPublicId: attachmentPublicId ?? null,
-                    },
+                // A reply may only point into THIS conversation, or at a DM that
+                // has since been deleted (PRD 16.11) — never at someone else's
+                // DM, whose text would then leak into the snippet.
+                if (replyToId) {
+                    const target = await app.prisma.directMessage.findUnique({
+                        where: { id: replyToId },
+                        select: { senderId: true, receiverId: true },
+                    });
+                    if (!isDmReplyAllowed(target, socket.data.userId, recipientId)) {
+                        ack({ success: false, error: "Invalid reply target" });
+                        return;
+                    }
+                }
+
+                // Persist DM — claim + create share one transaction (PRD 16.8)
+                const dm = await app.prisma.$transaction(async (tx) => {
+                    const files = await claimUploads(tx, {
+                        ids: claim.ids,
+                        urls: claim.urls,
+                        kind: "MESSAGE_ATTACHMENT",
+                        userId: socket.data.userId,
+                    });
+                    return tx.directMessage.create({
+                        data: {
+                            senderId: socket.data.userId,
+                            receiverId: recipientId,
+                            content: content?.trim() ?? "",
+                            replyToId,
+                            attachments: {
+                                create: files.map((f, position) => ({ url: f.url, publicId: f.publicId, position })),
+                            },
+                        },
+                        include: { attachments: attachmentInclude },
+                    });
                 });
 
+                const replyPreviews = await loadReplyPreviews(app.prisma, "dm", [replyToId]);
                 const dmDto: IDirectMessage = {
                     id: dm.id,
                     senderId: dm.senderId,
                     senderNickname: socket.data.nickname,
                     receiverId: dm.receiverId,
                     content: dm.content,
-                    attachmentUrl: dm.attachmentUrl,
+                    replyTo: replyPreviewFor(replyToId, replyPreviews),
+                    ...attachmentFields(dm.attachments),
                     createdAt: dm.createdAt.toISOString(),
                     readAt: null,
                 };
@@ -124,6 +182,10 @@ export function registerDMHandlers(
                     "Direct message sent",
                 );
             } catch (err) {
+                if (err instanceof UploadClaimError) {
+                    ack({ success: false, error: err.message });
+                    return;
+                }
                 app.log.error({ err }, "Error in SEND_DIRECT_MESSAGE");
                 ack({ success: false, error: "Failed to send direct message" });
             }
@@ -132,45 +194,84 @@ export function registerDMHandlers(
         // ── FETCH_DIRECT_MESSAGES ──────────────────────────────────────────
         socket.on("FETCH_DIRECT_MESSAGES", async (payload, ack) => {
             try {
-                const { partnerId, before, limit = 50 } = payload;
+                const { partnerId, before, limit = 50, aroundMessageId } = payload;
                 const take = Math.min(limit, 100); // cap at 100
                 const userId = socket.data.userId;
 
-                const where: any = {
+                const pairWhere = {
                     OR: [
                         { senderId: userId, receiverId: partnerId },
                         { senderId: partnerId, receiverId: userId },
                     ],
                 };
+                const dmInclude = {
+                    sender: { select: { nickname: true } },
+                    reactions: { select: { emoji: true, userId: true }, orderBy: { createdAt: "asc" as const } },
+                    attachments: attachmentInclude,
+                };
+                type DmRow = Prisma.DirectMessageGetPayload<{ include: typeof dmInclude }>;
 
-                if (before) {
-                    where.createdAt = { lt: new Date(before) };
+                let ordered: DmRow[];
+
+                if (aroundMessageId) {
+                    // Jump-to-message (PRD 16.11): a window centred on one DM
+                    // instead of the latest page — used when a reply's snippet
+                    // points at a DM outside the loaded history. Mirrors
+                    // FETCH_MESSAGES' window, and refuses anything outside THIS
+                    // conversation.
+                    const target = await app.prisma.directMessage.findUnique({ where: { id: aroundMessageId } });
+                    if (!target || !dmInPair(target, userId, partnerId)) {
+                        ack({ success: false, error: "Message not found" });
+                        return;
+                    }
+
+                    const halfBefore = Math.floor((take - 1) / 2);
+                    const halfAfter = take - 1 - halfBefore;
+
+                    const [beforeMsgs, targetMsg, afterMsgs] = await Promise.all([
+                        app.prisma.directMessage.findMany({
+                            where: { ...pairWhere, createdAt: { lt: target.createdAt } },
+                            orderBy: { createdAt: "desc" },
+                            take: halfBefore,
+                            include: dmInclude,
+                        }),
+                        app.prisma.directMessage.findUniqueOrThrow({ where: { id: aroundMessageId }, include: dmInclude }),
+                        app.prisma.directMessage.findMany({
+                            where: { ...pairWhere, createdAt: { gt: target.createdAt } },
+                            orderBy: { createdAt: "asc" },
+                            take: halfAfter,
+                            include: dmInclude,
+                        }),
+                    ]);
+                    ordered = [...beforeMsgs.reverse(), targetMsg, ...afterMsgs];
+                } else {
+                    const messages = await app.prisma.directMessage.findMany({
+                        where: { ...pairWhere, ...(before ? { createdAt: { lt: new Date(before) } } : {}) },
+                        orderBy: { createdAt: "desc" },
+                        take,
+                        include: dmInclude,
+                    });
+                    ordered = messages.reverse();
                 }
 
-                const messages = await app.prisma.directMessage.findMany({
-                    where,
-                    orderBy: { createdAt: "desc" },
-                    take,
-                    include: {
-                        sender: { select: { nickname: true } },
-                        reactions: { select: { emoji: true, userId: true }, orderBy: { createdAt: "asc" } },
-                    },
-                });
-
                 // Convert to DTOs in chronological order — every reactor's
-                // nickname is resolved in a single query (PRD 15.11).
-                const ordered = messages.reverse();
-                const reactorNicknames = await loadReactorNicknames(
-                    app.prisma,
-                    ordered.flatMap((m) => m.reactions.map((r) => r.userId)),
-                );
+                // nickname (PRD 15.11) and every reply snippet (PRD 16.11) is
+                // resolved in a single query each, whatever the page size.
+                const [reactorNicknames, replyPreviews] = await Promise.all([
+                    loadReactorNicknames(
+                        app.prisma,
+                        ordered.flatMap((m) => m.reactions.map((r) => r.userId)),
+                    ),
+                    loadReplyPreviews(app.prisma, "dm", ordered.map((m) => m.replyToId)),
+                ]);
                 const dtos: IDirectMessage[] = ordered.map((m) => ({
                     id: m.id,
                     senderId: m.senderId,
                     senderNickname: m.sender.nickname,
                     receiverId: m.receiverId,
                     content: m.content,
-                    attachmentUrl: m.attachmentUrl,
+                    replyTo: replyPreviewFor(m.replyToId, replyPreviews),
+                    ...attachmentFields(m.attachments, m.attachmentUrl),
                     createdAt: m.createdAt.toISOString(),
                     readAt: m.readAt?.toISOString() ?? null,
                     reactions: aggregateReactionRows(m.reactions, reactorNicknames),
@@ -324,6 +425,7 @@ export function registerDMHandlers(
 
                 const dm = await app.prisma.directMessage.findUnique({
                     where: { id: dmId },
+                    include: { attachments: attachmentInclude },
                 });
                 if (!dm) {
                     ack({ success: false, error: "Message not found" });
@@ -333,14 +435,19 @@ export function registerDMHandlers(
                     ack({ success: false, error: "You can only delete your own messages" });
                     return;
                 }
-
-                if (dm.attachmentUrl) {
-                    await deleteAttachment(dm.attachmentUrl, dm.attachmentPublicId);
-                }
+                // Read before the row (and its attachment rows) go.
+                const filesToRelease = attachmentUrlsToRelease(dm.attachments, dm.attachmentUrl);
 
                 await app.prisma.directMessage.delete({ where: { id: dmId } });
 
                 ack({ success: true });
+
+                // Row gone — release ALL its files via the upload ledger (PRD 16.8/16.10).
+                if (filesToRelease.length > 0) {
+                    releaseAttachmentFiles(app.prisma, filesToRelease).catch((err) =>
+                        app.log.warn({ err, dmId }, "Failed to release deleted DM's files"),
+                    );
+                }
 
                 // Notify both participants' sockets (mirrors SEND_DIRECT_MESSAGE's delivery pattern)
                 for (const [, s] of io.sockets.sockets) {

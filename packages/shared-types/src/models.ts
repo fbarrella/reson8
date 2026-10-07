@@ -156,12 +156,42 @@ export interface IReactionSummary {
     users?: Array<{ userId: string; nickname: string }>;
 }
 
+/** One image on a message (PRD 16.10). The URL is server-relative for local-disk files ("/uploads/x.png") — resolve it against the server address. */
+export interface IAttachment {
+    url: string;
+}
+
+/** Most images one message can carry (PRD 16.10) — enforced by the server, mirrored by the client composer. */
+export const MAX_ATTACHMENTS_PER_MESSAGE = 10;
+
+/**
+ * Snapshot of the message a reply points at (PRD 16.11). `deleted: true`
+ * means the original no longer exists (it was deleted after the reply was
+ * sent); the other fields are then absent. `content` is already truncated
+ * server-side and is raw message text — render it with the plain-text
+ * Markdown path, never as HTML.
+ */
+export interface IReplyPreview {
+    id: string;
+    deleted: boolean;
+    userId?: string;
+    nickname?: string;
+    content?: string;
+    /** The original has at least one image (it may have no text). */
+    hasAttachments?: boolean;
+}
+
 export interface IMessage {
     id: string;
     channelId: string;
     userId: string;
     nickname: string;
     content: string;
+    /** Set when this message is a reply (PRD 16.11). Only the message directly answered — snippets never nest. */
+    replyTo?: IReplyPreview | null;
+    /** The message's images, in order (PRD 16.10). */
+    attachments?: IAttachment[];
+    /** @deprecated Always `attachments[0]?.url ?? null`; kept so pre-v2.5.0 clients still show a message's first image. */
     attachmentUrl?: string | null;
     createdAt: string;
     editedAt?: string | null;
@@ -178,6 +208,11 @@ export interface IDirectMessage {
     senderNickname: string;
     receiverId: string;
     content: string;
+    /** Set when this DM is a reply (PRD 16.11). Only the message directly answered. */
+    replyTo?: IReplyPreview | null;
+    /** The message's images, in order (PRD 16.10). */
+    attachments?: IAttachment[];
+    /** @deprecated Always `attachments[0]?.url ?? null`; kept so pre-v2.5.0 clients still show a message's first image. */
     attachmentUrl?: string | null;
     createdAt: string;
     readAt?: string | null;

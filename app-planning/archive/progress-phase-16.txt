@@ -1,0 +1,1190 @@
+================================================================================
+  RESON8 — Development Progress Log
+  Archived: 07/10/2026 (condensed into the phase 16 summary in
+  app-planning/progress.txt)
+================================================================================
+
+PROJECT OVERVIEW
+================
+Reson8 is a high-performance, self-hosted voice and text communication platform
+for desktop (Electron). It replicates the TeamSpeak 3 experience — low-latency
+voice, hierarchical channel trees, and private server ownership — while
+integrating modern persistent text channels.
+
+Tech Stack: Electron + TypeScript, Fastify + Socket.io, mediasoup (SFU),
+PostgreSQL + Prisma, Redis, Docker.
+
+Monorepo structure:
+  apps/client/            — Electron desktop client
+  apps/server/             — Node.js signaling + SFU server
+  packages/shared-types/    — Shared DTOs, enums, and Socket.io event types
+
+For build commands, environment variables, ports, and architecture details,
+see the root CLAUDE.md (and apps/client/CLAUDE.md, apps/server/CLAUDE.md) —
+not duplicated here to avoid drift between docs.
+
+================================================================================
+  FULL UNABRIDGED ENTRIES — PHASE 16 (v2.5.0)
+================================================================================
+
+--- Entry: 07/10/2026 ---
+
+Feature/Fix: PRD 16.1 — "Don't warn me again" for NSFW channels
+
+  Problem: Opening an NSFW text channel always showed the confirmation modal,
+  even after the user had already accepted it many times, and even when
+  re-focusing a tab that was already open. Users asked to be able to dismiss
+  the warning for good.
+
+  Solution: The NSFW modal now has a "Don't warn me again for NSFW channels"
+  checkbox, and a new "Content" section in Settings -> Application has a
+  "Warn before opening NSFW channels" toggle to turn the warning back on.
+  The preference is one global per-install flag (decided with the user:
+  covers all NSFW channels, not one channel).
+
+  Client Changes:
+    - renderer.ts: isNsfwWarningEnabled()/setNsfwWarningEnabled() accessors
+      (try/catch around localStorage; anything other than an explicit "true"
+      dismissal means warn, which is also the fallback when storage is
+      unavailable).
+    - handleChannelClick(): the NSFW branch now prompts only when
+      node.isNsfw && isNsfwWarningEnabled() && !chatTabs.has(node.id). An
+      already-open NSFW tab was confirmed when it was opened, so re-focusing
+      it from the tree no longer re-prompts.
+    - The checkbox is reset to unchecked every time the modal opens. The
+      tick is persisted only when Continue is pressed; Cancel and backdrop
+      close discard it.
+    - openSettingsPanel() re-syncs the Settings toggle from storage on every
+      open, since the modal can change the value while Settings is closed.
+      The toggle shows "checked = warn" (inverse of the stored key) and
+      takes effect immediately on change.
+    - index.html: checkbox row in #nsfw-confirm-modal with a new
+      .modal-check-row style; "Content" section + #chk-nsfw-warn toggle row
+      in the Application panel (PRD 16.2 adds its row to the same section).
+
+  localStorage Keys:
+    reson8-nsfw-warning-dismissed = "true" when the warning is dismissed
+    (key absent = warn, the default)
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html
+    apps/client/src/renderer/renderer.ts
+
+  Verification:
+    npx tsc --noEmit in apps/client passes. No server or shared-types
+    change. UI behavior not exercised by Claude; manual testing by the user
+    (checklist in PRD 16.1).
+
+  Next Step: PRD 16.2 — optional image blurring in NSFW channels.
+
+
+--- Entry: 07/10/2026 ---
+
+Feature/Fix: PRD 16.2 — Optional image blurring in NSFW channels (per user)
+
+  Problem: Every image in an NSFW text channel was always blurred behind a
+  "click to reveal" overlay, with no way for a user who doesn't want that to
+  turn it off.
+
+  Solution: A per-user toggle, "Blur images in NSFW channels", in Settings ->
+  Application -> Content (the section created by PRD 16.1). On by default,
+  which keeps today's rendering exactly. Off shows NSFW-channel images like
+  any other image (no blur, no overlay); clicking still opens the viewer.
+
+  Client Changes:
+    - The switch is CSS-driven instead of a render-time branch: the message
+      builder still always wraps NSFW images in .msg-image-nsfw-wrap +
+      overlay, and a `body.nsfw-blur-off` class overrides the blur
+      (filter/transform none) and hides the overlay. Flipping the toggle
+      therefore updates every already-rendered message instantly, in both
+      directions, with no re-render or scroll jump. The image's own click
+      handler (-> openLightbox) keeps working once the overlay is hidden.
+    - renderer.ts: isNsfwBlurEnabled()/setNsfwBlurEnabled()/
+      applyNsfwBlurPreference() (try/catch around localStorage; only an
+      explicit "false" disables the blur), applied once at startup, on the
+      toggle's change event, and the checkbox is re-synced in
+      openSettingsPanel().
+    - index.html: the two body.nsfw-blur-off rules next to the NSFW thumbnail
+      CSS, and the #chk-nsfw-blur toggle row in the Content section.
+    - DM images were never blurred and are unaffected either way.
+    - PRD 16.10 (multi-image messages) must keep wrapping every NSFW image
+      in .msg-image-nsfw-wrap so this toggle keeps covering each tile.
+
+  localStorage Keys:
+    reson8-nsfw-blur-images = "false" when blurring is off (absent = on)
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html
+    apps/client/src/renderer/renderer.ts
+
+  Verification:
+    npx tsc --noEmit in apps/client passes. No server or shared-types
+    change. UI behavior not exercised by Claude; manual testing by the user
+    (checklist in PRD 16.2).
+
+  Next Step: PRD 16.3 — highlight the text channel being viewed (eye icon).
+
+
+--- Entry: 07/10/2026 ---
+
+Feature/Fix: PRD 16.3 — Highlight the text channel being viewed (eye icon)
+
+  Problem: On busy servers there was no indication in the channel tree of
+  which text channel's chat tab was currently open. Text channels never got
+  the .active class (that only marks the connected voice channel), so the
+  open chat looked identical to every other row.
+
+  Solution: The text channel whose tab is the active tab now gets a
+  `.viewing` highlight (one step above the hover tint, below the joined-voice
+  .active style) plus a small muted eye SVG at the far right of the row,
+  with a "You're viewing this channel" tooltip.
+
+  Client Changes:
+    - New `.tree-channel.viewing` class, deliberately separate from `.active`
+      so the voice-channel semantics are untouched; `.viewing:hover` keeps the
+      same background so hovering doesn't flicker it lighter/darker.
+    - renderer.ts: createViewingIcon() builds the eye span (aria-label
+      "Currently viewing"); renderChannel() adds the class + icon when
+      node.id === activeTabId (text channels only), appended last so the
+      name's flex:1 pushes it to the right of any unread dot / NSFW badge.
+    - updateViewingIndicator() is a targeted DOM update, NOT renderTree():
+      a full re-render would lose collapsed-category state (same reason
+      markChannelUnread() avoids it). It clears the previous row, then marks
+      the row matching activeTabId; the Server Log and DM tabs match no
+      `.tree-channel[data-channel-id]` row, so they just clear the highlight.
+    - Called at the end of switchTab(); closeTab() already routes through
+      switchTab("server-log") when the active tab is closed, and any full
+      renderTree() re-derives the state from activeTabId in renderChannel().
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html
+    apps/client/src/renderer/renderer.ts
+
+  Verification:
+    npx tsc --noEmit in apps/client passes. No server or shared-types
+    change. UI behavior not exercised by Claude; manual testing by the user
+    (checklist in PRD 16.3).
+
+  Next Step: PRD 16.4 — mute text channels (per user, client-side).
+
+
+--- Entry: 07/10/2026 ---
+
+Feature/Fix: PRD 16.4 — Mute text channels (per user, client-side)
+
+  Problem: On busy servers a lot of text channels with unread dots clutter the
+  tree, and there was no way for a user to opt out of the notifications for
+  channels they don't care about.
+
+  Solution: Any user can right-click a text channel and choose "Mute Channel" /
+  "Unmute Channel". A muted channel shows no unread dot or bold unread name and
+  is rendered faded (icon and name) like a disabled row, but stays fully
+  clickable. It is a purely local preference: no permission, no server event,
+  no wire-format change.
+
+  Client Changes:
+    - Menu: the mute item is first in the channel context menu, followed by a
+      new .ctx-menu-divider, and is offered only on openable text channels
+      (renderChannel passes canMute=true; voice channels and category rows via
+      renderCategory do not get it).
+    - Visuals: `.tree-channel.muted .ch-icon/.ch-name` at opacity 0.45 (0.7 on
+      hover so the name stays readable). Combines with the PRD 16.3 `.viewing`
+      highlight.
+    - Unread is still TRACKED while muted: unreadChannelIds, markChannelRead()
+      and the server's per-user read cursor are untouched. Only the painting is
+      suppressed (renderChannel skips the .unread class/dot for muted
+      channels; markChannelUnread() adds to the set then returns before
+      touching the DOM). Unmuting therefore reveals what arrived meanwhile.
+    - setChannelMuted() persists, then applyChannelMuteState() does a targeted
+      DOM update (toggles .muted/.unread and the dot) instead of renderTree(),
+      which would reset collapsed categories.
+    - Persistence: JSON { [serverId]: channelId[] } so different Reson8 servers
+      never mix lists. Reads validate the shape (malformed or unavailable
+      storage is treated as empty) and every access is in try/catch. The set
+      is loaded per server from the channel-tree handler (ensureMutedChannels
+      Loaded) and reset on disconnect.
+    - Pruning: each channel-tree update drops muted ids whose channel no longer
+      exists, so deleted channels don't accumulate. Skipped for an empty tree
+      (a transient state) so a blip can never wipe the list.
+
+  localStorage Keys:
+    reson8-muted-channels = JSON object mapping serverId -> array of muted
+    channel ids (key/entry removed when a server's list becomes empty)
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html
+    apps/client/src/renderer/renderer.ts
+
+  Verification:
+    npx tsc --noEmit in apps/client passes. No server or shared-types
+    change. UI behavior not exercised by Claude; manual testing by the user
+    (checklist in PRD 16.4).
+
+  Next Step: PRD 16.5 — floating message action toolbar (foundation for
+  grouping and replies).
+
+
+--- Entry: 07/10/2026 ---
+
+Feature/Fix: PRD 16.5 — Floating message action toolbar (foundation for 16.6 and 16.11)
+
+  Problem: Message actions (react, edit, pin, delete) were appended inside the
+  reaction strip, which had `min-height: 20px` on EVERY message so the
+  hover-only buttons had somewhere to appear. That reserved a fixed empty row
+  under each message, which defeats message grouping (PRD 16.6) and left no
+  home for the Reply button (PRD 16.11).
+
+  Solution: Structural refactor only — every existing action keeps working,
+  it just moves into a floating hover toolbar at the message's top-right
+  (user-approved, per print_discord_grouped_messages.png).
+
+  Client Changes:
+    - buildReactionBar(msgId, isDm, reactions) now builds ONLY the pills,
+      plus a trailing small "add reaction" button once at least one pill
+      exists. The strip is `display: none` unless it has `.has-reactions`, so
+      it takes no space until a reaction is added and "reinstates" its space
+      the moment one is (updateReactionBar() rebuilds it on reaction-updated).
+      min-height was removed. The old ownerId parameter and the owner lookup
+      in updateReactionBar() are gone since the strip no longer holds
+      owner-only buttons.
+    - New buildMessageActions(msgId, isDm, ownerId): a role="toolbar" with
+      React and (own messages) Delete. attachEditButton()/attachPinButton()
+      now take the toolbar and slot in through insertToolbarButton(), which
+      inserts before Delete, giving the deterministic order React, Edit, Pin,
+      Delete (PRD 16.11 will slot Reply right after React). Buttons keep their
+      btn-react / btn-edit-msg / btn-pin-msg / btn-delete-msg classes since
+      other code queries them; the edit button's 2-minute self-removal timer
+      is unchanged. All buttons got aria-labels and type="button".
+    - Visibility: the toolbar is absolute (top -14px, right 8px), hidden by
+      default, shown on `.chat-msg:hover`, `:focus-within` (keyboard access)
+      and `.actions-open`, which openReactionPicker() sets on the message so
+      the toolbar doesn't vanish as the pointer moves into the picker;
+      closeEmojiPicker() clears it. The picker's left edge is now clamped to
+      the window, since the toolbar sits at the message's right edge.
+    - A delegated mouseover adds `.actions-inside` (toolbar tucked inside at
+      top 2px) for a message within ~18px of its scroll container's top, so
+      the first message's toolbar isn't clipped.
+    - `.chat-msg` got position: relative, a faint hover tint, and 6px
+      padding balanced by -6px margin so the tint has breathing room without
+      shifting content.
+    - Pinned marker: the old `.btn-pin-msg.active` stayed visible without
+      hover to show which message is pinned; now that the toolbar is hidden,
+      a pinned message gets `.is-pinned` and a small persistent
+      `.msg-pin-indicator` (hidden while the toolbar shows). It is set at
+      build time from tab.pinnedMessageId and toggled by updatePinBarUI().
+    - The four per-button "opacity 0 until hover" CSS blocks were replaced by
+      toolbar-scoped rules. `attachMessageTruncation()` still inserts "See
+      more" before `.msg-reactions` (the strip is always in the DOM, just
+      hidden when empty).
+
+  Edge Cases Handled:
+    - Reaction hover card (PRD 15.11) unaffected: pills keep `.reaction-pill`
+      and the pillData WeakMap; hideReactionCard() still runs on every rebuild.
+    - Toolbar survives reaction updates (it is a separate element, never
+      replaced by updateReactionBar()).
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html
+    apps/client/src/renderer/renderer.ts
+
+  Verification:
+    npx tsc --noEmit in apps/client passes; npm run test:markdown passes. No
+    server or shared-types change. UI NOT exercised by Claude (touches every
+    message's DOM, so this item is the riskiest of the phase so far); manual
+    testing by the user in a channel AND a DM (checklist in PRD 16.5).
+
+  Next Step: PRD 16.6 — group consecutive messages, header layout, HH:MM times.
+
+
+--- Entry: 07/10/2026 ---
+
+Feature/Fix: PRD 16.6 — Group consecutive messages, header layout, HH:MM timestamps
+
+  Problem: Every message was an independent inline line ("HH:MM:SS nick text")
+  with its own nickname, seconds-resolution timestamp and margins, so busy
+  chats were cluttered with repeated nicknames.
+
+  Solution: Discord-style layout (user-approved). Each message has a header
+  line (nickname + HH:MM) and its text on its own line(s) below. A message
+  from the same author within 5 minutes of the FIRST message of the current
+  group becomes a "continuation": no header, tight spacing. Applies to
+  channel and DM chats; the Server Log is untouched.
+
+  Client Changes:
+    - DOM: both builders now share buildMessageShell(): .chat-msg >
+      .msg-header (.msg-nick + .msg-time) + .msg-body (.msg-text +
+      .msg-edited), with data-created-at. The header is always rendered and
+      hidden by CSS on `.msg-continuation`, so regrouping is only a class
+      toggle.
+    - Rule: shouldGroupMessage() is a pure function — same author, createdAt
+      not before the previous message, and createdAt minus the GROUP's first
+      message's time under GROUP_WINDOW_MS (5 min). Any non-.chat-msg sibling
+      between two messages (date divider, "Unread Messages" separator,
+      sentinels) breaks the group. A reply (data-is-reply="1", set by PRD
+      16.11) always opens its own group; that condition is a no-op until then.
+    - applyGrouping(el) recomputes one element from its previous sibling and
+      returns whether it changed (data-grouped, data-group-start, classes).
+      regroupFrom(startEl) always recomputes the start and keeps cascading
+      only while elements actually change, which bounds the work.
+    - Where it runs: append (renderChatMessage/renderDmMessage, covering
+      initial load, live messages, jump/rebuild) calls applyGrouping right
+      after insertion; prependOlderMessages() calls regroupFrom after
+      inserting the page, which also repairs the junction with the
+      previously-first message (inside the scroll-anchor measurement, so
+      scroll position stays correct); removeMessageElement() regroups from
+      the next message after a delete (a removed head promotes the next line;
+      removing an in-between message can merge two runs).
+    - Time: formatMessageTime() = toLocaleTimeString with hour+minute only
+      (respects the OS 12/24h preference). The header time's tooltip, and a
+      continuation's tooltip, show the full date and time. The continuation
+      tooltip is set on the whole message element rather than on .msg-body,
+      because an image-only continuation has an empty body that can't be
+      hovered. The Server Log's own timestamps are a separate path, unchanged.
+    - "(edited)" moved from after the time to the end of .msg-body
+      (ensureEditedLabel(), used by the edit and edit-broadcast paths), and is
+      hidden via :has() while the inline edit textarea is open.
+    - Spacing: group start margin-top 8px (0 right after a sentinel, date
+      divider or unread separator); continuation margin-top -2px to cancel
+      the container's flex gap. Reactions need no special handling: PRD 16.5
+      made the strip take space only when it has reactions.
+    - Solo-emoji messages, Markdown block/inline text, long-message
+      truncation and link previews operate on .msg-text / the message
+      element as before; block text lost its old margin-top since text is now
+      always below the header.
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html
+    apps/client/src/renderer/renderer.ts
+
+  Verification:
+    npx tsc --noEmit in apps/client passes; npm run test:markdown passes. The
+    real shouldGroupMessage/applyGrouping/regroupFrom code was additionally
+    extracted from renderer.ts, transpiled and run against a minimal fake DOM
+    (scratch script, not committed — the client has no DOM test harness):
+    12/12 scenarios pass — 5-minute window measured from the group start,
+    author change, separator break, no backwards grouping, reply opens a new
+    group, delete a head (with cascade), delete an in-between message (merge),
+    idempotent regroup, and three prepend-junction cases. The rendered UI was
+    NOT exercised by Claude; manual testing by the user in a channel and a DM
+    (checklist in PRD 16.6).
+
+  Next Step: PRD 16.7 — emoji autocomplete while typing :name.
+
+
+--- Entry: 07/10/2026 ---
+
+Feature/Fix: PRD 16.7 — Emoji autocomplete while typing :name
+
+  Problem: Emoji could only be inserted through the picker. Custom emoji could
+  be typed as :name: but only if the user remembered the exact name, and
+  Unicode emoji had no typed form at all.
+
+  Solution: Typing ":" followed by a letter in the chat box opens a floating
+  card just above the colon (per print_discord_emoji_autocomplete.png) with
+  emoji on the left and :name: on the right, covering both custom and Unicode
+  emoji. It filters as the user types and closes on no match, a closing colon,
+  whitespace, blur, tab switch, send, or the emoji picker opening.
+
+  Client Changes:
+    - Trigger: /(?:^|[\s([{"'])(:([a-zA-Z][a-zA-Z0-9_+-]{0,31}))$/ against the
+      text before the caret, so "http://x", "10:30" and "a:b" never trigger.
+      Group 1 is ":query", group 2 is "query". Ignored during IME composition.
+    - Search (searchEmojiForAutocomplete): ranked name prefix, name-word
+      prefix, keyword prefix (how ":laug" finds 🤣, like the reference's
+      :rofl:), then substring; ties favour custom emoji, then shorter names;
+      max 10. The Unicode index is built once lazily; the custom list is read
+      live. toEmojiSnakeName() is now shared with emojiShortName() (reaction
+      card) so both name an emoji identically.
+    - Card: one shared #emoji-autocomplete element (header "Emoji matching
+      :query", rows with glyph/<img> + name, role=listbox/option with
+      aria-activedescendant on the textarea). Opens upward, left-aligned to the
+      colon, clamped inside the window, max-height fitted to the space above.
+      The colon's coordinates come from a local mirror-div helper
+      (getTextareaCharCoords) instead of a dependency (no bundler).
+    - Keys: Up/Down move (wrapping), Enter/Tab select WITHOUT sending (the
+      handler runs first in the chatInput keydown), Escape closes only the card
+      (stopPropagation, so PRD 16.11's reply cancel won't also fire),
+      Shift+Enter closes the card and inserts a newline. Mouse: hover
+      highlights, mousedown is prevented so the textarea keeps focus.
+    - Selecting inserts the emoji CHARACTER for Unicode (only custom :name:
+      text renders as an emoji) and :name: for custom, plus a trailing space
+      unless whitespace already follows. Typing the closing ":" of a complete
+      Unicode name (":red_heart:") converts it in place; custom names are left
+      as typed since they already render.
+    - State/element refs live next to chatInput at the top of the file, not
+      beside the logic, because switchTab()/sendChatMessage() call
+      closeEmojiAutocomplete() and can run before the later section evaluates
+      (a const TDZ otherwise).
+    - Out of scope: the inline message-edit textarea and the picker's own
+      search box (the module takes the textarea from chatInput only).
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html
+    apps/client/src/renderer/renderer.ts
+
+  Verification:
+    npx tsc --noEmit in apps/client passes. The real search/ranking and the
+    open/closed trigger regexes were extracted from renderer.ts and run
+    against the real EMOJI_DATA in a scratch script (not committed): 22/22
+    pass, including ":laug" finding 🤣, the no-trigger cases, and the exact
+    replacement spans. That script CAUGHT A REAL BUG before commit: the code
+    indexed the regex capture groups as if group 2 included the colon, giving
+    a wrong query and colon index (typecheck cannot see this) — fixed, and
+    the span assertions added. NOT verified by Claude: the card's on-screen
+    positioning (mirror-div coordinates need real layout), keyboard flow in
+    the real textarea, and the window-edge clamping; manual testing by the
+    user (checklist in PRD 16.7).
+
+  Next Step: PRD 16.8 — server-side upload ownership (security fix).
+
+
+--- Entry: 07/10/2026 ---
+
+Feature/Fix: Follow-up fixes to PRD 16.1 (NSFW switch layout) and PRD 16.5/16.6 (reaction size)
+
+  Problem: (1) The "Don't warn me again" checkbox added by PRD 16.1 rendered
+  centered on its own line with its text on another line (reported with a
+  screenshot, app-planning/print_nsfw_fix.png). (2) After the grouped-message
+  layout, the reaction pills under messages looked too small.
+
+  Solution:
+    NSFW warning checkbox — root cause: the modal scope has generic rules,
+    `.modal-content label { display: block; margin-bottom: 4px }` and
+    `.modal-content input { width: 100%; padding; margin-bottom: 12px }`,
+    which outrank the single-class `.modal-check-row` flex rules, so the
+    checkbox was stretched across the modal and the label text fell below it.
+    Replaced with a switch row: the label text on the left (wraps naturally
+    at 12px/1.4 line-height) and the Settings `.toggle-switch` lever on the
+    right, inside a bordered card matching the Settings toggle rows. Every
+    new selector is scoped under `.modal-content` so it wins over those
+    generic rules, and the switch input gets a :focus-visible outline since
+    the visually-hidden input otherwise has no keyboard focus cue. The
+    checkbox id (chk-nsfw-dont-warn) and all JS are unchanged. The unused
+    .modal-check-row CSS was removed.
+
+    Reaction pills — `.reaction-pill` font-size 12px -> 15px, padding
+    1px 6px -> 2px 8px, gap 3 -> 4px, radius 10 -> 12px; `.reaction-count`
+    10px -> 12px; the trailing add-reaction button padding and icon (14 ->
+    16px) scaled to match. Custom emoji inside a pill are sized in em, so
+    they scale with the new font size (about 19px).
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html
+
+  Verification:
+    npx tsc --noEmit in apps/client passes (CSS/markup-only change). Visual
+    result NOT exercised by Claude; for the user to confirm against the
+    screenshot — the reaction size values (15px / 12px) are easy to tune.
+
+  Next Step: PRD 16.8 — server-side upload ownership (security fix).
+
+
+--- Entry: 07/10/2026 ---
+
+Feature/Fix: PRD 16.8 — Server-side upload ownership (stored-file ledger + upload tokens) [SECURITY]
+
+  Problem: The server trusted file URLs and Cloudinary public_ids sent by the
+  client — on SEND_MESSAGE / SEND_DIRECT_MESSAGE, CREATE_CUSTOM_EMOJI and
+  UPDATE_CHANNEL (icon) — then later DELETED whatever those values pointed at
+  (deleting a message/DM, an admin rejecting an emoji, replacing a channel
+  icon). A modified client could reference another user's already-posted file
+  from its own message and delete that message to get the victim's file
+  removed, pass an arbitrary public_id to cloudinary.destroy() (any asset in
+  the server's Cloudinary account), or submit an emoji pointing at someone's
+  image for an admin to reject. It could also post an external URL as an
+  "attachment" (a tracking pixel logging every viewer's IP).
+
+  Solution: The server now keeps its own record of every file it stores (the
+  `stored_files` ledger). Anything that wants to USE a file must claim it
+  there first; the URL/public_id that get persisted — and later deleted —
+  always come from the ledger, never from a client value.
+
+  Database Changes:
+    - New StoredFile model + StoredFileKind enum (MESSAGE_ATTACHMENT,
+      CUSTOM_EMOJI, CHANNEL_ICON): url (unique, canonical), publicId, kind,
+      ownerId (null = tokenless upload), claimedAt (null = unclaimed),
+      createdAt, index on (claimedAt, createdAt) for PRD 16.9's sweeper.
+    - Migration 20261007120000_add_stored_file_ledger, with a backfill: every
+      file already referenced by a message, DM, custom emoji or channel icon
+      becomes a claimed ledger row. Legacy absolute local URLs are normalized
+      to "/uploads/<file>" (regexp_replace); the same file under two hosts
+      collapses to one row (ON CONFLICT DO NOTHING); Cloudinary URLs and
+      public_ids pass through. NOT yet applied to the dev database (see
+      Verification / Next Step).
+
+  Server Changes:
+    - routes/upload.route.ts: authenticates BEFORE reading the multipart body
+      (Authorization: Bearer <token>; unknown/expired/malformed token -> 401;
+      no header -> accepted as ownerless while ALLOW_TOKENLESS_UPLOADS is
+      true), then records the file in the ledger and replies { url, publicId,
+      uploadId }. If recording fails the stored file is removed. Each route
+      passes its kind.
+    - handlers/upload.handler.ts (NEW): REQUEST_UPLOAD_TOKEN. Mints a random
+      32-byte token mapped to the socket's userId in Redis, stored under the
+      SHA-256 of the token (a Redis dump holds no usable tokens), 10-minute
+      TTL. Refused for viewer sockets and sockets that haven't joined.
+    - services/stored-file.service.ts (NEW): claimUploads() is one atomic
+      `UPDATE ... WHERE claimedAt IS NULL AND kind = ? AND (ownerId = me OR
+      ownerId IS NULL) RETURNING` — a compare-and-set, so concurrent claims
+      can't both win and there's no read-then-write window. It runs on the
+      SAME transaction client as the write that uses the file (message, DM,
+      emoji, channel update), so a failed write rolls the claim back and a
+      failed claim aborts the write. releaseStoredFile() runs AFTER the
+      referencing row is removed (DB first) and deletes the physical file only
+      if the file is in the ledger (a URL the server never stored is never
+      touched) and nothing else still references it (matched by file name, so
+      relative and legacy absolute forms both count). Also: normalizeUploadUrl,
+      parseClaimRequest, token helpers, UploadClaimError.
+    - message/dm/emoji/channel handlers: SEND_MESSAGE, SEND_DIRECT_MESSAGE,
+      CREATE_CUSTOM_EMOJI and UPDATE_CHANNEL claim by id (legacy single-URL
+      accepted for pre-v2.5.0 clients, claimed by URL under the same rules);
+      the client's attachmentPublicId / imagePublicId / iconPublicId are never
+      read. DELETE_MESSAGE, DELETE_DIRECT_MESSAGE, emoji rejection and icon
+      replacement now release via the ledger instead of calling
+      deleteAttachment() with row values. A claim failure acks "Attachment is
+      no longer available. Please re-attach it." Max one attachment per
+      message for now (PRD 16.10 raises it).
+    - config/upload.config.ts (NEW): ALLOW_TOKENLESS_UPLOADS, token TTL/prefix.
+
+  Shared Types Changes (all additive): REQUEST_UPLOAD_TOKEN event;
+    attachmentIds on SEND_MESSAGE / SEND_DIRECT_MESSAGE; imageUploadId on
+    CREATE_CUSTOM_EMOJI (imageUrl now optional); iconUploadId on UPDATE_CHANNEL;
+    legacy fields marked @deprecated.
+
+  Client Changes:
+    - preload.ts: getUploadToken() (cached until 1 minute before expiry;
+      5-second timeout because a pre-v2.5.0 server never answers the event, in
+      which case the upload simply goes out tokenless); uploadTo() sends the
+      bearer token, refreshes once and retries on a 401, and returns uploadId;
+      the cached token is dropped on every new socket. sendMessage /
+      sendDirectMessage / createCustomEmoji / updateChannel send the ledger id
+      AND the legacy URL/public_id fields, so a v2.5.0 client still works
+      against a v2.4.0 server.
+    - preload.ts: resolveMediaUrl() turns a server-relative "/uploads/x" into
+      an absolute URL on the connected server, applied at every inbound entry
+      point (MESSAGE_RECEIVED/EDITED, DIRECT_MESSAGE_RECEIVED, FETCH_MESSAGES,
+      FETCH_DIRECT_MESSAGES, GET_APPROVED/PENDING_EMOJIS,
+      CUSTOM_EMOJI_APPROVED, the channel tree's iconUrl). Absolute URLs
+      (Cloudinary, rows stored before v2.5.0) and protocol-relative "//host"
+      are left alone.
+    - renderer.ts: holds pendingAttachmentUploadId alongside the pending
+      image and passes the upload result through to send / emoji / icon calls.
+
+  DESIGN DECISION found during implementation (PRD 16.8 updated): the old
+  client composed ABSOLUTE URLs and the server stored them, so any scheme that
+  stores a client-composed URL lets a client pick the host of a stored
+  attachment (the external-URL hole). The server therefore stores the
+  host-independent path and clients resolve it. Consequence, stated plainly:
+  v2.4.0 clients will NOT display NEW locally-stored images, custom emoji or
+  channel icons from a v2.5.0 server (Cloudinary files and everything stored
+  before the upgrade are unaffected). This replaces the PRD's original
+  "v2.4.0 clients keep working" promise and must be said in the release notes.
+  Side finding, from reading the code (not reproduced against the old build):
+  local-disk deletion of message/DM images has never worked, because
+  deleteAttachment() requires a path starting with "/uploads/" and the stored
+  value was absolute. The ledger fixes this.
+
+  Key Files Modified:
+    packages/shared-types/src/socket-events.ts
+    apps/server/prisma/schema.prisma
+    apps/server/prisma/migrations/20261007120000_add_stored_file_ledger/migration.sql (NEW)
+    apps/server/src/config/upload.config.ts (NEW)
+    apps/server/src/services/stored-file.service.ts (NEW)
+    apps/server/src/handlers/upload.handler.ts (NEW)
+    apps/server/src/routes/upload.route.ts
+    apps/server/src/handlers/message.handler.ts
+    apps/server/src/handlers/dm.handler.ts
+    apps/server/src/handlers/emoji.handler.ts
+    apps/server/src/handlers/channel.handler.ts
+    apps/server/src/index.ts
+    apps/server/src/__tests__/stored-file.service.test.ts (NEW)
+    apps/client/src/preload.ts
+    apps/client/src/renderer/renderer.ts
+    app-planning/Reson8_Phase16_PRD.md (compatibility section revised)
+    (packages/shared-types and apps/server tsconfig.tsbuildinfo, per repo convention)
+
+  Verification:
+    - tsc: shared-types --build, server --noEmit and client --noEmit pass.
+      Server `npm run test`: 53/53 (18 new, covering URL normalization, token
+      hashing/extraction/round-trip with a fake Redis, claim-request parsing,
+      claim ordering and the claim-count assertion).
+    - Migration + backfill, run on a THROWAWAY database (never the dev DB):
+      all migrations applied in order, sample data inserted, then the new
+      migration — 7 ledger rows from a mixed set (absolute local URLs
+      normalized, one file under two hosts collapsed to one row, Cloudinary
+      ids kept, text-only messages skipped, already-relative kept). Then
+      `prisma migrate deploy` on a fresh DB also applied everything cleanly.
+    - Ledger against real Postgres (19 checks): one-shot claim, owner check,
+      ownerless claim, kind check, 8 concurrent claims -> exactly one wins,
+      rollback un-claims, legacy absolute URL claims the relative row,
+      external / never-uploaded URLs rejected, request order kept, release
+      refuses while a message still references the file (relative AND legacy
+      absolute forms), refuses untracked URLs, deletes file + row when
+      unreferenced.
+    - Full server end to end (46 checks): booted the REAL server on a spare
+      port against a fresh scratch DB and drove it with socket.io-client +
+      multipart HTTP: token issue (viewer / not-joined refused), 401 on
+      unknown and malformed tokens, tokenless legacy upload accepted and
+      ownerless, owned uploads, Bob cannot attach Alice's pending upload, the
+      attacker routes (reuse by id, by absolute URL, external URL) all fail
+      and create no message, forged public_ids ignored on message / emoji /
+      icon, legacy URL-based send still works, deleting a message / DM /
+      rejecting an emoji / replacing an icon really removes the file from disk
+      and the ledger row, kind mismatch rejected, duplicate emoji name doesn't
+      burn the upload, permission check on icons intact.
+    - Client logic (16 checks): the real getUploadToken / uploadTo /
+      resolveMediaUrl / attachmentPayload code extracted from preload.ts and
+      run against that live server: token cached, attributed to the user, a
+      rejected token refreshed once and retried, silent server -> tokenless
+      fallback, URL resolution (relative, absolute, protocol-relative, null,
+      nested tree, emoji).
+    - NOT verified by Claude: the real Electron UI (a chat image, emoji upload
+      and channel icon through the actual app). The scratch scripts are not
+      committed (no harness for them in the repo).
+    - The migration has NOT been applied to the dev database. To apply:
+      `cd apps/server && npm run db:migrate`. Docker deployments apply it
+      automatically on start. Until applied, a dev server on the new code will
+      fail on upload/send because the stored_files table doesn't exist.
+
+  Next Step: PRD 16.9 — orphaned upload cleanup (needs this ledger).
+
+
+--- Entry: 07/10/2026 ---
+
+Feature/Fix: PRD 16.9 — Orphaned upload cleanup (discard, sweeper, channel delete, one-time prune)
+
+  Problem: Files are uploaded the moment a user picks them, long before a
+  message, emoji or icon uses them, so abandoned ones piled up forever: an
+  image picked then removed or never sent, an emoji/icon upload that failed or
+  was cancelled after the file went up, and — because messages cascade-delete
+  with their channel but their files didn't — every image in a deleted
+  channel. Files left from before PRD 16.8 had the same problem.
+
+  Solution: Four layers, all built on the PRD 16.8 ledger (which is what
+  makes "unreferenced" knowable).
+
+  Server Changes:
+    - DISCARD_UPLOAD (new socket event, upload.handler.ts): throws away the
+      caller's own UNCLAIMED upload at once. discardUnclaimedUpload() is a
+      single atomic `DELETE ... WHERE claimedAt IS NULL AND ownerId = me
+      RETURNING`, so an attached file, someone else's upload, or an ownerless
+      (legacy) upload can never be discarded this way. Viewer sockets and
+      malformed ids are refused.
+    - Sweeper (services/upload-sweeper.ts, started from index.ts): first run
+      60s after boot, then hourly, never overlapping, timers unref()'d and
+      cleared in Fastify's onClose. sweepUnclaimedUploads() deletes unclaimed
+      uploads older than 24h in batches of 500. The `claimedAt IS NULL` test is
+      repeated on the OUTER delete on purpose: if a claim lands between the
+      batch being picked and the delete, Postgres re-checks the outer predicate
+      against the claimed row and skips it (a sub-select alone is not
+      re-evaluated), so a file that was just attached is never swept. Each
+      file still goes through the reference-count check before it is
+      physically deleted. Constants live in config/upload.config.ts.
+    - DELETE_CHANNEL: collectChannelFileUrls() gathers the channel's message
+      attachments and its own icon BEFORE the delete; the channel is deleted
+      (DB first), the ack is sent, then releaseStoredFiles() runs in the
+      background with bounded concurrency (20) so a channel with thousands of
+      images never delays the ack. Child channels are re-parented, not
+      deleted, so their files are untouched, and a file another row still
+      references (e.g. a DM) survives via the reference-count guard.
+    - Prune script (scripts/prune-orphan-uploads.mjs + .d.mts, `npm run
+      uploads:prune`): plain ESM so it runs in the production image (the
+      Dockerfile already copies all of apps/server). Dry run by default;
+      --apply deletes; --min-age-hours (default 24) protects in-flight uploads;
+      --dir. A file is kept if its name is in the ledger or referenced by any
+      messages/direct_messages/custom_emojis/channels row in ANY URL form
+      (relative or the old absolute), or by the `attachments` table once PRD
+      16.10 creates it (detected with to_regclass, so this script needs no
+      change then). Dotfiles are skipped; an unknown flag exits 2 with usage.
+      Local disk only — Cloudinary is documented as a manual step.
+    - New helpers in stored-file.service.ts: mapWithConcurrency (never
+      rejects), discardUnclaimedUpload, sweepUnclaimedUploads,
+      collectChannelFileUrls, releaseStoredFiles.
+
+  Client Changes:
+    - preload.ts: discardUpload(uploadId) with a 5s timeout (a pre-v2.5.0
+      server never answers; harmless, the sweep covers it).
+    - renderer.ts: a fire-and-forget discardUpload() helper that can never
+      block or fail the UI. Called when the ✕ on a ready attachment is
+      pressed (new discardPendingAttachment(); sending still just clears the
+      tray and does NOT discard), when a new image replaces the pending one,
+      and when an emoji / animated-emoji / channel-icon submit fails after its
+      file was uploaded (try/finally around the submit). A send that fails
+      leaves its upload for the sweeper.
+
+  Shared Types Changes: DISCARD_UPLOAD event (additive).
+
+  Docs: README gets a "Maintenance — Uploaded Files" section (what is cleaned
+  automatically, the prune script for local disk incl. the docker compose exec
+  form, and the manual Cloudinary comparison).
+
+  Key Files Modified:
+    packages/shared-types/src/socket-events.ts
+    apps/server/src/config/upload.config.ts
+    apps/server/src/services/stored-file.service.ts
+    apps/server/src/services/upload-sweeper.ts (NEW)
+    apps/server/src/handlers/upload.handler.ts
+    apps/server/src/handlers/channel.handler.ts
+    apps/server/src/index.ts
+    apps/server/scripts/prune-orphan-uploads.mjs (NEW)
+    apps/server/scripts/prune-orphan-uploads.d.mts (NEW)
+    apps/server/package.json
+    apps/server/src/__tests__/stored-file.service.test.ts
+    apps/server/src/__tests__/prune-orphan-uploads.test.ts (NEW)
+    apps/client/src/preload.ts
+    apps/client/src/renderer/renderer.ts
+    README.md
+    (packages/shared-types and apps/server tsconfig.tsbuildinfo, per repo convention)
+
+  Verification:
+    - tsc: shared-types --build, server --noEmit, client --noEmit pass. Server
+      `npm run test`: 64/64 (11 new: prune script's name extraction / orphan
+      selection / min-age / dotfiles, and mapWithConcurrency's cap, ordering
+      and never-rejects behaviour). Client `test:markdown` passes.
+    - Service level against real Postgres on a throwaway DB (15 checks):
+      discard permissions (own / other user / claimed / ownerless / missing),
+      sweep of expired owned and ownerless uploads, recent and claimed ones
+      kept, idempotent second sweep, batches (7 rows, batch size 3), a swept
+      ledger row whose file a message still references keeps the file,
+      channel file collection (dedupes the relative and absolute forms of one
+      file, skips text-only) and release, and a file shared with a DM
+      surviving its channel's deletion. Includes a SWEEP-vs-CLAIM RACE test
+      (6 rounds x 15 expired rows, claims and a sweep running concurrently):
+      82 claims won and 8 lost, with zero violations — a claimed row always
+      kept its file, a lost one was fully gone and reported UploadClaimError.
+    - Real server end to end (20 checks): booted on a spare port with a fresh
+      scratch DB and driven with socket.io-client + multipart HTTP:
+      DISCARD_UPLOAD (another user / viewer / malformed id refused, own
+      upload discarded and file removed, a second discard harmless, an
+      attached upload not discardable); deleting a channel with an uploaded
+      icon, two images and a child channel removes the icon, both images and
+      their ledger rows while the CHILD channel's image (child re-parented
+      to the root) and another channel's image stay; the prune script's dry
+      run lists only the old orphan and deletes nothing, --apply deletes
+      exactly that file (fresh orphan, referenced files, ledger-tracked file
+      and .gitkeep kept), --min-age-hours=0 also lists the fresh one, an
+      unknown flag exits 2 with usage; and the running server's OWN sweeper
+      fired after its 60s delay ("Swept unclaimed uploads: 1" in its log),
+      removing an expired unclaimed upload and leaving a fresh one alone.
+    - The test server was stopped and the scratch DB dropped; the dev
+      database was never touched. No new migration in this item.
+    - NOT verified by Claude: the real Electron UI (the ✕ on a picked image,
+      replacing a pending image, a failed emoji/icon submit actually calling
+      discard). Scratch scripts are not committed.
+
+  Next Step: PRD 16.10 — multi-image upload, persistent previews, preview
+  viewer, drag and drop (adds the `attachments` table: update
+  countFileReferences / collectChannelFileUrls to read it).
+
+
+--- Entry: 07/10/2026 ---
+
+Feature/Fix: PRD 16.10 — Multi-image upload, persistent previews, preview viewer, drag and drop
+
+  Problem: The composer could hold ONE image. Its preview was a 24px thumbnail
+  shown only while uploading, then collapsed to a "📎 filename ✕" line; the
+  image could not be viewed before sending; a message could carry only one
+  image (single attachmentUrl columns); and dropping a file anywhere on the
+  window made Chromium navigate the whole app to it.
+
+  Solution: Up to 10 images per message (Discord's limit) in a tray of large
+  cards above the input bar, previews that stay after upload, a limited
+  viewer to open each one, drag and drop and multi-paste, and an `attachments`
+  table so a message really holds several images.
+
+  Database Changes:
+    - New Attachment model (messageId OR dmId, url, publicId, position,
+      createdAt), same nullable-owner convention as Reaction, cascading with
+      its message/DM. Migration 20261008120000_add_attachments backfills every
+      existing single attachment as position 0 (URLs copied as stored, legacy
+      absolute ones included, so old messages display exactly as before).
+    - Expand/contract: Message/DirectMessage.attachmentUrl/attachmentPublicId
+      are KEPT but marked deprecated and no longer written (a rollback stays
+      non-destructive); reads fall back to them only for a row the backfill
+      missed. NOT yet applied to the dev database: `cd apps/server && npx prisma
+      migrate deploy`.
+
+  Shared Types Changes (additive): IAttachment, MAX_ATTACHMENTS_PER_MESSAGE
+    (10), `attachments` on IMessage / IDirectMessage; `attachmentUrl` is now
+    documented as deprecated and is ALWAYS the first image's URL, so a v2.4.0
+    client still shows a message's first image.
+
+  Server Changes:
+    - services/attachment.service.ts (NEW): normalizeAttachmentInput (ids or
+      the one legacy URL, max 10, de-duplicated, order kept), toAttachmentDtos
+      / attachmentFields (position order, never exposes publicId, legacy-column
+      fallback), attachmentUrlsToRelease, releaseAttachmentFiles.
+    - SEND_MESSAGE / SEND_DIRECT_MESSAGE claim up to 10 uploads and create the
+      message with its attachment rows in ONE transaction (all-or-nothing: a
+      single unclaimable upload aborts the whole send and un-claims the rest).
+      FETCH_MESSAGES / FETCH_DIRECT_MESSAGES include attachments. DELETE
+      releases EVERY file of the message after the row is gone. EDIT_MESSAGE
+      still refuses image messages (now sourced from attachments).
+    - stored-file.service.ts: countFileReferences and collectChannelFileUrls
+      now also read the attachments table (PRD 16.8/16.9 guards); the prune
+      script already detected the table via to_regclass, so it needed no change.
+
+  Client Changes:
+    - Composer: #chat-composer wraps [#attachment-tray, #chat-input-bar];
+      switchTab toggles the composer. The old #attachment-preview bar and its
+      CSS were removed.
+    - State/queue: pendingAttachments[] (uploading|ready|failed) is global, not
+      per tab, as before. Uploads start on pick, at most 3 at once. Object URLs
+      are kept until a card is removed or the send SUCCEEDS (that was the root
+      of the vanishing preview). Validation: image/* only, <= 5 MB each, cap 10,
+      each refusal a toast (file names HTML-escaped, since toasts use innerHTML).
+    - Cards: 156px wide, 140px thumbnail, filename ellipsized; eye (opens the
+      LOCAL file in the viewer, so it works mid-upload), trash (removes and
+      discards the upload on the server — PRD 16.9; an in-flight one is
+      discarded when it finishes) and, on failed cards only, retry. Failed
+      cards are red with a warning icon and their actions always visible.
+    - Viewer: openLightbox(url, { previewOnly }) adds .preview-only, which hides
+      copy image / copy link / open in browser / download, their separator and
+      the "sent by" pill; zoom, pan, keys, Escape and Close remain. Cleared on
+      close so a normal open is never affected.
+    - Sending: blocked with a toast while anything is uploading ("Waiting for
+      images to finish uploading…") or failed ("Remove or retry the failed
+      image first"); Send looks disabled. The tray clears immediately, as
+      before. If the send fails, the cards are restored (only if the tray is
+      still empty); on "no longer available" every card comes back FAILED with
+      the good uploads discarded, so Retry re-uploads the same files.
+    - Rendering: shared buildAttachmentsElement for channel AND DM messages.
+      One image looks exactly as before (max 300x200); two or more become a
+      grid of 150px square tiles, up to 3 columns. In an NSFW channel EACH
+      tile has its own blur wrap + overlay, so the PRD 16.2 setting still
+      covers every one. Each image re-sticks the scroll to the bottom on load
+      (PRD 14.1). The edit button stays hidden on any image message.
+    - Drag and drop: a window-level guard swallows file drops everywhere
+      (only drags carrying "Files" — the channel tree's text/plain reorder drag
+      is untouched); a dashed-border overlay ("Drop images to attach") shows
+      over the chat only on a chat tab while connected, with an enter/leave
+      counter so child elements can't make it flicker. Paste takes every image
+      on the clipboard.
+    - main.ts: will-navigate on the main window cancels any navigation away
+      from the app's own page (defense in depth).
+    - preload.ts: sendMessage / sendDirectMessage take an array; the payload
+      carries ALL ids plus the FIRST image's legacy url/public_id for an older
+      server; every attachment URL is resolved against the server address.
+    - The renderer has no module system, so MAX_ATTACHMENTS_PER_MESSAGE is
+      mirrored locally (10) rather than imported from shared-types.
+
+  Key Files Modified:
+    packages/shared-types/src/models.ts
+    packages/shared-types/src/socket-events.ts
+    apps/server/prisma/schema.prisma
+    apps/server/prisma/migrations/20261008120000_add_attachments/migration.sql (NEW)
+    apps/server/src/services/attachment.service.ts (NEW)
+    apps/server/src/services/stored-file.service.ts
+    apps/server/src/handlers/message.handler.ts
+    apps/server/src/handlers/dm.handler.ts
+    apps/server/src/__tests__/attachment.service.test.ts (NEW)
+    apps/client/src/renderer/index.html
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/preload.ts
+    apps/client/src/main.ts
+    (packages/shared-types and apps/server tsconfig.tsbuildinfo, per repo convention)
+
+  Verification:
+    - tsc: shared-types --build, server --noEmit, client --noEmit pass. Server
+      `npm run test`: 78/78 (14 new in attachment.service.test.ts). Client
+      `test:markdown` passes.
+    - Migration + backfill on a throwaway DB: all earlier migrations, sample
+      rows (legacy absolute URL, Cloudinary with public_id, text-only, already
+      relative, a DM), then the new one — 4 attachment rows, text-only skipped,
+      legacy columns still populated, and deleting a message cascades its rows.
+    - Real server end to end (34 checks, scratch DB): 3 images stored in the
+      requested order; the deprecated attachmentUrl is the first image; no
+      publicId in any DTO; the deprecated columns are not written; FETCH returns
+      the same list; exactly 10 accepted, 11 rejected without burning any
+      upload; a duplicated id attaches once; images with no text allowed; a
+      send including someone else's upload fails as a whole and un-claims the
+      sender's own upload (rollback); legacy single-URL send still works;
+      multi-image messages can't be edited, text ones can; deleting a 3-image
+      message removes all 3 files and rows; a 2-image DM end to end (delivery,
+      history, steal attempt refused, delete removes both); a row only the
+      deprecated column knows still renders, can't be edited, and releases its
+      file; deleting a channel removes every gallery file; the prune script keeps
+      a file referenced only through the attachments table.
+    - THE REAL APP (61 checks): built the client and drove the actual Electron
+      renderer over the DevTools protocol on a virtual display (Xvfb, no
+      WAYLAND_DISPLAY, own --user-data-dir so it could not touch a running
+      Reson8), against that real server, plus screenshots I inspected. Covered:
+      connecting through the UI; the composer hidden on the Server Log tab;
+      3 picked images -> 3 cards that stay after upload, 156px cards / 140px
+      thumbnails, tray above the input bar; the eye opens the viewer
+      preview-only (4 buttons, separator and pill hidden; zoom/close present),
+      Escape clears it, and a sent image opens the FULL viewer (copy, download,
+      "sent by"); trash removes a card and the server discards the upload;
+      sending a 2-image message -> 2-column grid of 150px tiles whose relative
+      URLs resolved against the server and loaded; a single image NOT in a
+      grid; no edit button on image messages; 12 picked -> 10 cards + toast;
+      a .txt file and a 6 MB image refused by toasts; uploads held via CDP
+      Fetch interception -> spinners, Send looks blocked, Enter shows the
+      "Waiting…" toast and sends nothing; uploads failed -> red card, visible
+      Retry, "Remove or retry…" toast, Retry succeeds; drag overlay appears,
+      hides, doesn't flicker on nested enter/leave, drop adds cards and is
+      handled; a text-only drag is ignored; no overlay or attach on the Server
+      Log tab; a file dropped on the channel tree is swallowed; a
+      renderer-initiated navigation to file:// is blocked by the main-process
+      will-navigate guard (page URL unchanged, still connected); paste of 2
+      images -> 2 cards; a send the server rejects ("no longer available")
+      restores both cards as failed, nothing is created, Retry re-uploads and
+      the second send succeeds; an NSFW channel's 3-image message has 3
+      separately blurred tiles and the blur setting off clears all 3; a 2-image
+      DM renders a grid, never blurred; reopening the channel reloads history
+      with the grids and images loading; zero uncaught page exceptions.
+    - First UI run had 4 FAILs that were test bugs, not app bugs (selector hit
+      older history; a CSS fade measured mid-transition); fixed in the test and
+      rerun clean on a fresh channel/user/Electron. Harness processes stopped,
+      scratch DB dropped, dev DB never touched. Scratch scripts not committed.
+    - NOT verified: native file-picker dialog (the input was fed a FileList),
+      a real OS drag from a file manager (events were synthesized with real
+      DataTransfer/File objects), a v2.4.0 client against this server.
+
+  Next Step: PRD 16.11 — message replies (channels and DMs). Uses this
+  composer: its reply bar goes at the top of #chat-composer.
+
+
+--- Entry: 07/10/2026 ---
+
+Feature/Fix: PRD 16.11 — Message replies (channels and DMs)
+
+  Problem: There was no way to answer a specific message. In a busy channel a
+  reply was just another line among many, and it was unclear what it answered.
+
+  Solution: Every message (channel and DM) has a Reply button in its hover
+  toolbar. Clicking it opens reply mode: a bar at the top of the composer
+  ("Replying to <nick>", with a cancel ✕) and an accent border on the message
+  being answered. The sent message shows a one-line snippet of the original
+  above its header, joined by a curved connector (per the Discord references);
+  clicking the snippet jumps to the original. Replies can be replied to, but a
+  snippet never nests: it shows only the message directly answered.
+
+  Database Changes: Message.replyToId and DirectMessage.replyToId, nullable.
+    Migration 20261009120000_add_message_replies (additive, no backfill). They
+    are PLAIN COLUMNS, deliberately NOT foreign keys: with ON DELETE SET NULL,
+    deleting the original would erase the fact that the message WAS a reply,
+    and the client wants to say "Original message was deleted". Lookups are one
+    batched primary-key query per page. NOT yet applied to the dev database:
+    `cd apps/server && npx prisma migrate deploy`.
+
+  Shared Types Changes (additive): IReplyPreview ({ id, deleted, userId?,
+    nickname?, content?, hasAttachments? }); `replyTo` on IMessage and
+    IDirectMessage; `replyToId` on SEND_MESSAGE / SEND_DIRECT_MESSAGE;
+    `aroundMessageId` on FETCH_DIRECT_MESSAGES.
+
+  Server Changes:
+    - services/reply.service.ts (NEW): truncateForPreview (collapses all
+      whitespace to single spaces, cuts at 200 CODE POINTS so an emoji is never
+      split, trims before the ellipsis), toReplyPreview / replyPreviewFor
+      (a missing original becomes { deleted: true } with none of its text),
+      parseReplyToId, isChannelReplyAllowed, dmInPair / isDmReplyAllowed, and
+      loadReplyPreviews (ONE query per page for every distinct target; counts
+      the new attachments table AND the deprecated column for hasAttachments).
+    - SEND_MESSAGE: a target that exists in ANOTHER channel is refused
+      ("Invalid reply target") because its text would leak into the snippet; one
+      that no longer exists is accepted and renders as deleted (the original may
+      have been deleted while the user typed). SEND_DIRECT_MESSAGE: an existing
+      target must belong to the same pair of users. A channel-message id used in
+      a DM reply matches no DM row, so it renders as deleted and leaks nothing.
+    - FETCH_MESSAGES, FETCH_DIRECT_MESSAGES and the EDIT_MESSAGE broadcast all
+      carry `replyTo` (an edited reply stays a reply).
+    - FETCH_DIRECT_MESSAGES gains `aroundMessageId`: the same half-before /
+      target / half-after window as channels, constrained to the conversation;
+      a DM outside it, or an unknown id, gets "Message not found".
+
+  Client Changes:
+    - Toolbar order is now React, Reply, Edit, Pin, Delete.
+    - Reply mode: replyTargets (Map keyed by tab id) so a draft belongs to its
+      own conversation; #reply-bar is the first child of #chat-composer;
+      switching tabs shows/hides it, closing a tab discards its draft. Enter
+      reply mode, send (clears the bar like the attachment tray and restores it
+      if the send fails), cancel with the ✕ or Escape. Escape reaches the reply
+      handler only if the emoji autocomplete did NOT consume it, so an open card
+      closes first and a second Escape cancels the reply (PRD 16.7 precedence).
+    - Snippet (buildReplySnippet): nick in accent + one line of plain text via
+      markdownToPlainText (never raw HTML), italic "Click to see attachment" with
+      an icon for an image-only original, and a muted italic non-clickable
+      "Original message was deleted" state (role/tabindex removed). It is
+      keyboard-operable (role=button, tabindex 0, Enter/Space). A reply sets
+      data-is-reply so it ALWAYS starts its own group with its header showing
+      (PRD 16.6 rule 5); the next plain message groups under it normally.
+    - Live: MESSAGE_EDITED refreshes snippets pointing at the edited message;
+      MESSAGE_DELETED turns them into the deleted state and cancels a reply
+      DRAFT that was answering it, with a toast.
+    - jumpToPinnedMessage became jumpToMessage(tabId, messageId) and now serves
+      channels AND DMs (DMs use the new aroundMessageId); the pinned bar calls
+      it unchanged.
+    - preload.ts: sendMessage / sendDirectMessage take replyToId;
+      fetchDirectMessages takes aroundMessageId.
+
+  Key Files Modified:
+    packages/shared-types/src/models.ts
+    packages/shared-types/src/socket-events.ts
+    apps/server/prisma/schema.prisma
+    apps/server/prisma/migrations/20261009120000_add_message_replies/migration.sql (NEW)
+    apps/server/src/services/reply.service.ts (NEW)
+    apps/server/src/handlers/message.handler.ts
+    apps/server/src/handlers/dm.handler.ts
+    apps/server/src/__tests__/reply.service.test.ts (NEW)
+    apps/client/src/renderer/index.html
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/preload.ts
+    (packages/shared-types and apps/server tsconfig.tsbuildinfo, per repo convention)
+
+  Verification:
+    - tsc: shared-types --build, server --noEmit, client --noEmit pass. Server
+      `npm run test`: 97/97 (19 new in reply.service.test.ts). Client
+      `test:markdown` passes.
+    - Migration on a throwaway DB with existing rows: existing messages/DMs get
+      NULL, and deleting an original leaves the reply's pointer intact (no FK).
+    - Real server end to end (32 checks, fresh scratch DB): snippet fields on the
+      broadcast; stored replyToId; non-replies are null; reply-to-reply shows the
+      directly-answered message and never nests; multi-line original collapsed to
+      one line; long original truncated; image-only original flagged
+      hasAttachments; history carries snippets; a deleted original leaves the
+      reply flagged deleted with none of its text, and the DB pointer stays;
+      replying to an already-deleted or never-existing id is accepted as
+      deleted; a cross-channel reply is refused and creates nothing; malformed
+      ids refused; a reply still needs text or an image; editing a reply keeps
+      its snippet, editing the original updates replies' snippets; DM replies in
+      both directions; a DM reply into a DIFFERENT conversation refused; a
+      channel-message id in a DM reply leaks nothing; DM history carries
+      snippets; the new DM aroundMessageId window (centred, 5 before / 5 after,
+      chronological, shorter at the very start, refused for another
+      conversation's DM or an unknown id, snippets included, normal latest-page
+      fetch unchanged).
+    - THE REAL APP (55 checks): rebuilt the client and drove the actual Electron
+      renderer over the DevTools protocol on a virtual display (own
+      --user-data-dir), against the real server, with a second socket playing
+      "Zed" live, plus screenshots I inspected. Covered: Reply button right after
+      React on every message; entering reply mode (bar text, accent highlight,
+      input focused, bar at the top of the composer); sending (bar and highlight
+      clear, snippet above the header with the right nick/text and the curved
+      connector, data-is-reply, own header, server pointer stored); a second
+      reply by the same author within 5 minutes NOT grouped, while a plain
+      message after it IS; multi-line / image-only / long originals; reply to a
+      reply never nests; clicking a snippet (and Enter) jumps and flashes the
+      original; Escape cancels; Escape with the emoji autocomplete open closes
+      only the card and a second Escape cancels the reply; the ✕ cancels;
+      Server Log hides the bar; another tab has its own independent draft;
+      coming back restores the right bar and highlight; closing a tab discards its
+      draft; a send the server refuses restores the draft and creates nothing; a
+      live edit of the original updates snippets; a live delete turns snippets
+      into "Original message was deleted" (muted, italic, no role/tabindex, click
+      does nothing), cancels a reply draft with a toast and removes the
+      highlight; reopening the channel restores snippets including the deleted
+      state; jumping to an original OUTSIDE the loaded page loads the window and
+      flashes it (channel and DM, via the new aroundMessageId); the pinned bar
+      still jumps; DM reply both directions with correct nicks; zero uncaught
+      page exceptions.
+    - Test bugs found and fixed along the way, none in the app: a log-truncation
+      assertion that ignored the (tested) trim-before-ellipsis rule; window
+      assertions that collided with a previous run's DMs; my own miscounts of
+      snippets (one reply points at the deleted message, five snippets in total)
+      and a 4-second toast measured after a slow check; and a DM lookup by
+      content alone that found another conversation's DM (the server correctly
+      refused it, which hung my test until I killed it and made the lookup
+      specific). Harness stopped, scratch DB dropped, dev DB never touched.
+      Scratch scripts not committed.
+    - NOT verified: a v2.4.0 client against this server (it ignores replyTo, so a
+      reply just shows as a normal message), and real typing latency/IME.
+
+  Next Step: Phase wrap-up, after your confirmation: /bump-version (expected
+  2.4.0 -> 2.5.0), release notes in app-planning/releases/v2.5.0.md, update the
+  three CLAUDE.md files and README.md, and archive the Phase 16 PRD.
+
+
+--- Entry: 07/10/2026 ---
+
+Feature/Fix: Follow-up to PRD 16.11 — reply snippet spacing and fade
+
+  Problem: (reported with a screenshot, app-planning/print_reply_fix.png) The
+  reply snippet sat almost on top of the message's header line, and it was as
+  bright as the real messages, so the two read as one block and the snippet
+  could be mistaken for an actual message in the conversation.
+
+  Solution (CSS only, apps/client/src/renderer/index.html):
+    - Spacing: `.msg-reply` margin 0 0 2px 18px -> -1px 0 5px 18px (lifted a
+      pixel, 5px of air below).
+    - Fade: opacity 0.55 on the whole snippet, in the spirit of the muted-channel
+      look (PRD 16.4); it returns to 0.95 on hover and keyboard focus
+      (:focus-visible) since it is a link. The "Original message was deleted"
+      state gets the same fade and does NOT brighten on hover (it isn't a link).
+    - Connector: the curved spine now runs from the snippet's middle to the TOP
+      edge of the header below (calc(50% + 5px)) — it points at the message
+      rather than running into it.
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html
+
+  Verification:
+    npx tsc --noEmit in apps/client passes. Measured in the real Electron app
+    (DevTools protocol, virtual display, fresh server/DB): gap between snippet
+    and header 5px, opacity 0.55, spine bottom within 0.02px of the header's top
+    edge, deleted snippet 0.55; with a real mouse hover the snippet goes to
+    >0.9 and a deleted snippet stays <0.6; no page exceptions. Screenshots
+    inspected. Harness stopped, scratch DB dropped, dev DB untouched.
+
+  Next Step: Phase 16 wrap-up (version bump, release notes, docs, archive the PRD).
+
+
+--- Entry: 07/10/2026 ---
+
+Feature/Fix: Phase 16 close-out — version bump to 2.5.0, release notes, documentation, PRD archived
+
+  Problem: Phase 16 (11 PRD items plus follow-up fixes) was complete and
+  hand-tested, and needed to be released and documented.
+
+  Solution:
+    - Version bump 2.4.0 -> 2.5.0 (minor: user-facing features, three additive
+      DB migrations, additive wire-format fields and a security fix, all
+      backward compatible) in the root, client and server package.json, the
+      README version badge and the root CLAUDE.md; package-lock.json regenerated
+      with `npm install --package-lock-only` (only the workspace versions
+      changed). shared-types stays on its own 0.1.0. A sweep for "2.4.0" found
+      nothing else live (the rest is history, a test description, and a
+      third-party crate version in packages/native-audio/Cargo.lock).
+    - New app-planning/releases/v2.5.0.md (every bullet traces to an entry
+      above). It carries two callouts that matter to users: update client and
+      server together (a v2.4.0 client cannot show NEW locally-stored images,
+      emoji or channel icons from a v2.5.0 server, shows only the first image of
+      a multi-image message and shows replies as plain messages), and server
+      admins need the three migrations (automatic in Docker, otherwise `npx
+      prisma migrate deploy`). The security fix is described at a high level
+      only, with no exploit steps.
+    - Documentation: root CLAUDE.md gains "Message layout, grouping & the hover
+      toolbar", "Replies", "Uploads — the stored-file ledger (security-
+      critical)" and "Composer" paragraphs, the data model additions, two new
+      Electron gotchas (never let the main window navigate; every inbound file
+      URL must go through resolveMediaUrl) and the Phase 16 entry in the
+      project history. apps/client/CLAUDE.md gains the attachment, reply,
+      targeted-DOM-update, per-user-preference and headless-testing (Xvfb +
+      DevTools protocol) conventions. apps/server/CLAUDE.md gains the ledger
+      rules, the reply rules, how to build and verify a migration with a
+      backfill on a throwaway database, and the dotenv gotcha for booting the
+      real server in tests. README: new feature bullets (replies, grouped
+      messages, toolbar, emoji autocomplete, multi-image messages, channel
+      muting, viewing highlight, NSFW options, upload ownership and cleanup),
+      the project structure and a roadmap row for Phase 16.
+    - app-planning/Reson8_Phase16_PRD.md moved to app-planning/archive/ (git mv).
+
+  Key Files Modified:
+    package.json, apps/client/package.json, apps/server/package.json,
+    package-lock.json
+    README.md, CLAUDE.md, apps/client/CLAUDE.md, apps/server/CLAUDE.md
+    app-planning/releases/v2.5.0.md (NEW)
+    app-planning/archive/Reson8_Phase16_PRD.md (moved)
+
+  Verification:
+    npx tsc --noEmit in apps/client and apps/server pass; server `npm run test`
+    97/97. Version references re-grepped after the edit.
+
+  Not done on purpose: condensing this log. progress.txt now holds 14 Phase 16
+  entries (~1,200 lines); the project convention is to condense them into a fifth
+  summary block and move the full text to archive/progress-phase-16.txt — see
+  the root CLAUDE.md's "Project history" note. Left for the start of the next
+  phase so it isn't done unasked.
+
+  Next Step: Review, commit and push the branch; then the next phase's
+  nextsteps.txt.

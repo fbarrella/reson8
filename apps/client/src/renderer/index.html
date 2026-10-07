@@ -312,6 +312,22 @@
       color: #fff;
     }
 
+    /* The text channel whose chat tab is currently shown (PRD 16.3). One
+       step above the hover tint, below the joined-voice .active style. Kept
+       separate from .active, which only ever means "connected voice channel". */
+    .tree-channel.viewing,
+    .tree-channel.viewing:hover {
+      background: rgba(79, 195, 247, 0.12);
+    }
+
+    .tree-channel .ch-viewing-icon {
+      display: inline-flex;
+      align-items: center;
+      flex-shrink: 0;
+      color: var(--text-muted);
+      opacity: 0.75;
+    }
+
     .tree-channel .ch-icon {
       font-size: 14px;
       flex-shrink: 0;
@@ -774,21 +790,55 @@
     }
 
     .chat-msg {
-      padding: 3px 0;
+      position: relative; /* anchors the floating action toolbar (PRD 16.5) */
+      padding: 3px 6px;
+      margin: 0 -6px; /* the padding above gives the hover tint breathing room without shifting content */
+      border-radius: 4px;
       font-size: 13px;
       line-height: 1.4;
+    }
+
+    .chat-msg:hover {
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    /* Header line = nickname + HH:MM (PRD 16.6); the text always sits on its
+       own line(s) in .msg-body below it. A continuation message (same author
+       within the grouping window, see applyGrouping()) hides the header. */
+    .chat-msg .msg-header {
+      display: flex;
+      align-items: baseline;
+      gap: 6px;
     }
 
     .chat-msg .msg-time {
       color: var(--text-muted);
       font-size: 10px;
-      margin-right: 6px;
     }
 
     .chat-msg .msg-nick {
       font-weight: 600;
       color: var(--accent);
-      margin-right: 6px;
+    }
+
+    .chat-msg.msg-continuation .msg-header {
+      display: none;
+    }
+
+    /* A new group gets breathing room above it; a continuation cancels the
+       container's 2px flex gap so grouped lines sit tight. */
+    .chat-msg.msg-group-start {
+      margin-top: 8px;
+    }
+
+    .chat-msg.msg-continuation {
+      margin-top: -2px;
+    }
+
+    .chat-top-sentinel + .chat-msg.msg-group-start,
+    .date-separator + .chat-msg.msg-group-start,
+    .unread-separator + .chat-msg.msg-group-start {
+      margin-top: 0;
     }
 
     .chat-msg .msg-text {
@@ -826,7 +876,7 @@
     /* ── Markdown inside messages (PRD 15.10) ──────────────────────── */
     .chat-msg .msg-text.msg-text-block {
       display: block;
-      margin-top: 2px;
+      margin-top: 0;
       overflow-wrap: anywhere;
     }
 
@@ -911,11 +961,17 @@
       border-color: var(--accent);
     }
 
+    /* "(edited)" trails the message text (PRD 16.6) — a continuation has no
+       header to carry it, so the end of the text is the one consistent spot. */
     .msg-edited {
       color: var(--text-muted);
       font-size: 10px;
-      margin-right: 6px;
+      margin-left: 4px;
       font-style: italic;
+    }
+
+    .msg-body:has(.msg-edit-input) .msg-edited {
+      display: none;
     }
 
     .msg-edit-input {
@@ -970,6 +1026,19 @@
       opacity: 1;
     }
 
+    /* "Blur images in NSFW channels" turned off in Settings (PRD 16.2). The
+       blurred wrap/overlay are still rendered either way, so this body class
+       un-blurs every already-rendered message live, and removing it re-blurs
+       them. The image keeps its own click handler -> image viewer. */
+    body.nsfw-blur-off .msg-image-nsfw-wrap .msg-image {
+      filter: none;
+      transform: none;
+    }
+
+    body.nsfw-blur-off .msg-image-nsfw-overlay {
+      display: none;
+    }
+
     .msg-image-nsfw-overlay {
       position: absolute;
       inset: 0;
@@ -993,19 +1062,48 @@
       align-items: center;
       gap: 4px;
       margin-top: 2px;
-      min-height: 20px;
+    }
+
+    /* The strip only takes space when the message actually has reactions
+       (PRD 16.5) — it used to reserve a fixed row on every message so the
+       hover-only action buttons had somewhere to appear. */
+    .msg-reactions:not(.has-reactions) {
+      display: none;
+    }
+
+    .reaction-add-btn {
+      display: inline-flex;
+      align-items: center;
+      padding: 3px 8px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--text-muted);
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .reaction-add-btn svg {
+      width: 16px;
+      height: 16px;
+    }
+
+    .reaction-add-btn:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+      background: rgba(99, 102, 241, 0.1);
     }
 
     .reaction-pill {
       display: inline-flex;
       align-items: center;
-      gap: 3px;
-      padding: 1px 6px;
-      border-radius: 10px;
+      gap: 4px;
+      padding: 2px 8px;
+      border-radius: 12px;
       border: 1px solid var(--border);
       background: transparent;
       color: var(--text-secondary);
-      font-size: 12px;
+      font-size: 15px;
       cursor: pointer;
       transition: all 0.15s;
       line-height: 1.3;
@@ -1019,6 +1117,83 @@
     .reaction-pill.mine {
       border-color: var(--accent);
       background: rgba(99, 102, 241, 0.2);
+    }
+
+    /* ── Emoji autocomplete card (PRD 16.7) ────────────────────────────
+       Floats just above the ":" being typed. Positioned (and its max-height
+       fitted to the space above) by JS; one shared element. */
+    #emoji-autocomplete {
+      display: none;
+      position: fixed;
+      z-index: 9100;
+      width: 280px;
+      max-height: 320px;
+      flex-direction: column;
+      overflow: hidden;
+      border-radius: 8px;
+      background: #0e1626;
+      border: 1px solid var(--border);
+      box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
+      -webkit-app-region: no-drag;
+    }
+
+    #emoji-autocomplete.visible {
+      display: flex;
+    }
+
+    .emoji-ac-header {
+      flex-shrink: 0;
+      padding: 8px 12px 6px;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .emoji-ac-list {
+      overflow-y: auto;
+      padding: 0 4px 4px;
+    }
+
+    .emoji-ac-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 5px 8px;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+
+    .emoji-ac-item.active {
+      background: rgba(79, 195, 247, 0.16);
+    }
+
+    .emoji-ac-glyph {
+      flex-shrink: 0;
+      width: 28px;
+      text-align: center;
+      font-size: 22px;
+      line-height: 1.2;
+    }
+
+    .emoji-ac-glyph img {
+      width: 22px;
+      height: 22px;
+      object-fit: contain;
+      vertical-align: middle;
+    }
+
+    .emoji-ac-name {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 13px;
+      color: var(--text-primary);
     }
 
     /* ── Reaction hover card (PRD 15.11) ───────────────────────────── */
@@ -1084,108 +1259,103 @@
     }
 
     .reaction-count {
-      font-size: 10px;
+      font-size: 12px;
       font-variant-numeric: tabular-nums;
       color: var(--text-muted);
     }
 
-    .btn-react {
-      background: none;
-      border: none;
-      color: var(--text-muted);
-      cursor: pointer;
+    /* ── Floating message action toolbar (PRD 16.5) ───────────────────
+       React / Reply / Edit / Pin / Delete live in one hover toolbar at the
+       message's top-right instead of inside the reaction strip. Shown on
+       hover, on keyboard focus within the message, and while this message's
+       reaction picker is open (.actions-open). */
+    .msg-actions {
+      position: absolute;
+      top: -14px;
+      right: 8px;
+      z-index: 2;
+      display: flex;
+      gap: 2px;
       padding: 2px;
-      border-radius: 4px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
       opacity: 0;
-      transition: all 0.15s;
+      pointer-events: none;
+      transition: opacity 0.12s;
+    }
+
+    .chat-msg:hover > .msg-actions,
+    .chat-msg:focus-within > .msg-actions,
+    .chat-msg.actions-open > .msg-actions {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    /* A message at the very top of the scroll area would clip the toolbar. */
+    .chat-msg.actions-inside > .msg-actions {
+      top: 2px;
+    }
+
+    .msg-actions button {
+      width: 26px;
+      height: 26px;
       display: flex;
       align-items: center;
+      justify-content: center;
+      padding: 0;
+      background: none;
+      border: none;
+      border-radius: 4px;
+      color: var(--text-muted);
+      cursor: pointer;
+      transition: all 0.15s;
     }
 
-    .chat-msg:hover .btn-react {
-      opacity: 0.6;
+    .msg-actions button svg {
+      width: 16px;
+      height: 16px;
     }
 
-    .btn-react:hover {
-      opacity: 1 !important;
+    .msg-actions button:hover {
       color: var(--accent);
-      background: rgba(99, 102, 241, 0.1);
+      background: rgba(255, 255, 255, 0.08);
     }
 
-    .btn-delete-msg {
-      background: none;
-      border: none;
-      color: var(--text-muted);
-      cursor: pointer;
-      padding: 2px;
-      border-radius: 4px;
-      opacity: 0;
-      transition: all 0.15s;
-      display: flex;
-      align-items: center;
-    }
-
-    .chat-msg:hover .btn-delete-msg {
-      opacity: 0.6;
-    }
-
-    .btn-delete-msg:hover {
-      opacity: 1 !important;
+    .msg-actions .btn-delete-msg:hover {
       color: var(--danger);
       background: rgba(239, 83, 80, 0.1);
     }
 
-    .btn-edit-msg {
-      background: none;
-      border: none;
-      color: var(--text-muted);
-      cursor: pointer;
-      padding: 2px;
-      border-radius: 4px;
-      opacity: 0;
-      transition: all 0.15s;
-      display: flex;
-      align-items: center;
-    }
-
-    .chat-msg:hover .btn-edit-msg {
-      opacity: 0.6;
-    }
-
-    .btn-edit-msg:hover {
-      opacity: 1 !important;
+    .msg-actions .btn-pin-msg.active {
       color: var(--accent);
-      background: rgba(99, 102, 241, 0.1);
     }
 
-    .btn-pin-msg {
-      background: none;
-      border: none;
-      color: var(--text-muted);
-      cursor: pointer;
-      padding: 2px;
-      border-radius: 4px;
-      opacity: 0;
-      transition: all 0.15s;
-      display: flex;
-      align-items: center;
-    }
-
-    .chat-msg:hover .btn-pin-msg {
-      opacity: 0.6;
-    }
-
-    .btn-pin-msg:hover {
-      opacity: 1 !important;
+    /* The toolbar is hidden until hover, so a pinned message keeps a small
+       persistent pin instead (the old always-visible active pin button). */
+    .msg-pin-indicator {
+      display: none;
+      position: absolute;
+      top: 5px;
+      right: 8px;
       color: var(--accent);
-      background: rgba(99, 102, 241, 0.1);
+      opacity: 0.8;
     }
 
-    /* A pinned message's own button stays visible even without hovering,
-       so it's clear at a glance which message is currently pinned. */
-    .btn-pin-msg.active {
-      opacity: 1;
-      color: var(--accent);
+    .msg-pin-indicator svg {
+      width: 12px;
+      height: 12px;
+    }
+
+    .chat-msg.is-pinned > .msg-pin-indicator {
+      display: block;
+    }
+
+    .chat-msg:hover > .msg-pin-indicator,
+    .chat-msg:focus-within > .msg-pin-indicator,
+    .chat-msg.actions-open > .msg-pin-indicator {
+      display: none;
     }
 
     /* Brief flash applied when jumping to a message via the pinned bar. */
@@ -1309,18 +1479,26 @@
     }
 
     /* Chat input */
-    #chat-input-bar {
+    /* The composer (tray + input bar) is shown only on chat tabs (PRD 16.10);
+       switchTab() toggles .visible on it instead of on the input bar. */
+    #chat-composer {
       display: none;
+      flex-direction: column;
+      flex-shrink: 0;
+    }
+
+    #chat-composer.visible {
+      display: flex;
+    }
+
+    #chat-input-bar {
+      display: flex;
       align-items: flex-end; /* the input grows upward-aligned with the buttons (PRD 15.10) */
       gap: 8px;
       padding: 8px 12px;
       border-top: 1px solid var(--border);
       background: var(--bg-secondary);
       flex-shrink: 0;
-    }
-
-    #chat-input-bar.visible {
-      display: flex;
     }
 
     #chat-input {
@@ -1380,83 +1558,353 @@
       color: var(--accent);
     }
 
-    /* Attachment preview bar */
-    #attachment-preview {
+    /* ── Reply mode (PRD 16.11) ─────────────────────────────────────────── */
+    #reply-bar {
       display: none;
       align-items: center;
+      justify-content: space-between;
       gap: 8px;
-      padding: 4px 12px;
+      padding: 6px 12px;
       background: var(--bg-tertiary);
       border-top: 1px solid var(--border);
-      font-size: 11px;
+      font-size: 12px;
       color: var(--text-secondary);
       flex-shrink: 0;
     }
 
-    .attachment-name {
-      flex: 1;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      color: var(--accent);
+    #reply-bar.visible {
+      display: flex;
     }
 
-    .attachment-remove {
+    .reply-bar-nick {
+      color: var(--accent);
+      font-weight: 600;
+    }
+
+    #btn-reply-cancel {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 22px;
+      height: 22px;
+      padding: 0;
       background: none;
       border: none;
-      color: var(--text-muted);
-      font-size: 12px;
-      cursor: pointer;
-      padding: 2px 6px;
       border-radius: 4px;
+      color: var(--text-muted);
+      cursor: pointer;
       transition: all 0.15s;
     }
 
-    .attachment-remove:hover {
-      color: var(--danger);
-      background: rgba(255, 107, 107, 0.1);
+    #btn-reply-cancel:hover {
+      color: var(--text-primary);
+      background: rgba(255, 255, 255, 0.08);
     }
 
-    .attachment-thumb {
-      width: 24px;
-      height: 24px;
-      object-fit: cover;
-      border-radius: 4px;
+    /* The message being answered, while the reply bar is up. */
+    .chat-msg.msg-reply-target {
+      background: rgba(79, 195, 247, 0.08);
+      box-shadow: inset 3px 0 0 var(--accent);
+    }
+
+    /* The snippet above a reply (PRD 16.11): who it answers + one line of
+       their text, joined to the message below by a curved connector. */
+    .msg-reply {
+      position: relative;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+      /* Lifted slightly (-1px) and given 5px of air below, so it can't be
+         mistaken for part of the message under it. */
+      margin: -1px 0 5px 18px;
+      font-size: 12px;
+      line-height: 1.4;
+      color: var(--text-secondary);
+      cursor: pointer;
+      /* Faded like a muted channel (PRD 16.4) — it's context, not a message. */
+      opacity: 0.55;
+      transition: opacity 0.12s;
+    }
+
+    /* Clickable, so it comes back to full strength under the pointer / focus. */
+    .msg-reply:hover,
+    .msg-reply:focus-visible {
+      opacity: 0.95;
+    }
+
+    .msg-reply-spine {
+      position: absolute;
+      left: -14px;
+      top: 50%;
+      width: 10px;
+      /* From the snippet's middle down to the TOP edge of the header below
+         (half a line + the 5px margin) — it points at the message, not into it. */
+      height: calc(50% + 5px);
+      border-left: 2px solid var(--border);
+      border-top: 2px solid var(--border);
+      border-top-left-radius: 6px;
+      pointer-events: none;
+    }
+
+    .msg-reply-nick {
+      flex-shrink: 0;
+      color: var(--accent);
+      font-weight: 600;
+    }
+
+    .msg-reply-text {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+
+    .msg-reply:hover .msg-reply-text {
+      color: var(--text-primary);
+    }
+
+    .msg-reply-text.attachment {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-style: italic;
+    }
+
+    .msg-reply-text.attachment svg {
       flex-shrink: 0;
     }
 
-    .attachment-spinner {
-      width: 12px;
-      height: 12px;
-      border: 2px solid var(--border);
-      border-top-color: var(--accent);
-      border-radius: 50%;
-      flex-shrink: 0;
-      animation: attachment-spin 0.7s linear infinite;
+    /* The original was deleted: informational only, not a link. */
+    .msg-reply.deleted {
+      cursor: default;
+      font-style: italic;
+      color: var(--text-muted);
     }
 
+    .msg-reply.deleted:hover {
+      opacity: 0.55; /* not a link: no hover emphasis */
+    }
+
+    .msg-reply.deleted:hover .msg-reply-text {
+      color: var(--text-muted);
+    }
+
+    #btn-send.blocked {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    /* ── Attachment tray (PRD 16.10) ─────────────────────────────────────
+       Cards for every picked image, ABOVE the input bar (as in Discord). The
+       preview stays after the upload finishes; each card has an eye (open the
+       image) and a trash (remove), plus a retry when its upload failed. */
     @keyframes attachment-spin {
       to { transform: rotate(360deg); }
     }
 
-    #attachment-preview.attachment-failed {
-      border-top-color: var(--danger);
-    }
-
-    .attachment-retry {
-      background: none;
-      border: 1px solid var(--accent);
-      color: var(--accent);
-      font-size: 11px;
-      cursor: pointer;
-      padding: 2px 8px;
-      border-radius: 4px;
-      transition: all 0.15s;
+    #attachment-tray {
+      display: none;
+      gap: 8px;
+      padding: 8px 12px;
+      background: var(--bg-tertiary);
+      border-top: 1px solid var(--border);
+      overflow-x: auto;
       flex-shrink: 0;
     }
 
-    .attachment-retry:hover {
-      background: rgba(79, 195, 247, 0.12);
+    #attachment-tray.has-items {
+      display: flex;
+    }
+
+    .attach-card {
+      position: relative;
+      flex: 0 0 156px;
+      width: 156px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding: 8px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+    }
+
+    .attach-card.failed {
+      border-color: var(--danger);
+    }
+
+    .attach-card-thumb {
+      position: relative;
+      height: 140px;
+      border-radius: var(--radius);
+      background: var(--bg-input);
+      overflow: hidden;
+    }
+
+    .attach-card-thumb img {
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      transition: opacity 0.15s;
+    }
+
+    .attach-card.uploading .attach-card-thumb img,
+    .attach-card.failed .attach-card-thumb img {
+      opacity: 0.4;
+    }
+
+    .attach-card-overlay {
+      position: absolute;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      pointer-events: none;
+    }
+
+    .attach-card.uploading .attach-card-overlay,
+    .attach-card.failed .attach-card-overlay {
+      display: flex;
+    }
+
+    .attach-card-spinner {
+      width: 22px;
+      height: 22px;
+      border: 3px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: attachment-spin 0.7s linear infinite;
+    }
+
+    .attach-card.failed .attach-card-spinner {
+      display: none;
+    }
+
+    .attach-card-warn {
+      display: none;
+      color: var(--danger);
+    }
+
+    .attach-card.failed .attach-card-warn {
+      display: block;
+    }
+
+    .attach-card-name {
+      font-size: 11px;
+      color: var(--text-secondary);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .attach-card-actions {
+      position: absolute;
+      top: 4px;
+      right: 4px;
+      z-index: 2;
+      display: flex;
+      gap: 2px;
+      padding: 2px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+      opacity: 0;
+      transition: opacity 0.12s;
+    }
+
+    .attach-card:hover .attach-card-actions,
+    .attach-card:focus-within .attach-card-actions,
+    .attach-card.failed .attach-card-actions {
+      opacity: 1;
+    }
+
+    .attach-card-actions button {
+      width: 24px;
+      height: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      background: none;
+      border: none;
+      border-radius: 4px;
+      color: var(--text-secondary);
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .attach-card-actions button:hover {
+      color: var(--accent);
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    .attach-card-actions button[hidden] {
+      display: none;
+    }
+
+    .attach-card-actions .attach-remove:hover {
+      color: var(--danger);
+      background: rgba(239, 83, 80, 0.1);
+    }
+
+    /* ── Drop zone (PRD 16.10) ─────────────────────────────────────────── */
+    #chat-drop-overlay {
+      display: none;
+      position: absolute;
+      inset: 8px;
+      z-index: 50;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      background: rgba(15, 20, 35, 0.88);
+      border: 2px dashed var(--accent);
+      border-radius: var(--radius);
+      color: var(--accent);
+      font-size: 14px;
+      font-weight: 600;
+      pointer-events: none; /* never intercepts the drag, so no enter/leave flicker */
+    }
+
+    #chat-drop-overlay.visible {
+      display: flex;
+    }
+
+    /* ── Several images on one message (PRD 16.10) ─────────────────────── */
+    .msg-attachments {
+      display: grid;
+      grid-template-columns: repeat(var(--att-cols, 2), 150px);
+      gap: 4px;
+      margin-top: 4px;
+    }
+
+    .msg-attachments .msg-image,
+    .msg-attachments .msg-image-nsfw-wrap {
+      width: 150px;
+      height: 150px;
+      max-width: none;
+      max-height: none;
+      margin-top: 0;
+    }
+
+    .msg-attachments .msg-image-nsfw-wrap .msg-image {
+      width: 100%;
+      height: 100%;
+    }
+
+    /* A preview of a picked image (PRD 16.10): zoom/pan/close only. There's
+       no sender yet and nothing to copy, link, open or download. */
+    #image-lightbox-modal.preview-only #btn-lightbox-copy-image,
+    #image-lightbox-modal.preview-only #btn-lightbox-copy-link,
+    #image-lightbox-modal.preview-only #btn-lightbox-open-browser,
+    #image-lightbox-modal.preview-only #btn-lightbox-download,
+    #image-lightbox-modal.preview-only .lightbox-sep,
+    #image-lightbox-modal.preview-only .lightbox-sender {
+      display: none;
     }
 
     /* ── Image Lightbox (PRD 15.9) ─────────────────────────────── */
@@ -2058,6 +2506,26 @@
 
     .channel-ctx-menu-item:hover {
       background: rgba(255,255,255,0.06);
+    }
+
+    .ctx-menu-divider {
+      height: 1px;
+      margin: 4px 0;
+      background: var(--border);
+    }
+
+    /* Muted text channel (PRD 16.4): faded, almost "disabled"-looking, but
+       still fully clickable. Brightens a little on hover so the user can read
+       what they're about to open. */
+    .tree-channel.muted .ch-icon,
+    .tree-channel.muted .ch-name {
+      opacity: 0.45;
+      transition: opacity 0.1s;
+    }
+
+    .tree-channel.muted:hover .ch-icon,
+    .tree-channel.muted:hover .ch-name {
+      opacity: 0.7;
     }
 
     .modal-content {
@@ -2872,6 +3340,52 @@
       border-color: var(--accent);
     }
 
+    /* "Don't ask again" switch row inside a confirmation modal (PRD 16.1).
+       Every selector is prefixed with .modal-content on purpose: that scope
+       has generic `label { display: block; margin-bottom }` and `input {
+       width: 100%; padding; margin-bottom }` rules which, at equal or lower
+       specificity, stretched the old plain checkbox onto its own line. The
+       switch itself reuses the Settings .toggle-switch component. */
+    .modal-content .modal-switch-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin: 0 0 16px;
+      padding: 10px 12px;
+      border-radius: var(--radius);
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+    }
+
+    .modal-content .modal-switch-text {
+      flex: 1;
+      min-width: 0;
+      margin: 0;
+      font-size: 12px;
+      line-height: 1.4;
+      color: var(--text-secondary);
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .modal-content .modal-switch-row .toggle-switch {
+      margin: 0;
+    }
+
+    .modal-content .modal-switch-row .toggle-switch input {
+      width: 0;
+      height: 0;
+      margin: 0;
+      padding: 0;
+      border: 0;
+    }
+
+    .modal-content .modal-switch-row .toggle-switch input:focus-visible + .toggle-slider {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+
     /* ── Toggle Switch ────────────────────────────────────────────── */
     .toggle-row {
       display: flex;
@@ -3579,7 +4093,20 @@
         <div class="tab-content active" data-tab-id="server-log">
           <div id="event-log"></div>
         </div>
+        <!-- Drop zone shown while image files are dragged over the chat (PRD 16.10) -->
+        <div id="chat-drop-overlay" aria-hidden="true">
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          <span>Drop images to attach</span>
+        </div>
       </div>
+      <!-- Everything below the message list: [reply bar — PRD 16.11] → attachment tray → input bar (PRD 16.10) -->
+      <div id="chat-composer">
+      <!-- Reply mode (PRD 16.11): shown while the user is answering a specific message -->
+      <div id="reply-bar" role="status">
+        <span class="reply-bar-label">Replying to <strong class="reply-bar-nick" id="reply-bar-nick"></strong></span>
+        <button type="button" id="btn-reply-cancel" title="Cancel reply (Esc)" aria-label="Cancel reply"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+      </div>
+      <div id="attachment-tray" role="list" aria-label="Attached images"></div>
       <div id="chat-input-bar" style="position:relative;">
         <!-- Emoji Picker Panel (floating above input bar) -->
         <div class="emoji-picker" id="emoji-picker">
@@ -3592,13 +4119,13 @@
           </div>
           <div class="emoji-grid-container" id="emoji-grid-container"></div>
         </div>
-        <input type="file" id="file-input" accept="image/jpeg,image/png,image/gif,image/webp" style="display:none;">
+        <input type="file" id="file-input" accept="image/jpeg,image/png,image/gif,image/webp" multiple style="display:none;">
         <button id="btn-attach" title="Attach Image"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></button>
         <button id="btn-emoji" title="Emoji"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg></button>
         <textarea id="chat-input" rows="1" placeholder="Type a message..."></textarea>
         <button id="btn-send">Send</button>
       </div>
-      <div id="attachment-preview"></div>
+      </div>
     </div>
   </div>
 
@@ -3692,6 +4219,13 @@
     <div class="modal-content">
       <h3>🔞 NSFW Channel</h3>
       <p><strong id="nsfw-confirm-channel-name"></strong> is marked as Not Safe For Work. Are you sure you want to open it?</p>
+      <div class="modal-switch-row">
+        <label class="modal-switch-text" for="chk-nsfw-dont-warn">Don't warn me again for NSFW channels</label>
+        <label class="toggle-switch">
+          <input type="checkbox" id="chk-nsfw-dont-warn">
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
       <div class="modal-actions">
         <button class="btn btn-cancel" id="btn-nsfw-cancel">Cancel</button>
         <button class="btn btn-disconnect" id="btn-nsfw-confirm">Continue</button>
@@ -4194,6 +4728,40 @@
             <span class="toggle-slider"></span>
           </label>
         </div>
+
+        <label style="font-size:11px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px; display:block; margin-bottom:10px; margin-top:6px;">Content</label>
+
+        <div class="toggle-row">
+          <div class="toggle-row-info">
+            <div class="toggle-row-icon">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            </div>
+            <div class="toggle-row-text">
+              <span class="toggle-row-title">Warn before opening NSFW channels</span>
+              <span class="toggle-row-desc">Ask for confirmation before opening a channel marked NSFW</span>
+            </div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="chk-nsfw-warn">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+
+        <div class="toggle-row">
+          <div class="toggle-row-info">
+            <div class="toggle-row-icon">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+            </div>
+            <div class="toggle-row-text">
+              <span class="toggle-row-title">Blur images in NSFW channels</span>
+              <span class="toggle-row-desc">Hide images in NSFW channels behind a blur until you open them</span>
+            </div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="chk-nsfw-blur">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
       </div>
 
       <!-- Audio Tab -->
@@ -4286,6 +4854,12 @@
       allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
       allowfullscreen style="display:none;"></iframe>
     <video id="video-lightbox-video" controls style="display:none;"></video>
+  </div>
+
+  <!-- ── Emoji Autocomplete card (PRD 16.7) ─────────────────────────────── -->
+  <div id="emoji-autocomplete" role="listbox" aria-label="Emoji suggestions">
+    <div class="emoji-ac-header" id="emoji-ac-header"></div>
+    <div class="emoji-ac-list" id="emoji-ac-list"></div>
   </div>
 
   <!-- ── Toast Notifications (Nudge, etc.) ───────────────────────────── -->

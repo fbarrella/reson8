@@ -1,8 +1,8 @@
 ================================================================================
   RESON8 — Development Progress Log
-  Summary regenerated: 04/10/2026 (condensed from the original phase 1-8
+  Summary regenerated: 07/10/2026 (condensed from the original phase 1-8
   log; also condenses phases 9-10 as of 12/08/2026, phases 11-13 as of
-  30/08/2026, and now phases 14-15)
+  30/08/2026, phases 14-15 as of 04/10/2026, and now phase 16)
 ================================================================================
 
 PROJECT OVERVIEW
@@ -30,11 +30,12 @@ app-planning/archive/progress-phases-1-8.txt (phases 1-8),
 app-planning/archive/progress-phases-9-10.txt (phases 9-10),
 app-planning/archive/progress-phases-11-13.txt (phases 11-13), and
 app-planning/archive/progress-phases-14-15.txt (the v2.2.1 patch work,
-phases 14 and 15). The original PRDs that drove this work are in
+phases 14 and 15), and app-planning/archive/progress-phase-16.txt (phase 16).
+The original PRDs that drove this work are in
 app-planning/archive/ (PRD.md, Reson8_Evolutions_PRD.md,
 Reson8_Improvements_PRD.md, Reson8_NextSteps_PRD.md, Reson8_Phase10_PRD.md,
 Reson8_Phase11_PRD.md, Reson8_Phase12_PRD.md, Reson8_Phase13_PRD.md,
-Reson8_Phase14_PRD.md, Reson8_Phase15_PRD.md). Reach for the archive when
+Reson8_Phase14_PRD.md, Reson8_Phase15_PRD.md, Reson8_Phase16_PRD.md). Reach for the archive when
 you need the "why" behind a specific decision that this summary
 compresses away.
 
@@ -419,6 +420,112 @@ process; trusted mouse events via `Input.dispatchMouseEvent`) caught bugs
 that typechecking and pure-function tests could not (the noise-cancelling
 chain, a mis-positioned Close button, a blank emoji font, a textarea
 scrollbar sliver).
+
+
+================================================================================
+  PHASE 16 SUMMARY — COMPLETE ✅  (current version: 2.5.0)
+================================================================================
+
+PHASE 16 — Replies, Grouped Chat & Secure Uploads (PRD 16.x — 11 items: 8 from
+app-planning/nextsteps.txt, plus two upload-pipeline findings from the PRD's own
+audit and one enabling refactor; reached v2.5.0. Three DB migrations.)
+  - Small preferences and chat polish (16.1-16.4): a global "Don't warn me
+    again" switch for the NSFW prompt (localStorage, per install; re-focusing an
+    already-open NSFW tab no longer re-prompts), an optional NSFW image blur
+    driven by a `body.nsfw-blur-off` class so already-rendered messages update
+    live, a `.viewing` highlight + eye icon on the open text channel, and
+    per-user channel muting (client-only, `{ serverId: channelId[] }` in
+    localStorage, pruned against the tree; unread is still TRACKED while muted,
+    only its painting is suppressed, so unmuting reveals what was missed). The
+    last two use targeted DOM updates, because a full renderTree() would lose
+    collapsed-category state.
+  - Hover toolbar refactor (16.5): the reaction strip's `min-height` reserved an
+    empty row on EVERY message just so hover-only buttons had somewhere to
+    appear, which defeated grouping and left no home for Reply. React, Reply,
+    Edit, Pin and Delete moved into a floating `.msg-actions` toolbar; the
+    strip now takes space only when a message has reactions.
+  - Grouped messages (16.6): Discord-style header (nick + HH:MM) over the text;
+    consecutive same-author messages within 5 minutes of the GROUP'S FIRST
+    message become continuations; a reply always starts its own group.
+    `applyGrouping()`/`regroupFrom()` run on append, prepend (repairing the page
+    junction) and delete, with a cascade that stops once nothing changes.
+  - Emoji autocomplete (16.7): `:` + a letter opens a card above the colon
+    (mirror-div coordinates, ranked name/word/keyword/substring search, custom
+    first on ties); Unicode emoji insert as the character, custom as `:name:`;
+    Enter/Tab select without sending, Escape closes only the card.
+  - Follow-ups found in hand-testing: the NSFW switch row had been stretched by
+    the modal's generic `label`/`input` rules (now a scoped switch row), and
+    reaction pills were enlarged after the grouped layout shrank them.
+  - SECURITY — upload ownership (16.8): the server trusted client-supplied
+    attachment/emoji/icon URLs and Cloudinary public_ids and later DELETED
+    whatever they pointed at, so a modified client could get another user's
+    file (or any asset in the Cloudinary account) deleted, or post an external
+    URL as an "attachment". Now every stored file is a `StoredFile` ledger row;
+    uploads are attributed by a socket-issued bearer token (hashed in Redis,
+    10 min); a file is claimed once, by its owner, for its own kind, by an
+    atomic compare-and-set on the SAME transaction as the write that uses it;
+    deletion uses only the ledger's url/public_id, after the referencing row is
+    gone, and only when nothing else references the file. Decision with a user-
+    visible cost: the server stores the host-independent path (`/uploads/x`)
+    because the old client composed ABSOLUTE URLs and storing a client-built
+    URL lets a client choose the host; clients resolve it with
+    `resolveMediaUrl()`. So a v2.4.0 client cannot show NEW locally-stored
+    images/emoji/icons from a v2.5.0 server (Cloudinary and older content are
+    fine); a v2.5.0 client still works against an older server (it also sends
+    the legacy fields). Tokenless (v2.4.0) uploads stay accepted as ownerless,
+    claim-once, behind `ALLOW_TOKENLESS_UPLOADS`. Side finding, by code reading
+    (not reproduced): local-disk deletion of message images had never worked,
+    since the stored URL never started with `/uploads/`.
+  - Orphaned-upload cleanup (16.9): `DISCARD_UPLOAD` (removing a picked image or
+    a failed emoji/icon submit deletes the file at once), an hourly sweeper for
+    uploads unclaimed after 24 h, file cleanup when a channel is deleted
+    (children are re-parented, not deleted, so their files stay), and
+    `npm run uploads:prune` (plain ESM, dry run by default) for pre-ledger
+    leftovers. The sweeper repeats `claimedAt IS NULL` on the OUTER delete so a
+    claim landing mid-sweep is never swept (verified with a 90-file race test).
+  - Multi-image messages (16.10): a new `attachments` table (expand/contract:
+    the old columns are kept but deprecated and no longer written), up to 10
+    images claimed all-or-nothing in one transaction, a tray of large persistent
+    preview cards (eye / trash / retry), a zoom-only preview viewer
+    (`openLightbox(..., { previewOnly })`), uploads queued 3 at a time, Send
+    blocked while anything is uploading or failed, failed sends restore the
+    cards, drag & drop and multi-paste, and a main-process `will-navigate`
+    guard plus a renderer-wide file-drop guard (a dropped file used to navigate
+    the whole app away).
+  - Replies (16.11): `replyToId` is a plain column with NO foreign key so a
+    reply stays a reply after its original is deleted ("Original message was
+    deleted"); one batched `loadReplyPreviews()` query per page; replies into
+    another channel/conversation are refused (their text would leak into the
+    snippet), missing targets are accepted; snippets never nest; reply drafts
+    are per tab; Escape cancels only after the emoji autocomplete has had its
+    say; DMs gained an `aroundMessageId` jump window and `jumpToMessage()`
+    now serves reply snippets AND the pinned bar. A follow-up spaced the snippet
+    away from the header and faded it (0.55, full strength on hover).
+  - Close-out: bumped to 2.5.0, release notes with the compatibility callouts,
+    the three CLAUDE.md files and README updated, the PRD archived.
+
+Testing lessons worth keeping (this phase leaned on them heavily):
+  - Real-UI testing is possible headlessly: build the client, run Electron under
+    Xvfb with `env -u WAYLAND_DISPLAY` and its own `--user-data-dir` (keeps the
+    single-instance lock away from a Reson8 you have open), and drive it over
+    the DevTools protocol. The renderer is a classic script, so its functions
+    and state are reachable from `Runtime.evaluate`; the CDP `Fetch` domain can
+    hold or fail uploads; synthetic `DragEvent`/`ClipboardEvent` carry real
+    `DataTransfer` files. Screenshots were inspected, not just asserted on.
+  - Real code, extracted and run: pure functions pulled out of renderer.ts /
+    preload.ts and run against a fake DOM, and server SQL run against a
+    throwaway Postgres database. This caught a bug typechecking could not (the
+    emoji autocomplete indexed its regex capture groups wrongly). The real
+    server was also booted for end-to-end runs.
+  - Most "failures" were bugs in the TEST (stale history in a reused channel,
+    miscounts, a 4 s toast measured late, a lookup by content that found another
+    conversation's row). Read the log and the screenshot before touching app
+    code.
+  - Gotchas: dotenv loads apps/server/.env regardless of the cwd and never
+    overrides variables that are already set (pass explicit DATABASE_URL /
+    REDIS_URL / PORT and an empty SERVER_PRIVATE_PASSWORD); `pkill -f` on a
+    pattern that is also in your own command line kills your own shell; tsx
+    treats `.ts` as CommonJS (use `.mts` for top-level await).
 
 
 ================================================================================
