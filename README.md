@@ -212,6 +212,43 @@ docker compose -f docker-compose.yml -f docker-compose.turn.yml up --build
 
 ---
 
+## 🧹 Maintenance — Uploaded Files
+
+Reson8 keeps its own record of every file it stores (chat images, custom emoji, channel icons) and cleans up after itself:
+
+- **Removing a picked image** before sending it, or cancelling an emoji/icon upload, deletes the file immediately.
+- **An hourly sweep** deletes any upload that was never attached to anything within 24 hours (for example, the app was closed mid-compose).
+- **Deleting a message or a DM, rejecting a custom emoji, replacing a channel icon, or deleting a channel** deletes the files involved — including every image in a deleted channel (sub-channels are moved up, not deleted, so their files stay).
+
+### Pruning files left over from older versions
+
+Versions before 2.5.0 never deleted some files (images that were removed before sending, files of deleted channels…). To find and remove those on a **local-disk** server:
+
+```bash
+cd apps/server
+npm run uploads:prune                        # dry run — lists orphaned files, deletes nothing
+npm run uploads:prune -- --apply             # delete them
+npm run uploads:prune -- --min-age-hours=48  # only files untouched for 48h+ (default 24)
+
+# Docker
+docker compose exec server npm run uploads:prune
+docker compose exec server npm run uploads:prune -- --apply
+```
+
+A file is kept if the database still references it in any form, or if it was modified within the minimum age (so an upload in progress is never touched). Always run the dry run first and read the list.
+
+### Cloudinary
+
+If you store files on Cloudinary, the prune script does **not** touch them (listing assets uses the rate-limited Admin API, and the account may hold assets that aren't Reson8's). To clean up by hand, compare the `reson8/` folder in your Cloudinary Media Library against the `publicId` values the server still knows:
+
+```sql
+SELECT "publicId" FROM stored_files WHERE "publicId" IS NOT NULL;
+```
+
+Anything in that folder that isn't in the list is an orphan. Files uploaded from 2.5.0 on are cleaned up automatically, exactly like local ones.
+
+---
+
 ## 📦 Releasing
 
 The client checks GitHub Releases for updates via `electron-updater`. Building installers is **not** the same as publishing an update:

@@ -19,7 +19,12 @@ import { createHash, randomBytes } from "node:crypto";
 import path from "node:path";
 import type { Prisma, PrismaClient, StoredFileKind } from "@prisma/client";
 import type { Redis } from "ioredis";
-import { UPLOAD_TOKEN_REDIS_PREFIX, UPLOAD_TOKEN_TTL_SEC } from "../config/upload.config.js";
+import {
+    FILE_RELEASE_CONCURRENCY,
+    UPLOAD_SWEEP_BATCH_SIZE,
+    UPLOAD_TOKEN_REDIS_PREFIX,
+    UPLOAD_TOKEN_TTL_SEC,
+} from "../config/upload.config.js";
 import { deleteAttachment } from "./storage.service.js";
 
 // ── Pure helpers ────────────────────────────────────────────────────────────
@@ -229,4 +234,102 @@ export async function releaseStoredFile(
     await prisma.storedFile.delete({ where: { id: file.id } }).catch(() => {});
     await deleteAttachment(file.url, file.publicId);
     return "deleted";
+}
+
+// ── Cleanup (PRD 16.9) ──────────────────────────────────────────────────────
+
+/** Runs `fn` over `items` with at most `limit` in flight at once; never rejects (failures are returned). */
+export async function mapWithConcurrency<T, R>(
+    items: readonly T[],
+    limit: number,
+    fn: (item: T) => Promise<R>,
+): Promise<PromiseSettledResult<R>[]> {
+    const results: PromiseSettledResult<R>[] = new Array(items.length);
+    let next = 0;
+    const worker = async (): Promise<void> => {
+        while (next < items.length) {
+            const i = next++;
+            try {
+                results[i] = { status: "fulfilled", value: await fn(items[i]) };
+            } catch (reason) {
+                results[i] = { status: "rejected", reason };
+            }
+        }
+    };
+    await Promise.all(Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, worker));
+    return results;
+}
+
+/**
+ * Discards the caller's own UNCLAIMED upload. One atomic
+ * `DELETE … WHERE claimedAt IS NULL AND ownerId = me RETURNING`: a file that
+ * has been (or is concurrently being) claimed can't be discarded, and
+ * someone else's — or an ownerless — upload is never touched. Returns whether
+ * anything was discarded. An unclaimed file is referenced by nothing, so it
+ * is deleted directly.
+ */
+export async function discardUnclaimedUpload(prisma: PrismaClient, uploadId: string, userId: string): Promise<boolean> {
+    const rows = await prisma.$queryRaw<{ url: string; publicId: string | null }[]>`
+        DELETE FROM "stored_files"
+        WHERE "id" = ${uploadId} AND "claimedAt" IS NULL AND "ownerId" = ${userId}
+        RETURNING "url", "publicId"`;
+    if (rows.length === 0) return false;
+    await deleteAttachment(rows[0].url, rows[0].publicId);
+    return true;
+}
+
+/**
+ * Deletes unclaimed uploads created before `olderThan`, in batches, and their
+ * files. The `claimedAt IS NULL` test is repeated on the OUTER delete on
+ * purpose: if a claim lands between the batch being picked and the delete,
+ * Postgres re-checks the outer predicate against the claimed row and skips it
+ * (a sub-select alone would not be re-evaluated), so a file that has just
+ * been attached is never swept. Each file is still checked against the
+ * reference count before it is physically deleted, as a belt-and-braces guard.
+ */
+export async function sweepUnclaimedUploads(
+    prisma: PrismaClient,
+    opts: { olderThan: Date; batchSize?: number },
+): Promise<{ swept: number }> {
+    const batchSize = opts.batchSize ?? UPLOAD_SWEEP_BATCH_SIZE;
+    let swept = 0;
+    for (;;) {
+        const rows = await prisma.$queryRaw<{ url: string; publicId: string | null }[]>`
+            DELETE FROM "stored_files"
+            WHERE "id" IN (
+                SELECT "id" FROM "stored_files"
+                WHERE "claimedAt" IS NULL AND "createdAt" < ${opts.olderThan}
+                ORDER BY "createdAt" LIMIT ${batchSize}
+            ) AND "claimedAt" IS NULL
+            RETURNING "url", "publicId"`;
+        if (rows.length === 0) break;
+
+        await mapWithConcurrency(rows, FILE_RELEASE_CONCURRENCY, async (row) => {
+            if ((await countFileReferences(prisma, row.url)) > 0) return;
+            await deleteAttachment(row.url, row.publicId);
+        });
+        swept += rows.length;
+        if (rows.length < batchSize) break;
+    }
+    return { swept };
+}
+
+/** The URLs of every file a channel would orphan when deleted: its messages' attachments and its own icon. */
+export async function collectChannelFileUrls(prisma: PrismaClient, channelId: string): Promise<string[]> {
+    const [messages, channel] = await Promise.all([
+        prisma.message.findMany({
+            where: { channelId, attachmentUrl: { not: null } },
+            select: { attachmentUrl: true },
+        }),
+        prisma.channel.findUnique({ where: { id: channelId }, select: { iconUrl: true } }),
+    ]);
+    const urls = new Set<string>();
+    for (const m of messages) if (m.attachmentUrl) urls.add(m.attachmentUrl);
+    if (channel?.iconUrl) urls.add(channel.iconUrl);
+    return [...urls];
+}
+
+/** Releases many files with bounded concurrency; failures are returned, never thrown. */
+export async function releaseStoredFiles(prisma: PrismaClient, urls: readonly string[]) {
+    return mapWithConcurrency(urls, FILE_RELEASE_CONCURRENCY, (url) => releaseStoredFile(prisma, url));
 }

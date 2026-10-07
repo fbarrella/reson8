@@ -441,6 +441,19 @@ export interface ClientToServerEvents {
     ) => void;
 
     /**
+     * Throws away an upload the user no longer wants before it was ever
+     * attached to anything (PRD 16.9) — e.g. they removed a picked image from
+     * the composer, or cancelled an emoji/icon flow after the file uploaded.
+     * Only the uploader's own UNCLAIMED uploads can be discarded; anything
+     * already in use, or owned by someone else, is refused. Best effort: a
+     * missed discard is caught by the server's hourly unclaimed-upload sweep.
+     */
+    DISCARD_UPLOAD: (
+        payload: { uploadId: string },
+        ack: (response: { success: boolean; error?: string }) => void,
+    ) => void;
+
+    /**
      * Resolves this viewer socket's `userId` from the same persisted
      * instance ID the primary connection uses, WITHOUT touching presence,
      * rooms, or anything `USER_JOIN_SERVER` would (that's the whole point —

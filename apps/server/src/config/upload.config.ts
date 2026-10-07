@@ -15,3 +15,18 @@ export const UPLOAD_TOKEN_TTL_SEC = 10 * 60;
 
 /** Redis key prefix for upload tokens — the key holds the SHA-256 of the token, never the token. */
 export const UPLOAD_TOKEN_REDIS_PREFIX = "upload-token:";
+
+/** An upload nobody attached to anything is swept away after this long (PRD 16.9). */
+export const UNCLAIMED_UPLOAD_TTL_MS = 24 * 60 * 60 * 1000;
+
+/** How often the sweeper looks for expired unclaimed uploads. */
+export const UPLOAD_SWEEP_INTERVAL_MS = 60 * 60 * 1000;
+
+/** Delay before the first sweep after boot, so startup isn't competing with it. */
+export const UPLOAD_SWEEP_FIRST_RUN_DELAY_MS = 60 * 1000;
+
+/** Rows handled per sweeper batch. */
+export const UPLOAD_SWEEP_BATCH_SIZE = 500;
+
+/** How many files are released at once when a channel (and all its images) is deleted. */
+export const FILE_RELEASE_CONCURRENCY = 20;

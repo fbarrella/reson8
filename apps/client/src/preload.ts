@@ -1067,6 +1067,23 @@ const api = {
         return uploadTo("/api/upload/channel-icon", fileBuffer, fileName, mimeType);
     },
 
+    /**
+     * Throws away an upload that was never attached to anything (PRD 16.9) —
+     * best effort: a pre-v2.5.0 server never answers, so this times out, and
+     * the server's hourly sweep catches whatever a discard misses.
+     */
+    discardUpload(uploadId: string): Promise<{ success: boolean; error?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.timeout(5000).emit("DISCARD_UPLOAD", { uploadId }, (err, res) => {
+                resolve(err ? { success: false, error: "No response" } : res);
+            });
+        });
+    },
+
     // ── Image Download ───────────────────────────────────────────────────
 
     downloadImage(url: string): void {

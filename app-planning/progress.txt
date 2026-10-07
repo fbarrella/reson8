@@ -1061,3 +1061,131 @@ Feature/Fix: PRD 16.8 — Server-side upload ownership (stored-file ledger + upl
       fail on upload/send because the stored_files table doesn't exist.
 
   Next Step: PRD 16.9 — orphaned upload cleanup (needs this ledger).
+
+
+--- Entry: 07/10/2026 ---
+
+Feature/Fix: PRD 16.9 — Orphaned upload cleanup (discard, sweeper, channel delete, one-time prune)
+
+  Problem: Files are uploaded the moment a user picks them, long before a
+  message, emoji or icon uses them, so abandoned ones piled up forever: an
+  image picked then removed or never sent, an emoji/icon upload that failed or
+  was cancelled after the file went up, and — because messages cascade-delete
+  with their channel but their files didn't — every image in a deleted
+  channel. Files left from before PRD 16.8 had the same problem.
+
+  Solution: Four layers, all built on the PRD 16.8 ledger (which is what
+  makes "unreferenced" knowable).
+
+  Server Changes:
+    - DISCARD_UPLOAD (new socket event, upload.handler.ts): throws away the
+      caller's own UNCLAIMED upload at once. discardUnclaimedUpload() is a
+      single atomic `DELETE ... WHERE claimedAt IS NULL AND ownerId = me
+      RETURNING`, so an attached file, someone else's upload, or an ownerless
+      (legacy) upload can never be discarded this way. Viewer sockets and
+      malformed ids are refused.
+    - Sweeper (services/upload-sweeper.ts, started from index.ts): first run
+      60s after boot, then hourly, never overlapping, timers unref()'d and
+      cleared in Fastify's onClose. sweepUnclaimedUploads() deletes unclaimed
+      uploads older than 24h in batches of 500. The `claimedAt IS NULL` test is
+      repeated on the OUTER delete on purpose: if a claim lands between the
+      batch being picked and the delete, Postgres re-checks the outer predicate
+      against the claimed row and skips it (a sub-select alone is not
+      re-evaluated), so a file that was just attached is never swept. Each
+      file still goes through the reference-count check before it is
+      physically deleted. Constants live in config/upload.config.ts.
+    - DELETE_CHANNEL: collectChannelFileUrls() gathers the channel's message
+      attachments and its own icon BEFORE the delete; the channel is deleted
+      (DB first), the ack is sent, then releaseStoredFiles() runs in the
+      background with bounded concurrency (20) so a channel with thousands of
+      images never delays the ack. Child channels are re-parented, not
+      deleted, so their files are untouched, and a file another row still
+      references (e.g. a DM) survives via the reference-count guard.
+    - Prune script (scripts/prune-orphan-uploads.mjs + .d.mts, `npm run
+      uploads:prune`): plain ESM so it runs in the production image (the
+      Dockerfile already copies all of apps/server). Dry run by default;
+      --apply deletes; --min-age-hours (default 24) protects in-flight uploads;
+      --dir. A file is kept if its name is in the ledger or referenced by any
+      messages/direct_messages/custom_emojis/channels row in ANY URL form
+      (relative or the old absolute), or by the `attachments` table once PRD
+      16.10 creates it (detected with to_regclass, so this script needs no
+      change then). Dotfiles are skipped; an unknown flag exits 2 with usage.
+      Local disk only — Cloudinary is documented as a manual step.
+    - New helpers in stored-file.service.ts: mapWithConcurrency (never
+      rejects), discardUnclaimedUpload, sweepUnclaimedUploads,
+      collectChannelFileUrls, releaseStoredFiles.
+
+  Client Changes:
+    - preload.ts: discardUpload(uploadId) with a 5s timeout (a pre-v2.5.0
+      server never answers; harmless, the sweep covers it).
+    - renderer.ts: a fire-and-forget discardUpload() helper that can never
+      block or fail the UI. Called when the ✕ on a ready attachment is
+      pressed (new discardPendingAttachment(); sending still just clears the
+      tray and does NOT discard), when a new image replaces the pending one,
+      and when an emoji / animated-emoji / channel-icon submit fails after its
+      file was uploaded (try/finally around the submit). A send that fails
+      leaves its upload for the sweeper.
+
+  Shared Types Changes: DISCARD_UPLOAD event (additive).
+
+  Docs: README gets a "Maintenance — Uploaded Files" section (what is cleaned
+  automatically, the prune script for local disk incl. the docker compose exec
+  form, and the manual Cloudinary comparison).
+
+  Key Files Modified:
+    packages/shared-types/src/socket-events.ts
+    apps/server/src/config/upload.config.ts
+    apps/server/src/services/stored-file.service.ts
+    apps/server/src/services/upload-sweeper.ts (NEW)
+    apps/server/src/handlers/upload.handler.ts
+    apps/server/src/handlers/channel.handler.ts
+    apps/server/src/index.ts
+    apps/server/scripts/prune-orphan-uploads.mjs (NEW)
+    apps/server/scripts/prune-orphan-uploads.d.mts (NEW)
+    apps/server/package.json
+    apps/server/src/__tests__/stored-file.service.test.ts
+    apps/server/src/__tests__/prune-orphan-uploads.test.ts (NEW)
+    apps/client/src/preload.ts
+    apps/client/src/renderer/renderer.ts
+    README.md
+    (packages/shared-types and apps/server tsconfig.tsbuildinfo, per repo convention)
+
+  Verification:
+    - tsc: shared-types --build, server --noEmit, client --noEmit pass. Server
+      `npm run test`: 64/64 (11 new: prune script's name extraction / orphan
+      selection / min-age / dotfiles, and mapWithConcurrency's cap, ordering
+      and never-rejects behaviour). Client `test:markdown` passes.
+    - Service level against real Postgres on a throwaway DB (15 checks):
+      discard permissions (own / other user / claimed / ownerless / missing),
+      sweep of expired owned and ownerless uploads, recent and claimed ones
+      kept, idempotent second sweep, batches (7 rows, batch size 3), a swept
+      ledger row whose file a message still references keeps the file,
+      channel file collection (dedupes the relative and absolute forms of one
+      file, skips text-only) and release, and a file shared with a DM
+      surviving its channel's deletion. Includes a SWEEP-vs-CLAIM RACE test
+      (6 rounds x 15 expired rows, claims and a sweep running concurrently):
+      82 claims won and 8 lost, with zero violations — a claimed row always
+      kept its file, a lost one was fully gone and reported UploadClaimError.
+    - Real server end to end (20 checks): booted on a spare port with a fresh
+      scratch DB and driven with socket.io-client + multipart HTTP:
+      DISCARD_UPLOAD (another user / viewer / malformed id refused, own
+      upload discarded and file removed, a second discard harmless, an
+      attached upload not discardable); deleting a channel with an uploaded
+      icon, two images and a child channel removes the icon, both images and
+      their ledger rows while the CHILD channel's image (child re-parented
+      to the root) and another channel's image stay; the prune script's dry
+      run lists only the old orphan and deletes nothing, --apply deletes
+      exactly that file (fresh orphan, referenced files, ledger-tracked file
+      and .gitkeep kept), --min-age-hours=0 also lists the fresh one, an
+      unknown flag exits 2 with usage; and the running server's OWN sweeper
+      fired after its 60s delay ("Swept unclaimed uploads: 1" in its log),
+      removing an expired unclaimed upload and leaving a fresh one alone.
+    - The test server was stopped and the scratch DB dropped; the dev
+      database was never touched. No new migration in this item.
+    - NOT verified by Claude: the real Electron UI (the ✕ on a picked image,
+      replacing a pending image, a failed emoji/icon submit actually calling
+      discard). Scratch scripts are not committed.
+
+  Next Step: PRD 16.10 — multi-image upload, persistent previews, preview
+  viewer, drag and drop (adds the `attachments` table: update
+  countFileReferences / collectChannelFileUrls to read it).

@@ -34,6 +34,7 @@ import { registerNudgeHandlers } from "./handlers/nudge.handler.js";
 import { registerUploadHandlers } from "./handlers/upload.handler.js";
 import { registerUploadRoute } from "./routes/upload.route.js";
 import { MediasoupService } from "./services/mediasoup.service.js";
+import { startUploadSweeper } from "./services/upload-sweeper.js";
 
 // Augment Fastify with the resolved server ID
 declare module "fastify" {
@@ -146,6 +147,7 @@ async function main(): Promise<void> {
     registerEmojiHandlers(io, app);
     registerNudgeHandlers(io, app);
     registerUploadHandlers(io, app);
+    startUploadSweeper(app);
 
     // ── Start ──────────────────────────────────────────────────────────────
     try {

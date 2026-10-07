@@ -19,8 +19,10 @@ import { buildChannelTree } from "../services/channel-tree.service.js";
 import { requirePermission } from "../middleware/permissions.middleware.js";
 import {
     claimUploads,
+    collectChannelFileUrls,
     normalizeUploadUrl,
     releaseStoredFile,
+    releaseStoredFiles,
     UploadClaimError,
 } from "../services/stored-file.service.js";
 
@@ -149,13 +151,32 @@ export function registerChannelHandlers(
                     return;
                 }
 
+                // Collect the files this deletion will orphan BEFORE the rows
+                // go (PRD 16.9): the messages' attachments and the channel's
+                // own icon. Child channels are re-parented (SetNull), not
+                // deleted, so their messages and files are correctly left alone.
+                const orphanedFileUrls = await collectChannelFileUrls(app.prisma, channelId);
+
                 // Cascade: Prisma schema has onDelete: Cascade for messages,
-                // and onDelete: SetNull for children
+                // and onDelete: SetNull for children. DB first, so a failed
+                // delete never loses a file.
                 await app.prisma.channel.delete({
                     where: { id: channelId },
                 });
 
                 ack({ success: true });
+
+                // Release the files in the background (bounded concurrency) —
+                // a channel can hold thousands of images and the ack must not
+                // wait on them. Each goes through the ledger's reference check.
+                if (orphanedFileUrls.length > 0) {
+                    releaseStoredFiles(app.prisma, orphanedFileUrls)
+                        .then((results) => {
+                            const failed = results.filter((r) => r.status === "rejected").length;
+                            if (failed > 0) app.log.warn({ channelId, failed }, "Some deleted-channel files could not be released");
+                        })
+                        .catch((err) => app.log.warn({ err, channelId }, "Failed to release deleted channel's files"));
+                }
 
                 // Broadcast updated tree
                 await broadcastTreeUpdate(app, io, channel.serverId);

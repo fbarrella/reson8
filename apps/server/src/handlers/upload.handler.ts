@@ -14,7 +14,7 @@ import type {
     InterServerEvents,
     SocketData,
 } from "@reson8/shared-types";
-import { issueUploadToken } from "../services/stored-file.service.js";
+import { discardUnclaimedUpload, issueUploadToken } from "../services/stored-file.service.js";
 
 type TypedIO = SocketIOServer<ClientToServerEvents, ServerToClientEvents, InterServerEvents, SocketData>;
 type TypedSocket = Socket<ClientToServerEvents, ServerToClientEvents, InterServerEvents, SocketData>;
@@ -34,6 +34,27 @@ export function registerUploadHandlers(io: TypedIO, app: FastifyInstance): void 
             } catch (err) {
                 app.log.error({ err }, "Error in REQUEST_UPLOAD_TOKEN");
                 ack({ success: false, error: "Failed to issue upload token" });
+            }
+        });
+
+        // Throw away an upload the user abandoned before it was attached to
+        // anything (PRD 16.9). Only their own unclaimed uploads qualify.
+        socket.on("DISCARD_UPLOAD", async (payload, ack) => {
+            try {
+                const uploadId = payload?.uploadId;
+                if (socket.data.role === "viewer" || !socket.data.userId) {
+                    ack({ success: false, error: "Not connected to a server" });
+                    return;
+                }
+                if (typeof uploadId !== "string" || uploadId.length === 0 || uploadId.length > 64) {
+                    ack({ success: false, error: "Invalid upload" });
+                    return;
+                }
+                const discarded = await discardUnclaimedUpload(app.prisma, uploadId, socket.data.userId);
+                ack(discarded ? { success: true } : { success: false, error: "Nothing to discard" });
+            } catch (err) {
+                app.log.error({ err }, "Error in DISCARD_UPLOAD");
+                ack({ success: false, error: "Failed to discard upload" });
             }
         });
     });

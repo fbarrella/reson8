@@ -24,6 +24,16 @@ interface UploadResult {
     uploadId?: string;
 }
 
+/**
+ * Tells the server to throw away an upload that never got used (PRD 16.9).
+ * Fire-and-forget on purpose: it must never block or fail the UI, and the
+ * server's hourly sweep catches anything this misses.
+ */
+function discardUpload(uploadId: string | null | undefined): void {
+    if (!uploadId) return;
+    api.discardUpload(uploadId).catch(() => {});
+}
+
 interface ChatMessage {
     id: string;
     channelId: string;
@@ -795,6 +805,7 @@ interface Reson8Api {
     uploadEmojiFile(fileBuffer: ArrayBuffer, fileName: string, mimeType: string): Promise<UploadResult>;
     uploadAnimatedEmojiFile(fileBuffer: ArrayBuffer, fileName: string, mimeType: string): Promise<UploadResult>;
     uploadChannelIcon(fileBuffer: ArrayBuffer, fileName: string, mimeType: string): Promise<UploadResult>;
+    discardUpload(uploadId: string): Promise<{ success: boolean; error?: string }>;
     createCustomEmoji(name: string, image: UploadResult, isAnimated?: boolean): Promise<{ success: boolean; emojiId?: string; error?: string }>;
     getApprovedEmojis(): Promise<{ success: boolean; emojis?: CustomEmoji[]; error?: string }>;
     getPendingEmojis(): Promise<{ success: boolean; emojis?: CustomEmoji[]; error?: string }>;
@@ -5989,6 +6000,13 @@ async function handleFileUpload(file: File): Promise<void> {
         return;
     }
 
+    // Picking another image replaces the pending one — throw the old upload
+    // away instead of leaving it behind (PRD 16.9).
+    discardUpload(pendingAttachmentUploadId);
+    pendingAttachmentUrl = null;
+    pendingAttachmentPublicId = null;
+    pendingAttachmentUploadId = null;
+
     revokePendingAttachmentObjectUrl();
     pendingAttachmentObjectUrl = URL.createObjectURL(file);
     showAttachmentUploading(file.name, pendingAttachmentObjectUrl);
@@ -6027,7 +6045,14 @@ function showAttachmentPreview(fileName: string): void {
         <button class="attachment-remove" id="btn-remove-attachment">✕</button>
     `;
     attachmentPreview.style.display = "flex";
-    document.getElementById("btn-remove-attachment")?.addEventListener("click", clearAttachmentPreview);
+    document.getElementById("btn-remove-attachment")?.addEventListener("click", discardPendingAttachment);
+}
+
+/** The ✕ on a ready attachment: drop it from the composer AND throw the already-uploaded file away (PRD 16.9). */
+function discardPendingAttachment(): void {
+    const uploadId = pendingAttachmentUploadId;
+    clearAttachmentPreview();
+    discardUpload(uploadId);
 }
 
 /** Failure state — surfaces the error instead of silently discarding the attempt, with a one-click retry (re-reads the same File object). */
@@ -7725,13 +7750,21 @@ btnEmojiUploadConfirm.addEventListener("click", async () => {
 
         const buffer = await blob.arrayBuffer();
         const uploadResult = await api.uploadEmojiFile(buffer, `${name}.png`, "image/png");
-        const createResult = await api.createCustomEmoji(name, uploadResult);
-
-        if (createResult.success) {
-            log(`Emoji ":${name}:" submitted for admin approval`, "success");
-            closeEmojiUploadModal();
-        } else {
-            log(`Failed to submit emoji: ${createResult.error}`, "error");
+        // The file is uploaded before the emoji is submitted, so if the
+        // submit fails (name taken, connection lost…) it must be discarded
+        // rather than left behind (PRD 16.9).
+        let submitted = false;
+        try {
+            const createResult = await api.createCustomEmoji(name, uploadResult);
+            submitted = createResult.success;
+            if (createResult.success) {
+                log(`Emoji ":${name}:" submitted for admin approval`, "success");
+                closeEmojiUploadModal();
+            } else {
+                log(`Failed to submit emoji: ${createResult.error}`, "error");
+            }
+        } finally {
+            if (!submitted) discardUpload(uploadResult.uploadId);
         }
     } catch (err: any) {
         log(`Emoji upload failed: ${err.message}`, "error");
@@ -7801,13 +7834,18 @@ btnEmojiAnimatedUploadConfirm.addEventListener("click", async () => {
     try {
         const buffer = await emojiAnimatedFile.arrayBuffer();
         const uploadResult = await api.uploadAnimatedEmojiFile(buffer, `${name}.gif`, "image/gif");
-        const createResult = await api.createCustomEmoji(name, uploadResult, true);
-
-        if (createResult.success) {
-            log(`Animated emoji ":${name}:" submitted for admin approval`, "success");
-            closeAnimatedEmojiUploadModal();
-        } else {
-            log(`Failed to submit emoji: ${createResult.error}`, "error");
+        let submitted = false; // discard the uploaded file if the submit fails (PRD 16.9)
+        try {
+            const createResult = await api.createCustomEmoji(name, uploadResult, true);
+            submitted = createResult.success;
+            if (createResult.success) {
+                log(`Animated emoji ":${name}:" submitted for admin approval`, "success");
+                closeAnimatedEmojiUploadModal();
+            } else {
+                log(`Failed to submit emoji: ${createResult.error}`, "error");
+            }
+        } finally {
+            if (!submitted) discardUpload(uploadResult.uploadId);
         }
     } catch (err: any) {
         log(`Emoji upload failed: ${err.message}`, "error");
@@ -8032,19 +8070,25 @@ btnChannelIconUploadConfirm.addEventListener("click", async () => {
 
         const buffer = await blob.arrayBuffer();
         const uploadResult = await api.uploadChannelIcon(buffer, "channel-icon.png", "image/png");
-        const updateResult = await api.updateChannel(channelId, {
-            iconUploadId: uploadResult.uploadId,
-            // Legacy fields, for a pre-v2.5.0 server; a v2.5.0+ server uses the id.
-            iconUrl: uploadResult.url,
-            iconPublicId: uploadResult.publicId ?? null,
-        });
+        let applied = false; // discard the uploaded file if the update fails (PRD 16.9)
+        try {
+            const updateResult = await api.updateChannel(channelId, {
+                iconUploadId: uploadResult.uploadId,
+                // Legacy fields, for a pre-v2.5.0 server; a v2.5.0+ server uses the id.
+                iconUrl: uploadResult.url,
+                iconPublicId: uploadResult.publicId ?? null,
+            });
+            applied = updateResult.success;
 
-        if (updateResult.success) {
-            log("Channel icon updated", "success");
-            closeChannelIconModal();
-        } else {
-            log(`Failed to update channel icon: ${updateResult.error}`, "error");
-            if (updateResult.error && /permission|denied/i.test(updateResult.error)) SoundAlert.play("insufficient_perms.mp3");
+            if (updateResult.success) {
+                log("Channel icon updated", "success");
+                closeChannelIconModal();
+            } else {
+                log(`Failed to update channel icon: ${updateResult.error}`, "error");
+                if (updateResult.error && /permission|denied/i.test(updateResult.error)) SoundAlert.play("insufficient_perms.mp3");
+            }
+        } finally {
+            if (!applied) discardUpload(uploadResult.uploadId);
         }
     } catch (err: any) {
         log(`Channel icon upload failed: ${err.message}`, "error");
