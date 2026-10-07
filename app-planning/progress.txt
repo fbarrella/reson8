@@ -580,3 +580,59 @@ Feature/Fix: PRD 16.3 — Highlight the text channel being viewed (eye icon)
     (checklist in PRD 16.3).
 
   Next Step: PRD 16.4 — mute text channels (per user, client-side).
+
+
+--- Entry: 07/10/2026 ---
+
+Feature/Fix: PRD 16.4 — Mute text channels (per user, client-side)
+
+  Problem: On busy servers a lot of text channels with unread dots clutter the
+  tree, and there was no way for a user to opt out of the notifications for
+  channels they don't care about.
+
+  Solution: Any user can right-click a text channel and choose "Mute Channel" /
+  "Unmute Channel". A muted channel shows no unread dot or bold unread name and
+  is rendered faded (icon and name) like a disabled row, but stays fully
+  clickable. It is a purely local preference: no permission, no server event,
+  no wire-format change.
+
+  Client Changes:
+    - Menu: the mute item is first in the channel context menu, followed by a
+      new .ctx-menu-divider, and is offered only on openable text channels
+      (renderChannel passes canMute=true; voice channels and category rows via
+      renderCategory do not get it).
+    - Visuals: `.tree-channel.muted .ch-icon/.ch-name` at opacity 0.45 (0.7 on
+      hover so the name stays readable). Combines with the PRD 16.3 `.viewing`
+      highlight.
+    - Unread is still TRACKED while muted: unreadChannelIds, markChannelRead()
+      and the server's per-user read cursor are untouched. Only the painting is
+      suppressed (renderChannel skips the .unread class/dot for muted
+      channels; markChannelUnread() adds to the set then returns before
+      touching the DOM). Unmuting therefore reveals what arrived meanwhile.
+    - setChannelMuted() persists, then applyChannelMuteState() does a targeted
+      DOM update (toggles .muted/.unread and the dot) instead of renderTree(),
+      which would reset collapsed categories.
+    - Persistence: JSON { [serverId]: channelId[] } so different Reson8 servers
+      never mix lists. Reads validate the shape (malformed or unavailable
+      storage is treated as empty) and every access is in try/catch. The set
+      is loaded per server from the channel-tree handler (ensureMutedChannels
+      Loaded) and reset on disconnect.
+    - Pruning: each channel-tree update drops muted ids whose channel no longer
+      exists, so deleted channels don't accumulate. Skipped for an empty tree
+      (a transient state) so a blip can never wipe the list.
+
+  localStorage Keys:
+    reson8-muted-channels = JSON object mapping serverId -> array of muted
+    channel ids (key/entry removed when a server's list becomes empty)
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html
+    apps/client/src/renderer/renderer.ts
+
+  Verification:
+    npx tsc --noEmit in apps/client passes. No server or shared-types
+    change. UI behavior not exercised by Claude; manual testing by the user
+    (checklist in PRD 16.4).
+
+  Next Step: PRD 16.5 — floating message action toolbar (foundation for
+  grouping and replies).

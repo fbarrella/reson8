@@ -2089,6 +2089,26 @@
       background: rgba(255,255,255,0.06);
     }
 
+    .ctx-menu-divider {
+      height: 1px;
+      margin: 4px 0;
+      background: var(--border);
+    }
+
+    /* Muted text channel (PRD 16.4): faded, almost "disabled"-looking, but
+       still fully clickable. Brightens a little on hover so the user can read
+       what they're about to open. */
+    .tree-channel.muted .ch-icon,
+    .tree-channel.muted .ch-name {
+      opacity: 0.45;
+      transition: opacity 0.1s;
+    }
+
+    .tree-channel.muted:hover .ch-icon,
+    .tree-channel.muted:hover .ch-name {
+      opacity: 0.7;
+    }
+
     .modal-content {
       background: var(--bg-secondary);
       border: 1px solid var(--border);

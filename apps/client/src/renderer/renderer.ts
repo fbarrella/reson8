@@ -1700,6 +1700,100 @@ function renderCategory(node: TreeNode, siblings: TreeNode[]): HTMLDivElement {
     return category;
 }
 
+// ── Muted text channels (PRD 16.4) ─────────────────────────────────────────
+// A purely local, per-user preference — no server round trip, no permission.
+// Stored as { [serverId]: channelId[] } so connecting to another Reson8
+// server never mixes lists. Unread state keeps being tracked while muted
+// (unreadChannelIds / the server's read cursor are untouched); muting only
+// suppresses how it's painted, so unmuting reveals what arrived meanwhile.
+const MUTED_CHANNELS_KEY = "reson8-muted-channels";
+let mutedChannelIds = new Set<string>();
+let mutedChannelsServerId: string | null = null;
+
+function readMutedChannelsStore(): Record<string, string[]> {
+    try {
+        const parsed = JSON.parse(localStorage.getItem(MUTED_CHANNELS_KEY) ?? "{}");
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+        const clean: Record<string, string[]> = {};
+        for (const [serverId, ids] of Object.entries(parsed)) {
+            if (Array.isArray(ids)) clean[serverId] = ids.filter((id): id is string => typeof id === "string");
+        }
+        return clean;
+    } catch {
+        return {}; // missing, malformed or storage unavailable — treat as empty
+    }
+}
+
+function persistMutedChannels(): void {
+    if (!mutedChannelsServerId) return;
+    try {
+        const store = readMutedChannelsStore();
+        if (mutedChannelIds.size > 0) store[mutedChannelsServerId] = [...mutedChannelIds];
+        else delete store[mutedChannelsServerId];
+        localStorage.setItem(MUTED_CHANNELS_KEY, JSON.stringify(store));
+    } catch {
+        /* storage unavailable — the mute just won't persist */
+    }
+}
+
+/** Loads the current server's muted set once per server (idempotent). */
+function ensureMutedChannelsLoaded(serverId: string): void {
+    if (mutedChannelsServerId === serverId) return;
+    mutedChannelsServerId = serverId;
+    mutedChannelIds = new Set(readMutedChannelsStore()[serverId] ?? []);
+}
+
+/** Drops muted ids whose channel no longer exists, so deleted channels don't accumulate. */
+function pruneMutedChannels(tree: TreeNode[]): void {
+    if (tree.length === 0 || mutedChannelIds.size === 0) return; // an empty tree is a transient state, never prune on it
+    const existing = new Set<string>();
+    const walk = (nodes: TreeNode[]): void => {
+        for (const n of nodes) {
+            existing.add(n.id);
+            walk(n.children);
+        }
+    };
+    walk(tree);
+    let changed = false;
+    for (const id of [...mutedChannelIds]) {
+        if (!existing.has(id)) {
+            mutedChannelIds.delete(id);
+            changed = true;
+        }
+    }
+    if (changed) persistMutedChannels();
+}
+
+function isChannelMuted(channelId: string): boolean {
+    return mutedChannelIds.has(channelId);
+}
+
+function setChannelMuted(channelId: string, muted: boolean): void {
+    if (muted) mutedChannelIds.add(channelId);
+    else mutedChannelIds.delete(channelId);
+    persistMutedChannels();
+    applyChannelMuteState(channelId);
+}
+
+/** Targeted DOM update (no renderTree(), which would reset collapsed categories). */
+function applyChannelMuteState(channelId: string): void {
+    const el = channelTree.querySelector(`.tree-channel[data-channel-id="${CSS.escape(channelId)}"]`);
+    if (!el) return;
+    const muted = isChannelMuted(channelId);
+    el.classList.toggle("muted", muted);
+
+    const showUnread = unreadChannelIds.has(channelId) && !muted;
+    el.classList.toggle("unread", showUnread);
+    const dot = el.querySelector(".unread-dot");
+    if (showUnread && !dot) {
+        const newDot = document.createElement("span");
+        newDot.className = "unread-dot";
+        el.querySelector(".ch-name")?.after(newDot);
+    } else if (!showUnread) {
+        dot?.remove();
+    }
+}
+
 /** Muted eye shown at the right of the text channel whose tab is being viewed (PRD 16.3). */
 function createViewingIcon(): HTMLSpanElement {
     const icon = document.createElement("span");
@@ -1778,9 +1872,14 @@ function renderChannel(node: TreeNode, siblings: TreeNode[]): HTMLDivElement {
     if (!isVoice) {
         channel.dataset.channelId = node.id;
         if (node.hasUnread && node.id !== activeTabId) unreadChannelIds.add(node.id);
-        if (unreadChannelIds.has(node.id)) channel.classList.add("unread");
+        // A muted channel (PRD 16.4) is faded and never paints unread visuals,
+        // though the unread set above keeps tracking it.
+        if (isChannelMuted(node.id)) channel.classList.add("muted");
+        else if (unreadChannelIds.has(node.id)) channel.classList.add("unread");
     }
-    const unreadDot = !isVoice && unreadChannelIds.has(node.id) ? `<span class="unread-dot"></span>` : "";
+    const unreadDot = !isVoice && unreadChannelIds.has(node.id) && !isChannelMuted(node.id)
+        ? `<span class="unread-dot"></span>`
+        : "";
 
     channel.innerHTML = `
         ${iconHtml}
@@ -1799,7 +1898,7 @@ function renderChannel(node: TreeNode, siblings: TreeNode[]): HTMLDivElement {
 
     channel.addEventListener("click", () => handleChannelClick(node));
     attachChannelDragHandlers(channel, node, siblings);
-    attachChannelContextMenu(channel, node);
+    attachChannelContextMenu(channel, node, !isVoice);
 
     return channel;
 }
@@ -1814,7 +1913,7 @@ function renderChannel(node: TreeNode, siblings: TreeNode[]): HTMLDivElement {
  * the menu is shown to everyone and a rejected action surfaces via the
  * existing "insufficient_perms.mp3" pattern.
  */
-function attachChannelContextMenu(el: HTMLElement, node: TreeNode): void {
+function attachChannelContextMenu(el: HTMLElement, node: TreeNode, canMute = false): void {
     const isVoice = node.type === "VOICE";
 
     el.addEventListener("contextmenu", (e) => {
@@ -1828,13 +1927,25 @@ function attachChannelContextMenu(el: HTMLElement, node: TreeNode): void {
         menu.style.left = `${e.clientX}px`;
         menu.style.top = `${e.clientY}px`;
 
+        // Mute is personal (client-side, no permission) and only offered on an
+        // openable text channel — never voice channels or category rows (PRD 16.4).
+        const muteItem = canMute
+            ? `<button class="channel-ctx-menu-item ctx-mute-btn">${isChannelMuted(node.id) ? "🔔 Unmute Channel" : "🔕 Mute Channel"}</button><div class="ctx-menu-divider"></div>`
+            : "";
+
         menu.innerHTML = `
+            ${muteItem}
             <button class="channel-ctx-menu-item ctx-rename-btn">✏️ Rename</button>
             <button class="channel-ctx-menu-item ctx-move-btn">📁 Move to…</button>
             ${!isVoice ? `<button class="channel-ctx-menu-item ctx-icon-btn">🖼️ Set Icon</button>` : ""}
             ${!isVoice ? `<button class="channel-ctx-menu-item ctx-nsfw-toggle-btn">🔞 ${node.isNsfw ? "Unmark" : "Mark"} as NSFW</button>` : ""}
             <button class="ctx-delete-channel-btn">🗑️ Delete Channel</button>
         `;
+
+        menu.querySelector(".ctx-mute-btn")?.addEventListener("click", () => {
+            menu.remove();
+            setChannelMuted(node.id, !isChannelMuted(node.id));
+        });
 
         menu.querySelector(".ctx-rename-btn")?.addEventListener("click", () => {
             menu.remove();
@@ -2846,6 +2957,8 @@ api.on("disconnected", (data?: { reason?: string }) => {
     currentChannelId = null;
     currentServerId = "";
     currentTree = [];
+    mutedChannelIds = new Set();
+    mutedChannelsServerId = null;
     customEmojis = [];
     api.setCustomEmojis(customEmojis);
     previousOccupantIds = new Set();
@@ -2984,6 +3097,8 @@ api.on("user-banned", () => {
 });
 
 api.on("channel-tree", (data: { serverId: string; tree: TreeNode[] }) => {
+    ensureMutedChannelsLoaded(data.serverId);
+    pruneMutedChannels(data.tree);
     renderTree(data.tree);
     syncOpenTabNames(data.tree);
 });
@@ -4431,6 +4546,7 @@ api.on("message", (msg: ChatMessage) => {
 function markChannelUnread(channelId: string): void {
     if (unreadChannelIds.has(channelId)) return;
     unreadChannelIds.add(channelId);
+    if (isChannelMuted(channelId)) return; // still tracked, just not painted (PRD 16.4)
 
     const el = channelTree.querySelector(`.tree-channel[data-channel-id="${CSS.escape(channelId)}"]`);
     if (!el || el.classList.contains("unread")) return;
