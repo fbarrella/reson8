@@ -1233,7 +1233,32 @@ const nsfwConfirmModal = document.getElementById("nsfw-confirm-modal") as HTMLDi
 const nsfwConfirmChannelName = document.getElementById("nsfw-confirm-channel-name") as HTMLElement;
 const btnNsfwCancel = document.getElementById("btn-nsfw-cancel") as HTMLButtonElement;
 const btnNsfwConfirm = document.getElementById("btn-nsfw-confirm") as HTMLButtonElement;
+const chkNsfwDontWarn = document.getElementById("chk-nsfw-dont-warn") as HTMLInputElement;
+const chkNsfwWarn = document.getElementById("chk-nsfw-warn") as HTMLInputElement;
 let pendingNsfwChannel: TreeNode | null = null;
+
+// "Don't warn me again" (PRD 16.1): one global per-install preference, stored
+// under a reson8-* key like every other client preference. Anything other
+// than an explicit "true" dismissal means warn — the safe default, also used
+// when storage is unavailable.
+const NSFW_WARNING_DISMISSED_KEY = "reson8-nsfw-warning-dismissed";
+
+function isNsfwWarningEnabled(): boolean {
+    try {
+        return localStorage.getItem(NSFW_WARNING_DISMISSED_KEY) !== "true";
+    } catch {
+        return true;
+    }
+}
+
+function setNsfwWarningEnabled(enabled: boolean): void {
+    try {
+        if (enabled) localStorage.removeItem(NSFW_WARNING_DISMISSED_KEY);
+        else localStorage.setItem(NSFW_WARNING_DISMISSED_KEY, "true");
+    } catch {
+        /* storage unavailable — the preference just won't persist */
+    }
+}
 
 // ── Pin-Replace Confirmation Modal (PRD 11.5) ───────────────────────────────
 const pinReplaceConfirmModal = document.getElementById("pin-replace-confirm-modal") as HTMLDivElement;
@@ -2044,10 +2069,13 @@ async function handleChannelClick(node: TreeNode): Promise<void> {
             isJoiningChannel = false;
         }
     } else {
-        // Text channel — open (or focus) a chat tab, prompting first if NSFW
-        if (node.isNsfw) {
+        // Text channel — open (or focus) a chat tab, prompting first if NSFW.
+        // An already-open tab was confirmed when it was opened, so
+        // re-focusing it from the tree doesn't prompt again (PRD 16.1).
+        if (node.isNsfw && isNsfwWarningEnabled() && !chatTabs.has(node.id)) {
             pendingNsfwChannel = node;
             nsfwConfirmChannelName.textContent = node.name;
+            chkNsfwDontWarn.checked = false; // never pre-ticked
             nsfwConfirmModal.classList.add("visible");
             return;
         }
@@ -2599,6 +2627,8 @@ nsfwConfirmModal.addEventListener("click", (e) => {
 
 btnNsfwConfirm.addEventListener("click", () => {
     nsfwConfirmModal.classList.remove("visible");
+    // Only an explicit Continue persists the tick — Cancel/backdrop discard it.
+    if (chkNsfwDontWarn.checked) setNsfwWarningEnabled(false);
     if (pendingNsfwChannel) {
         openChatTab(pendingNsfwChannel.id, pendingNsfwChannel.name);
         pendingNsfwChannel = null;
@@ -4702,6 +4732,8 @@ async function openSettingsPanel(): Promise<void> {
     // the live re-check below is still in flight — the client already knows
     // the answer and shouldn't need a round trip to render correctly.
     applySettingsTabVisibility();
+    // The NSFW modal can change this preference while Settings is closed.
+    chkNsfwWarn.checked = isNsfwWarningEnabled();
     adminModal.classList.add("visible");
 
     // Populate audio devices
@@ -7332,6 +7364,14 @@ chkMuteAlerts.checked = soundAlertsMuted;
 chkMuteAlerts.addEventListener("change", () => {
     soundAlertsMuted = chkMuteAlerts.checked;
     localStorage.setItem("reson8-mute-alerts", String(soundAlertsMuted));
+});
+
+// ── Content Preferences (PRD 16.1) ────────────────────────────────────────
+
+chkNsfwWarn.checked = isNsfwWarningEnabled();
+
+chkNsfwWarn.addEventListener("change", () => {
+    setNsfwWarningEnabled(chkNsfwWarn.checked);
 });
 
 // ── Audio Tab Volume Sliders (PRD 10.2) ────────────────────────────────────

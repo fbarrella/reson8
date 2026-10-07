@@ -439,3 +439,54 @@ Feature/Fix: <name>
   Verification:
     ...
   Next Step: ...
+
+
+--- Entry: 07/10/2026 ---
+
+Feature/Fix: PRD 16.1 — "Don't warn me again" for NSFW channels
+
+  Problem: Opening an NSFW text channel always showed the confirmation modal,
+  even after the user had already accepted it many times, and even when
+  re-focusing a tab that was already open. Users asked to be able to dismiss
+  the warning for good.
+
+  Solution: The NSFW modal now has a "Don't warn me again for NSFW channels"
+  checkbox, and a new "Content" section in Settings -> Application has a
+  "Warn before opening NSFW channels" toggle to turn the warning back on.
+  The preference is one global per-install flag (decided with the user:
+  covers all NSFW channels, not one channel).
+
+  Client Changes:
+    - renderer.ts: isNsfwWarningEnabled()/setNsfwWarningEnabled() accessors
+      (try/catch around localStorage; anything other than an explicit "true"
+      dismissal means warn, which is also the fallback when storage is
+      unavailable).
+    - handleChannelClick(): the NSFW branch now prompts only when
+      node.isNsfw && isNsfwWarningEnabled() && !chatTabs.has(node.id). An
+      already-open NSFW tab was confirmed when it was opened, so re-focusing
+      it from the tree no longer re-prompts.
+    - The checkbox is reset to unchecked every time the modal opens. The
+      tick is persisted only when Continue is pressed; Cancel and backdrop
+      close discard it.
+    - openSettingsPanel() re-syncs the Settings toggle from storage on every
+      open, since the modal can change the value while Settings is closed.
+      The toggle shows "checked = warn" (inverse of the stored key) and
+      takes effect immediately on change.
+    - index.html: checkbox row in #nsfw-confirm-modal with a new
+      .modal-check-row style; "Content" section + #chk-nsfw-warn toggle row
+      in the Application panel (PRD 16.2 adds its row to the same section).
+
+  localStorage Keys:
+    reson8-nsfw-warning-dismissed = "true" when the warning is dismissed
+    (key absent = warn, the default)
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html
+    apps/client/src/renderer/renderer.ts
+
+  Verification:
+    npx tsc --noEmit in apps/client passes. No server or shared-types
+    change. UI behavior not exercised by Claude; manual testing by the user
+    (checklist in PRD 16.1).
+
+  Next Step: PRD 16.2 — optional image blurring in NSFW channels.

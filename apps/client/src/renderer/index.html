@@ -2872,6 +2872,23 @@
       border-color: var(--accent);
     }
 
+    /* "Don't ask again" style checkbox row inside a confirmation modal (PRD 16.1). */
+    .modal-check-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 12px 0 4px;
+      font-size: 12px;
+      color: var(--text-secondary);
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .modal-check-row input {
+      accent-color: var(--accent);
+      cursor: pointer;
+    }
+
     /* ── Toggle Switch ────────────────────────────────────────────── */
     .toggle-row {
       display: flex;
@@ -3692,6 +3709,10 @@
     <div class="modal-content">
       <h3>🔞 NSFW Channel</h3>
       <p><strong id="nsfw-confirm-channel-name"></strong> is marked as Not Safe For Work. Are you sure you want to open it?</p>
+      <label class="modal-check-row" for="chk-nsfw-dont-warn">
+        <input type="checkbox" id="chk-nsfw-dont-warn">
+        <span>Don't warn me again for NSFW channels</span>
+      </label>
       <div class="modal-actions">
         <button class="btn btn-cancel" id="btn-nsfw-cancel">Cancel</button>
         <button class="btn btn-disconnect" id="btn-nsfw-confirm">Continue</button>
@@ -4191,6 +4212,24 @@
           </div>
           <label class="toggle-switch">
             <input type="checkbox" id="chk-mute-alerts">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+
+        <label style="font-size:11px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px; display:block; margin-bottom:10px; margin-top:6px;">Content</label>
+
+        <div class="toggle-row">
+          <div class="toggle-row-info">
+            <div class="toggle-row-icon">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            </div>
+            <div class="toggle-row-text">
+              <span class="toggle-row-title">Warn before opening NSFW channels</span>
+              <span class="toggle-row-desc">Ask for confirmation before opening a channel marked NSFW</span>
+            </div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="chk-nsfw-warn">
             <span class="toggle-slider"></span>
           </label>
         </div>
