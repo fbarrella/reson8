@@ -1235,6 +1235,7 @@ const btnNsfwCancel = document.getElementById("btn-nsfw-cancel") as HTMLButtonEl
 const btnNsfwConfirm = document.getElementById("btn-nsfw-confirm") as HTMLButtonElement;
 const chkNsfwDontWarn = document.getElementById("chk-nsfw-dont-warn") as HTMLInputElement;
 const chkNsfwWarn = document.getElementById("chk-nsfw-warn") as HTMLInputElement;
+const chkNsfwBlur = document.getElementById("chk-nsfw-blur") as HTMLInputElement;
 let pendingNsfwChannel: TreeNode | null = null;
 
 // "Don't warn me again" (PRD 16.1): one global per-install preference, stored
@@ -1258,6 +1259,32 @@ function setNsfwWarningEnabled(enabled: boolean): void {
     } catch {
         /* storage unavailable — the preference just won't persist */
     }
+}
+
+// "Blur images in NSFW channels" (PRD 16.2): per-user, on by default. Only an
+// explicit "false" turns it off; also falls back to on if storage is unavailable.
+const NSFW_BLUR_KEY = "reson8-nsfw-blur-images";
+
+function isNsfwBlurEnabled(): boolean {
+    try {
+        return localStorage.getItem(NSFW_BLUR_KEY) !== "false";
+    } catch {
+        return true;
+    }
+}
+
+function setNsfwBlurEnabled(enabled: boolean): void {
+    try {
+        localStorage.setItem(NSFW_BLUR_KEY, String(enabled));
+    } catch {
+        /* storage unavailable — the preference just won't persist */
+    }
+    applyNsfwBlurPreference();
+}
+
+/** Pure CSS switch — see `body.nsfw-blur-off` in index.html. Applies live to every rendered message. */
+function applyNsfwBlurPreference(): void {
+    document.body.classList.toggle("nsfw-blur-off", !isNsfwBlurEnabled());
 }
 
 // ── Pin-Replace Confirmation Modal (PRD 11.5) ───────────────────────────────
@@ -4734,6 +4761,7 @@ async function openSettingsPanel(): Promise<void> {
     applySettingsTabVisibility();
     // The NSFW modal can change this preference while Settings is closed.
     chkNsfwWarn.checked = isNsfwWarningEnabled();
+    chkNsfwBlur.checked = isNsfwBlurEnabled();
     adminModal.classList.add("visible");
 
     // Populate audio devices
@@ -7372,6 +7400,13 @@ chkNsfwWarn.checked = isNsfwWarningEnabled();
 
 chkNsfwWarn.addEventListener("change", () => {
     setNsfwWarningEnabled(chkNsfwWarn.checked);
+});
+
+chkNsfwBlur.checked = isNsfwBlurEnabled();
+applyNsfwBlurPreference();
+
+chkNsfwBlur.addEventListener("change", () => {
+    setNsfwBlurEnabled(chkNsfwBlur.checked);
 });
 
 // ── Audio Tab Volume Sliders (PRD 10.2) ────────────────────────────────────

@@ -490,3 +490,50 @@ Feature/Fix: PRD 16.1 — "Don't warn me again" for NSFW channels
     (checklist in PRD 16.1).
 
   Next Step: PRD 16.2 — optional image blurring in NSFW channels.
+
+
+--- Entry: 07/10/2026 ---
+
+Feature/Fix: PRD 16.2 — Optional image blurring in NSFW channels (per user)
+
+  Problem: Every image in an NSFW text channel was always blurred behind a
+  "click to reveal" overlay, with no way for a user who doesn't want that to
+  turn it off.
+
+  Solution: A per-user toggle, "Blur images in NSFW channels", in Settings ->
+  Application -> Content (the section created by PRD 16.1). On by default,
+  which keeps today's rendering exactly. Off shows NSFW-channel images like
+  any other image (no blur, no overlay); clicking still opens the viewer.
+
+  Client Changes:
+    - The switch is CSS-driven instead of a render-time branch: the message
+      builder still always wraps NSFW images in .msg-image-nsfw-wrap +
+      overlay, and a `body.nsfw-blur-off` class overrides the blur
+      (filter/transform none) and hides the overlay. Flipping the toggle
+      therefore updates every already-rendered message instantly, in both
+      directions, with no re-render or scroll jump. The image's own click
+      handler (-> openLightbox) keeps working once the overlay is hidden.
+    - renderer.ts: isNsfwBlurEnabled()/setNsfwBlurEnabled()/
+      applyNsfwBlurPreference() (try/catch around localStorage; only an
+      explicit "false" disables the blur), applied once at startup, on the
+      toggle's change event, and the checkbox is re-synced in
+      openSettingsPanel().
+    - index.html: the two body.nsfw-blur-off rules next to the NSFW thumbnail
+      CSS, and the #chk-nsfw-blur toggle row in the Content section.
+    - DM images were never blurred and are unaffected either way.
+    - PRD 16.10 (multi-image messages) must keep wrapping every NSFW image
+      in .msg-image-nsfw-wrap so this toggle keeps covering each tile.
+
+  localStorage Keys:
+    reson8-nsfw-blur-images = "false" when blurring is off (absent = on)
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html
+    apps/client/src/renderer/renderer.ts
+
+  Verification:
+    npx tsc --noEmit in apps/client passes. No server or shared-types
+    change. UI behavior not exercised by Claude; manual testing by the user
+    (checklist in PRD 16.2).
+
+  Next Step: PRD 16.3 — highlight the text channel being viewed (eye icon).
