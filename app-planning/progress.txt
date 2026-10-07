@@ -708,3 +708,78 @@ Feature/Fix: PRD 16.5 — Floating message action toolbar (foundation for 16.6 a
     testing by the user in a channel AND a DM (checklist in PRD 16.5).
 
   Next Step: PRD 16.6 — group consecutive messages, header layout, HH:MM times.
+
+
+--- Entry: 07/10/2026 ---
+
+Feature/Fix: PRD 16.6 — Group consecutive messages, header layout, HH:MM timestamps
+
+  Problem: Every message was an independent inline line ("HH:MM:SS nick text")
+  with its own nickname, seconds-resolution timestamp and margins, so busy
+  chats were cluttered with repeated nicknames.
+
+  Solution: Discord-style layout (user-approved). Each message has a header
+  line (nickname + HH:MM) and its text on its own line(s) below. A message
+  from the same author within 5 minutes of the FIRST message of the current
+  group becomes a "continuation": no header, tight spacing. Applies to
+  channel and DM chats; the Server Log is untouched.
+
+  Client Changes:
+    - DOM: both builders now share buildMessageShell(): .chat-msg >
+      .msg-header (.msg-nick + .msg-time) + .msg-body (.msg-text +
+      .msg-edited), with data-created-at. The header is always rendered and
+      hidden by CSS on `.msg-continuation`, so regrouping is only a class
+      toggle.
+    - Rule: shouldGroupMessage() is a pure function — same author, createdAt
+      not before the previous message, and createdAt minus the GROUP's first
+      message's time under GROUP_WINDOW_MS (5 min). Any non-.chat-msg sibling
+      between two messages (date divider, "Unread Messages" separator,
+      sentinels) breaks the group. A reply (data-is-reply="1", set by PRD
+      16.11) always opens its own group; that condition is a no-op until then.
+    - applyGrouping(el) recomputes one element from its previous sibling and
+      returns whether it changed (data-grouped, data-group-start, classes).
+      regroupFrom(startEl) always recomputes the start and keeps cascading
+      only while elements actually change, which bounds the work.
+    - Where it runs: append (renderChatMessage/renderDmMessage, covering
+      initial load, live messages, jump/rebuild) calls applyGrouping right
+      after insertion; prependOlderMessages() calls regroupFrom after
+      inserting the page, which also repairs the junction with the
+      previously-first message (inside the scroll-anchor measurement, so
+      scroll position stays correct); removeMessageElement() regroups from
+      the next message after a delete (a removed head promotes the next line;
+      removing an in-between message can merge two runs).
+    - Time: formatMessageTime() = toLocaleTimeString with hour+minute only
+      (respects the OS 12/24h preference). The header time's tooltip, and a
+      continuation's tooltip, show the full date and time. The continuation
+      tooltip is set on the whole message element rather than on .msg-body,
+      because an image-only continuation has an empty body that can't be
+      hovered. The Server Log's own timestamps are a separate path, unchanged.
+    - "(edited)" moved from after the time to the end of .msg-body
+      (ensureEditedLabel(), used by the edit and edit-broadcast paths), and is
+      hidden via :has() while the inline edit textarea is open.
+    - Spacing: group start margin-top 8px (0 right after a sentinel, date
+      divider or unread separator); continuation margin-top -2px to cancel
+      the container's flex gap. Reactions need no special handling: PRD 16.5
+      made the strip take space only when it has reactions.
+    - Solo-emoji messages, Markdown block/inline text, long-message
+      truncation and link previews operate on .msg-text / the message
+      element as before; block text lost its old margin-top since text is now
+      always below the header.
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html
+    apps/client/src/renderer/renderer.ts
+
+  Verification:
+    npx tsc --noEmit in apps/client passes; npm run test:markdown passes. The
+    real shouldGroupMessage/applyGrouping/regroupFrom code was additionally
+    extracted from renderer.ts, transpiled and run against a minimal fake DOM
+    (scratch script, not committed — the client has no DOM test harness):
+    12/12 scenarios pass — 5-minute window measured from the group start,
+    author change, separator break, no backwards grouping, reply opens a new
+    group, delete a head (with cascade), delete an in-between message (merge),
+    idempotent regroup, and three prepend-junction cases. The rendered UI was
+    NOT exercised by Claude; manual testing by the user in a channel and a DM
+    (checklist in PRD 16.6).
+
+  Next Step: PRD 16.7 — emoji autocomplete while typing :name.

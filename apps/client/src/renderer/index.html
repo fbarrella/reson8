@@ -802,16 +802,43 @@
       background: rgba(255, 255, 255, 0.03);
     }
 
+    /* Header line = nickname + HH:MM (PRD 16.6); the text always sits on its
+       own line(s) in .msg-body below it. A continuation message (same author
+       within the grouping window, see applyGrouping()) hides the header. */
+    .chat-msg .msg-header {
+      display: flex;
+      align-items: baseline;
+      gap: 6px;
+    }
+
     .chat-msg .msg-time {
       color: var(--text-muted);
       font-size: 10px;
-      margin-right: 6px;
     }
 
     .chat-msg .msg-nick {
       font-weight: 600;
       color: var(--accent);
-      margin-right: 6px;
+    }
+
+    .chat-msg.msg-continuation .msg-header {
+      display: none;
+    }
+
+    /* A new group gets breathing room above it; a continuation cancels the
+       container's 2px flex gap so grouped lines sit tight. */
+    .chat-msg.msg-group-start {
+      margin-top: 8px;
+    }
+
+    .chat-msg.msg-continuation {
+      margin-top: -2px;
+    }
+
+    .chat-top-sentinel + .chat-msg.msg-group-start,
+    .date-separator + .chat-msg.msg-group-start,
+    .unread-separator + .chat-msg.msg-group-start {
+      margin-top: 0;
     }
 
     .chat-msg .msg-text {
@@ -849,7 +876,7 @@
     /* ── Markdown inside messages (PRD 15.10) ──────────────────────── */
     .chat-msg .msg-text.msg-text-block {
       display: block;
-      margin-top: 2px;
+      margin-top: 0;
       overflow-wrap: anywhere;
     }
 
@@ -934,11 +961,17 @@
       border-color: var(--accent);
     }
 
+    /* "(edited)" trails the message text (PRD 16.6) — a continuation has no
+       header to carry it, so the end of the text is the one consistent spot. */
     .msg-edited {
       color: var(--text-muted);
       font-size: 10px;
-      margin-right: 6px;
+      margin-left: 4px;
       font-style: italic;
+    }
+
+    .msg-body:has(.msg-edit-input) .msg-edited {
+      display: none;
     }
 
     .msg-edit-input {

@@ -2847,7 +2847,14 @@ btnDeleteMessageConfirm.addEventListener("click", async () => {
 
 /** Removes a rendered message from every tab it might be showing in (a tab stays in the DOM, just hidden, when it isn't the active one). */
 function removeMessageElement(msgId: string): void {
-    document.querySelectorAll(`.chat-msg[data-msg-id="${CSS.escape(msgId)}"]`).forEach((el) => el.remove());
+    document.querySelectorAll(`.chat-msg[data-msg-id="${CSS.escape(msgId)}"]`).forEach((el) => {
+        // Removing a group's head promotes the next line to head, and removing
+        // a message between two same-author runs can merge them (PRD 16.6).
+        let next = el.nextElementSibling;
+        el.remove();
+        while (next && !next.classList.contains("chat-msg")) next = next.nextElementSibling;
+        regroupFrom(next);
+    });
 }
 
 api.on("message-deleted", (payload: { channelId: string; messageId: string }) => {
@@ -4246,28 +4253,141 @@ function trackOldestOnFirstAppend(tab: ChatTab, createdAt: string): void {
     tab.oldestRenderedDateKey = computeDayKey(new Date(createdAt));
 }
 
+// ── Message grouping + shared message shell (PRD 16.6) ─────────────────────
+// A message is a "continuation" (no header) when it directly follows a
+// message from the same author and lands within GROUP_WINDOW_MS of the FIRST
+// message of that group — so a group never spans more than 5 minutes and the
+// header's time stays meaningful. Anything that isn't a .chat-msg between two
+// messages (date divider, "Unread Messages" separator, the sentinels) breaks
+// the group naturally.
+const GROUP_WINDOW_MS = 5 * 60 * 1000;
+
+/** The pure grouping rule — kept free of the DOM so it's easy to reason about. */
+function shouldGroupMessage(
+    prev: { ownerId: string; createdMs: number; groupStartMs: number } | null,
+    cur: { ownerId: string; createdMs: number; isReply: boolean },
+): boolean {
+    if (!prev || cur.isReply) return false; // a reply always opens its own group (PRD 16.11)
+    if (prev.ownerId !== cur.ownerId) return false;
+    if (cur.createdMs < prev.createdMs) return false; // clock skew: never group backwards
+    return cur.createdMs - prev.groupStartMs < GROUP_WINDOW_MS; // NaN compares false -> not grouped
+}
+
+/** "23:32" in the user's locale (12h/24h as their OS prefers) — seconds dropped on purpose. */
+function formatMessageTime(iso: string): string {
+    return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function formatMessageFullDate(iso: string): string {
+    return new Date(iso).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
+}
+
+/**
+ * Recomputes one message element's group state from its previous sibling and
+ * writes it back (classes + data attributes). Returns whether anything
+ * changed, which `regroupFrom()` uses to stop cascading.
+ */
+function applyGrouping(el: HTMLElement): boolean {
+    const prevEl = el.previousElementSibling as HTMLElement | null;
+    const prev = prevEl?.classList.contains("chat-msg")
+        ? {
+            ownerId: prevEl.dataset.msgOwner ?? "",
+            createdMs: Date.parse(prevEl.dataset.createdAt ?? ""),
+            groupStartMs: Date.parse(prevEl.dataset.groupStart ?? ""),
+        }
+        : null;
+
+    const grouped = shouldGroupMessage(prev, {
+        ownerId: el.dataset.msgOwner ?? "",
+        createdMs: Date.parse(el.dataset.createdAt ?? ""),
+        isReply: el.dataset.isReply === "1",
+    });
+    const groupStart = grouped ? (prevEl!.dataset.groupStart ?? "") : (el.dataset.createdAt ?? "");
+
+    const changed = el.dataset.grouped !== (grouped ? "1" : "0") || el.dataset.groupStart !== groupStart;
+    el.dataset.grouped = grouped ? "1" : "0";
+    el.dataset.groupStart = groupStart;
+    el.classList.toggle("msg-continuation", grouped);
+    el.classList.toggle("msg-group-start", !grouped);
+
+    // A continuation has no visible time, so its full date/time is a tooltip.
+    if (grouped && el.dataset.createdAt) el.title = formatMessageFullDate(el.dataset.createdAt);
+    else el.removeAttribute("title");
+    return changed;
+}
+
+/**
+ * Re-evaluates grouping from `startEl` forward. The start element is always
+ * recomputed; after that it keeps going only while elements actually change,
+ * since a changed group start can cascade (a former continuation may now
+ * fall outside the 5-minute window and become a head). Used after a prepend
+ * (the page junction), and after a delete (a head removed promotes the next
+ * line; a removed in-between message can merge two runs).
+ */
+function regroupFrom(startEl: Element | null): void {
+    let el = startEl;
+    let first = true;
+    while (el) {
+        if (el.classList.contains("chat-msg")) {
+            const changed = applyGrouping(el as HTMLElement);
+            if (!first && !changed) break;
+            first = false;
+        }
+        el = el.nextElementSibling;
+    }
+}
+
+/**
+ * The shared skeleton of a channel/DM message: header (nick + time) and body
+ * (text + "(edited)"). Always renders the header and lets CSS hide it on
+ * continuations, so regrouping is only a class toggle.
+ */
+function buildMessageShell(opts: {
+    kind: "channel" | "dm";
+    id: string;
+    ownerId: string;
+    nickname: string;
+    createdAt: string;
+    content: string;
+    edited?: boolean;
+}): HTMLDivElement {
+    const el = document.createElement("div");
+    el.className = "chat-msg";
+    el.setAttribute("data-msg-id", opts.id);
+    el.setAttribute("data-msg-type", opts.kind);
+    el.setAttribute("data-msg-owner", opts.ownerId);
+    el.setAttribute("data-created-at", opts.createdAt);
+
+    const editedLabel = opts.edited ? `<span class="msg-edited">(edited)</span>` : "";
+    const text = opts.content ? `<span class="msg-text"></span>` : "";
+    el.innerHTML = `<div class="msg-header"><span class="msg-nick">${escapeHtml(opts.nickname)}</span><span class="msg-time" title="${escapeHtml(formatMessageFullDate(opts.createdAt))}">${formatMessageTime(opts.createdAt)}</span></div>`
+        + `<div class="msg-body">${text}${editedLabel}</div>`;
+
+    if (opts.content) {
+        setMessageBody(el.querySelector(".msg-text") as HTMLElement, opts.content);
+    }
+    return el;
+}
+
+/** Adds the "(edited)" label to the end of a message's body if it isn't there yet. */
+function ensureEditedLabel(el: Element): void {
+    if (el.querySelector(".msg-edited")) return;
+    el.querySelector(".msg-body")?.insertAdjacentHTML("beforeend", `<span class="msg-edited">(edited)</span>`);
+}
+
 /** Builds a channel message's DOM element without appending it or touching
  *  scroll state — shared by the forward-append path (`renderChatMessage`)
  *  and the backward-prepend path (`prependOlderMessages`, PRD 14.2). */
 function buildChatMessageElement(tab: ChatTab, msg: ChatMessage): HTMLDivElement {
-    const el = document.createElement("div");
-    el.className = "chat-msg";
-    el.setAttribute("data-msg-id", msg.id);
-    el.setAttribute("data-msg-type", "channel");
-    el.setAttribute("data-msg-owner", msg.userId);
-
-    const time = new Date(msg.createdAt).toLocaleTimeString();
-    const editedLabel = msg.editedAt ? `<span class="msg-edited">(edited)</span>` : "";
-    let html = `<span class="msg-time">${time}</span>${editedLabel}<span class="msg-nick">${escapeHtml(msg.nickname)}</span>`;
-
-    if (msg.content) {
-        html += `<span class="msg-text"></span>`;
-    }
-
-    el.innerHTML = html;
-    if (msg.content) {
-        setMessageBody(el.querySelector(".msg-text") as HTMLElement, msg.content);
-    }
+    const el = buildMessageShell({
+        kind: "channel",
+        id: msg.id,
+        ownerId: msg.userId,
+        nickname: msg.nickname,
+        createdAt: msg.createdAt,
+        content: msg.content,
+        edited: !!msg.editedAt,
+    });
 
     if (msg.attachmentUrl) {
         const img = document.createElement("img");
@@ -4324,6 +4444,7 @@ function renderChatMessage(tab: ChatTab, msg: ChatMessage): void {
     maybeInsertDateDivider(tab, new Date(msg.createdAt));
     const el = buildChatMessageElement(tab, msg);
     tab.bottomSentinelEl.insertAdjacentElement("beforebegin", el);
+    applyGrouping(el); // after insertion: needs the previous sibling (PRD 16.6)
     trackOldestOnFirstAppend(tab, msg.createdAt);
 
     if (wasNearBottom) stickToBottom(tab);
@@ -4417,6 +4538,11 @@ function prependOlderMessages(tab: ChatTab, messages: ChatMessage[] | DirectMess
             tab.topSentinelEl.insertAdjacentElement("afterend", divider);
         }
     }
+
+    // Group the whole prepended page in forward order, then keep cascading
+    // into the previously-first message: it may now continue the page's last
+    // message (or a former group head may now be a continuation) (PRD 16.6).
+    regroupFrom(tab.topSentinelEl.nextElementSibling);
 
     tab.oldestRenderedDateKey = entries[0].dayKey;
     tab.oldestLoadedTimestamp = messages[0].createdAt;
@@ -4607,23 +4733,14 @@ function markChannelRead(channelId: string): void {
  *  never had long-message truncation (unlike channel messages) — preserved
  *  as-is here, not a gap introduced by this refactor. */
 function buildDmMessageElement(tab: ChatTab, msg: DirectMessage): HTMLDivElement {
-    const el = document.createElement("div");
-    el.className = "chat-msg";
-    el.setAttribute("data-msg-id", msg.id);
-    el.setAttribute("data-msg-type", "dm");
-    el.setAttribute("data-msg-owner", msg.senderId);
-
-    const time = new Date(msg.createdAt).toLocaleTimeString();
-    let html = `<span class="msg-time">${time}</span><span class="msg-nick">${escapeHtml(msg.senderNickname)}</span>`;
-
-    if (msg.content) {
-        html += `<span class="msg-text"></span>`;
-    }
-
-    el.innerHTML = html;
-    if (msg.content) {
-        setMessageBody(el.querySelector(".msg-text") as HTMLElement, msg.content);
-    }
+    const el = buildMessageShell({
+        kind: "dm",
+        id: msg.id,
+        ownerId: msg.senderId,
+        nickname: msg.senderNickname,
+        createdAt: msg.createdAt,
+        content: msg.content,
+    });
 
     if (msg.attachmentUrl) {
         const img = document.createElement("img");
@@ -4648,6 +4765,7 @@ function renderDmMessage(tab: ChatTab, msg: DirectMessage): void {
     maybeInsertDateDivider(tab, new Date(msg.createdAt));
     const el = buildDmMessageElement(tab, msg);
     tab.bottomSentinelEl.insertAdjacentElement("beforebegin", el);
+    applyGrouping(el); // after insertion: needs the previous sibling (PRD 16.6)
     trackOldestOnFirstAppend(tab, msg.createdAt);
 
     if (wasNearBottom) stickToBottom(tab);
@@ -6759,9 +6877,7 @@ function startMessageEdit(el: HTMLDivElement, msg: ChatMessage): void {
         newTextEl.className = "msg-text";
         setMessageBody(newTextEl, newContent);
         input.replaceWith(newTextEl);
-        if (!el.querySelector(".msg-edited")) {
-            el.querySelector(".msg-time")?.insertAdjacentHTML("afterend", `<span class="msg-edited">(edited)</span>`);
-        }
+        ensureEditedLabel(el);
         // Re-evaluate truncation against the new content — an edit can
         // just as easily make a short message long as vice versa. Drop
         // any stale "See more" button from before the edit first, since
@@ -6797,9 +6913,7 @@ function applyMessageEdit(msg: ChatMessage): void {
             el.querySelector(".btn-see-more")?.remove();
             attachMessageTruncation(el as HTMLDivElement, textEl);
         }
-        if (!el.querySelector(".msg-edited")) {
-            el.querySelector(".msg-time")?.insertAdjacentHTML("afterend", `<span class="msg-edited">(edited)</span>`);
-        }
+        ensureEditedLabel(el);
     });
 }
 
