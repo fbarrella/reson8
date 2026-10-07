@@ -1615,11 +1615,22 @@
       align-items: center;
       gap: 6px;
       min-width: 0;
-      margin: 0 0 2px 18px;
+      /* Lifted slightly (-1px) and given 5px of air below, so it can't be
+         mistaken for part of the message under it. */
+      margin: -1px 0 5px 18px;
       font-size: 12px;
       line-height: 1.4;
       color: var(--text-secondary);
       cursor: pointer;
+      /* Faded like a muted channel (PRD 16.4) — it's context, not a message. */
+      opacity: 0.55;
+      transition: opacity 0.12s;
+    }
+
+    /* Clickable, so it comes back to full strength under the pointer / focus. */
+    .msg-reply:hover,
+    .msg-reply:focus-visible {
+      opacity: 0.95;
     }
 
     .msg-reply-spine {
@@ -1627,7 +1638,9 @@
       left: -14px;
       top: 50%;
       width: 10px;
-      height: calc(50% + 8px);
+      /* From the snippet's middle down to the TOP edge of the header below
+         (half a line + the 5px margin) — it points at the message, not into it. */
+      height: calc(50% + 5px);
       border-left: 2px solid var(--border);
       border-top: 2px solid var(--border);
       border-top-left-radius: 6px;
@@ -1668,6 +1681,10 @@
       cursor: default;
       font-style: italic;
       color: var(--text-muted);
+    }
+
+    .msg-reply.deleted:hover {
+      opacity: 0.55; /* not a link: no hover emphasis */
     }
 
     .msg-reply.deleted:hover .msg-reply-text {

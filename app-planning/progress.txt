@@ -1507,3 +1507,37 @@ Feature/Fix: PRD 16.11 — Message replies (channels and DMs)
   Next Step: Phase wrap-up, after your confirmation: /bump-version (expected
   2.4.0 -> 2.5.0), release notes in app-planning/releases/v2.5.0.md, update the
   three CLAUDE.md files and README.md, and archive the Phase 16 PRD.
+
+
+--- Entry: 07/10/2026 ---
+
+Feature/Fix: Follow-up to PRD 16.11 — reply snippet spacing and fade
+
+  Problem: (reported with a screenshot, app-planning/print_reply_fix.png) The
+  reply snippet sat almost on top of the message's header line, and it was as
+  bright as the real messages, so the two read as one block and the snippet
+  could be mistaken for an actual message in the conversation.
+
+  Solution (CSS only, apps/client/src/renderer/index.html):
+    - Spacing: `.msg-reply` margin 0 0 2px 18px -> -1px 0 5px 18px (lifted a
+      pixel, 5px of air below).
+    - Fade: opacity 0.55 on the whole snippet, in the spirit of the muted-channel
+      look (PRD 16.4); it returns to 0.95 on hover and keyboard focus
+      (:focus-visible) since it is a link. The "Original message was deleted"
+      state gets the same fade and does NOT brighten on hover (it isn't a link).
+    - Connector: the curved spine now runs from the snippet's middle to the TOP
+      edge of the header below (calc(50% + 5px)) — it points at the message
+      rather than running into it.
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html
+
+  Verification:
+    npx tsc --noEmit in apps/client passes. Measured in the real Electron app
+    (DevTools protocol, virtual display, fresh server/DB): gap between snippet
+    and header 5px, opacity 0.55, spine bottom within 0.02px of the header's top
+    edge, deleted snippet 0.55; with a real mouse hover the snippet goes to
+    >0.9 and a deleted snippet stays <0.6; no page exceptions. Screenshots
+    inspected. Harness stopped, scratch DB dropped, dev DB untouched.
+
+  Next Step: Phase 16 wrap-up (version bump, release notes, docs, archive the PRD).
