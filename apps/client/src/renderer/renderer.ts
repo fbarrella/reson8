@@ -804,6 +804,20 @@ interface Reson8Api {
     downloadImage(url: string): void;
     setCustomEmojis(list: Array<{ name: string; imageUrl: string }>): void;
     renderMarkdown(text: string): { html: string; block: boolean };
+    avatar: {
+        isPlausibleEmail(email: string): boolean;
+        selectionFor(provider: "libravatar" | "gravatar", email: string): { provider: "libravatar" | "gravatar"; hash: string };
+        previewUrl(selection: { provider: "libravatar" | "gravatar"; hash: string }, fallback: "wavatar" | "404"): string;
+        defaultUrl(userId: string): string;
+        withSize(url: string, px: number): string;
+    };
+    setAvatarSelection(selection: { provider: "libravatar" | "gravatar"; hash: string } | null): void;
+    setAvatar(selection: { provider: "libravatar" | "gravatar"; hash: string } | null): Promise<{
+        success: boolean;
+        avatarUrl?: string | null;
+        unsupported?: boolean;
+        error?: string;
+    }>;
     markdownToPlainText(text: string): string;
     openExternal(url: string): Promise<{ success: boolean; error?: string }>;
     copyText(text: string): Promise<boolean>;
@@ -1370,6 +1384,162 @@ function setNsfwBlurEnabled(enabled: boolean): void {
 /** Pure CSS switch — see `body.nsfw-blur-off` in index.html. Applies live to every rendered message. */
 function applyNsfwBlurPreference(): void {
     document.body.classList.toggle("nsfw-blur-off", !isNsfwBlurEnabled());
+}
+
+// ── Avatars (PRD 17.1) ──────────────────────────────────────────────────────
+// A user's avatar is a Libravatar/Gravatar URL the SERVER built from the
+// { provider, hash } the user chose; users without one get a generated
+// Libravatar "wavatar" keyed by sha256(userId). Every avatar on screen is one
+// `.avatar` element carrying `data-avatar-user-id`, so a change (or the
+// external-avatars switch) is re-applied with refreshAvatars().
+
+type AvatarProvider = "libravatar" | "gravatar";
+interface AvatarSelection {
+    provider: AvatarProvider;
+    hash: string;
+}
+
+const AVATAR_PROVIDER_KEY = "reson8-avatar-provider";
+const AVATAR_EMAIL_KEY = "reson8-avatar-email";
+const AVATARS_EXTERNAL_KEY = "reson8-avatars-external";
+
+function readAvatarPrefs(): { provider: AvatarProvider; email: string } {
+    try {
+        const provider = localStorage.getItem(AVATAR_PROVIDER_KEY) === "gravatar" ? "gravatar" : "libravatar";
+        return { provider, email: localStorage.getItem(AVATAR_EMAIL_KEY) ?? "" };
+    } catch {
+        return { provider: "libravatar", email: "" };
+    }
+}
+
+function writeAvatarPrefs(provider: AvatarProvider, email: string): void {
+    try {
+        localStorage.setItem(AVATAR_PROVIDER_KEY, provider);
+        if (email) localStorage.setItem(AVATAR_EMAIL_KEY, email);
+        else localStorage.removeItem(AVATAR_EMAIL_KEY);
+    } catch {
+        /* storage unavailable — the preference just won't persist */
+    }
+}
+
+/** What the server is told: `null` (default avatar) unless a usable email is saved. */
+function currentAvatarSelection(): AvatarSelection | null {
+    const { provider, email } = readAvatarPrefs();
+    return email && api.avatar.isPlausibleEmail(email) ? api.avatar.selectionFor(provider, email) : null;
+}
+
+/** "Load avatars from Libravatar/Gravatar" — on unless explicitly "false". */
+function areExternalAvatarsEnabled(): boolean {
+    try {
+        return localStorage.getItem(AVATARS_EXTERNAL_KEY) !== "false";
+    } catch {
+        return true;
+    }
+}
+
+function setExternalAvatarsEnabled(enabled: boolean): void {
+    try {
+        if (enabled) localStorage.removeItem(AVATARS_EXTERNAL_KEY);
+        else localStorage.setItem(AVATARS_EXTERNAL_KEY, "false");
+    } catch {
+        /* storage unavailable — the preference just won't persist */
+    }
+    refreshAvatars();
+}
+
+/** userId → the avatar URL the server stored (`null` = default avatar). Absent = not known yet. */
+const avatarUrlCache = new Map<string, string | null>();
+
+/** Records a DTO's avatar URL; `undefined` (an older server) leaves the cache alone. */
+function rememberAvatarUrl(userId: string, avatarUrl: string | null | undefined): void {
+    if (avatarUrl !== undefined) avatarUrlCache.set(userId, avatarUrl);
+}
+
+/** Up to two letters from the nickname's words — code points, so an emoji is never split. */
+function avatarInitials(nickname: string): string {
+    const words = nickname.trim().split(/\s+/).filter(Boolean);
+    const letters = words.length > 1
+        ? [Array.from(words[0])[0], Array.from(words[words.length - 1])[0]]
+        : Array.from(words[0] ?? "").slice(0, 1);
+    return letters.join("").toUpperCase() || "?";
+}
+
+/** A stable background per user (same color on every client), dark enough for white text. */
+function avatarColor(userId: string): string {
+    let hash = 0;
+    for (let i = 0; i < userId.length; i++) hash = (hash * 31 + userId.charCodeAt(i)) | 0;
+    return `hsl(${Math.abs(hash) % 360} 45% 38%)`;
+}
+
+/** The URLs to try, in order, for a user's avatar at a CSS size. */
+function avatarCandidates(userId: string, cssPx: number): string[] {
+    const px = cssPx * 2; // HiDPI
+    const stored = avatarUrlCache.get(userId);
+    const fallback = api.avatar.withSize(api.avatar.defaultUrl(userId), px);
+    return stored ? [api.avatar.withSize(stored, px), fallback] : [fallback];
+}
+
+/**
+ * (Re)fills an `.avatar` element: initials always sit underneath, and an image
+ * fades in over them once it loads. On an error it tries the next candidate;
+ * when none is left the initials simply stay — never a broken-image icon.
+ * `candidates` overrides the cache (the Settings preview).
+ */
+function applyAvatar(el: HTMLElement, candidates?: string[]): void {
+    const userId = el.dataset.avatarUserId ?? "";
+    const nickname = el.dataset.avatarNick ?? "";
+    const cssPx = Number(el.dataset.avatarPx) || 40;
+    el.style.setProperty("--avatar-bg", avatarColor(userId));
+
+    const initials = document.createElement("span");
+    initials.className = "avatar-initials";
+    initials.textContent = avatarInitials(nickname);
+    el.replaceChildren(initials);
+
+    if (!areExternalAvatarsEnabled()) return;
+
+    const urls = candidates ?? avatarCandidates(userId, cssPx);
+    if (urls.length === 0) return;
+
+    const img = document.createElement("img");
+    img.width = cssPx;
+    img.height = cssPx;
+    img.alt = "";
+    img.decoding = "async";
+    img.loading = "lazy";
+    img.referrerPolicy = "no-referrer";
+    img.draggable = false;
+    let index = 0;
+    img.addEventListener("load", () => img.classList.add("loaded"));
+    img.addEventListener("error", () => {
+        index++;
+        if (index < urls.length) img.src = urls[index];
+        else img.remove();
+    });
+    img.src = urls[0];
+    el.appendChild(img);
+}
+
+/** A new avatar element for a user, sized in CSS pixels. */
+function createAvatarElement(userId: string, nickname: string, cssPx: number): HTMLSpanElement {
+    const el = document.createElement("span");
+    el.className = "avatar";
+    el.dataset.avatarUserId = userId;
+    el.dataset.avatarNick = nickname;
+    el.dataset.avatarPx = String(cssPx);
+    el.style.width = `${cssPx}px`;
+    el.style.height = `${cssPx}px`;
+    el.style.fontSize = `${Math.round(cssPx * 0.38)}px`;
+    applyAvatar(el);
+    return el;
+}
+
+/** Re-applies every rendered avatar (of one user, or all of them). */
+function refreshAvatars(userId?: string): void {
+    document.querySelectorAll<HTMLElement>(".avatar[data-avatar-user-id]").forEach((el) => {
+        if (el.dataset.avatarPreview) return; // the Settings preview manages itself
+        if (userId === undefined || el.dataset.avatarUserId === userId) applyAvatar(el);
+    });
 }
 
 // ── Pin-Replace Confirmation Modal (PRD 11.5) ───────────────────────────────
@@ -5712,6 +5882,7 @@ async function openSettingsPanel(): Promise<void> {
     // The NSFW modal can change this preference while Settings is closed.
     chkNsfwWarn.checked = isNsfwWarningEnabled();
     chkNsfwBlur.checked = isNsfwBlurEnabled();
+    syncProfileSection(); // discard an unsaved avatar draft from a previous visit (PRD 17.1)
     adminModal.classList.add("visible");
 
     // Populate audio devices
@@ -8626,6 +8797,217 @@ applyNsfwBlurPreference();
 
 chkNsfwBlur.addEventListener("change", () => {
     setNsfwBlurEnabled(chkNsfwBlur.checked);
+});
+
+// ── Profile: avatar settings (PRD 17.1) ─────────────────────────────────────
+// Settings → Application. Editing is a draft until Save; the preview probes
+// the provider with d=404 to tell "your picture" from "a generated one".
+
+const profileAvatarPreview = document.getElementById("profile-avatar-preview") as HTMLSpanElement;
+const profileAvatarStatus = document.getElementById("profile-avatar-status") as HTMLSpanElement;
+const profileEmailInput = document.getElementById("profile-email-input") as HTMLInputElement;
+const profileEmailError = document.getElementById("profile-email-error") as HTMLSpanElement;
+const profileProviderLink = document.getElementById("profile-provider-link") as HTMLAnchorElement;
+const btnProfileSave = document.getElementById("btn-profile-save") as HTMLButtonElement;
+const btnProfileRemove = document.getElementById("btn-profile-remove") as HTMLButtonElement;
+const chkAvatarsExternal = document.getElementById("chk-avatars-external") as HTMLInputElement;
+const profileProviderButtons = Array.from(
+    document.querySelectorAll<HTMLButtonElement>(".segmented-option[data-avatar-provider]"),
+);
+
+const AVATAR_PROVIDER_INFO: Record<AvatarProvider, { name: string; site: string; url: string }> = {
+    libravatar: { name: "Libravatar", site: "libravatar.org", url: "https://www.libravatar.org/" },
+    gravatar: { name: "Gravatar", site: "gravatar.com", url: "https://gravatar.com/" },
+};
+const PROFILE_PREVIEW_PX = 96;
+
+let profileDraftProvider: AvatarProvider = readAvatarPrefs().provider;
+let profilePreviewTimer: ReturnType<typeof setTimeout> | null = null;
+let profilePreviewToken = 0;
+let profileSaving = false;
+
+profileAvatarPreview.dataset.avatarPreview = "1";
+profileAvatarPreview.dataset.avatarPx = String(PROFILE_PREVIEW_PX);
+
+function setProfileStatus(text: string, found = false): void {
+    profileAvatarStatus.textContent = text;
+    profileAvatarStatus.classList.toggle("found", found);
+}
+
+/** Paints the preview for the current draft; `immediate` skips the typing debounce. */
+function updateProfilePreview(immediate = false): void {
+    if (profilePreviewTimer) clearTimeout(profilePreviewTimer);
+    const run = (): void => {
+        const token = ++profilePreviewToken;
+        const myId = api.getInstanceId();
+        profileAvatarPreview.dataset.avatarUserId = myId;
+        profileAvatarPreview.dataset.avatarNick = nicknameInput.value.trim() || "You";
+        const px = PROFILE_PREVIEW_PX * 2;
+        const email = profileEmailInput.value.trim();
+        const fallback = myId ? [api.avatar.withSize(api.avatar.defaultUrl(myId), px)] : [];
+
+        if (!areExternalAvatarsEnabled()) {
+            applyAvatar(profileAvatarPreview, []);
+            setProfileStatus("External avatars are off");
+            return;
+        }
+        if (!email) {
+            applyAvatar(profileAvatarPreview, fallback);
+            setProfileStatus("Default avatar");
+            return;
+        }
+        if (!api.avatar.isPlausibleEmail(email)) return; // keep the last good preview while typing
+
+        const selection = api.avatar.selectionFor(profileDraftProvider, email);
+        const name = AVATAR_PROVIDER_INFO[profileDraftProvider].name;
+        const chosen = [api.avatar.withSize(api.avatar.previewUrl(selection, "wavatar"), px), ...fallback];
+        setProfileStatus("Checking…");
+        // Libravatar can take several seconds (it proxies Gravatar on a miss),
+        // so the probe gives up after a while instead of "Checking…" forever.
+        const giveUp = setTimeout(() => {
+            if (token !== profilePreviewToken) return;
+            profilePreviewToken++; // a late probe answer must not overwrite this
+            applyAvatar(profileAvatarPreview, chosen);
+            setProfileStatus(`Couldn't reach ${name} right now — your choice will still be used.`);
+        }, 10000);
+        // A detached Image is fine here (it's an image probe, not playback).
+        const probe = new Image();
+        probe.referrerPolicy = "no-referrer";
+        probe.onload = () => {
+            clearTimeout(giveUp);
+            if (token !== profilePreviewToken) return;
+            applyAvatar(profileAvatarPreview, chosen);
+            setProfileStatus("Avatar found ✓", true);
+        };
+        probe.onerror = () => {
+            clearTimeout(giveUp);
+            if (token !== profilePreviewToken) return;
+            applyAvatar(profileAvatarPreview, chosen);
+            setProfileStatus(`No picture on ${name} yet — you'll get a generated one. New pictures can take a few minutes to appear.`);
+        };
+        probe.src = api.avatar.withSize(api.avatar.previewUrl(selection, "404"), px);
+    };
+    if (immediate) run();
+    else profilePreviewTimer = setTimeout(run, 400);
+}
+
+/** Provider toggle, link text, validation message and button states for the draft. */
+function renderProfileControls(): void {
+    for (const btn of profileProviderButtons) {
+        const selected = btn.dataset.avatarProvider === profileDraftProvider;
+        btn.setAttribute("aria-checked", String(selected));
+        btn.tabIndex = selected ? 0 : -1;
+    }
+    profileProviderLink.textContent = AVATAR_PROVIDER_INFO[profileDraftProvider].site;
+
+    const email = profileEmailInput.value.trim();
+    const invalid = email.length > 0 && !api.avatar.isPlausibleEmail(email);
+    profileEmailInput.classList.toggle("invalid", invalid);
+    profileEmailError.textContent = invalid ? "That doesn't look like an email address." : "";
+
+    const saved = readAvatarPrefs();
+    const dirty = profileDraftProvider !== saved.provider || email.toLowerCase() !== saved.email.trim().toLowerCase();
+    btnProfileSave.disabled = profileSaving || invalid || !dirty;
+    btnProfileRemove.disabled = profileSaving || !saved.email;
+}
+
+/** Resets the draft to the saved preferences — every time Settings opens. */
+function syncProfileSection(): void {
+    const saved = readAvatarPrefs();
+    profileDraftProvider = saved.provider;
+    profileEmailInput.value = saved.email;
+    chkAvatarsExternal.checked = areExternalAvatarsEnabled();
+    renderProfileControls();
+    updateProfilePreview(true);
+}
+
+/** Saves the draft (or clears it) and tells the server when connected. */
+async function commitAvatar(provider: AvatarProvider, email: string): Promise<void> {
+    writeAvatarPrefs(provider, email);
+    renderProfileControls(); // the draft is now the saved state
+    const selection = currentAvatarSelection();
+    api.setAvatarSelection(selection); // every future join carries it
+
+    if (!isConnected) {
+        showToast(email ? "Avatar saved — it will be shared when you connect" : "Avatar removed");
+        return;
+    }
+
+    profileSaving = true;
+    renderProfileControls();
+    const res = await api.setAvatar(selection);
+    profileSaving = false;
+    renderProfileControls();
+
+    if (res.success) {
+        const myId = api.getInstanceId();
+        rememberAvatarUrl(myId, res.avatarUrl ?? null);
+        refreshAvatars(myId);
+        showToast(email ? "Avatar saved" : "Avatar removed");
+    } else if (res.unsupported) {
+        showToast("Saved on this computer. This server doesn't support avatars yet — it needs Reson8 2.6.0.", 6000);
+    } else {
+        showToast(`Saved on this computer, but the server refused it: ${escapeHtml(res.error ?? "unknown error")}`, 6000);
+    }
+}
+
+for (const btn of profileProviderButtons) {
+    btn.addEventListener("click", () => {
+        profileDraftProvider = btn.dataset.avatarProvider === "gravatar" ? "gravatar" : "libravatar";
+        renderProfileControls();
+        updateProfilePreview(true);
+    });
+    // Arrow keys move between the two options (radiogroup keyboard pattern).
+    btn.addEventListener("keydown", (e) => {
+        if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) return;
+        e.preventDefault();
+        const next = profileProviderButtons.find((b) => b !== btn);
+        next?.click();
+        next?.focus();
+    });
+}
+
+profileEmailInput.addEventListener("input", () => {
+    renderProfileControls();
+    updateProfilePreview();
+});
+
+profileEmailInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !btnProfileSave.disabled) {
+        e.preventDefault();
+        btnProfileSave.click();
+    }
+});
+
+profileProviderLink.addEventListener("click", (e) => {
+    e.preventDefault();
+    api.openExternal(AVATAR_PROVIDER_INFO[profileDraftProvider].url);
+});
+
+btnProfileSave.addEventListener("click", async () => {
+    const email = profileEmailInput.value.trim();
+    if (email && !api.avatar.isPlausibleEmail(email)) return;
+    await commitAvatar(profileDraftProvider, email);
+});
+
+btnProfileRemove.addEventListener("click", async () => {
+    profileEmailInput.value = "";
+    await commitAvatar(profileDraftProvider, "");
+    updateProfilePreview(true);
+});
+
+chkAvatarsExternal.addEventListener("change", () => {
+    setExternalAvatarsEnabled(chkAvatarsExternal.checked);
+    updateProfilePreview(true);
+});
+
+// Hand the saved choice to the preload before any connect, so the very first
+// USER_JOIN_SERVER (and every reconnect) carries it.
+api.setAvatarSelection(currentAvatarSelection());
+
+api.on("user-avatar-updated", (data: { userId: string; avatarUrl: string | null }) => {
+    rememberAvatarUrl(data.userId, data.avatarUrl);
+    refreshAvatars(data.userId);
 });
 
 // ── Audio Tab Volume Sliders (PRD 10.2) ────────────────────────────────────

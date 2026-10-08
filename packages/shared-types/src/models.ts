@@ -109,6 +109,25 @@ export interface IUser {
     username: string;
     nickname: string;
     createdAt: string;
+    /** Server-built avatar URL (PRD 17.1); null/absent = the client's default avatar. */
+    avatarUrl?: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// Avatar (PRD 17.1)
+// ---------------------------------------------------------------------------
+
+export type AvatarProvider = "libravatar" | "gravatar";
+
+/**
+ * What a client sends to choose its avatar — never a URL. The server builds
+ * the URL itself from a fixed template, so a client can't make everyone load
+ * an image from a host of its choosing. `hash` is the lower-case SHA-256 hex
+ * of the trimmed, lower-cased email; the email itself never leaves the client.
+ */
+export interface IAvatarSelection {
+    provider: AvatarProvider;
+    hash: string;
 }
 
 /** Lightweight presence record for channel occupants. */

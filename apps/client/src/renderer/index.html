@@ -2868,6 +2868,211 @@
       line-height: 1.5;
     }
 
+    /* ── Avatars (PRD 17.1) ─────────────────────────────────────────────
+       One .avatar element everywhere (Settings preview, chat, profile card):
+       a fixed-size circle holding either the image or initials, so an avatar
+       never shifts layout while it loads. */
+    .avatar {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      overflow: hidden;
+      background: var(--avatar-bg, var(--bg-tertiary));
+      color: #fff;
+      font-weight: 600;
+      font-size: 15px;
+      line-height: 1;
+      user-select: none;
+    }
+
+    /* The image sits over the initials and fades in once loaded, so a slow or
+       failing load shows initials rather than an empty or broken image. */
+    .avatar img {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+      opacity: 0;
+      transition: opacity 0.15s ease-out;
+    }
+
+    .avatar img.loaded {
+      opacity: 1;
+    }
+
+    .avatar .avatar-initials {
+      letter-spacing: 0.3px;
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+    }
+
+    /* Profile section (Settings → Application). Scoped selectors on purpose:
+       .modal-content's generic label/input rules would otherwise stretch
+       these controls (the PRD 16.1 switch-row lesson). */
+    .profile-card {
+      display: flex;
+      gap: 16px;
+      padding: 14px;
+      margin-bottom: 10px;
+      border-radius: var(--radius);
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+    }
+
+    .profile-avatar-col {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+      width: 112px;
+      flex-shrink: 0;
+    }
+
+    .avatar.profile-avatar-preview {
+      width: 96px;
+      height: 96px;
+      font-size: 34px;
+      box-shadow: 0 0 0 3px var(--bg-secondary), 0 0 0 4px var(--border);
+    }
+
+    .profile-avatar-status {
+      min-height: 28px;
+      font-size: 11px;
+      line-height: 1.3;
+      text-align: center;
+      color: var(--text-muted);
+    }
+
+    .profile-avatar-status.found {
+      color: var(--success);
+    }
+
+    .profile-fields {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .profile-field {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+
+    .profile-field-label {
+      font-size: 11px;
+      color: var(--text-secondary);
+    }
+
+    .modal-content input.profile-email-input {
+      margin-bottom: 0;
+    }
+
+    .modal-content input.profile-email-input.invalid {
+      border-color: var(--danger);
+    }
+
+    .profile-field-error {
+      min-height: 0;
+      font-size: 11px;
+      color: var(--danger);
+    }
+
+    .profile-field-error:empty {
+      display: none;
+    }
+
+    .segmented {
+      display: inline-flex;
+      align-self: flex-start;
+      padding: 2px;
+      border-radius: var(--radius);
+      background: var(--bg-primary);
+      border: 1px solid var(--border);
+    }
+
+    .segmented-option {
+      padding: 4px 14px;
+      border: none;
+      border-radius: 4px;
+      background: transparent;
+      color: var(--text-secondary);
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+    }
+
+    .segmented-option:hover {
+      color: var(--text-primary);
+    }
+
+    .segmented-option[aria-checked="true"] {
+      background: var(--accent-dim);
+      color: var(--text-primary);
+    }
+
+    .segmented-option:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 1px;
+    }
+
+    .modal-content p.profile-hint {
+      display: flex;
+      gap: 6px;
+      align-items: flex-start;
+      margin: 0;
+      font-size: 11px;
+      line-height: 1.45;
+      color: var(--text-muted);
+    }
+
+    .profile-hint svg {
+      flex-shrink: 0;
+      margin-top: 1px;
+    }
+
+    .profile-provider-link {
+      color: var(--accent);
+      text-decoration: none;
+    }
+
+    .profile-provider-link:hover {
+      text-decoration: underline;
+    }
+
+    .profile-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+
+    .profile-actions .btn {
+      padding: 6px 14px;
+    }
+
+    .profile-actions .btn:disabled {
+      opacity: 0.45;
+      cursor: default;
+    }
+
+    /* The accent stays vivid even at low opacity, so a disabled Save gets a
+       neutral look instead (and no hover change). */
+    .profile-actions .btn-create:disabled,
+    .profile-actions .btn-create:disabled:hover {
+      opacity: 1;
+      background: var(--bg-tertiary);
+      color: var(--text-muted);
+    }
+
     .modal-actions {
       display: flex;
       gap: 8px;
@@ -4677,7 +4882,61 @@
 
       <!-- Application Tab -->
       <div class="settings-panel" data-settings-panel="app">
-        <label style="font-size:11px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px; display:block; margin-bottom:10px;">System Tray</label>
+        <!-- Profile (PRD 17.1) — avatar from Libravatar/Gravatar. Client-side
+             preference; only { provider, hash } is ever sent to the server. -->
+        <label style="font-size:11px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px; display:block; margin-bottom:10px;">Profile</label>
+
+        <div class="profile-card" id="profile-card">
+          <div class="profile-avatar-col">
+            <span class="avatar profile-avatar-preview" id="profile-avatar-preview" aria-hidden="true"></span>
+            <span class="profile-avatar-status" id="profile-avatar-status" role="status" aria-live="polite"></span>
+          </div>
+
+          <div class="profile-fields">
+            <div class="profile-field">
+              <span class="profile-field-label" id="profile-provider-label">Avatar source</span>
+              <div class="segmented" role="radiogroup" aria-labelledby="profile-provider-label">
+                <button type="button" class="segmented-option" role="radio" data-avatar-provider="libravatar">Libravatar</button>
+                <button type="button" class="segmented-option" role="radio" data-avatar-provider="gravatar">Gravatar</button>
+              </div>
+            </div>
+
+            <div class="profile-field">
+              <span class="profile-field-label" id="profile-email-label">Email</span>
+              <input type="email" class="profile-email-input" id="profile-email-input" aria-labelledby="profile-email-label"
+                placeholder="you@example.com" autocomplete="email" spellcheck="false" maxlength="254">
+              <span class="profile-field-error" id="profile-email-error" role="alert"></span>
+            </div>
+
+            <p class="profile-hint">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+              <span>Create a free account at <a href="#" class="profile-provider-link" id="profile-provider-link">libravatar.org</a> with this email and upload your picture there. Your email never leaves this computer &mdash; only an anonymous hash of it is shared.</span>
+            </p>
+
+            <div class="profile-actions">
+              <button type="button" class="btn btn-cancel" id="btn-profile-remove">Remove</button>
+              <button type="button" class="btn btn-create" id="btn-profile-save">Save avatar</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="toggle-row">
+          <div class="toggle-row-info">
+            <div class="toggle-row-icon">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+            </div>
+            <div class="toggle-row-text">
+              <span class="toggle-row-title">Load avatars from Libravatar/Gravatar</span>
+              <span class="toggle-row-desc">Turn off to show initials instead, with no requests to those services</span>
+            </div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="chk-avatars-external">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+
+        <label style="font-size:11px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px; display:block; margin-bottom:10px; margin-top:6px;">System Tray</label>
 
         <div class="toggle-row">
           <div class="toggle-row-info">

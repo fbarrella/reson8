@@ -32,6 +32,7 @@ import { registerReactionHandlers } from "./handlers/reaction.handler.js";
 import { registerEmojiHandlers } from "./handlers/emoji.handler.js";
 import { registerNudgeHandlers } from "./handlers/nudge.handler.js";
 import { registerUploadHandlers } from "./handlers/upload.handler.js";
+import { registerProfileHandlers } from "./handlers/profile.handler.js";
 import { registerUploadRoute } from "./routes/upload.route.js";
 import { MediasoupService } from "./services/mediasoup.service.js";
 import { startUploadSweeper } from "./services/upload-sweeper.js";
@@ -147,6 +148,7 @@ async function main(): Promise<void> {
     registerEmojiHandlers(io, app);
     registerNudgeHandlers(io, app);
     registerUploadHandlers(io, app);
+    registerProfileHandlers(io, app);
     startUploadSweeper(app);
 
     // ── Start ──────────────────────────────────────────────────────────────

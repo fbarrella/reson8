@@ -22,6 +22,7 @@ import type {
     IConsumerInfo,
     ICustomEmoji,
     IReactionSummary,
+    IAvatarSelection,
 } from "./models.js";
 
 // ---------------------------------------------------------------------------
@@ -33,7 +34,18 @@ export interface ClientToServerEvents {
      * Client requests to join a server instance.
      */
     USER_JOIN_SERVER: (
-        payload: { serverId?: string; nickname: string; instanceId: string; password?: string },
+        payload: {
+            serverId?: string;
+            nickname: string;
+            instanceId: string;
+            password?: string;
+            /**
+             * The user's avatar choice (PRD 17.1), refreshed on every join.
+             * Absent (a pre-v2.6.0 client) = leave the stored avatar alone;
+             * `null` = clear it (back to the default avatar).
+             */
+            avatar?: IAvatarSelection | null;
+        },
         ack: (response: { success: boolean; serverId?: string; error?: string }) => void,
     ) => void;
 
@@ -471,6 +483,16 @@ export interface ClientToServerEvents {
     ) => void;
 
     /**
+     * Changes the caller's avatar while connected (PRD 17.1). `null` clears it.
+     * The server validates the selection, builds the URL itself, and
+     * broadcasts `USER_AVATAR_UPDATED` when it actually changed.
+     */
+    SET_AVATAR: (
+        payload: { avatar: IAvatarSelection | null },
+        ack: (response: { success: boolean; avatarUrl?: string | null; error?: string }) => void,
+    ) => void;
+
+    /**
      * Resolves this viewer socket's `userId` from the same persisted
      * instance ID the primary connection uses, WITHOUT touching presence,
      * rooms, or anything `USER_JOIN_SERVER` would (that's the whole point —
@@ -700,6 +722,9 @@ export interface ServerToClientEvents {
 
     /** Broadcasts a newly-approved custom emoji so every connected picker updates live. */
     CUSTOM_EMOJI_APPROVED: (payload: { serverId: string; emoji: ICustomEmoji }) => void;
+
+    /** A user's avatar changed (PRD 17.1); `null` = back to the default avatar. */
+    USER_AVATAR_UPDATED: (payload: { userId: string; avatarUrl: string | null }) => void;
 
     /** Delivered to the target of a NUDGE_USER call. */
     NUDGE_RECEIVED: (payload: { fromUserId: string; fromNickname: string }) => void;

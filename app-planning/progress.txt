@@ -546,3 +546,151 @@ Feature/Fix: <name>
   Verification:
     ...
   Next Step: ...
+
+--- Entry: 08/10/2026 ---
+
+Feature/Fix: PRD 17.1 — Avatars via Libravatar/Gravatar (profile settings + server storage)
+
+  Problem: Reson8 had no avatars at all. Users wanted a picture identity
+  hosted on Libravatar (default) or Gravatar, chosen by email, that other
+  users can see even while its owner is offline.
+
+  Solution: Settings -> Application has a new first section, "Profile":
+  an avatar source switch (Libravatar | Gravatar), an email field, a 96px
+  live preview and Save/Remove buttons, plus a "Load avatars from
+  Libravatar/Gravatar" opt-out toggle (user decision; off = colored
+  initials, no external requests at all). The email is hashed locally
+  (SHA-256 of the trimmed, lower-cased address, the key both providers
+  use) and only { provider, hash } is ever sent to the server. The server
+  NEVER accepts a URL: it validates the selection and builds the URL from
+  one of two fixed templates, so a modified client can't make everyone
+  load an image from a host of its choosing (an IP-logging pixel), the
+  same principle as the PRD 16.8 upload ledger. The stored URL is
+  refreshed on every USER_JOIN_SERVER ("checked once at login") and via a
+  new SET_AVATAR event when changed while connected; changes are broadcast
+  as USER_AVATAR_UPDATED. Users without an avatar get Libravatar's
+  generated "wavatar" keyed by sha256(userId), never the raw id, because
+  the user id IS the instanceId, the identity credential (user decision).
+
+  Shared Types Changes:
+    - AvatarProvider ("libravatar" | "gravatar"), IAvatarSelection
+      { provider, hash }; IUser.avatarUrl?.
+    - USER_JOIN_SERVER payload gains avatar?: IAvatarSelection | null.
+      Absent (a v2.5.0 client) = leave the stored avatar alone; null =
+      clear it; an object = validate and store.
+    - New C2S SET_AVATAR ({ avatar } -> { success, avatarUrl?, error? }).
+    - New S2C USER_AVATAR_UPDATED ({ userId, avatarUrl | null }).
+
+  Database Changes:
+    - Migration 20261010120000_add_user_avatar_url: users."avatarUrl" TEXT,
+      nullable, no backfill (NULL = default avatar). Generated with
+      `prisma migrate diff` against a throwaway shadow DB, never migrate dev.
+
+  Server Changes:
+    - services/avatar.service.ts (NEW, pure): parseAvatarSelection() (exact
+      provider via hasOwnProperty, so "toString"/"__proto__" are refused;
+      hash must match /^[0-9a-f]{64}$/; extra keys dropped) and
+      buildAvatarUrl(). AVATAR_UPDATE_COOLDOWN_MS = 2000.
+    - handlers/profile.handler.ts (NEW): SET_AVATAR. Refused for viewer
+      sockets and sockets that haven't joined; 2s in-memory cooldown per
+      user (nudge pattern); writes and broadcasts only when the URL
+      actually changed.
+    - connection.handler.ts USER_JOIN_SERVER: avatar folded into the
+      existing user upsert. An invalid selection is logged and ignored and
+      never fails the join. A join that changes the avatar (e.g. changed
+      while offline) broadcasts USER_AVATAR_UPDATED before USER_JOINED, so
+      online clients don't keep a stale one.
+
+  Client Changes:
+    - src/avatar.ts (NEW, pure, like markdown.ts): normalizeEmail,
+      isPlausibleEmail, sha256Hex/hashEmail (Node crypto, so it lives in
+      the preload, not the renderer), buildAvatarUrl (mirrors the server,
+      used only for the preview, plus a d=404 variant), defaultAvatarUrl,
+      withAvatarSize (URLSearchParams, clamped to 1-512).
+    - preload.ts: reson8Api.avatar.* helpers; setAvatarSelection() stores
+      the choice and every USER_JOIN_SERVER (reconnects included) sends it;
+      setAvatar() emits SET_AVATAR with a 5s timeout, reported as
+      `unsupported` against a pre-v2.6.0 server; USER_AVATAR_UPDATED is
+      forwarded as "user-avatar-updated".
+    - renderer.ts "Avatars (PRD 17.1)" section: avatarUrlCache (userId ->
+      stored URL), createAvatarElement()/applyAvatar()/refreshAvatars().
+      Every avatar is one `.avatar[data-avatar-user-id]` element: initials
+      on a stable per-user color always underneath, with the image fading
+      in on load and falling back stored -> default -> initials (never a
+      broken-image icon). Fixed size, so no layout shift (17.2/17.8 rely on
+      that). Built here so 17.2/17.3 can reuse it.
+    - Profile section: the edit is a draft until Save and is reset whenever
+      Settings opens. The preview probes the provider with d=404 to tell
+      "Avatar found ✓" from "No picture on <provider> yet — you'll get a
+      generated one", gives up after 10s ("Couldn't reach <provider> right
+      now"), and request tokens discard stale answers. Save works
+      disconnected (stored locally, sent on the next join). Remove clears
+      the avatar. Server refusals and "server too old" surface as toasts
+      (error text escaped, since showToast uses innerHTML).
+    - index.html: Profile markup + scoped CSS. The provider switch is a
+      button radiogroup (aria-checked, arrow keys), not radio inputs,
+      because .modal-content's generic label/input rules would stretch it
+      (the PRD 16.1 lesson). A disabled Save gets a neutral look instead
+      of opacity, since the accent stayed vivid at 45%.
+
+  localStorage Keys:
+    reson8-avatar-provider ("libravatar" default | "gravatar")
+    reson8-avatar-email (only to refill the field; never sent anywhere)
+    reson8-avatars-external ("false" = initials only)
+
+  Found During Testing:
+    - Bug (fixed): saving while disconnected returned before re-rendering
+      the buttons, so Save stayed enabled and Remove disabled.
+    - Libravatar's d=404 probe takes ~4.5s for the first hop (it proxies
+      Gravatar on a miss) and longer for the full redirect chain. Not a
+      bug, but it motivated the 10s give-up.
+
+  Key Files Modified:
+    packages/shared-types/src/models.ts
+    packages/shared-types/src/socket-events.ts
+    apps/server/prisma/schema.prisma
+    apps/server/prisma/migrations/20261010120000_add_user_avatar_url/migration.sql (NEW)
+    apps/server/src/services/avatar.service.ts (NEW)
+    apps/server/src/handlers/profile.handler.ts (NEW)
+    apps/server/src/handlers/connection.handler.ts
+    apps/server/src/index.ts
+    apps/server/src/__tests__/avatar.service.test.ts (NEW)
+    apps/client/src/avatar.ts (NEW)
+    apps/client/scripts/avatar-smoke.mjs (NEW)
+    apps/client/package.json (test:avatar script)
+    apps/client/src/preload.ts
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/renderer/index.html
+
+  Verification:
+    - npx tsc --build (shared-types), npx tsc --noEmit (server, client).
+    - npm run test (server): 10 files, 105 tests pass, including the new
+      avatar.service tests (both providers, null, extra keys dropped,
+      unknown/inherited providers, wrong-length/uppercase/URL hashes).
+    - npm run test:avatar (client, 20 checks: known email hash,
+      normalization, URL builders match the server, default URL never
+      contains the raw id, size param) and npm run test:markdown
+      (regression) both pass.
+    - Migration: `prisma migrate deploy` on a fresh scratch DB, column
+      confirmed nullable; scratch DB dropped afterwards.
+    - Real built server on the scratch DB (explicit DATABASE_URL, Redis
+      db 7, port 9871, empty password), seeded after boot, with a scripted
+      two-socket run: 18/18 pass (join stores URL + broadcasts; invalid
+      avatar ignored, join still OK; SET_AVATAR refuses bad provider/
+      uppercase hash/before-join; valid one persists + broadcasts; 2s
+      cooldown; unchanged = no broadcast; null clears; legacy join keeps
+      the avatar; join-time change/clear broadcast). The first run failed
+      because the scratch DB had no roles (not seeded), a test-setup
+      mistake, not an app bug.
+    - Real built client under Xvfb over CDP: 17/17 pass (default state and
+      sha256 default URL, invalid email error, "No picture" hint, provider
+      switch, save while disconnected, join stores the URL in the DB,
+      Remove/Save while connected update the DB, external-off initials,
+      draft discarded on reopen). Screenshots inspected (default, invalid,
+      no-picture, external off, saved state).
+    - Not yet hand-tested by the user. Avatars aren't shown in chat until
+      17.2.
+
+  Next Step: PRD 17.2 — avatars next to nicknames in text chats (DTOs gain
+  avatarUrl/senderAvatarUrl; buildMessageShell() gets the 40px gutter
+  avatar).

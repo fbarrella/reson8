@@ -19,6 +19,7 @@ import { PresenceService } from "../services/presence.service.js";
 import { buildChannelTree } from "../services/channel-tree.service.js";
 import type { MediasoupService } from "../services/mediasoup.service.js";
 import { SocketOwnership } from "../services/socket-ownership.js";
+import { buildAvatarUrl, parseAvatarSelection } from "../services/avatar.service.js";
 
 type TypedIO = SocketIOServer<
     ClientToServerEvents,
@@ -302,15 +303,38 @@ export function registerConnectionHandlers(
                 socket.data.userId = instanceId;
                 socket.data.currentChannelId = null;
 
+                // Avatar refresh (PRD 17.1): an absent field (a pre-v2.6.0
+                // client) leaves the stored avatar alone, null clears it, and
+                // an invalid selection is ignored — it never fails the join.
+                let avatarData: { avatarUrl: string | null } | Record<string, never> = {};
+                let avatarChanged = false;
+                if (payload.avatar !== undefined) {
+                    const parsed = parseAvatarSelection(payload.avatar);
+                    if (parsed.ok) {
+                        const avatarUrl = buildAvatarUrl(parsed.value);
+                        avatarData = { avatarUrl };
+                        // A change made while offline must reach clients that
+                        // are already online and cached the old one.
+                        const existing = await app.prisma.user.findUnique({
+                            where: { id: instanceId },
+                            select: { avatarUrl: true },
+                        });
+                        avatarChanged = (existing?.avatarUrl ?? null) !== avatarUrl;
+                    } else {
+                        app.log.warn({ userId: instanceId, error: parsed.error }, "Ignoring invalid avatar on join");
+                    }
+                }
+
                 // Auto-create (upsert) User record for this instance
                 await app.prisma.user.upsert({
                     where: { id: instanceId },
-                    update: { nickname },
+                    update: { nickname, ...avatarData },
                     create: {
                         id: instanceId,
                         username: instanceId,
                         nickname,
                         password: "instance-auth", // no real auth — instance-based
+                        ...avatarData,
                     },
                 });
 
@@ -364,7 +388,14 @@ export function registerConnectionHandlers(
                 // Register presence in Redis
                 await presence.joinServer(instanceId, serverId, nickname);
 
-                // Notify all other clients in the server
+                // Notify all other clients in the server (a changed avatar first,
+                // so their cache is current before the join is announced)
+                if (avatarChanged && "avatarUrl" in avatarData) {
+                    socket.to(`server:${serverId}`).emit("USER_AVATAR_UPDATED", {
+                        userId: instanceId,
+                        avatarUrl: avatarData.avatarUrl,
+                    });
+                }
                 socket.to(`server:${serverId}`).emit("USER_JOINED", {
                     userId: instanceId,
                     nickname,

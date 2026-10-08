@@ -10,6 +10,14 @@ import { contextBridge, ipcRenderer } from "electron";
 import { io, Socket } from "socket.io-client";
 import { renderMessageMarkdown, markdownToPlainText } from "./markdown";
 import type { CustomEmojiMap } from "./markdown";
+import {
+    buildAvatarUrl,
+    defaultAvatarUrl,
+    hashEmail,
+    isPlausibleEmail,
+    withAvatarSize,
+    type AvatarSelection,
+} from "./avatar";
 import type {
     ClientToServerEvents,
     ServerToClientEvents,
@@ -40,6 +48,12 @@ let screenAudioWriter: WritableStreamDefaultWriter<AudioData> | null = null;
 let screenAudioSamplesWritten = 0;
 let serverBaseUrl: string = "";
 let joinServerInFlight = false;
+/**
+ * The user's avatar choice (PRD 17.1), set by the renderer before connecting
+ * and on every change. Sent with every USER_JOIN_SERVER (reconnects included),
+ * which is how the server refreshes the stored avatar "once per login".
+ */
+let avatarSelection: AvatarSelection | null = null;
 let latencyMs: number = -1;
 /**
  * Best current estimate of (server clock) - (this machine's clock), in ms.
@@ -423,7 +437,7 @@ const api = {
             // Join the server — let the server decide the serverId
             socket!.emit(
                 "USER_JOIN_SERVER",
-                { nickname, instanceId, password },
+                { nickname, instanceId, password, avatar: avatarSelection },
                 (res) => {
                     joinServerInFlight = false;
                     if (res.success && res.serverId) {
@@ -504,6 +518,7 @@ const api = {
             emit("custom-emoji-approved", payload);
         });
         socket.on("NUDGE_RECEIVED", (payload) => emit("nudge-received", payload));
+        socket.on("USER_AVATAR_UPDATED", (payload) => emit("user-avatar-updated", payload));
         socket.on("SERVER_SETTINGS_UPDATED", (payload) => emit("server-settings-updated", payload));
         socket.on("CHANNEL_PIN_UPDATED", (payload) => emit("channel-pin-updated", payload));
 
@@ -1112,6 +1127,58 @@ const api = {
     /** One line of plain text with all Markdown syntax and line breaks removed. */
     markdownToPlainText(text: string): string {
         return markdownToPlainText(text);
+    },
+
+    // ── Avatars (PRD 17.1) ───────────────────────────────────────────────
+    // Hashing needs Node's crypto, which the renderer (a plain <script>)
+    // doesn't have. The email itself never leaves this process: only
+    // { provider, hash } goes to the server.
+
+    avatar: {
+        isPlausibleEmail(email: string): boolean {
+            return isPlausibleEmail(email);
+        },
+        /** `{ provider, hash }` for an email — what the server receives. */
+        selectionFor(provider: "libravatar" | "gravatar", email: string): AvatarSelection {
+            return { provider, hash: hashEmail(email) };
+        },
+        /** The provider URL for the Settings preview; "404" asks "is there a real picture?". */
+        previewUrl(selection: AvatarSelection, fallback: "wavatar" | "404"): string {
+            return buildAvatarUrl(selection, fallback);
+        },
+        defaultUrl(userId: string): string {
+            return defaultAvatarUrl(userId);
+        },
+        withSize(url: string, px: number): string {
+            return withAvatarSize(url, px);
+        },
+    },
+
+    /** Remembers the avatar choice for every future join (reconnects included). */
+    setAvatarSelection(selection: AvatarSelection | null): void {
+        avatarSelection = selection;
+    },
+
+    /**
+     * Tells the server about an avatar change while connected. A pre-v2.6.0
+     * server has no SET_AVATAR handler, so it never answers: that surfaces as
+     * `unsupported` after 5 s instead of hanging.
+     */
+    setAvatar(selection: AvatarSelection | null): Promise<{
+        success: boolean;
+        avatarUrl?: string | null;
+        unsupported?: boolean;
+        error?: string;
+    }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.timeout(5000).emit("SET_AVATAR", { avatar: selection }, (err, res) => {
+                resolve(err ? { success: false, unsupported: true, error: "No response" } : res);
+            });
+        });
     },
 
     // ── Image viewer actions (PRD 15.9) ──────────────────────────────────
