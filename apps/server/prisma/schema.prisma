@@ -91,6 +91,10 @@ model User {
   /// Server-built Libravatar/Gravatar URL (PRD 17.1) — never a client-supplied
   /// URL. NULL = the client's default (generated) avatar.
   avatarUrl String?
+  /// Ed25519 public key (base64 SPKI DER) bound to this identity on first
+  /// signed join (PRD 17.12). NULL = not bound yet (legacy / never signed).
+  publicKey        String?
+  publicKeyBoundAt DateTime?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

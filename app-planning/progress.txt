@@ -1647,3 +1647,215 @@ Feature/Fix: PRD 17.11 — Emoji autocomplete in the message edit box
 
   Next Step: PRD 17.12 — cryptographic identity (stop instance-id
   impersonation).
+
+--- Entry: 08/10/2026 ---
+
+Feature/Fix: PRD 17.12 — Cryptographic identity (stop instance-id impersonation)
+
+  Problem (audit finding, added to Phase 17 at the user's request): a user
+  WAS whatever `instanceId` a socket presented at USER_JOIN_SERVER, and
+  every id is broadcast to every client (USER_JOINED, presence, message
+  DTOs), so anyone could join as anyone, the admin included. One install
+  uses the same id on every server, so any server operator (or anyone
+  sniffing plain ws://) learned an id usable everywhere else. Worse,
+  VIEWER_AUTHENTICATE accepted any id with NO password or ban check, so an
+  outsider could watch a channel's screen shares using an occupant's id.
+
+  Solution: public-key challenge-response (the SSH/WebAuthn model), Ed25519
+  via Node's built-in crypto on both sides (no new dependency).
+  - Each install has a key pair whose private key never leaves the Electron
+    MAIN process.
+  - On every connection (reconnects included) the server issues a fresh
+    single-use nonce (60 s); the client signs
+    "reson8-auth-v1\n<nonce>\n<host>"; the server verifies against the key
+    BOUND to that id.
+  - Trust on first use: the first valid signed join binds the key, via an
+    atomic compare-and-set, so racing first joins can't both win.
+  - User ids stay the same; they are now treated as public handles.
+  - A secret token was rejected: every server would learn it and could
+    replay it elsewhere.
+  User decisions: in this phase as 17.12; gradual rollout (bound
+  identities are protected at once, unbound legacy joins are allowed until
+  REQUIRE_SIGNED_IDENTITY=true); optional ADMIN_KEY_FINGERPRINT; an
+  ADMIN-only "Reset key" in User Management for recovery.
+
+  Database Changes:
+    - Migration 20261011120000_add_user_identity_key: users."publicKey"
+      TEXT and "publicKeyBoundAt" TIMESTAMP(3), both nullable, no backfill.
+
+  Shared Types Changes:
+    - New events: REQUEST_AUTH_CHALLENGE, REQUEST_VIEWER_TICKET,
+      RESET_IDENTITY_KEY.
+    - USER_JOIN_SERVER.identity?: { publicKey, signature, host };
+      VIEWER_AUTHENTICATE payload { ticket?, instanceId? }.
+    - GET_ALL_USERS rows: hasIdentityKey?.
+    - SocketData: authNonce?, authNonceIssuedAt?.
+
+  Server Changes:
+    - services/identity.service.ts (NEW, pure + node:crypto): nonce,
+      authMessage, parseIdentityProof (shape checks), Ed25519-only key
+      import, verifyAuthSignature, SSH-style keyFingerprint, isNonceFresh,
+      isHostAllowed, and decideIdentity(), the PRD's table as one pure
+      function:
+      - signed + same key → accept; signed + other key → refuse "registered
+        to another device"; signed + unbound → accept + BIND; invalid
+        signature or disallowed host → refuse;
+      - unsigned + bound → refuse "protected — update"; unsigned + unbound
+        → accept unless REQUIRE_SIGNED_IDENTITY, or the admin id with a
+        fingerprint set;
+      - the admin role is only granted when no fingerprint is set or the key
+        matches it, and a foreign key can never bind a fingerprint-protected
+        admin id.
+    - config/identity.config.ts (NEW): REQUIRE_SIGNED_IDENTITY,
+      ADMIN_KEY_FINGERPRINT, AUTH_ALLOWED_HOSTS, read at call time.
+    - connection.handler.ts:
+      - REQUEST_AUTH_CHALLENGE.
+      - USER_JOIN_SERVER: validates instanceId; the identity decision runs
+        after the password/ban checks and BEFORE any write; the nonce is
+        taken from the socket (never the payload) and consumed whatever the
+        outcome; binding is a CAS (updateMany ... WHERE "publicKey" IS NULL)
+        for an existing row, or the key is set in the upsert's create for a
+        new user, with race checks; role-admin is granted only on
+        decision.grantAdmin. Every bind/refusal is logged with fingerprint,
+        address and host (never the signature).
+      - REQUEST_VIEWER_TICKET: only the owning primary socket.
+      - VIEWER_AUTHENTICATE now takes the user id FROM THE TICKET. The legacy
+        id path is allowed only for an unbound id, while unsigned joins are
+        allowed, AND while that user has a live owned session.
+      - finalizeDisconnect revokes the user's viewer tickets.
+    - services/viewer-ticket.service.ts (NEW): the upload-token pattern —
+      32 random bytes, only the SHA-256 stored in Redis, 10 min TTL
+      refreshed on use (survives the viewer's own reconnects), a per-user
+      set so all of a user's tickets can be revoked.
+    - admin.handler.ts: RESET_IDENTITY_KEY (requirePermission ADMIN) clears
+      the key, revokes tickets and disconnects that user's sockets, so an
+      impostor loses the session at once. GET_ALL_USERS reports
+      hasIdentityKey and never the key.
+    - .env.example documents the three optional variables.
+
+  Client Changes:
+    - src/identity-proof.ts (NEW, pure): the message format, a nonce/host
+      shape check, SPKI export, fingerprint, and signChallenge(), which
+      refuses anything that isn't a server-shaped nonce plus a plain host,
+      so a compromised renderer can't get arbitrary data signed.
+    - src/identity-key.ts (NEW, main process only):
+      - packaged: Ed25519 PKCS#8 at <userData>/identity-key.pem, mode 0600;
+        an unreadable file is renamed aside, never overwritten;
+      - dev: an ephemeral key per launch, like dev's fresh instance id;
+      - safeStorage rejected on purpose: on Linux without a keyring it
+        silently falls back to plain text, and a later keyring loss locks
+        the identity out forever.
+    - main.ts: IPC identity-get-public and identity-sign-challenge.
+    - DEVIATION FROM THE PRD (security): the viewer ticket is NOT passed in
+      additionalArguments, which land on the process command line, readable
+      by other local users. main.ts keeps it per viewer webContents id
+      (cleared on close); the viewer preload fetches it via
+      viewer-get-ticket.
+    - preload.ts:
+      - on every "connect", buildIdentityProof(): REQUEST_AUTH_CHALLENGE
+        with a 3 s timeout (a pre-2.6.0 server → legacy join), then the
+        main process signs for host[:port] as typed, and the join carries
+        `identity`;
+      - openScreenShareViewer requests a ticket first;
+      - getIdentityFingerprint(), resetIdentityKey().
+    - preload-viewer.ts: authenticates with the ticket (the id only against
+      a server without tickets); the handshake no longer carries the id.
+    - Settings → About: an "Identity" card with the fingerprint, Copy, and
+      the ADMIN_KEY_FINGERPRINT hint.
+    - User Management: 🔒 on bound identities. "Reset key" appears only when
+      I really hold ADMIN (computed from my own row's role permission bits,
+      since isAdminUser only means MANAGE_ROLES), only on bound OTHER
+      users' rows, and as a two-step button ("Reset key" → "Confirm reset",
+      reverting after 4 s) instead of the PRD's confirm modal: the same
+      protection without a new modal for a one-off row action.
+    - New script test:identity.
+
+  Key Files Modified:
+    packages/shared-types/src/socket-events.ts
+    apps/server/prisma/schema.prisma
+    apps/server/prisma/migrations/20261011120000_add_user_identity_key/migration.sql (NEW)
+    apps/server/src/services/identity.service.ts (NEW)
+    apps/server/src/services/viewer-ticket.service.ts (NEW)
+    apps/server/src/config/identity.config.ts (NEW)
+    apps/server/src/__tests__/identity.service.test.ts (NEW)
+    apps/server/src/handlers/connection.handler.ts
+    apps/server/src/handlers/admin.handler.ts
+    apps/server/.env.example
+    apps/client/src/identity-proof.ts (NEW)
+    apps/client/src/identity-key.ts (NEW)
+    apps/client/scripts/identity-smoke.mjs (NEW)
+    apps/client/package.json (test:identity)
+    apps/client/src/main.ts
+    apps/client/src/preload.ts
+    apps/client/src/preload-viewer.ts
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/renderer/index.html
+
+  Verification:
+    - npx tsc --build (shared-types), npx tsc --noEmit (server, client).
+    - npm run test (server): 13 files, 148 tests, including 27 new identity
+      tests covering every row of the table, the admin-fingerprint cases,
+      a tampered message, a signature by another key, a non-Ed25519 key,
+      nonce freshness, host allow-listing and proof shape checks.
+    - npm run test:identity (client): signs with the CLIENT code and
+      verifies with the SERVER's compiled verifier, so the message format
+      and fingerprint are proven identical. The signer refuses arbitrary
+      text, short nonces, newline/space hosts (message injection), empty
+      hosts and non-strings. The PEM round trip is checked. 14/14.
+      test:markdown, avatar, soft-clip and link-fixers all pass.
+    - Migration: applied to a fresh scratch DB via `prisma migrate deploy`
+      (both columns present).
+    - Real built server, scripted sockets with real Ed25519 keys,
+      ADMIN_KEY_FINGERPRINT set, 33/33:
+      - first signed join binds; a reconnect works; another key is refused
+        and the binding is unchanged;
+      - legacy on bound → refused; legacy on unbound → accepted, nothing
+        bound;
+      - a captured signature replayed on another socket, a nonce reused on
+        the same socket, another host, no challenge, and a malformed proof
+        → all refused;
+      - admin: a foreign key can't bind it and an unsigned admin join is
+        refused, with no role granted by either; the right key binds and
+        gets the role;
+      - viewer: a bound id without a ticket is refused; ticket issued and
+        accepted, reused across a viewer reconnect; a viewer socket can't
+        mint tickets; a made-up ticket is refused; the legacy viewer path
+        is allowed only with a live session; the ticket is revoked when the
+        owner's session ends;
+      - reset: refused for a non-admin; the admin reset clears the key and
+        disconnects the live socket; the next device binds;
+      - GET_ALL_USERS has hasIdentityKey and never a key.
+      The first run hung at the viewer step: a test bug (step 4's successful
+      join had superseded the earlier socket), fixed by rejoining, plus an
+      ack timeout so a dead socket can't hang the test.
+    - Restarted with REQUIRE_SIGNED_IDENTITY=true +
+      AUTH_ALLOWED_HOSTS=127.0.0.1:9871, 5/5: an unsigned join is refused
+      even for an unbound id; a signed one works and binds; an unlisted
+      host is refused and a listed one accepted; a legacy viewer is
+      refused; refusals are logged at WARN.
+    - Real built client (Xvfb, CDP), all functional checks pass:
+      - joined the REQUIRE_SIGNED server (so it really signs); its key is
+        bound; About shows exactly the bound key's fingerprint;
+      - the Viewer window authenticated WITH A TICKET (server log
+        viaTicket: true), and no process command line contains a ticket;
+      - after a server restart (now with this client as admin) the client
+        auto-reconnected and re-signed with no refusal;
+      - User Management: 🔒 on bound users, Reset key on others but never
+        on your own row; the first click arms ("Confirm reset") without
+        resetting, the second resets in the DB and the list refreshes.
+      Four check failures across the client runs were test parsing/state
+      mistakes, each confirmed against the real data:
+      - pino's pretty log prints `viaTicket: true`, not JSON;
+      - ps|grep counted the probe itself; listing the viewer's actual args
+        showed only the 4 non-secret params;
+      - the strict phase had legitimately bound the "legacy" user, so its 🔒
+        and Reset key were correct (DB confirmed every badge).
+    - Screenshots inspected (About identity card; User Management with 🔒,
+      Reset key and the armed state).
+    - NOT machine-tested: voice joining after the identity change. The join
+      path is shared and was exercised by every connect, but the voice
+      handshake itself needs a real/fake mic run. Not yet hand-tested by the
+      user.
+
+  Next Step: Phase 17 close-out: /bump-version (2.6.0), release notes,
+  CLAUDE.md files and README, archive the Phase 17 PRD.

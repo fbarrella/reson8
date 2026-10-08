@@ -826,6 +826,8 @@ interface Reson8Api {
         withSize(url: string, px: number): string;
     };
     setAvatarSelection(selection: { provider: "libravatar" | "gravatar"; hash: string } | null): void;
+    getIdentityFingerprint(): Promise<string>;
+    resetIdentityKey(userId: string): Promise<{ success: boolean; error?: string }>;
     getUserProfile(userId: string): Promise<{
         success: boolean;
         profile?: UserProfile;
@@ -4094,6 +4096,17 @@ function renderAdminUsers(users: any[]): void {
     }
 
     const myId = api.getInstanceId();
+    // "Reset key" (PRD 17.12) is ADMIN-only on the server; derive it from my
+    // own roles in this same list rather than offer a button that can only
+    // fail for a MANAGE_ROLES-only holder.
+    const ADMIN_FLAG = 1n << 8n; // PermissionFlags.ADMIN
+    const iAmAdmin = (users.find((u) => u.id === myId)?.roles ?? []).some((r: any) => {
+        try {
+            return (BigInt(r.permissions) & ADMIN_FLAG) !== 0n;
+        } catch {
+            return false;
+        }
+    });
 
     for (const user of users) {
         const row = document.createElement("div");
@@ -4105,8 +4118,12 @@ function renderAdminUsers(users: any[]): void {
         const infoEl = document.createElement("div");
         infoEl.className = "admin-user-info";
         const bannedBadge = user.isBanned ? ' <span class="user-banned-badge">BANNED</span>' : "";
+        // 🔒 = this identity has bound a key on this server (PRD 17.12).
+        const keyBadge = user.hasIdentityKey
+            ? ' <span class="user-key-badge" title="Identity key bound — only this user\'s device can connect as them" aria-label="Identity key bound">🔒</span>'
+            : "";
         infoEl.innerHTML = `
-            <div class="admin-user-nickname">${escapeHtml(user.nickname)}${bannedBadge}</div>
+            <div class="admin-user-nickname">${escapeHtml(user.nickname)}${keyBadge}${bannedBadge}</div>
             <div class="admin-user-id">${escapeHtml(user.id)}</div>
         `;
         row.appendChild(infoEl);
@@ -4192,6 +4209,43 @@ function renderAdminUsers(users: any[]): void {
                 }
             });
             row.appendChild(banBtn);
+        }
+
+        // Reset identity key (PRD 17.12): ADMIN only, never on your own row.
+        // Two-step: the first click arms it, a second within 4 s confirms.
+        if (iAmAdmin && user.hasIdentityKey && user.id !== myId) {
+            const resetBtn = document.createElement("button");
+            resetBtn.className = "btn-reset-key";
+            resetBtn.textContent = "Reset key";
+            resetBtn.title = `The next device that connects as ${user.nickname} will be bound to this identity. Use it if they reinstalled, changed computer, or someone else claimed their identity. Disconnects them now.`;
+            let armedUntil = 0;
+            let disarmTimer: ReturnType<typeof setTimeout> | null = null;
+            resetBtn.addEventListener("click", async () => {
+                if (Date.now() > armedUntil) {
+                    armedUntil = Date.now() + 4000;
+                    resetBtn.textContent = "Confirm reset";
+                    resetBtn.classList.add("armed");
+                    if (disarmTimer) clearTimeout(disarmTimer);
+                    disarmTimer = setTimeout(() => {
+                        resetBtn.textContent = "Reset key";
+                        resetBtn.classList.remove("armed");
+                    }, 4000);
+                    return;
+                }
+                if (disarmTimer) clearTimeout(disarmTimer);
+                resetBtn.disabled = true;
+                const res = await api.resetIdentityKey(user.id);
+                if (res.success) {
+                    log(`Identity key of ${escapeHtml(user.nickname)} reset — their next connection binds a new key`, "success");
+                    openSettingsPanel(); // refresh the list
+                } else {
+                    resetBtn.disabled = false;
+                    resetBtn.textContent = "Reset key";
+                    resetBtn.classList.remove("armed");
+                    log(`Failed to reset identity key: ${escapeHtml(res.error ?? "unknown error")}`, "error");
+                }
+            });
+            row.appendChild(resetBtn);
         }
 
         adminUserList.appendChild(row);
@@ -9668,6 +9722,24 @@ applyNsfwBlurPreference();
 
 chkNsfwBlur.addEventListener("change", () => {
     setNsfwBlurEnabled(chkNsfwBlur.checked);
+});
+
+// ── Identity fingerprint in Settings → About (PRD 17.12) ────────────────────
+const aboutIdentityFingerprint = document.getElementById("about-identity-fingerprint") as HTMLElement;
+const btnCopyFingerprint = document.getElementById("btn-copy-fingerprint") as HTMLButtonElement;
+api.getIdentityFingerprint()
+    .then((fp) => {
+        aboutIdentityFingerprint.textContent = fp;
+    })
+    .catch(() => {
+        aboutIdentityFingerprint.textContent = "Unavailable";
+    });
+btnCopyFingerprint.addEventListener("click", async () => {
+    const fp = aboutIdentityFingerprint.textContent ?? "";
+    if (!fp.startsWith("SHA256:")) return;
+    const ok = await api.copyText(fp);
+    btnCopyFingerprint.textContent = ok ? "Copied!" : "Copy failed";
+    setTimeout(() => (btnCopyFingerprint.textContent = "Copy"), 1500);
 });
 
 // ── Profile: avatar settings (PRD 17.1) ─────────────────────────────────────

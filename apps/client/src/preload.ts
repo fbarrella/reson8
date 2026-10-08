@@ -212,6 +212,45 @@ ipcRenderer.invoke("get-instance-id").then((id: string) => {
     instanceId = id;
 });
 
+// ── Identity proof (PRD 17.12) ───────────────────────────────────────────
+
+/**
+ * Asks the server for a one-time challenge and has the main process sign it
+ * (the private key never reaches this process). Undefined when the server is
+ * older than 2.6.0 (no answer within 3 s) or signing failed — the join then
+ * goes ahead without a proof, which such a server expects anyway.
+ */
+async function buildIdentityProof(
+    s: TypedSocket,
+    host: string,
+): Promise<{ publicKey: string; signature: string; host: string } | undefined> {
+    const nonce = await new Promise<string | null>((resolve) => {
+        s.timeout(3000).emit("REQUEST_AUTH_CHALLENGE", (err, res) => resolve(err ? null : res?.nonce ?? null));
+    });
+    if (!nonce) return undefined;
+    try {
+        const [pub, signature] = await Promise.all([
+            ipcRenderer.invoke("identity-get-public") as Promise<{ publicKey: string; fingerprint: string }>,
+            ipcRenderer.invoke("identity-sign-challenge", nonce, host) as Promise<string | null>,
+        ]);
+        return signature ? { publicKey: pub.publicKey, signature, host } : undefined;
+    } catch (err) {
+        console.error("[identity] couldn't sign the challenge:", err);
+        return undefined;
+    }
+}
+
+/** A viewer ticket from the server (PRD 17.12), or null (older server / not joined). */
+function requestViewerTicket(): Promise<string | null> {
+    return new Promise((resolve) => {
+        if (!socket?.connected) {
+            resolve(null);
+            return;
+        }
+        socket.timeout(5000).emit("REQUEST_VIEWER_TICKET", (err, res) => resolve(!err && res?.success ? res.ticket ?? null : null));
+    });
+}
+
 // ── Callback registry ────────────────────────────────────────────────────
 
 type Callback = (...args: any[]) => void;
@@ -429,15 +468,28 @@ const api = {
         // Latency measurement — started after connect, cleared on disconnect
         let latencyInterval: ReturnType<typeof setInterval> | null = null;
 
-        socket.on("connect", () => {
+        // What the identity proof is signed for: the host as the user typed it (PRD 17.12).
+        const identityHost = port ? `${host}:${port}` : host;
+
+        socket.on("connect", async () => {
             // Guard against duplicate emissions from Socket.io auto-reconnect
             if (joinServerInFlight) return;
             joinServerInFlight = true;
 
+            // Prove we own this identity (PRD 17.12) — a fresh challenge on
+            // every connect, reconnects included. Against a pre-2.6.0 server
+            // there's no challenge: join the old way.
+            const joiningSocket = socket!;
+            const identity = await buildIdentityProof(joiningSocket, identityHost);
+            if (socket !== joiningSocket || !joiningSocket.connected) {
+                joinServerInFlight = false; // replaced or dropped meanwhile
+                return;
+            }
+
             // Join the server — let the server decide the serverId
-            socket!.emit(
+            joiningSocket.emit(
                 "USER_JOIN_SERVER",
-                { nickname, instanceId, password, avatar: avatarSelection },
+                { nickname, instanceId, password, avatar: avatarSelection, identity },
                 (res) => {
                     joinServerInFlight = false;
                     if (res.success && res.serverId) {
@@ -1171,6 +1223,24 @@ const api = {
         },
     },
 
+    /** This install's identity key fingerprint, for Settings → About (PRD 17.12). */
+    getIdentityFingerprint(): Promise<string> {
+        return ipcRenderer.invoke("identity-get-public").then((r: { fingerprint: string }) => r.fingerprint);
+    },
+
+    /** ADMIN: forget a user's bound identity key (PRD 17.12). */
+    resetIdentityKey(userId: string): Promise<{ success: boolean; error?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.timeout(5000).emit("RESET_IDENTITY_KEY", { userId }, (err, res) => {
+                resolve(err ? { success: false, error: "This server doesn't support identity keys yet" } : res);
+            });
+        });
+    },
+
     /** Remembers the avatar choice for every future join (reconnects included). */
     setAvatarSelection(selection: AvatarSelection | null): void {
         avatarSelection = selection;
@@ -1433,11 +1503,15 @@ const api = {
         if (!serverBaseUrl) {
             return { success: false, error: "Not connected to a server" };
         }
+        // The Viewer window authenticates with this ticket, not our id (PRD
+        // 17.12); null against an older server → it falls back to the id.
+        const viewerTicket = (await requestViewerTicket()) ?? undefined;
         return ipcRenderer.invoke("open-screen-share-viewer", {
             targetUserId,
             nickname,
             channelId,
             serverBaseUrl,
+            viewerTicket,
         });
     },
 

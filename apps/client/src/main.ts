@@ -14,6 +14,7 @@ import type { CaptureHandle } from "@reson8/native-audio";
 import MarkdownIt from "markdown-it";
 import { loadWindowState, trackWindowState } from "./window-state.js";
 import { FIXER_USER_AGENT, decodeHtmlEntities, displayDomain, toFixerUrl } from "./link-fixers.js";
+import { getIdentityPublic, signAuthChallenge } from "./identity-key.js";
 
 // ── Single-instance lock (PRD 13.18) ────────────────────────────────────
 // Requested as early as possible, before any other startup work. Opening
@@ -411,6 +412,8 @@ async function fetchLinkPreview(url: string): Promise<LinkPreviewData | null> {
 }
 
 let mainWindow: BrowserWindow | null = null;
+/** webContents id of a Viewer window → its viewer ticket (PRD 17.12). */
+const viewerTickets = new Map<number, string>();
 let pttKey: string | null = null;
 
 // Set by `setDisplayMediaRequestHandler` (Linux/Wayland screen-share
@@ -836,6 +839,13 @@ app.whenReady().then(() => {
     const instanceId = getInstanceId();
     ipcMain.handle("get-instance-id", () => instanceId);
 
+    // Identity (PRD 17.12): the private key never leaves this process. The
+    // preload gets the public half, and signatures over server challenges
+    // only — identity-key.ts refuses anything that isn't a well-formed
+    // nonce + host, so a compromised renderer can't get arbitrary data signed.
+    ipcMain.handle("identity-get-public", () => getIdentityPublic());
+    ipcMain.handle("identity-sign-challenge", (_event, nonce: unknown, host: unknown) => signAuthChallenge(nonce, host));
+
     // PTT shortcut IPC
     ipcMain.on("set-ptt-key", (_event, key: string) => {
         registerPttShortcut(key);
@@ -1112,7 +1122,7 @@ app.whenReady().then(() => {
         "open-screen-share-viewer",
         (
             _event,
-            args: { targetUserId: string; nickname: string; channelId: string; serverBaseUrl: string },
+            args: { targetUserId: string; nickname: string; channelId: string; serverBaseUrl: string; viewerTicket?: string },
         ) => {
             const viewerWindow = new BrowserWindow({
                 width: 960,
@@ -1135,6 +1145,13 @@ app.whenReady().then(() => {
                     ],
                 },
             });
+            // The viewer ticket (PRD 17.12) is a credential, so it is NOT
+            // passed in additionalArguments (they end up on the process's
+            // command line, readable by other local users). The window's
+            // preload fetches it over IPC instead.
+            const contentsId = viewerWindow.webContents.id;
+            if (typeof args.viewerTicket === "string") viewerTickets.set(contentsId, args.viewerTicket);
+            viewerWindow.on("closed", () => viewerTickets.delete(contentsId));
             viewerWindow.loadFile(path.join(__dirname, "renderer", "viewer.html"));
             return { success: true };
         },
@@ -1154,6 +1171,10 @@ app.whenReady().then(() => {
     // as "fullscreen video" while keeping the controls bar reachable.
     // Registered once (not per-window) and resolves the target window from
     // the invoking `event.sender`, so it works for any open Viewer window.
+    // A Viewer window asks for its own ticket (PRD 17.12) — only the window it
+    // was issued for gets it.
+    ipcMain.handle("viewer-get-ticket", (event) => viewerTickets.get(event.sender.id) ?? null);
+
     ipcMain.handle("viewer-toggle-fullscreen", (event) => {
         const win = BrowserWindow.fromWebContents(event.sender);
         if (!win) return false;

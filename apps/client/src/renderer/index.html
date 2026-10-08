@@ -3498,6 +3498,73 @@
       border-color: var(--accent);
     }
 
+    /* ── Identity (PRD 17.12) ─────────────────────────────────────────── */
+    .identity-row {
+      margin-top: 18px;
+      padding: 12px;
+      border-radius: var(--radius);
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+    }
+
+    .identity-row-label {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      margin-bottom: 6px;
+    }
+
+    .identity-row-value {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .identity-row-value code {
+      flex: 1;
+      min-width: 0;
+      overflow-wrap: anywhere;
+      font-size: 11px;
+      color: var(--text-primary);
+    }
+
+    .identity-row-hint {
+      margin-top: 6px;
+      font-size: 11px;
+      line-height: 1.4;
+      color: var(--text-muted);
+    }
+
+    .user-key-badge {
+      font-size: 11px;
+      margin-left: 4px;
+      cursor: help;
+    }
+
+    .btn-reset-key {
+      flex-shrink: 0;
+      padding: 4px 10px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--bg-input);
+      color: var(--text-secondary);
+      font-size: 11px;
+      cursor: pointer;
+    }
+
+    .btn-reset-key:hover {
+      border-color: var(--warning);
+      color: var(--text-primary);
+    }
+
+    .btn-reset-key.armed {
+      border-color: var(--danger);
+      background: rgba(239, 83, 80, 0.15);
+      color: var(--text-primary);
+    }
+
     /* Message avatars and nicknames open the card (PRD 17.3). */
     .chat-msg .msg-header > .avatar,
     .chat-msg .msg-nick {
@@ -5438,6 +5505,16 @@
         </p>
         <button class="btn btn-create" id="btn-check-updates" style="width:100%;">Check for Updates</button>
         <div id="about-update-status" style="font-size:12px; color:var(--text-secondary); margin-top:10px; min-height:16px;"></div>
+
+        <!-- Identity key fingerprint (PRD 17.12) -->
+        <div class="identity-row">
+          <div class="identity-row-label">Identity</div>
+          <div class="identity-row-value">
+            <code id="about-identity-fingerprint">…</code>
+            <button type="button" class="btn btn-cancel" id="btn-copy-fingerprint">Copy</button>
+          </div>
+          <div class="identity-row-hint">Your server admin may ask for this to protect the admin account (<code>ADMIN_KEY_FINGERPRINT</code>).</div>
+        </div>
       </div>
 
       <div class="modal-actions">

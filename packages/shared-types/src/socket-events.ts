@@ -46,8 +46,37 @@ export interface ClientToServerEvents {
              * `null` = clear it (back to the default avatar).
              */
             avatar?: IAvatarSelection | null;
+            /**
+             * Proof that this install owns `instanceId` (PRD 17.12): an
+             * Ed25519 signature over "reson8-auth-v1\n<nonce>\n<host>",
+             * where the nonce came from REQUEST_AUTH_CHALLENGE on THIS
+             * socket. Absent = a pre-v2.6.0 client (legacy join rules).
+             */
+            identity?: { publicKey: string; signature: string; host: string };
         },
         ack: (response: { success: boolean; serverId?: string; error?: string }) => void,
+    ) => void;
+
+    /**
+     * A fresh single-use challenge for this socket's next USER_JOIN_SERVER
+     * (PRD 17.12). Expires after 60 s.
+     */
+    REQUEST_AUTH_CHALLENGE: (ack: (response: { nonce: string }) => void) => void;
+
+    /**
+     * A ticket the screen-share Viewer window presents in VIEWER_AUTHENTICATE
+     * instead of an id (PRD 17.12). Primary, joined sockets only.
+     */
+    REQUEST_VIEWER_TICKET: (ack: (response: { success: boolean; ticket?: string; error?: string }) => void) => void;
+
+    /**
+     * ADMIN only (PRD 17.12): forgets a user's bound identity key and
+     * disconnects their sockets, so the next device that connects as them
+     * binds a new key (reinstall, new computer, or an impostor bound it first).
+     */
+    RESET_IDENTITY_KEY: (
+        payload: { userId: string },
+        ack: (response: { success: boolean; error?: string }) => void,
     ) => void;
 
     /** Client signals they are leaving the server. */
@@ -275,7 +304,8 @@ export interface ClientToServerEvents {
         payload: { serverId: string },
         ack: (response: {
             success: boolean;
-            users?: Array<IUser & { roles: IRole[]; isBanned: boolean }>;
+            /** `hasIdentityKey` (PRD 17.12): whether a key is bound — never the key itself. */
+            users?: Array<IUser & { roles: IRole[]; isBanned: boolean; hasIdentityKey?: boolean }>;
             error?: string;
         }) => void,
     ) => void;
@@ -539,7 +569,8 @@ export interface ClientToServerEvents {
      * this socket must stay invisible to everyone else).
      */
     VIEWER_AUTHENTICATE: (
-        payload: { instanceId: string },
+        /** `ticket` from REQUEST_VIEWER_TICKET (PRD 17.12); `instanceId` only for pre-v2.6.0 clients. */
+        payload: { ticket?: string; instanceId?: string },
         ack: (response: { success: boolean; error?: string }) => void,
     ) => void;
 
@@ -837,4 +868,8 @@ export interface SocketData {
      *  eventual `disconnect` must not touch the userId-keyed state the newer
      *  socket now owns. */
     superseded?: boolean;
+    /** The pending REQUEST_AUTH_CHALLENGE nonce for this socket (PRD 17.12) — single use. */
+    authNonce?: string;
+    /** When `authNonce` was issued (ms epoch); it expires after 60 s. */
+    authNonceIssuedAt?: number;
 }
