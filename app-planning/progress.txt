@@ -1417,3 +1417,108 @@ Feature/Fix: PRD 17.8 — Pinned-message jump with paginated history (two-way pa
     - Not yet hand-tested by the user.
 
   Next Step: PRD 17.9 — social-media link "fixers" for rich previews.
+
+--- Entry: 08/10/2026 ---
+
+Feature/Fix: PRD 17.9 — Social-media link "fixers" for rich previews
+
+  Problem: Links to video-first social networks only got a thumbnail
+  preview (YouTube showed a play overlay that opened the browser), so the
+  content had to be consumed in another app. Community "fixer" proxies
+  (FxTwitter and its cousins) serve embed-friendly metadata, usually with a
+  DIRECT video URL, for a fixed set of networks.
+
+  Solution: For YouTube, X/Twitter, Instagram, Reddit, Twitch, Bluesky and
+  Imgur links, the main process first asks the matching fixer. If it
+  delivers, the preview uses its metadata (the existing card already plays
+  a direct video/mp4 inline). Otherwise the normal flow runs on the ORIGINAL
+  url exactly as before (fast fetch → hidden-window fallback). That's the
+  "3 tries" from nextsteps. Links outside the list are untouched.
+
+  Client Changes:
+    - src/link-fixers.ts (NEW, pure):
+      - toFixerUrl(): exact-hostname rules, never substring, so look-alikes
+        never match. The hosts:
+        - YouTube: youtube.com/www/m, youtu.be → koutube.com
+        - X/Twitter: twitter.com/x.com + www/mobile → fxtwitter.com
+        - Instagram: instagram.com/www → oginstagram.com
+        - Reddit: reddit.com/www/old/new/m → vxreddit.com
+        - Twitch: twitch.tv/www/m → fxtwitch.seria.moe, plus
+          clips.twitch.tv/<slug> → /clip/<slug>
+        - Bluesky: bsky.app → vxbsky.app
+        - Imgur: imgur.com/www/m → imgurez.com (NOT i.imgur.com, already a
+          direct image)
+        http(s) only, no credentials; the path and query are kept, the
+        fragment is dropped; bare homepages are skipped. Each rule carries
+        the real network's name.
+      - FIXER_USER_AGENT: the fixers only serve embed metadata to recognized
+        crawlers (verified while planning: vxreddit redirected the plain
+        Reson8Bot UA to reddit.com and answered once the UA also carried
+        "Discordbot/2.0"). Used for fixer requests ONLY; every other request
+        keeps the old UA.
+      - decodeHtmlEntities(), displayDomain().
+    - main.ts:
+      - fetchLinkPreviewFast(url, { userAgent, strict }), whose defaults keep
+        the old behavior. In strict mode the final response URL must still
+        be on the fixer host (fixers redirect visitors they won't serve, e.g.
+        imgurez → embedez.com/download), AND the result must carry an image
+        or a video (a title alone is a fixer's error page, e.g. oginstagram's
+        "Temporarily unavailable" with status 200).
+      - fetchLinkPreview(): fixer first; a fixer result gets url = the
+        ORIGINAL link (clicking opens the real post), domain = the original
+        domain, siteName = the network name.
+      - The cache stays keyed by the original URL.
+
+  Found During Testing (fixed):
+    - Fixers stuff og:site_name with branding and stats, e.g. koutube's
+      "Koutube - use s/y/k\nUploaded 16 years ago\n&#x1F441;&#xFE0E; 1,822,…".
+      The card would have shown that raw. A fixer result's siteName is now
+      the real network ("YouTube", "X", "Twitch", …).
+    - Pre-existing, exposed by the above: extractOgTags() never decoded HTML
+      character references, so any site's og: fallback values (titles,
+      descriptions, and image URLs with &amp;) showed them literally. They
+      are now decoded (named + hex/decimal; unknown/invalid ones left as
+      is). Still safe: the card renders text via textContent, and
+      sanitizeText() strips tags after decoding.
+
+  Key Files Modified:
+    apps/client/src/link-fixers.ts (NEW)
+    apps/client/scripts/link-fixers-smoke.mjs (NEW)
+    apps/client/package.json (test:link-fixers script)
+    apps/client/src/main.ts
+
+  Verification:
+    - npx tsc --noEmit (client); npm run test:markdown passes.
+    - npm run test:link-fixers (NEW), all pass:
+      - every network incl. youtu.be, shorts, mobile/old hosts and
+        clips.twitch.tv;
+      - normalization: case, http→https, fragment dropped, :443 dropped;
+      - look-alike hosts, already-fixed hosts, i.imgur.com, non-http
+        schemes, credentials, homepages and junk never matched;
+      - entity decoding: named, hex/decimal, astral, unknown/invalid left
+        alone; the UA token.
+    - Live, through the real main process (renderer → IPC → main) in the
+      built app under Xvfb, 16/16 pass:
+      - YouTube and youtu.be → koutube answered: direct video/mp4 from the
+        Invidious proxy; the card links to the original url/domain; site
+        name "YouTube";
+      - X → fxtwitter (pbs.twimg.com image), named "X", links to x.com;
+      - Twitch clip → fxtwitch direct video/mp4, named "Twitch";
+      - Reddit → a preview linking to the original (vxreddit had no media
+        for that post, so the strict rule fell back to reddit.com);
+      - Instagram → never oginstagram's "Temporarily unavailable" (fell
+        back); Imgur → never the embedez redirect page (fell back to no
+        preview); Bluesky → vxbsky answered this time;
+      - no raw entities in any fixer result; example.com unchanged.
+      - In the real card: a YouTube preview renders an inline <video> (no
+        "open in browser" overlay) whose metadata actually loads from the
+        proxied MP4 (duration 213 s).
+    - Screenshot inspected (YouTube card with the inline player, "YOUTUBE"
+      site name, youtube.com footer).
+    - Note: the fixers are third-party services; their availability varies
+      (oginstagram/imgurez were failing on 07-08/10/2026). The fallback is
+      what keeps those links working.
+    - Not yet hand-tested by the user.
+
+  Next Step: PRD 17.10 — keep whitespace-only lines as blank lines in
+  Markdown.
