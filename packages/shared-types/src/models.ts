@@ -130,6 +130,18 @@ export interface IAvatarSelection {
     hash: string;
 }
 
+/** What the user profile card shows (PRD 17.3). */
+export interface IUserProfile {
+    userId: string;
+    nickname: string;
+    avatarUrl: string | null;
+    /** ISO time of the user's first login: User.createdAt, written once when the row is created. */
+    memberSince: string;
+    /** This server's roles, highest powerLevel first. */
+    roles: { id: string; name: string; color: string | null; powerLevel: number }[];
+    isOnline: boolean;
+}
+
 /** Lightweight presence record for channel occupants. */
 export interface IUserPresence {
     userId: string;

@@ -23,6 +23,7 @@ import type {
     ICustomEmoji,
     IReactionSummary,
     IAvatarSelection,
+    IUserProfile,
 } from "./models.js";
 
 // ---------------------------------------------------------------------------
@@ -490,6 +491,16 @@ export interface ClientToServerEvents {
     SET_AVATAR: (
         payload: { avatar: IAvatarSelection | null },
         ack: (response: { success: boolean; avatarUrl?: string | null; error?: string }) => void,
+    ) => void;
+
+    /**
+     * Everything the user profile card shows about one user (PRD 17.3):
+     * nickname, avatar, first login, this server's roles, online status.
+     * Any joined member may ask; nothing on it is private.
+     */
+    GET_USER_PROFILE: (
+        payload: { userId: string },
+        ack: (response: { success: boolean; profile?: IUserProfile; error?: string }) => void,
     ) => void;
 
     /**

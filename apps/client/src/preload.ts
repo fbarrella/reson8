@@ -1181,6 +1181,34 @@ const api = {
         });
     },
 
+    /**
+     * Everything the profile card shows about a user (PRD 17.3). A pre-v2.6.0
+     * server has no handler, so it never answers: reported as `unsupported`.
+     */
+    getUserProfile(userId: string): Promise<{
+        success: boolean;
+        profile?: {
+            userId: string;
+            nickname: string;
+            avatarUrl: string | null;
+            memberSince: string;
+            roles: { id: string; name: string; color: string | null; powerLevel: number }[];
+            isOnline: boolean;
+        };
+        unsupported?: boolean;
+        error?: string;
+    }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.timeout(5000).emit("GET_USER_PROFILE", { userId }, (err, res) => {
+                resolve(err ? { success: false, unsupported: true, error: "No response" } : res);
+            });
+        });
+    },
+
     // ── Image viewer actions (PRD 15.9) ──────────────────────────────────
 
     openExternal(url: string): Promise<{ success: boolean; error?: string }> {

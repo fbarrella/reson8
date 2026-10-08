@@ -70,6 +70,16 @@ interface PinnedMessage {
     createdAt: string;
 }
 
+/** The profile card's data (PRD 17.3) — mirrors shared-types' IUserProfile. */
+interface UserProfile {
+    userId: string;
+    nickname: string;
+    avatarUrl: string | null;
+    memberSince: string;
+    roles: { id: string; name: string; color: string | null; powerLevel: number }[];
+    isOnline: boolean;
+}
+
 interface DirectMessage {
     id: string;
     senderId: string;
@@ -816,6 +826,12 @@ interface Reson8Api {
         withSize(url: string, px: number): string;
     };
     setAvatarSelection(selection: { provider: "libravatar" | "gravatar"; hash: string } | null): void;
+    getUserProfile(userId: string): Promise<{
+        success: boolean;
+        profile?: UserProfile;
+        unsupported?: boolean;
+        error?: string;
+    }>;
     setAvatar(selection: { provider: "libravatar" | "gravatar"; hash: string } | null): Promise<{
         success: boolean;
         avatarUrl?: string | null;
@@ -3447,14 +3463,16 @@ api.on("presence", (data: { channelId: string; occupants: any[]; sessionStartedA
     }
 });
 
-api.on("user-joined", (data: { nickname: string }) => {
+api.on("user-joined", (data: { userId: string; nickname: string }) => {
     log(`${data.nickname} joined the server`, "info");
     updateOnlineDot();
+    if (data.userId === profileUserId && profileIsOnline !== null) setProfilePresence(true); // PRD 17.3
 });
 
 api.on("user-left", (data: { userId: string }) => {
     log(`A user left the server`, "info");
     updateOnlineDot();
+    if (data.userId === profileUserId && profileIsOnline !== null) setProfilePresence(false); // PRD 17.3
 });
 
 // ── Active Speaker Indicator ──────────────────────────────────────────────
@@ -4767,7 +4785,7 @@ function buildMessageShell(opts: {
 
     const editedLabel = opts.edited ? `<span class="msg-edited">(edited)</span>` : "";
     const text = opts.content ? `<span class="msg-text"></span>` : "";
-    el.innerHTML = `<div class="msg-header"><span class="msg-nick">${escapeHtml(opts.nickname)}</span><span class="msg-time" title="${escapeHtml(formatMessageFullDate(opts.createdAt))}">${formatMessageTime(opts.createdAt)}</span></div>`
+    el.innerHTML = `<div class="msg-header"><span class="msg-nick" role="button" tabindex="0" title="View profile">${escapeHtml(opts.nickname)}</span><span class="msg-time" title="${escapeHtml(formatMessageFullDate(opts.createdAt))}">${formatMessageTime(opts.createdAt)}</span></div>`
         + `<div class="msg-body">${text}${editedLabel}</div>`;
 
     if (opts.content) {
@@ -5778,54 +5796,9 @@ function createUserRow(user: { userId: string; nickname: string; isOnline: boole
     });
     btnGroup.appendChild(dmBtn);
 
-    const myId = api.getInstanceId();
-
     // Nudge — online users only, never yourself, only when the server allows it
-    if (user.isOnline && user.userId !== myId && serverNudgeEnabled) {
-        const nudgeBtn = document.createElement("button");
-        nudgeBtn.className = "btn-nudge";
-        nudgeBtn.textContent = "👋 Nudge";
-
-        let cooldownInterval: ReturnType<typeof setInterval> | null = null;
-        const applyCooldownState = (): void => {
-            if (!document.body.contains(nudgeBtn)) {
-                if (cooldownInterval) clearInterval(cooldownInterval);
-                return;
-            }
-            const last = lastNudgeSentAt.get(user.userId);
-            const remaining = last ? NUDGE_COOLDOWN_MS - (Date.now() - last) : 0;
-            if (remaining <= 0) {
-                nudgeBtn.disabled = false;
-                nudgeBtn.textContent = "👋 Nudge";
-                if (cooldownInterval) {
-                    clearInterval(cooldownInterval);
-                    cooldownInterval = null;
-                }
-                return;
-            }
-            nudgeBtn.disabled = true;
-            nudgeBtn.textContent = `${Math.ceil(remaining / 1000)}s`;
-        };
-
-        if (lastNudgeSentAt.has(user.userId)) {
-            applyCooldownState();
-            cooldownInterval = setInterval(applyCooldownState, 1000);
-        }
-
-        nudgeBtn.addEventListener("click", async () => {
-            nudgeBtn.disabled = true;
-            const res = await api.nudgeUser(user.userId);
-            if (res.success) {
-                lastNudgeSentAt.set(user.userId, Date.now());
-                applyCooldownState();
-                if (!cooldownInterval) cooldownInterval = setInterval(applyCooldownState, 1000);
-                log(`Nudged ${escapeHtml(user.nickname)}`, "success");
-            } else {
-                nudgeBtn.disabled = false;
-                log(`Failed to nudge: ${res.error}`, "error");
-            }
-        });
-        btnGroup.appendChild(nudgeBtn);
+    if (canNudge(user.userId, user.isOnline)) {
+        btnGroup.appendChild(buildNudgeButton(user.userId, user.nickname));
     }
 
     // Ban moved to the User Management settings tab (PRD 13.17) — it
@@ -5834,6 +5807,327 @@ function createUserRow(user: { userId: string; nickname: string; isOnline: boole
     row.appendChild(btnGroup);
     return row;
 }
+
+/** The Nudge rules shared by the Online Users modal and the profile card (PRD 17.3). */
+function canNudge(userId: string, isOnline: boolean): boolean {
+    return isOnline && userId !== api.getInstanceId() && serverNudgeEnabled;
+}
+
+/**
+ * A Nudge button with its 30 s per-target cooldown countdown. Extracted from
+ * the Online Users modal (PRD 17.3) so the profile card shares the exact same
+ * behavior and cooldown (`lastNudgeSentAt`).
+ */
+function buildNudgeButton(userId: string, nickname: string): HTMLButtonElement {
+    const nudgeBtn = document.createElement("button");
+    nudgeBtn.className = "btn-nudge";
+    nudgeBtn.textContent = "👋 Nudge";
+
+    let cooldownInterval: ReturnType<typeof setInterval> | null = null;
+    let wasAttached = false;
+    const applyCooldownState = (): void => {
+        if (!nudgeBtn.isConnected) {
+            // Gone with its modal → stop ticking. Not yet attached → wait.
+            if (wasAttached && cooldownInterval) clearInterval(cooldownInterval);
+            return;
+        }
+        wasAttached = true;
+        const last = lastNudgeSentAt.get(userId);
+        const remaining = last ? NUDGE_COOLDOWN_MS - (Date.now() - last) : 0;
+        if (remaining <= 0) {
+            nudgeBtn.disabled = false;
+            nudgeBtn.textContent = "👋 Nudge";
+            if (cooldownInterval) {
+                clearInterval(cooldownInterval);
+                cooldownInterval = null;
+            }
+            return;
+        }
+        nudgeBtn.disabled = true;
+        nudgeBtn.textContent = `${Math.ceil(remaining / 1000)}s`;
+    };
+
+    if (lastNudgeSentAt.has(userId)) {
+        // Runs once the caller has attached the button (the first tick
+        // would otherwise see it detached and stop the interval).
+        queueMicrotask(applyCooldownState);
+        cooldownInterval = setInterval(applyCooldownState, 1000);
+    }
+
+    nudgeBtn.addEventListener("click", async () => {
+        nudgeBtn.disabled = true;
+        const res = await api.nudgeUser(userId);
+        if (res.success) {
+            lastNudgeSentAt.set(userId, Date.now());
+            applyCooldownState();
+            if (!cooldownInterval) cooldownInterval = setInterval(applyCooldownState, 1000);
+            log(`Nudged ${escapeHtml(nickname)}`, "success");
+        } else {
+            nudgeBtn.disabled = false;
+            log(`Failed to nudge: ${res.error}`, "error");
+        }
+    });
+    return nudgeBtn;
+}
+
+// ── User Profile Card (PRD 17.3) ────────────────────────────────────────────
+// Opened by clicking (or Enter/Space on) a message's avatar or nickname. It
+// opens at once with what the message already knows and fills in when
+// GET_USER_PROFILE answers; a per-open request id drops stale answers.
+
+const userProfileModal = document.getElementById("user-profile-modal") as HTMLDivElement;
+const userProfileCard = userProfileModal.querySelector(".user-profile-card") as HTMLDivElement;
+const userProfileBanner = document.getElementById("user-profile-banner") as HTMLDivElement;
+const userProfileAvatar = document.getElementById("user-profile-avatar") as HTMLSpanElement;
+const userProfilePresence = document.getElementById("user-profile-presence") as HTMLSpanElement;
+const userProfileName = document.getElementById("user-profile-name") as HTMLHeadingElement;
+const userProfileSince = document.getElementById("user-profile-since") as HTMLDivElement;
+const userProfileRoles = document.getElementById("user-profile-roles") as HTMLDivElement;
+const userProfileStatus = document.getElementById("user-profile-status") as HTMLDivElement;
+const userProfileError = document.getElementById("user-profile-error") as HTMLDivElement;
+const userProfileErrorText = document.getElementById("user-profile-error-text") as HTMLSpanElement;
+const userProfileActions = document.getElementById("user-profile-actions") as HTMLDivElement;
+const btnUserProfileClose = document.getElementById("btn-user-profile-close") as HTMLButtonElement;
+const btnUserProfileRetry = document.getElementById("btn-user-profile-retry") as HTMLButtonElement;
+
+let profileUserId: string | null = null;
+let profileNickname = "";
+/** null = not known yet (still loading, or an old server). */
+let profileIsOnline: boolean | null = null;
+let profileRequestId = 0;
+let profileReturnFocus: HTMLElement | null = null;
+
+/** The card reads as an English sentence ("Member since … · 7 months ago"),
+ *  like the rest of the UI, so its dates are English too — the system locale
+ *  produced mixed-language text. */
+const PROFILE_LOCALE = "en";
+
+/** "7 months ago" — the largest unit that fits, via Intl.RelativeTimeFormat. */
+function formatRelativeTime(date: Date): string {
+    const seconds = (date.getTime() - Date.now()) / 1000;
+    const units: [Intl.RelativeTimeFormatUnit, number][] = [
+        ["year", 365 * 24 * 3600],
+        ["month", 30 * 24 * 3600],
+        ["week", 7 * 24 * 3600],
+        ["day", 24 * 3600],
+        ["hour", 3600],
+        ["minute", 60],
+    ];
+    const rtf = new Intl.RelativeTimeFormat(PROFILE_LOCALE, { numeric: "auto" });
+    for (const [unit, size] of units) {
+        if (Math.abs(seconds) >= size) return rtf.format(Math.round(seconds / size), unit);
+    }
+    return rtf.format(0, "minute");
+}
+
+function skeleton(widthPx: number): string {
+    return `<span class="user-profile-skeleton" style="width:${widthPx}px"></span>`;
+}
+
+function setProfilePresence(isOnline: boolean | null): void {
+    profileIsOnline = isOnline;
+    userProfilePresence.classList.toggle("online", isOnline === true);
+    userProfilePresence.classList.toggle("unknown", isOnline === null);
+    if (isOnline === null) {
+        userProfileStatus.innerHTML = skeleton(70);
+    } else {
+        userProfileStatus.innerHTML = `<span class="user-profile-status-dot${isOnline ? " online" : ""}"></span>${isOnline ? "Online" : "Offline"}`;
+    }
+    renderProfileActions();
+}
+
+/** Message + Nudge for someone else; "This is you" + Edit profile for yourself. */
+function renderProfileActions(): void {
+    userProfileActions.replaceChildren();
+    if (!profileUserId) return;
+    const userId = profileUserId;
+    const nickname = profileNickname;
+
+    if (userId === api.getInstanceId()) {
+        const self = document.createElement("div");
+        self.className = "user-profile-self";
+        self.innerHTML = `<span>This is you</span>`;
+        const edit = document.createElement("button");
+        edit.type = "button";
+        edit.textContent = "Edit profile";
+        edit.addEventListener("click", () => {
+            closeUserProfile();
+            openSettingsPanel();
+            (document.querySelector('.settings-tab-btn[data-settings-tab="app"]') as HTMLButtonElement | null)?.click();
+        });
+        self.appendChild(edit);
+        userProfileActions.appendChild(self);
+        return;
+    }
+
+    const message = document.createElement("button");
+    message.type = "button";
+    message.className = "btn-dm";
+    message.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg> Message';
+    message.addEventListener("click", () => {
+        closeUserProfile(false);
+        openDmTab(userId, nickname);
+    });
+    userProfileActions.appendChild(message);
+
+    if (canNudge(userId, profileIsOnline === true)) {
+        userProfileActions.appendChild(buildNudgeButton(userId, nickname));
+    }
+}
+
+function renderProfileRoles(roles: UserProfile["roles"]): void {
+    userProfileRoles.replaceChildren();
+    if (roles.length === 0) {
+        userProfileRoles.innerHTML = `<span class="user-profile-empty">No roles</span>`;
+        return;
+    }
+    for (const role of roles) {
+        const chip = document.createElement("span");
+        chip.className = "user-profile-role";
+        // Only a real hex color reaches CSS; anything else uses the neutral dot.
+        if (role.color && /^#[0-9a-fA-F]{3,8}$/.test(role.color)) chip.style.setProperty("--role-color", role.color);
+        const dot = document.createElement("span");
+        dot.className = "user-profile-role-dot";
+        const name = document.createElement("span");
+        name.textContent = role.name;
+        chip.append(dot, name);
+        userProfileRoles.appendChild(chip);
+    }
+}
+
+async function loadUserProfile(): Promise<void> {
+    if (!profileUserId) return;
+    const requestId = ++profileRequestId;
+    userProfileError.hidden = true;
+    userProfileSince.innerHTML = skeleton(190);
+    userProfileRoles.innerHTML = `${skeleton(64)} ${skeleton(52)}`;
+    setProfilePresence(null);
+
+    const res = await api.getUserProfile(profileUserId);
+    if (requestId !== profileRequestId || !userProfileModal.classList.contains("visible")) return;
+
+    if (!res.success || !res.profile) {
+        userProfileSince.textContent = "";
+        userProfileRoles.replaceChildren();
+        userProfileStatus.textContent = "";
+        userProfileErrorText.textContent = res.unsupported
+            ? "Profile details need a newer server (Reson8 2.6.0)."
+            : "Couldn't load this profile.";
+        btnUserProfileRetry.hidden = !!res.unsupported;
+        userProfileError.hidden = false;
+        return;
+    }
+
+    const p = res.profile;
+    profileNickname = p.nickname;
+    userProfileName.textContent = p.nickname;
+    userProfileAvatar.dataset.avatarNick = p.nickname;
+    rememberAvatarUrl(p.userId, p.avatarUrl);
+    applyAvatar(userProfileAvatar);
+
+    const since = new Date(p.memberSince);
+    const dateText = new Intl.DateTimeFormat(PROFILE_LOCALE, { dateStyle: "long" }).format(since);
+    userProfileSince.textContent = `Member since ${dateText} · ${formatRelativeTime(since)}`;
+    userProfileSince.title = new Intl.DateTimeFormat(PROFILE_LOCALE, { dateStyle: "full", timeStyle: "short" }).format(since);
+
+    renderProfileRoles(p.roles);
+    setProfilePresence(p.isOnline);
+}
+
+/** Opens the card for a user. `trigger` gets focus back when it closes. */
+function openUserProfile(userId: string, nickname: string, trigger?: HTMLElement | null): void {
+    profileUserId = userId;
+    profileNickname = nickname;
+    profileReturnFocus = trigger ?? (document.activeElement as HTMLElement | null);
+
+    userProfileName.textContent = nickname;
+    userProfileBanner.style.setProperty("--profile-tint", avatarColor(userId));
+    userProfileAvatar.dataset.avatarUserId = userId;
+    userProfileAvatar.dataset.avatarNick = nickname;
+    userProfileAvatar.dataset.avatarPx = "96";
+    applyAvatar(userProfileAvatar);
+
+    userProfileModal.classList.add("visible");
+    userProfileModal.setAttribute("aria-hidden", "false");
+    btnUserProfileClose.focus();
+    loadUserProfile();
+}
+
+function closeUserProfile(restoreFocus = true): void {
+    if (!userProfileModal.classList.contains("visible")) return;
+    userProfileModal.classList.remove("visible");
+    userProfileModal.setAttribute("aria-hidden", "true");
+    profileRequestId++; // drop an answer still in flight
+    profileUserId = null;
+    userProfileActions.replaceChildren(); // stops a Nudge countdown's interval
+    if (restoreFocus && profileReturnFocus?.isConnected) profileReturnFocus.focus();
+    profileReturnFocus = null;
+}
+
+btnUserProfileClose.addEventListener("click", () => closeUserProfile());
+btnUserProfileRetry.addEventListener("click", () => loadUserProfile());
+userProfileModal.addEventListener("click", (e) => {
+    if (e.target === userProfileModal) closeUserProfile();
+});
+
+// Handled on the DOCUMENT, not the dialog: focus can leave the card without
+// the user meaning to (the Nudge button disables itself for its cooldown,
+// and a disabled button drops focus to <body>), and Escape must still close
+// it then. Capture phase, so it runs before other Escape handlers.
+document.addEventListener("keydown", (e) => {
+    if (!userProfileModal.classList.contains("visible")) return;
+    if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        closeUserProfile();
+        return;
+    }
+    // Keep Tab inside the dialog while it's open (and bring it back if lost).
+    if (e.key === "Tab") {
+        const focusables = Array.from(
+            userProfileCard.querySelectorAll<HTMLElement>("button:not([disabled]):not([hidden]), [tabindex='0']"),
+        ).filter((el) => el.offsetParent !== null);
+        if (focusables.length === 0) return;
+        const first = focusables[0];
+        const last = focusables[focusables.length - 1];
+        if (!userProfileCard.contains(document.activeElement)) {
+            e.preventDefault();
+            (e.shiftKey ? last : first).focus();
+        } else if (e.shiftKey && document.activeElement === first) {
+            e.preventDefault();
+            last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+            e.preventDefault();
+            first.focus();
+        }
+    }
+}, true);
+
+/** The message's author for a click/keypress on its avatar or nickname, if that's what was hit. */
+function profileTriggerFrom(target: EventTarget | null): { userId: string; nickname: string; el: HTMLElement } | null {
+    const el = (target as HTMLElement | null)?.closest?.(".chat-msg .msg-header > .avatar, .chat-msg .msg-nick") as HTMLElement | null;
+    if (!el) return null;
+    const msg = el.closest(".chat-msg") as HTMLElement | null;
+    const userId = msg?.getAttribute("data-msg-owner");
+    if (!msg || !userId) return null;
+    const nickname = msg.querySelector(".msg-nick")?.textContent ?? "";
+    return { userId, nickname, el: (msg.querySelector(".msg-nick") as HTMLElement | null) ?? el };
+}
+
+tabContentArea.addEventListener("click", (e) => {
+    const hit = profileTriggerFrom(e.target);
+    if (!hit) return;
+    e.stopPropagation();
+    openUserProfile(hit.userId, hit.nickname, hit.el);
+});
+
+tabContentArea.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    const hit = profileTriggerFrom(e.target);
+    if (!hit) return;
+    e.preventDefault();
+    openUserProfile(hit.userId, hit.nickname, hit.el);
+});
 
 /** Checks online user count and toggles the green dot on the Online Users button. */
 async function updateOnlineDot(): Promise<void> {

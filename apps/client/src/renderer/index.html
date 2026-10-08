@@ -3182,6 +3182,297 @@
       display: flex;
     }
 
+    /* ── User Profile Card (PRD 17.3) ─────────────────────────────────── */
+    #user-profile-modal {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.6);
+      z-index: 100;
+      align-items: center;
+      justify-content: center;
+      -webkit-app-region: no-drag;
+    }
+
+    #user-profile-modal.visible {
+      display: flex;
+    }
+
+    .user-profile-card {
+      position: relative;
+      width: 340px;
+      max-width: calc(100vw - 32px);
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+      animation: user-profile-in 0.14s ease-out;
+    }
+
+    @keyframes user-profile-in {
+      from { opacity: 0; transform: translateY(6px) scale(0.98); }
+      to { opacity: 1; transform: none; }
+    }
+
+    /* Tinted with the user's own avatar color (--profile-tint), so every
+       card feels a little personal even with a generated avatar. */
+    .user-profile-banner {
+      position: relative;
+      height: 76px;
+      background:
+        linear-gradient(135deg, var(--profile-tint, var(--accent-dim)) 0%, var(--bg-tertiary) 100%);
+    }
+
+    .user-profile-close {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      width: 28px;
+      height: 28px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: none;
+      border-radius: 50%;
+      background: rgba(0, 0, 0, 0.35);
+      color: #fff;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+
+    .user-profile-close:hover {
+      background: rgba(0, 0, 0, 0.55);
+    }
+
+    .user-profile-close:focus-visible,
+    .user-profile-retry:focus-visible,
+    .user-profile-actions button:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+
+    .user-profile-avatar-wrap {
+      position: relative;
+      width: 96px;
+      height: 96px;
+      margin: -48px 0 0 20px;
+    }
+
+    .avatar.user-profile-avatar {
+      width: 96px;
+      height: 96px;
+      font-size: 34px;
+      box-shadow: 0 0 0 6px var(--bg-secondary);
+    }
+
+    .user-profile-presence {
+      position: absolute;
+      right: 2px;
+      bottom: 2px;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: var(--text-muted);
+      box-shadow: 0 0 0 4px var(--bg-secondary);
+    }
+
+    .user-profile-presence.online {
+      background: var(--success);
+    }
+
+    .user-profile-presence.unknown {
+      display: none;
+    }
+
+    .user-profile-body {
+      padding: 10px 20px 20px;
+    }
+
+    .user-profile-name {
+      margin: 0;
+      font-size: 20px;
+      font-weight: 700;
+      color: var(--text-primary);
+      overflow-wrap: anywhere;
+    }
+
+    .user-profile-since {
+      margin-top: 2px;
+      min-height: 17px;
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+
+    .user-profile-section {
+      margin-top: 16px;
+    }
+
+    .user-profile-label {
+      margin-bottom: 6px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      color: var(--text-muted);
+    }
+
+    .user-profile-roles {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      min-height: 24px;
+    }
+
+    .user-profile-role {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 9px;
+      border-radius: 999px;
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      font-size: 12px;
+      color: var(--text-primary);
+    }
+
+    .user-profile-role-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--role-color, var(--text-muted));
+    }
+
+    .user-profile-empty {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .user-profile-status {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 18px;
+      font-size: 13px;
+      color: var(--text-primary);
+    }
+
+    .user-profile-status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--text-muted);
+    }
+
+    .user-profile-status-dot.online {
+      background: var(--success);
+    }
+
+    /* Skeleton bars while the profile loads. */
+    .user-profile-skeleton {
+      display: inline-block;
+      height: 12px;
+      border-radius: 6px;
+      background: linear-gradient(90deg, var(--bg-input) 0%, var(--border) 50%, var(--bg-input) 100%);
+      background-size: 200% 100%;
+      animation: user-profile-shimmer 1.2s linear infinite;
+    }
+
+    @keyframes user-profile-shimmer {
+      from { background-position: 200% 0; }
+      to { background-position: -200% 0; }
+    }
+
+    .user-profile-error {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-top: 16px;
+      padding: 8px 10px;
+      border-radius: var(--radius);
+      background: rgba(239, 83, 80, 0.1);
+      border: 1px solid rgba(239, 83, 80, 0.35);
+      font-size: 12px;
+      color: var(--text-primary);
+    }
+
+    .user-profile-error[hidden] {
+      display: none;
+    }
+
+    .user-profile-retry {
+      flex-shrink: 0;
+      padding: 3px 10px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--bg-input);
+      color: var(--text-primary);
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    .user-profile-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 20px;
+    }
+
+    .user-profile-actions:empty {
+      display: none;
+    }
+
+    .user-profile-actions .btn-dm,
+    .user-profile-actions .btn-nudge {
+      flex: 1;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 8px 12px;
+      font-size: 13px;
+    }
+
+    .user-profile-self {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+
+    .user-profile-self button {
+      padding: 6px 12px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--bg-input);
+      color: var(--text-primary);
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    .user-profile-self button:hover {
+      border-color: var(--accent);
+    }
+
+    /* Message avatars and nicknames open the card (PRD 17.3). */
+    .chat-msg .msg-header > .avatar,
+    .chat-msg .msg-nick {
+      cursor: pointer;
+    }
+
+    .chat-msg .msg-nick:hover,
+    .chat-msg .msg-nick:focus-visible {
+      text-decoration: underline;
+      outline: none;
+    }
+
+    .chat-msg .msg-header > .avatar:hover {
+      filter: brightness(1.12);
+    }
+
     .online-user-list {
       flex: 1;
       overflow-y: auto;
@@ -5123,6 +5414,44 @@
       </div>
       <div class="modal-actions" style="padding-right: 10px;">
         <button class="btn btn-cancel" id="btn-online-close">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── User Profile Card (PRD 17.3) ───────────────────────────────
+       Opened from a message's avatar or nickname. Filled by
+       openUserProfile() in renderer.ts. -->
+  <div id="user-profile-modal" aria-hidden="true">
+    <div class="user-profile-card" role="dialog" aria-modal="true" aria-labelledby="user-profile-name">
+      <div class="user-profile-banner" id="user-profile-banner">
+        <button type="button" class="user-profile-close" id="btn-user-profile-close" aria-label="Close profile">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div class="user-profile-avatar-wrap">
+        <span class="avatar user-profile-avatar" id="user-profile-avatar" aria-hidden="true"></span>
+        <span class="user-profile-presence" id="user-profile-presence" aria-hidden="true"></span>
+      </div>
+      <div class="user-profile-body">
+        <h2 class="user-profile-name" id="user-profile-name"></h2>
+        <div class="user-profile-since" id="user-profile-since"></div>
+
+        <div class="user-profile-section">
+          <div class="user-profile-label">Roles</div>
+          <div class="user-profile-roles" id="user-profile-roles"></div>
+        </div>
+
+        <div class="user-profile-section">
+          <div class="user-profile-label">Status</div>
+          <div class="user-profile-status" id="user-profile-status"></div>
+        </div>
+
+        <div class="user-profile-error" id="user-profile-error" hidden>
+          <span id="user-profile-error-text">Couldn't load this profile.</span>
+          <button type="button" class="user-profile-retry" id="btn-user-profile-retry">Retry</button>
+        </div>
+
+        <div class="user-profile-actions" id="user-profile-actions"></div>
       </div>
     </div>
   </div>

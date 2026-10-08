@@ -808,3 +808,133 @@ Feature/Fix: PRD 17.2 — Avatars next to nicknames in text chats
     - Not yet hand-tested by the user.
 
   Next Step: PRD 17.3 — user profile card when clicking a nickname or avatar.
+
+--- Entry: 08/10/2026 ---
+
+Feature/Fix: PRD 17.3 — User profile card (click a nickname or avatar)
+
+  Problem: The only way to act on another user (DM, Nudge) was the Online
+  Users modal, and nicknames in chat were plain text. Users wanted to click
+  a name or avatar in any chat message and see who that person is: avatar,
+  nickname, first login, roles, online status, plus Message/Nudge shortcuts
+  and a close button.
+
+  Solution: Clicking (or Enter/Space on) a message's avatar or nickname, in
+  a channel or a DM, opens a profile card. It opens immediately with what
+  the message already knows (nickname, avatar) plus skeleton rows, then
+  fills in from a new GET_USER_PROFILE event. A per-open request id drops
+  stale answers.
+
+  "First login" needed no migration: User.createdAt (@default(now())) is
+  written once, when USER_JOIN_SERVER's upsert first CREATES the row (the
+  update branch never touches it), and that has been true for every user
+  since Phase 4. The nextsteps "start storing it if we don't have it"
+  fallback wasn't needed. Labelled "Member since".
+
+  Shared Types Changes:
+    - IUserProfile { userId, nickname, avatarUrl, memberSince, roles[{ id,
+      name, color, powerLevel }], isOnline }.
+    - New C2S GET_USER_PROFILE ({ userId } -> { success, profile?, error? }).
+
+  Server Changes:
+    - services/profile.service.ts (NEW, pure): toUserProfile() keeps only
+      this server's roles, sorted by powerLevel desc then name, and never
+      exposes serverId; isPlausibleUserId() (string, 1-128 chars).
+    - profile.handler.ts: GET_USER_PROFILE. Refused for viewer sockets and
+      sockets that haven't joined. No permission flag: everything on the
+      card is already visible to members. One user query (roles filtered to
+      this server) plus presence from Redis (getOnlineUsers, never
+      Postgres).
+
+  Client Changes:
+    - preload.ts: getUserProfile() with a 5s timeout -> `unsupported`
+      against a pre-v2.6.0 server.
+    - Card (#user-profile-modal, index.html + renderer.ts "User Profile
+      Card"):
+      - banner tinted with the user's avatar color; 96px avatar with an
+        online dot;
+      - nickname; "Member since <date> · <relative>" with a full date
+        tooltip;
+      - role chips, the dot in role.color (only a real hex color reaches
+        CSS);
+      - Online/Offline status.
+    - Actions: Message (closes the card, openDmTab) and Nudge (only when
+      canNudge: online, not you, nudging enabled). Your own card shows
+      "This is you" + "Edit profile" (opens Settings -> Application).
+      Error state with Retry; "Profile details need a newer server" when
+      unsupported. Live: USER_JOINED/USER_LEFT flip the status and
+      show/hide Nudge while it's open; avatar changes arrive via 17.1's
+      refreshAvatars.
+    - Nudge button EXTRACTED from createUserRow() into buildNudgeButton()
+      + canNudge(), shared by the Online Users modal and the card, so the
+      30s cooldown (lastNudgeSentAt) is shared. Its self-cleanup stops the
+      countdown when the button is detached; it now does that only once
+      the button has been attached (wasAttached), since the card builds the
+      button before inserting it.
+    - Triggers: .msg-nick got role="button" tabindex="0" title="View
+      profile"; one delegated click + keydown listener on tabContentArea
+      for ".msg-header > .avatar" and ".msg-nick". Reply-snippet names keep
+      their jump-to-original click.
+    - Accessibility: role=dialog, aria-modal, labelled by the nickname;
+      focus moves to Close on open and back to the nickname on close; Tab
+      is trapped in the card; Escape, backdrop click and the Close button
+      all close it.
+
+  Found During Testing (fixed):
+    - REAL BUG, found by the UI test: after pressing Nudge in the card,
+      Escape no longer closed it. The Nudge button disables itself for its
+      cooldown, a disabled button drops focus to <body>, and the Escape
+      handler was attached to the dialog, so it never fired. The card stayed
+      open, and the next action opened the Online Users modal on top of it.
+      Escape/Tab are now handled on the DOCUMENT (capture phase) whenever
+      the card is visible, and Tab brings focus back into the card if it
+      has left. A regression check reproduces the exact sequence.
+    - Mixed-language text: Intl with the system locale produced "Member
+      since 8 de outubro de 2026 · há 4 minutos" inside an English
+      sentence. The card's date/relative-time now use "en", like the rest
+      of the (English) UI.
+    - Test-only mistakes (not app bugs): the first "avatar click" failure
+      was really the leftover-open card above; one assertion used a plain
+      string instead of a template literal.
+
+  Key Files Modified:
+    packages/shared-types/src/models.ts
+    packages/shared-types/src/socket-events.ts
+    apps/server/src/services/profile.service.ts (NEW)
+    apps/server/src/handlers/profile.handler.ts
+    apps/server/src/__tests__/profile.service.test.ts (NEW)
+    apps/client/src/preload.ts
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/renderer/index.html
+
+  Verification:
+    - npx tsc --build (shared-types), npx tsc --noEmit (server, client);
+      npm run test (server): 11 files, 111 tests pass, including the new
+      profile.service tests; npm run test:markdown and npm run test:avatar
+      pass.
+    - Real built server on a fresh scratch DB, ADMIN_INSTANCE_ID set to a
+      seeded user, scripted sockets: 12/12 pass:
+      - refused before joining and for a viewer socket;
+      - memberSince equals users.createdAt read from Postgres;
+      - roles "Server Admin" before "Member", no serverId;
+      - offline/online status from Redis; unknown, non-string and
+        oversized ids refused.
+    - Real built client under Xvfb over CDP, trusted mouse/keyboard input:
+      22/22 pass on the final run:
+      - opening: click on the nickname and on the avatar, Enter on a
+        focused nickname, opens immediately; focus goes to Close and
+        returns to the nickname;
+      - content: English "Member since", roles, offline = Message only,
+        online = Message + Nudge, avatar at s=192;
+      - Nudge: countdown, shared with the Online Users modal; live Offline
+        (Nudge hidden) and back Online;
+      - the Escape-after-Nudge regression; Message opens the DM and closes
+        the card;
+      - own card with Edit profile -> Settings/Application; unknown user ->
+        error + Retry; backdrop click closes.
+    - Screenshots inspected: offline admin, online member, own card, error
+      state.
+    - Not yet hand-tested by the user.
+
+  Next Step: PRD 17.4 — microphone volume up to 300% (with a soft clipper
+  above 100%).
