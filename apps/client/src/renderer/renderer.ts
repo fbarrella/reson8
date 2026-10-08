@@ -1120,6 +1120,12 @@ let emojiAcItems: EmojiAcItem[] = [];
 let emojiAcActive = 0;
 let emojiAcColonIndex = 0; // index of the ":" that opened the card
 let emojiAcQuery = "";
+/** The textarea the card currently serves — the composer, or a message's
+ *  edit box (PRD 17.11). Set when an attached textarea gains focus. */
+let emojiAcTarget: HTMLTextAreaElement | null = null;
+/** What to run after an insertion in the current target (the composer
+ *  re-sizes itself; the edit box needs nothing). */
+let emojiAcAfterInsert: (() => void) | null = null;
 const btnSend = document.getElementById("btn-send") as HTMLButtonElement;
 const btnAttach = document.getElementById("btn-attach") as HTMLButtonElement;
 const btnEmoji = document.getElementById("btn-emoji") as HTMLButtonElement;
@@ -5793,7 +5799,7 @@ function renderEmojiAutocomplete(): void {
         row.addEventListener("click", () => selectEmojiAutocompleteItem(i));
         emojiAcList.appendChild(row);
     });
-    chatInput.setAttribute("aria-activedescendant", `emoji-ac-item-${emojiAcActive}`);
+    acTarget().setAttribute("aria-activedescendant", `emoji-ac-item-${emojiAcActive}`);
 }
 
 function setEmojiAutocompleteActive(index: number, scroll: boolean): void {
@@ -5803,24 +5809,34 @@ function setEmojiAutocompleteActive(index: number, scroll: boolean): void {
         el.classList.toggle("active", i === index);
         el.setAttribute("aria-selected", String(i === index));
     });
-    chatInput.setAttribute("aria-activedescendant", `emoji-ac-item-${index}`);
+    acTarget().setAttribute("aria-activedescendant", `emoji-ac-item-${index}`);
     if (scroll) emojiAcList.children[index]?.scrollIntoView({ block: "nearest" });
 }
 
 /** Opens the card above the colon, kept fully inside the window. */
 function positionEmojiAutocomplete(): void {
-    const colon = getTextareaCharCoords(chatInput, emojiAcColonIndex);
+    const target = acTarget();
+    const colon = getTextareaCharCoords(target, emojiAcColonIndex);
     const margin = 8;
+    const lineHeight = parseFloat(getComputedStyle(target).lineHeight) || 18;
 
-    // It opens upward (the input sits at the bottom of the window); in a tiny
-    // window shrink the card rather than push it off the top.
+    // It opens upward (the composer sits at the bottom of the window). An
+    // edit box near the top of the message list may have no room above, so
+    // then it opens BELOW the caret's line instead (PRD 17.11); for the
+    // composer that never happens. In a tiny window the card shrinks rather
+    // than leave the screen.
     const roomAbove = colon.top - 6 - margin;
-    emojiAutocompleteEl.style.maxHeight = `${Math.max(120, Math.min(320, roomAbove))}px`;
+    const below = roomAbove < 120;
+    const belowTop = colon.top + lineHeight + 6;
+    const room = below ? window.innerHeight - belowTop - margin : roomAbove;
+    emojiAutocompleteEl.style.maxHeight = `${Math.max(120, Math.min(320, room))}px`;
 
     const width = emojiAutocompleteEl.offsetWidth;
     const height = emojiAutocompleteEl.offsetHeight;
     const left = Math.max(margin, Math.min(colon.left, window.innerWidth - width - margin));
-    const top = Math.max(margin, colon.top - 6 - height);
+    const top = below
+        ? Math.min(belowTop, window.innerHeight - height - margin)
+        : Math.max(margin, colon.top - 6 - height);
     emojiAutocompleteEl.style.left = `${left}px`;
     emojiAutocompleteEl.style.top = `${top}px`;
 }
@@ -5830,18 +5846,18 @@ function closeEmojiAutocomplete(): void {
     emojiAcOpen = false;
     emojiAcItems = [];
     emojiAutocompleteEl.classList.remove("visible");
-    chatInput.setAttribute("aria-expanded", "false");
-    chatInput.removeAttribute("aria-activedescendant");
+    acTarget().setAttribute("aria-expanded", "false");
+    acTarget().removeAttribute("aria-activedescendant");
 }
 
 /** Re-evaluates the text before the caret: open, refresh or close the card. */
 function updateEmojiAutocomplete(): void {
-    if (chatInput.selectionStart !== chatInput.selectionEnd) {
+    if (acTarget().selectionStart !== acTarget().selectionEnd) {
         closeEmojiAutocomplete();
         return;
     }
-    const caret = chatInput.selectionStart ?? chatInput.value.length;
-    const match = EMOJI_AC_OPEN_RE.exec(chatInput.value.slice(0, caret));
+    const caret = acTarget().selectionStart ?? acTarget().value.length;
+    const match = EMOJI_AC_OPEN_RE.exec(acTarget().value.slice(0, caret));
     if (!match) {
         closeEmojiAutocomplete();
         return;
@@ -5867,8 +5883,8 @@ function updateEmojiAutocomplete(): void {
         // different flow, but it never coexists with typing anyway).
         if (emojiPicker.classList.contains("visible")) closeEmojiPicker();
         emojiAcOpen = true;
-        chatInput.setAttribute("aria-expanded", "true");
-        chatInput.setAttribute("aria-controls", "emoji-autocomplete");
+        acTarget().setAttribute("aria-expanded", "true");
+        acTarget().setAttribute("aria-controls", "emoji-autocomplete");
     }
     renderEmojiAutocomplete();
     emojiAutocompleteEl.classList.add("visible");
@@ -5879,13 +5895,13 @@ function updateEmojiAutocomplete(): void {
 function selectEmojiAutocompleteItem(index: number): void {
     const item = emojiAcItems[index];
     if (!item) return;
-    const caret = chatInput.selectionStart ?? chatInput.value.length;
-    const nextChar = chatInput.value.charAt(caret);
+    const caret = acTarget().selectionStart ?? acTarget().value.length;
+    const nextChar = acTarget().value.charAt(caret);
     const suffix = nextChar === "" || !/\s/.test(nextChar) ? " " : "";
-    chatInput.setRangeText(item.insert + suffix, emojiAcColonIndex, caret, "end");
+    acTarget().setRangeText(item.insert + suffix, emojiAcColonIndex, caret, "end");
     closeEmojiAutocomplete();
-    autosizeChatInput();
-    chatInput.focus();
+    emojiAcAfterInsert?.();
+    acTarget().focus();
 }
 
 /**
@@ -5894,15 +5910,15 @@ function selectEmojiAutocompleteItem(index: number): void {
  * already render from `:name:` text. Returns true when it converted.
  */
 function convertClosedEmojiShortcode(): boolean {
-    const caret = chatInput.selectionStart ?? chatInput.value.length;
-    const match = EMOJI_AC_CLOSED_RE.exec(chatInput.value.slice(0, caret));
+    const caret = acTarget().selectionStart ?? acTarget().value.length;
+    const match = EMOJI_AC_CLOSED_RE.exec(acTarget().value.slice(0, caret));
     if (!match) return false;
     getUnicodeEmojiIndex();
     // Group 1 is ":name:" (both colons), group 2 is just "name".
     const emoji = unicodeEmojiBySnake?.get(match[2].toLowerCase());
     if (!emoji) return false;
-    chatInput.setRangeText(emoji, caret - match[1].length, caret, "end");
-    autosizeChatInput();
+    acTarget().setRangeText(emoji, caret - match[1].length, caret, "end");
+    emojiAcAfterInsert?.();
     return true;
 }
 
@@ -5940,29 +5956,87 @@ function handleEmojiAutocompleteKeydown(e: KeyboardEvent): boolean {
     }
 }
 
-chatInput.setAttribute("aria-autocomplete", "list");
-chatInput.setAttribute("aria-expanded", "false");
+/** The textarea the card serves (the composer unless another one has focus). */
+function acTarget(): HTMLTextAreaElement {
+    return emojiAcTarget ?? chatInput;
+}
+
+/**
+ * Gives a textarea the emoji autocomplete (PRD 16.7; generalized for the edit
+ * box in PRD 17.11). The card, search and keys are shared; the textarea
+ * becomes the card's target when it gains focus. Its OWN keydown handler must
+ * call handleEmojiAutocompleteKeydown(e) first and stop if it returns true.
+ * Returns a function that detaches everything again.
+ */
+function attachEmojiAutocomplete(ta: HTMLTextAreaElement, opts: { onAfterInsert?: () => void } = {}): () => void {
+    ta.setAttribute("aria-autocomplete", "list");
+    ta.setAttribute("aria-expanded", "false");
+
+    const claim = (): void => {
+        if (emojiAcTarget !== ta) {
+            if (emojiAcOpen) closeEmojiAutocomplete();
+            emojiAcTarget = ta;
+        }
+        emojiAcAfterInsert = opts.onAfterInsert ?? null;
+    };
+    const onInput = (e: Event): void => {
+        claim();
+        if ((e as InputEvent).isComposing) return; // wait for the IME to commit
+        if ((e as InputEvent).data === ":" && convertClosedEmojiShortcode()) {
+            closeEmojiAutocomplete();
+            return;
+        }
+        updateEmojiAutocomplete();
+    };
+    const onClick = (): void => {
+        claim();
+        updateEmojiAutocomplete();
+    };
+    // Caret moves that don't fire "input": clicking, Home/End, and Left/Right
+    // (Up/Down/Enter/Tab/Escape are consumed by the card itself while it's open).
+    const onKeyup = (e: KeyboardEvent): void => {
+        if (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "Home" || e.key === "End") {
+            claim();
+            updateEmojiAutocomplete();
+        }
+    };
+    const onBlur = (): void => {
+        if (emojiAcTarget === ta) closeEmojiAutocomplete();
+    };
+    // A textarea inside the message list moves when the list scrolls.
+    const scroller = ta.closest(".chat-messages");
+    const onScroll = (): void => {
+        if (emojiAcTarget === ta) closeEmojiAutocomplete();
+    };
+
+    ta.addEventListener("focus", claim);
+    ta.addEventListener("input", onInput);
+    ta.addEventListener("click", onClick);
+    ta.addEventListener("keyup", onKeyup);
+    ta.addEventListener("blur", onBlur);
+    scroller?.addEventListener("scroll", onScroll, { passive: true });
+
+    return () => {
+        ta.removeEventListener("focus", claim);
+        ta.removeEventListener("input", onInput);
+        ta.removeEventListener("click", onClick);
+        ta.removeEventListener("keyup", onKeyup);
+        ta.removeEventListener("blur", onBlur);
+        scroller?.removeEventListener("scroll", onScroll);
+        if (emojiAcTarget === ta) {
+            closeEmojiAutocomplete();
+            emojiAcTarget = null;
+            emojiAcAfterInsert = null;
+        }
+    };
+}
+
 // Grabbing the card's scrollbar (or its header) must not blur the textarea,
 // which would close the card mid-interaction.
 emojiAutocompleteEl.addEventListener("mousedown", (e) => e.preventDefault());
 
-chatInput.addEventListener("input", (e) => {
-    if ((e as InputEvent).isComposing) return; // wait for the IME to commit
-    if ((e as InputEvent).data === ":" && convertClosedEmojiShortcode()) {
-        closeEmojiAutocomplete();
-        return;
-    }
-    updateEmojiAutocomplete();
-});
-// Caret moves that don't fire "input": clicking, Home/End, and Left/Right
-// (Up/Down/Enter/Tab/Escape are consumed by the card itself while it's open).
-chatInput.addEventListener("click", updateEmojiAutocomplete);
-chatInput.addEventListener("keyup", (e) => {
-    if (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "Home" || e.key === "End") {
-        updateEmojiAutocomplete();
-    }
-});
-chatInput.addEventListener("blur", closeEmojiAutocomplete);
+// The composer: unchanged behavior, it just goes through the shared wiring now.
+attachEmojiAutocomplete(chatInput, { onAfterInsert: autosizeChatInput });
 window.addEventListener("resize", () => {
     if (emojiAcOpen) positionEmojiAutocomplete();
 });
@@ -8645,12 +8719,16 @@ function startMessageEdit(el: HTMLDivElement, msg: ChatMessage): void {
     input.className = "msg-edit-input";
     input.value = msg.content;
     textEl.replaceWith(input);
+    // The same emoji autocomplete as the composer (PRD 17.11) — attached
+    // before focus so the focus makes this box the card's target.
+    const detachAutocomplete = attachEmojiAutocomplete(input);
     input.focus();
     input.setSelectionRange(input.value.length, input.value.length);
 
     const finish = async (save: boolean): Promise<void> => {
         input.removeEventListener("keydown", onKeydown);
         input.removeEventListener("blur", onBlur);
+        detachAutocomplete();
 
         if (!save) {
             input.outerHTML = originalHTML;
@@ -8689,6 +8767,10 @@ function startMessageEdit(el: HTMLDivElement, msg: ChatMessage): void {
     };
 
     const onKeydown = (e: KeyboardEvent) => {
+        // The open emoji card gets first refusal (PRD 17.11): Enter/Tab pick
+        // an emoji instead of saving, and Escape closes the card before it
+        // ever cancels the edit — the composer's precedence with replies.
+        if (handleEmojiAutocompleteKeydown(e)) return;
         if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
             e.preventDefault();
             finish(true);

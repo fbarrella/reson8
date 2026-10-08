@@ -1582,3 +1582,68 @@ Feature/Fix: PRD 17.10 — Keep whitespace-only lines as blank lines in Markdown
     - Not yet hand-tested by the user.
 
   Next Step: PRD 17.11 — emoji autocomplete in the message edit box.
+
+--- Entry: 08/10/2026 ---
+
+Feature/Fix: PRD 17.11 — Emoji autocomplete in the message edit box
+
+  Problem: The emoji autocomplete (PRD 16.7) only worked in the composer;
+  editing a sent message meant typing emoji names from memory. The whole
+  autocomplete section was hard-wired to `chatInput`.
+
+  Solution: The autocomplete is generalized, not duplicated: a single card,
+  search and key handling now serve whichever textarea is its current
+  target, and the message edit box is attached to it.
+    - emojiAcTarget (+ acTarget(), defaulting to the composer) replaces
+      every `chatInput` reference inside the autocomplete functions;
+      emojiAcAfterInsert replaces the hard-coded autosizeChatInput() after
+      an insertion (the composer passes it, the edit box passes nothing).
+    - attachEmojiAutocomplete(textarea, { onAfterInsert }) wires
+      focus/input/click/keyup/blur on that textarea, plus scroll on its
+      .chat-messages list, which closes the card since the box moves.
+      Gaining focus makes the textarea the target. It sets the ARIA
+      attributes and returns a detach function. The composer now uses it
+      too (same behavior); its own keydown still calls
+      handleEmojiAutocompleteKeydown() first.
+    - startMessageEdit(): attaches before focusing (so the focus claims the
+      card) and detaches in finish(); detaching resets the target to the
+      composer. Its keydown gives the card first refusal: Enter/Tab pick an
+      emoji instead of saving, and Escape closes the card before it ever
+      cancels the edit (the composer's precedence with reply-cancel).
+      Clicking a suggestion doesn't blur (rows preventDefault on mousedown),
+      so it doesn't save the edit.
+    - positionEmojiAutocomplete(): when there is less than 120 px above the
+      caret, the card opens BELOW the caret's line (an edit box at the top
+      of the list), clamped inside the window. The composer at the bottom
+      never triggers it.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts
+
+  Verification:
+    - npx tsc --noEmit (client); npm run test:markdown passes.
+    - Real built server (scratch DB) + real built client under Xvfb over
+      CDP, with REAL typing (Input.insertText → genuine input events with
+      .data) and real key/mouse events:
+      - composer regression: ':hea' opens the card above the input; Enter
+        inserts and does NOT send; with a reply open, the 1st Escape closes
+        the card and the 2nd cancels the reply;
+      - edit box: it is focused; ':hea' opens the card targeted at the edit
+        box; ArrowDown + Enter picks without saving; the 1st Escape closes
+        the card, the 2nd cancels the edit (text restored); clicking a
+        suggestion inserts and keeps editing; ':red_heart:' converts on the
+        closing colon; Enter then saves with the emoji;
+      - scrolling the list closes the card;
+      - the composer owns the card again after an edit.
+      15/16 on the first run. The failing check was a test setup mistake:
+      the "top of list" box was at 198 px with 186 px above it, so by
+      design the card opened upward and shrank to fit. A follow-up probe put
+      the edit box truly at the top of a scrolled list (box at 100 px): the
+      card opened BELOW the caret line (top 129 px, inside the window).
+      PASS.
+    - Screenshots inspected (card open for an edit box; card below the caret
+      for a top-of-list edit box).
+    - Not yet hand-tested by the user.
+
+  Next Step: PRD 17.12 — cryptographic identity (stop instance-id
+  impersonation).
