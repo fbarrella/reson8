@@ -10,7 +10,7 @@ import { dirname, resolve } from "node:path";
 
 const require = createRequire(import.meta.url);
 const here = dirname(fileURLToPath(import.meta.url));
-const { renderMessageMarkdown, markdownToPlainText } = require(resolve(here, "../dist/markdown.js"));
+const { renderMessageMarkdown, markdownToPlainText, preserveWhitespaceOnlyLines } = require(resolve(here, "../dist/markdown.js"));
 
 const emoji = new Map([
     ["party", "http://x/party.png"],
@@ -89,6 +89,25 @@ for (const v of vectors) {
 check("plain text strips syntax and newlines", markdownToPlainText("**Hello** _there_\n\n# Title\n- one\n- two") === "Hello there Title one two", markdownToPlainText("**Hello** _there_\n\n# Title\n- one\n- two"));
 check("plain text keeps code + urls", markdownToPlainText("run `npm i` at https://x.com") === "run npm i at https://x.com", markdownToPlainText("run `npm i` at https://x.com"));
 check("plain text of empty", markdownToPlainText("") === "");
+
+
+// ── Whitespace-only lines are blank lines (PRD 17.10) ──
+const NB = " ";
+const blankLines = (html) => (html.match(new RegExp(`<br>\\n${NB}(?=<br>|</p>|</li>)`, "g")) ?? []).length;
+check("space line → one visible blank line", blankLines(r("Line 1\n \nLine 3").html) === 1 && r("Line 1\n \nLine 3").html.includes("Line 3"), r("Line 1\n \nLine 3").html);
+check("tab-only line → blank line too", blankLines(r("a\n\t\nb").html) === 1, r("a\n\t\nb").html);
+check("several spaces → still ONE blank line", blankLines(r("a\n     \nb").html) === 1, r("a\n     \nb").html);
+check("two space lines → two blank lines", blankLines(r("a\n \n \nb").html) === 2, r("a\n \n \nb").html);
+check("truly empty line unchanged (paragraph break)", r("a\n\nb").html === "<p>a</p>\n<p>b</p>\n", r("a\n\nb").html);
+check("fenced code keeps its whitespace-only line verbatim", r("```\nx\n   \ny\n```").html.includes("x\n   \ny"), r("```\nx\n   \ny\n```").html);
+check("~~~ fence too", r("~~~\nx\n  \ny\n~~~").html.includes("x\n  \ny"), r("~~~\nx\n  \ny\n~~~").html);
+check("after a fence closes, a space line is a blank line again", blankLines(r("```\ncode\n```\ntext\n \nmore").html) === 1, r("```\ncode\n```\ntext\n \nmore").html);
+check("a longer closing fence closes; a shorter one doesn't", preserveWhitespaceOnlyLines("````\na\n```\n \n````\n \nb") === `\`\`\`\`\na\n\`\`\`\n \n\`\`\`\`\n${NB}\nb`, JSON.stringify(preserveWhitespaceOnlyLines("````\na\n```\n \n````\n \nb")));
+check("quote: the blank line stays inside the quote", /<blockquote>[\s\S]*a<br>\n <br>\nb[\s\S]*<\/blockquote>/.test(r("> a\n \n> b").html), r("> a\n \n> b").html);
+check("list: stays a list", r("- a\n \n- b").html.includes("<ul>") && r("- a\n \n- b").html.includes("<li>b</li>"), r("- a\n \n- b").html);
+check("plain-text preview collapses it away", markdownToPlainText("Line 1\n \nLine 3") === "Line 1 Line 3", markdownToPlainText("Line 1\n \nLine 3"));
+check("no-op fast path returns the same string", preserveWhitespaceOnlyLines("no blank lines here") === "no blank lines here");
+check("XSS still escaped next to a blank line", !r("<img src=x onerror=alert(1)>\n \nok").html.includes("<img"), r("<img src=x onerror=alert(1)>\n \nok").html);
 
 console.log(failures ? `\n${failures} FAILED` : "\nAll checks passed");
 process.exit(failures ? 1 : 0);

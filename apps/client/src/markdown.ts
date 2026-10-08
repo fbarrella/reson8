@@ -117,10 +117,49 @@ md.renderer.rules.reson8_emoji = (tokens, idx) => {
     return `<img src="${src}" alt="${token_text}" title="${token_text}" class="custom-emoji-inline">`;
 };
 
+// ── Whitespace-only lines are blank lines (PRD 17.10) ─────────────────────
+// Markdown treats a line of only spaces/tabs exactly like an empty line: a
+// paragraph boundary with no visible gap, so a message could never show a
+// blank line between paragraphs. Here a line with AT LEAST ONE space or tab
+// (and nothing else) becomes a single no-break space, which markdown-it
+// treats as ordinary text: with `breaks: true` it renders as a visible empty
+// line, and several in a row stay several. A truly empty line is left alone
+// (still a plain paragraph break). Fenced code blocks are untouched — their
+// whitespace is content.
+const FENCE_OPEN = /^ {0,3}(`{3,}|~{3,})/;
+const NBSP = "\u00A0";
+
+export function preserveWhitespaceOnlyLines(text: string): string {
+    if (!/^[ \t]+$/m.test(text)) return text; // fast path: nothing to do
+    const lines = text.split("\n");
+    let fence: { char: string; length: number } | null = null;
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const marker = FENCE_OPEN.exec(line);
+        if (fence) {
+            // A closing fence: the same character, at least as long, nothing after it.
+            if (marker && marker[1][0] === fence.char && marker[1].length >= fence.length && line.trim() === marker[1]) {
+                fence = null;
+            }
+            continue;
+        }
+        if (marker) {
+            // A backtick fence's info string can't contain a backtick (CommonMark).
+            const info = line.slice(line.indexOf(marker[1]) + marker[1].length);
+            if (marker[1][0] === "~" || !info.includes("`")) {
+                fence = { char: marker[1][0], length: marker[1].length };
+            }
+            continue;
+        }
+        if (/^[ \t]+$/.test(line)) lines[i] = NBSP;
+    }
+    return lines.join("\n");
+}
+
 /** Renders a chat message's Markdown. */
 export function renderMessageMarkdown(text: string, emoji?: CustomEmojiMap): RenderedMessage {
     const env: RenderEnv = { emoji };
-    const tokens = md.parse(text, env);
+    const tokens = md.parse(preserveWhitespaceOnlyLines(text), env);
 
     // A lone paragraph with no line breaks is just a line of text: render
     // only its inline content (no wrapping <p>) so it keeps flowing inline

@@ -1522,3 +1522,63 @@ Feature/Fix: PRD 17.9 — Social-media link "fixers" for rich previews
 
   Next Step: PRD 17.10 — keep whitespace-only lines as blank lines in
   Markdown.
+
+--- Entry: 08/10/2026 ---
+
+Feature/Fix: PRD 17.10 — Keep whitespace-only lines as blank lines in Markdown
+
+  Problem: There was no way to show a blank line between paragraphs
+  (useful for warning-style messages). A line containing only spaces, typed
+  as Shift+Enter, space, Shift+Enter, was treated by markdown-it exactly
+  like an empty line: a paragraph boundary, and paragraphs render with no
+  visible gap. Confirmed before changing anything: "Line 1\n \nLine 3"
+  and "Line 1\n\nLine 3" produced identical HTML.
+
+  Solution: renderMessageMarkdown() now runs preserveWhitespaceOnlyLines()
+  before parsing. Every line made only of spaces/tabs (at least one) becomes
+  a single U+00A0 no-break space, which markdown-it treats as ordinary
+  paragraph text, so with `breaks: true` it renders as one visible blank
+  line (`<br>\n&nbsp;<br>`), and several in a row stay several. A truly
+  empty line is left alone (still a plain paragraph break, as nextsteps
+  allows).
+  - Fenced code blocks are untouched: their whitespace is content. Fences
+    are tracked per CommonMark (``` or ~~~ with up to 3 leading spaces;
+    closed by the same character at least as long with nothing after it; a
+    backtick fence's info string can't contain a backtick).
+  - Inside a quote or a list item the blank line stays within that block
+    and the quote/list continues.
+  - markdownToPlainText() (pinned bar, reply snippets) needed no change:
+    it collapses all whitespace, NBSP included.
+  - The pipeline already allowed it: the client and server only trim the
+    WHOLE message and normalizeNewlines() leaves inner lines alone (checked
+    end to end below). No server change.
+
+  Key Files Modified:
+    apps/client/src/markdown.ts
+    apps/client/scripts/markdown-smoke.mjs
+
+  Verification:
+    - npx tsc --noEmit (client).
+    - npm run test:markdown: all pass, including 15 new cases:
+      - a space line → 1 blank line; a tab line too; many spaces → still 1;
+        two space lines → 2; a truly empty line unchanged;
+      - code: a ``` block and a ~~~ block keep their whitespace line
+        verbatim; after a fence closes, space lines become blank lines
+        again; a longer closing fence closes and a shorter one doesn't;
+      - quote and list continuity; the plain-text preview; the no-op fast
+        path; XSS still escaped next to a blank line.
+      All existing syntax and XSS vectors still pass.
+    - End to end with the real built server (scratch DB) and client
+      (Xvfb, CDP), sending through the composer exactly as a user would.
+      4/4 pass:
+      - the stored DB content keeps the inner " " lines;
+      - a message with 3 whitespace lines renders exactly 3 line-heights
+        taller than the same text without them (109.1 vs 54.6 px at
+        18.2 px/line);
+      - a truly empty line still adds no blank line;
+      - editing a message to add a space line shows the blank line.
+    - Screenshot inspected (warning-style message with 1 and 2 blank lines
+      next to the control).
+    - Not yet hand-tested by the user.
+
+  Next Step: PRD 17.11 — emoji autocomplete in the message edit box.
