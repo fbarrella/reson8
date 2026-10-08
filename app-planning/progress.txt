@@ -1039,3 +1039,112 @@ Feature/Fix: PRD 17.4 — Microphone volume up to 300% (with a soft clipper)
       be loud but not crackly; 100% unchanged).
 
   Next Step: PRD 17.5 — preview tabs and "Keep Tab Open" for text channels.
+
+--- Entry: 08/10/2026 ---
+
+Feature/Fix: PRD 17.5 — Preview tabs and "Keep Tab Open" for text channels
+
+  Problem: Every click on a text channel opened a new tab, so on bigger
+  servers tabs piled up and had to be closed one ✕ at a time. The user asked
+  for VS Code-style behavior: one tab that is replaced by the next channel
+  opened, plus a way to keep chosen tabs open (labelled "Keep Tab Open",
+  remembered across restarts, user decisions). DM tabs stay as they were.
+
+  Solution: Channel tabs now have a mode, "preview" or "kept". There is at
+  most one preview tab (previewTabId). Clicking a channel opens it in the
+  preview tab, which the next channel replaces IN PLACE: the new tab is
+  inserted before the old one, which is then disposed of without the usual
+  fall-back to the Server Log, so there is no flicker. "Keep Tab Open" makes
+  a tab permanent; it is offered from a new right-click menu on channel tabs
+  and from the tree's text-channel menu, next to Mute. Double-click has no
+  special meaning (explicitly requested). Kept tabs are remembered per server
+  and restored after every connect.
+
+  Client Changes (renderer.ts "Preview tabs & Keep Tab Open", index.html):
+    - ChatTab gains kind ("channel" | "dm") and mode (channel tabs only).
+    - fillTabElement(): structured tab markup — .tab-icon, .tab-kept-icon
+      (Lucide bookmark, accent; not the pushpin, which already means
+      "pinned message"), .tab-label, .tab-unread-dot (slot for 17.6),
+      .tab-close — for channel AND DM tabs. syncOpenTabNames() now updates
+      only .tab-label, so a rename keeps the icon. renderTabMode() sets the
+      .preview/.kept classes and tooltips. A preview tab's title is italic
+      (VS Code convention).
+    - openChatTab(id, name, { mode, focus, deferLoad }): an already-open tab
+      is just focused, and asking for "kept" keeps it in place; a new
+      preview replaces the old one in its slot; a "kept" open persists.
+    - closeTab(id, { reason }): "user" and "deleted" forget a kept tab;
+      "disconnect" keeps it remembered; "replaced" also skips the Server
+      Log fall-back. Existing cleanup (observer, DOM, reply draft) is
+      unchanged.
+    - setTabKept(id, kept):
+      - keeping a channel with no tab opens it kept and focused;
+      - unkeeping makes it THE preview tab; if another preview is open, the
+        one being viewed survives and the other closes.
+    - showChannelTabContextMenu(): "🔖 Keep Tab Open / Stop Keeping Open" +
+      "✕ Close Tab", same .occupant-ctx-menu styling as the tree menu.
+    - switchTab() lazily runs loadChatHistory() for a tab not loaded yet.
+    - Persistence: reson8-kept-tabs = { serverId: channelId[] } in tab-bar
+      order, written on keep/unkeep/✕/delete (same shape and try/catch
+      discipline as reson8-muted-channels).
+      - restoreKeptTabs(), after the first channel tree of each connection:
+        reopens the saved channels in order, UNFOCUSED, with history
+        DEFERRED until each is first opened, and drops ids that no longer
+        exist as text channels.
+      - A restored NSFW tab doesn't re-prompt (keeping it was a deliberate
+        choice).
+      - Disconnect closes every tab with reason "disconnect" (the store is
+        kept) and resets the restore flag.
+    - pruneClosedChannelTabs() on every tree update closes channel tabs
+      whose channel vanished, and channel-deleted now closes that channel's
+      tab (reason "deleted"). Correction to the PRD's audit: it assumed a
+      deleted channel's tab was already closed; it never was. The line it
+      cited is the disconnect handler. A deleted text channel's tab used to
+      linger.
+
+  localStorage Keys:
+    reson8-kept-tabs ({ [serverId]: channelId[] }, tab-bar order)
+
+  Found During Testing (fixed):
+    - REAL BUG: kept tabs were not restored after a restart. The first
+      CHANNEL_TREE_UPDATE arrives DURING the join, before the "connected"
+      event sets currentServerId, so restoreKeptTabs() saw an empty server
+      id and returned, and nothing re-sent the tree. The kept list is now
+      keyed by keptTabsServerId, taken from the tree payload's own serverId
+      (the same approach the muted-channels store uses for the same reason).
+    - Test mistake: the expected store order assumed opening the NSFW
+      channel appended a tab. It actually replaced the preview tab and took
+      its slot (before foxtrot), so the real tab-bar order was right.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/renderer/index.html
+
+  Verification:
+    - npx tsc --noEmit (client); npm run test:markdown, test:avatar,
+      test:soft-clip pass. (No server/shared-types change.)
+    - Real built server on a fresh scratch DB with 7 text channels (one
+      NSFW) created via an admin socket; real built client under Xvfb over
+      CDP with trusted left/right clicks. 28/28 pass on a clean
+      environment:
+      - opening: 5 tree clicks → one channel tab, same slot every time, no
+        orphan content; the preview is italic;
+      - keeping: tab right-click menu → kept (upright + bookmark, stored);
+        3 more clicks → kept + 1 preview; clicking a kept channel only
+        focuses it;
+      - DM tabs still accumulate and are never preview/kept;
+      - both unkeep cases; tree menu "Keep Tab Open" on an unopened channel
+        → opened kept + focused; store in real tab-bar order;
+      - a rename updates only the label (bookmark stays);
+      - persistence: disconnect keeps the store; after a renderer reload +
+        reconnect the kept tabs return in order, unfocused, history not
+        loaded until activation; the restored NSFW tab loads on activation
+        without a prompt;
+      - deletion: deleting a kept channel closes its tab and drops it from
+        the store; deleting the active preview's channel falls back to the
+        Server Log; ✕ on a kept tab forgets it.
+    - Screenshots inspected (preview tab, tab context menu, kept + DM tabs
+      together).
+    - Not yet hand-tested by the user.
+
+  Next Step: PRD 17.6 — unread indicator on unfocused channel tabs (fills
+  the .tab-unread-dot slot added here).

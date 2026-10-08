@@ -697,6 +697,31 @@
       background: rgba(255, 255, 255, 0.1);
     }
 
+    /* Preview & kept tabs (PRD 17.5). A preview tab's title is italic (the
+       VS Code convention); a kept tab shows a bookmark — not the pushpin,
+       which already means "pinned message" here. */
+    .tab .tab-icon {
+      display: inline-flex;
+    }
+
+    .tab .tab-kept-icon {
+      display: none;
+      color: var(--accent);
+    }
+
+    .tab.kept .tab-kept-icon {
+      display: inline-flex;
+    }
+
+    .tab.preview .tab-label {
+      font-style: italic;
+    }
+
+    /* Filled in by PRD 17.6 (unread on unfocused tabs). */
+    .tab .tab-unread-dot {
+      display: none;
+    }
+
     #tab-content-area {
       flex: 1;
       position: relative;

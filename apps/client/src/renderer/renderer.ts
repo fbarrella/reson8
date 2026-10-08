@@ -1743,8 +1743,90 @@ interface ChatTab {
      *  rendered message is by definition the true latest, so this stays
      *  true throughout ordinary use. */
     atTrueLatest: boolean;
+    /** Text channel vs DM (PRD 17.5). Only channel tabs have a mode. */
+    kind: "channel" | "dm";
+    /** "preview" = replaced by the next channel opened; "kept" = stays open
+     *  and is remembered across restarts (PRD 17.5). Channel tabs only. */
+    mode?: "preview" | "kept";
 }
 const chatTabs = new Map<string, ChatTab>();
+
+// ── Preview tabs & "Keep Tab Open" (PRD 17.5) ────────────────────────────────
+// Clicking a text channel opens it in THE preview tab (at most one), which the
+// next channel replaces in place. "Keep Tab Open" makes a tab permanent and
+// remembers it per server (`reson8-kept-tabs`, same shape and try/catch
+// discipline as `reson8-muted-channels`). DM tabs are unaffected.
+
+/** The single preview tab, if any. */
+let previewTabId: string | null = null;
+/** Kept tabs are restored once per connection, after the first channel tree. */
+let keptTabsRestored = false;
+/**
+ * The server the kept list belongs to — taken from the channel tree's own
+ * payload, because the first CHANNEL_TREE_UPDATE arrives DURING the join,
+ * before the "connected" event sets currentServerId (the muted-channels store
+ * does the same, PRD 16.4).
+ */
+let keptTabsServerId: string | null = null;
+
+const KEPT_TABS_KEY = "reson8-kept-tabs";
+
+function readKeptTabsStore(): Record<string, string[]> {
+    try {
+        const parsed = JSON.parse(localStorage.getItem(KEPT_TABS_KEY) ?? "{}");
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+        const clean: Record<string, string[]> = {};
+        for (const [serverId, ids] of Object.entries(parsed)) {
+            if (Array.isArray(ids)) clean[serverId] = ids.filter((id): id is string => typeof id === "string");
+        }
+        return clean;
+    } catch {
+        return {}; // missing, malformed or storage unavailable — treat as empty
+    }
+}
+
+/** Writes the current server's kept channels, in tab-bar order. */
+function persistKeptTabs(): void {
+    if (!keptTabsServerId) return;
+    const ids = Array.from(tabBar.querySelectorAll<HTMLElement>(".tab.kept"))
+        .map((el) => el.dataset.tabId ?? "")
+        .filter((id) => chatTabs.get(id)?.kind === "channel");
+    try {
+        const store = readKeptTabsStore();
+        if (ids.length > 0) store[keptTabsServerId] = ids;
+        else delete store[keptTabsServerId];
+        localStorage.setItem(KEPT_TABS_KEY, JSON.stringify(store));
+    } catch {
+        /* storage unavailable — kept tabs just won't be remembered */
+    }
+}
+
+const TAB_KEPT_ICON_SVG =
+    `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/></svg>`;
+
+/**
+ * Fills a tab element with its structured parts (PRD 17.5), so a rename only
+ * touches `.tab-label` and the kept icon / unread dot survive it.
+ */
+function fillTabElement(tabEl: HTMLElement, icon: string, name: string): void {
+    tabEl.innerHTML =
+        `<span class="tab-icon" aria-hidden="true">${icon}</span>` +
+        `<span class="tab-kept-icon">${TAB_KEPT_ICON_SVG}</span>` +
+        `<span class="tab-label"></span>` +
+        `<span class="tab-unread-dot" aria-hidden="true"></span>` +
+        `<span class="tab-close" role="button" aria-label="Close tab">✕</span>`;
+    (tabEl.querySelector(".tab-label") as HTMLElement).textContent = name;
+}
+
+/** Applies a channel tab's mode to its element (classes + tooltip). */
+function renderTabMode(tab: ChatTab): void {
+    const kept = tab.mode === "kept";
+    tab.tabEl.classList.toggle("kept", kept);
+    tab.tabEl.classList.toggle("preview", tab.mode === "preview");
+    tab.tabEl.title = kept
+        ? `${tab.channelName} — kept open`
+        : `${tab.channelName} — preview: opening another channel replaces this tab. Right-click → Keep Tab Open to keep it.`;
+}
 /** Initial + "load older" page size for both channel and DM history (PRD 14.2). */
 const CHAT_PAGE_SIZE = 20;
 let activeTabId = "server-log"; // default active tab
@@ -2209,8 +2291,11 @@ function attachChannelContextMenu(el: HTMLElement, node: TreeNode, canMute = fal
 
         // Mute is personal (client-side, no permission) and only offered on an
         // openable text channel — never voice channels or category rows (PRD 16.4).
+        // Keep Tab Open (PRD 17.5) sits with Mute: both are personal, text-channel-only.
+        const isKept = chatTabs.get(node.id)?.mode === "kept";
         const muteItem = canMute
-            ? `<button class="channel-ctx-menu-item ctx-mute-btn">${isChannelMuted(node.id) ? "🔔 Unmute Channel" : "🔕 Mute Channel"}</button><div class="ctx-menu-divider"></div>`
+            ? `<button class="channel-ctx-menu-item ctx-keep-btn">🔖 ${isKept ? "Stop Keeping Open" : "Keep Tab Open"}</button>`
+              + `<button class="channel-ctx-menu-item ctx-mute-btn">${isChannelMuted(node.id) ? "🔔 Unmute Channel" : "🔕 Mute Channel"}</button><div class="ctx-menu-divider"></div>`
             : "";
 
         menu.innerHTML = `
@@ -2225,6 +2310,11 @@ function attachChannelContextMenu(el: HTMLElement, node: TreeNode, canMute = fal
         menu.querySelector(".ctx-mute-btn")?.addEventListener("click", () => {
             menu.remove();
             setChannelMuted(node.id, !isChannelMuted(node.id));
+        });
+
+        menu.querySelector(".ctx-keep-btn")?.addEventListener("click", () => {
+            menu.remove();
+            setTabKept(node.id, !isKept);
         });
 
         menu.querySelector(".ctx-rename-btn")?.addEventListener("click", () => {
@@ -3281,9 +3371,13 @@ api.on("disconnected", (data?: { reason?: string }) => {
         </div>
     `;
     // Close all chat tabs (including DM tabs)
+    // A kept tab stays remembered and comes back on the next connect (PRD 17.5).
     for (const [tabId] of chatTabs) {
-        closeTab(tabId);
+        closeTab(tabId, { reason: "disconnect" });
     }
+    previewTabId = null;
+    keptTabsRestored = false;
+    keptTabsServerId = null;
     switchTab("server-log");
     log(`Disconnected from server (${disconnectReason})`, "error");
     SoundAlert.play("disconnected.mp3");
@@ -3392,6 +3486,8 @@ api.on("channel-tree", (data: { serverId: string; tree: TreeNode[] }) => {
     pruneMutedChannels(data.tree);
     renderTree(data.tree);
     syncOpenTabNames(data.tree);
+    pruneClosedChannelTabs(data.tree); // PRD 17.5
+    restoreKeptTabs(data.tree, data.serverId);
 });
 
 /** Keeps already-open chat tabs' displayed names in sync after a channel rename. */
@@ -3403,7 +3499,10 @@ function syncOpenTabNames(tree: TreeNode[]): void {
             const tab = chatTabs.get(node.id);
             if (tab && tab.channelName !== node.name) {
                 tab.channelName = node.name;
-                tab.tabEl.innerHTML = `💬 ${escapeHtml(node.name)} <span class="tab-close">✕</span>`;
+                // Only the label: the kept icon and unread dot stay (PRD 17.5).
+                const label = tab.tabEl.querySelector(".tab-label");
+                if (label) label.textContent = node.name;
+                renderTabMode(tab);
             }
             if (node.children.length > 0) walk(node.children);
         }
@@ -3525,6 +3624,8 @@ api.on("active-speakers", (data: { channelId: string; speakers: string[] }) => {
 
 api.on("channel-deleted", (data: { channelId: string }) => {
     sessionTimers.delete(data.channelId);
+    // Its tab (preview or kept) goes too, and a kept one is forgotten (PRD 17.5).
+    closeTab(data.channelId, { reason: "deleted" });
     if (currentChannelId === data.channelId) {
         currentChannelId = null;
         if (isInVoice) {
@@ -4100,23 +4201,44 @@ function switchTab(tabId: string): void {
     if (tab?.initialLoadDone) {
         tab.messagesEl.scrollTop = tab.messagesEl.scrollHeight;
     }
+    // A kept tab restored at connect loads its history on first view (PRD 17.5).
+    if (tab && !tab.loaded) loadChatHistory(tab);
 
     updateViewingIndicator();
     renderReplyBar();
 }
 
-function openChatTab(channelId: string, channelName: string): void {
-    // If tab already exists, just switch to it
-    if (chatTabs.has(channelId)) {
-        switchTab(channelId);
+/**
+ * Opens (or focuses) a text channel's tab (PRD 17.5). By default it opens in
+ * the preview tab, replacing the current preview in place; `mode: "kept"`
+ * opens it as a kept tab. `focus: false` + `deferLoad` are used to restore
+ * kept tabs at connect without stealing focus or fetching N histories (the
+ * history loads when the tab is first activated — see switchTab()).
+ */
+function openChatTab(
+    channelId: string,
+    channelName: string,
+    opts: { mode?: "preview" | "kept"; focus?: boolean; deferLoad?: boolean } = {},
+): void {
+    const focus = opts.focus !== false;
+
+    // Already open: focus it; "Keep Tab Open" on a preview tab keeps it in place.
+    const existing = chatTabs.get(channelId);
+    if (existing) {
+        if (opts.mode === "kept" && existing.mode !== "kept") setTabKept(channelId, true);
+        if (focus) switchTab(channelId);
         return;
     }
+
+    const mode = opts.mode ?? "preview";
+    // The preview tab this one replaces, if any (only a new PREVIEW replaces).
+    const replaced = mode === "preview" && previewTabId ? chatTabs.get(previewTabId) ?? null : null;
 
     // Create tab button
     const tabEl = document.createElement("div");
     tabEl.className = "tab";
     tabEl.dataset.tabId = channelId;
-    tabEl.innerHTML = `💬 ${escapeHtml(channelName)} <span class="tab-close">✕</span>`;
+    fillTabElement(tabEl, "💬", channelName);
 
     tabEl.addEventListener("click", (e) => {
         // Check if close button was clicked
@@ -4126,8 +4248,11 @@ function openChatTab(channelId: string, channelName: string): void {
             switchTab(channelId);
         }
     });
+    tabEl.addEventListener("contextmenu", (e) => showChannelTabContextMenu(e, channelId));
 
-    tabBar.appendChild(tabEl);
+    // A replacement takes the replaced tab's slot in the bar.
+    if (replaced) tabBar.insertBefore(tabEl, replaced.tabEl);
+    else tabBar.appendChild(tabEl);
 
     // Create tab content
     const contentEl = document.createElement("div");
@@ -4178,15 +4303,23 @@ function openChatTab(channelId: string, channelName: string): void {
         bottomSentinelEl,
         jumpToRecentBtn,
         atTrueLatest: true,
+        kind: "channel",
+        mode,
     };
     chatTabs.set(channelId, chatTab);
     setupInfiniteScroll(chatTab);
+    renderTabMode(chatTab);
 
-    // Switch to the new tab
-    switchTab(channelId);
+    // Dispose of the replaced preview AFTER the new tab exists, without the
+    // usual fall-back to the Server Log in between (no flicker).
+    if (replaced) closeTab(replaced.channelId, { reason: "replaced" });
+    if (mode === "preview") previewTabId = channelId;
+    else persistKeptTabs();
 
-    // Fetch message history
-    loadChatHistory(chatTab);
+    if (focus) switchTab(channelId);
+
+    // Fetch message history (a deferred tab loads on first activation).
+    if (!opts.deferLoad) loadChatHistory(chatTab);
 }
 
 // ── DM Tab Management ─────────────────────────────────────────────────────
@@ -4204,7 +4337,7 @@ function openDmTab(userId: string, nickname: string, unreadCountHint?: number): 
     const tabEl = document.createElement("div");
     tabEl.className = "tab";
     tabEl.dataset.tabId = tabKey;
-    tabEl.innerHTML = `✉️ ${escapeHtml(nickname)} <span class="tab-close">✕</span>`;
+    fillTabElement(tabEl, "✉️", nickname);
 
     tabEl.addEventListener("click", (e) => {
         if ((e.target as HTMLElement).classList.contains("tab-close")) {
@@ -4250,6 +4383,7 @@ function openDmTab(userId: string, nickname: string, unreadCountHint?: number): 
         bottomSentinelEl,
         jumpToRecentBtn,
         atTrueLatest: true,
+        kind: "dm",
     };
     chatTabs.set(tabKey, chatTab);
     setupInfiniteScroll(chatTab);
@@ -4261,7 +4395,18 @@ function openDmTab(userId: string, nickname: string, unreadCountHint?: number): 
     loadChatHistory(chatTab, unreadCountHint);
 }
 
-function closeTab(channelId: string): void {
+/**
+ * Closes a tab. `reason` (PRD 17.5) decides the bookkeeping:
+ * - "user" (✕, menu) and "deleted" (channel gone) forget a kept tab;
+ * - "disconnect" keeps it remembered, to be restored on the next connect;
+ * - "replaced" (a new preview took its slot) also skips the fall-back to the
+ *   Server Log, since the replacement is about to be focused.
+ */
+function closeTab(
+    channelId: string,
+    opts: { reason?: "user" | "replaced" | "disconnect" | "deleted" } = {},
+): void {
+    const reason = opts.reason ?? "user";
     const tab = chatTabs.get(channelId);
     if (!tab) return;
 
@@ -4271,9 +4416,113 @@ function closeTab(channelId: string): void {
     chatTabs.delete(channelId);
     replyTargets.delete(channelId); // a draft reply dies with its conversation's tab (PRD 16.11)
 
+    if (previewTabId === channelId) previewTabId = null;
+    if (tab.mode === "kept" && (reason === "user" || reason === "deleted")) persistKeptTabs();
+
     // If this was the active tab, switch to server log
-    if (activeTabId === channelId) {
+    if (activeTabId === channelId && reason !== "replaced") {
         switchTab("server-log");
+    }
+}
+
+/**
+ * Keep Tab Open / Stop Keeping Open (PRD 17.5). Keeping a channel that has no
+ * tab opens it as a kept tab and focuses it. Unkeeping turns the tab back into
+ * THE preview tab; if another preview tab is open, the one the user is
+ * looking at survives and the other closes.
+ */
+function setTabKept(channelId: string, kept: boolean): void {
+    const tab = chatTabs.get(channelId);
+    if (kept) {
+        if (!tab) {
+            const node = findChannelNodeById(currentTree, channelId);
+            if (node) openChatTab(node.id, node.name, { mode: "kept" });
+            return;
+        }
+        if (tab.kind !== "channel" || tab.mode === "kept") return;
+        tab.mode = "kept";
+        if (previewTabId === channelId) previewTabId = null;
+        renderTabMode(tab);
+        persistKeptTabs();
+        return;
+    }
+
+    if (!tab || tab.kind !== "channel" || tab.mode !== "kept") return;
+    const otherPreview = previewTabId && previewTabId !== channelId ? chatTabs.get(previewTabId) : undefined;
+    tab.mode = "preview";
+    renderTabMode(tab);
+    if (otherPreview && activeTabId === otherPreview.channelId) {
+        // The user is looking at the other preview: this one gives way.
+        closeTab(channelId, { reason: "user" });
+    } else {
+        if (otherPreview) closeTab(otherPreview.channelId, { reason: "user" });
+        previewTabId = channelId;
+    }
+    persistKeptTabs();
+}
+
+/** Right-click on a channel tab (PRD 17.5): Keep Tab Open / Stop Keeping Open, Close Tab. */
+function showChannelTabContextMenu(e: MouseEvent, channelId: string): void {
+    e.preventDefault();
+    e.stopPropagation();
+    const tab = chatTabs.get(channelId);
+    if (!tab) return;
+
+    document.querySelector(".occupant-ctx-menu")?.remove();
+    const menu = document.createElement("div");
+    menu.className = "occupant-ctx-menu";
+    menu.style.left = `${e.clientX}px`;
+    menu.style.top = `${e.clientY}px`;
+    const kept = tab.mode === "kept";
+    menu.innerHTML = `
+        <button class="channel-ctx-menu-item ctx-keep-btn">🔖 ${kept ? "Stop Keeping Open" : "Keep Tab Open"}</button>
+        <div class="ctx-menu-divider"></div>
+        <button class="channel-ctx-menu-item ctx-close-tab-btn">✕ Close Tab</button>
+    `;
+    menu.querySelector(".ctx-keep-btn")?.addEventListener("click", () => {
+        menu.remove();
+        setTabKept(channelId, !kept);
+    });
+    menu.querySelector(".ctx-close-tab-btn")?.addEventListener("click", () => {
+        menu.remove();
+        closeTab(channelId);
+    });
+    document.body.appendChild(menu);
+
+    const closeCtx = (ev: MouseEvent) => {
+        if (!menu.contains(ev.target as Node)) {
+            menu.remove();
+            document.removeEventListener("click", closeCtx, true);
+        }
+    };
+    setTimeout(() => document.addEventListener("click", closeCtx, true), 0);
+}
+
+/**
+ * Re-opens the current server's kept tabs (PRD 17.5) once per connection,
+ * after the first channel tree: in their saved order, unfocused, with history
+ * deferred until each is first opened. Channels that no longer exist (or are
+ * no longer text channels) are dropped from the store.
+ */
+function restoreKeptTabs(tree: TreeNode[], serverId: string): void {
+    keptTabsServerId = serverId;
+    if (keptTabsRestored || tree.length === 0) return;
+    keptTabsRestored = true;
+    const saved = readKeptTabsStore()[serverId] ?? [];
+    for (const id of saved) {
+        const node = findChannelNodeById(tree, id);
+        if (node && node.type === "TEXT") openChatTab(node.id, node.name, { mode: "kept", focus: false, deferLoad: true });
+    }
+    persistKeptTabs(); // drops ids that weren't restored
+}
+
+/** Closes kept/preview channel tabs whose channel vanished from the tree (PRD 17.5). */
+function pruneClosedChannelTabs(tree: TreeNode[]): void {
+    if (tree.length === 0) return; // an empty tree is transient — never prune on it
+    for (const tab of [...chatTabs.values()]) {
+        if (tab.kind !== "channel") continue;
+        const node = findChannelNodeById(tree, tab.channelId);
+        if (!node || node.type !== "TEXT") closeTab(tab.channelId, { reason: "deleted" });
     }
 }
 
