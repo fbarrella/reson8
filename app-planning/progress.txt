@@ -1859,3 +1859,73 @@ Feature/Fix: PRD 17.12 — Cryptographic identity (stop instance-id impersonatio
 
   Next Step: Phase 17 close-out: /bump-version (2.6.0), release notes,
   CLAUDE.md files and README, archive the Phase 17 PRD.
+
+--- Entry: 08/10/2026 ---
+
+Feature/Fix: Phase 17 close-out — release 2.6.0
+
+  Problem: With all 12 Phase 17 items implemented and confirmed by the user,
+  the release had to be cut and the docs brought up to date.
+
+  Solution:
+    - Version bumped 2.5.0 → 2.6.0 (/bump-version; SemVer minor: new
+      features, two additive migrations, additive wire format, a security
+      fix whose strict mode is opt-in; backward compatible with 2.5.0) in
+      the root, client and server package.json, the README badge and
+      CLAUDE.md's "Current version"; package-lock.json regenerated with
+      `npm install --package-lock-only` (only the 4 workspace version lines
+      changed). shared-types keeps its own 0.x version. Every other "2.5.0"
+      in the repo is a compatibility note ("pre-v2.5.0 clients") and was
+      left alone.
+    - Release notes: app-planning/releases/v2.6.0.md. Every bullet traces
+      to a Phase 17 entry, plus compatibility and server-admin notes: two
+      migrations, and the recommended identity rollout (update the server,
+      set ADMIN_KEY_FINGERPRINT from Settings → About, then
+      REQUIRE_SIGNED_IDENTITY=true once everyone has updated).
+    - Root CLAUDE.md:
+      - "phases 1–17";
+      - Identity rewritten for the key model (a user id is public, not
+        proof; decideIdentity; viewer tickets; reset; the rule that new
+        user-acting paths derive the id from an authenticated socket or a
+        ticket);
+      - new Avatars and Tabs paragraphs; Chat pagination (two-way paging,
+        stick:false, jumpInProgress, detached live messages,
+        ensureHistoryFilled); Link preview (fixers); Message layout
+        (avatar gutter, flex-shrink, element-anchored prepend); Composer
+        (attachEmojiAutocomplete);
+      - a new Electron gotcha: never pass a secret via additionalArguments
+        (process command line);
+      - the identity env vars; progress.txt state; the Phase 17 PRD in the
+        archive list; a pointer to app-planning/open-risks.md.
+    - apps/client/CLAUDE.md: the new modules (identity-key/identity-proof,
+      avatar, link-fixers, mic-soft-clip in the voice graph), the five
+      test:* scripts, the new localStorage keys.
+    - apps/server/CLAUDE.md: profile.handler and the identity events, the
+      new services and config, the new tests, and conventions for identity,
+      avatars and history paging.
+    - README: new/updated features (avatars, profile card, preview tabs,
+      tab unread dots, mic 300%, the 15-line collapse, inline social videos,
+      blank lines, autocomplete while editing, the pinned jump, Identity
+      Protection); the "Self-Hosted" line corrected (avatars and link
+      fixers contact outside services; avatars can be switched off); the
+      identity env vars; the project structure; and a Phase 17 roadmap row
+      (first inserted before 16, then moved into order).
+    - Reson8_Phase17_PRD.md marked "Completed — shipped in v2.6.0" and moved
+      to app-planning/archive/.
+
+  Key Files Modified:
+    package.json, apps/client/package.json, apps/server/package.json,
+    package-lock.json
+    app-planning/releases/v2.6.0.md (NEW)
+    CLAUDE.md, apps/client/CLAUDE.md, apps/server/CLAUDE.md, README.md
+    app-planning/archive/Reson8_Phase17_PRD.md (moved from app-planning/)
+
+  Verification:
+    - npx tsc --build (shared-types), npx tsc --noEmit (client, server)
+      after the bump; npm run test (server): 148 pass; client test:markdown,
+      avatar, soft-clip, link-fixers and identity all pass.
+
+  Next Step: the user pushes `phase17-go`. Before Phase 18: condense this
+  "ongoing log" into a Phase 17 summary block (archiving the full entries
+  as app-planning/archive/progress-phase-17.txt), clear nextsteps.txt and
+  print_chat_avatar.png, and start from app-planning/open-risks.md.

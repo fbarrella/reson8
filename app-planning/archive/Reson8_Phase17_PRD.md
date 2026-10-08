@@ -2,7 +2,7 @@
 
 **Created:** 07/10/2026
 **Author:** Felipe B. Netto (assisted by AI)
-**Status:** Draft — Pending Review
+**Status:** Completed — shipped in v2.6.0 (08/10/2026)
 **Source:** `app-planning/nextsteps.txt` (11 items) + the reference screenshot `app-planning/print_chat_avatar.png` + one security fix found during the audit and added at the user's request (PRD 17.12)
 **Branch:** `phase17-go`
 

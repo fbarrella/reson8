@@ -8,7 +8,7 @@ A high-performance desktop communication platform inspired by TeamSpeak 3,
 built with modern technology for low-latency voice, hierarchical channel trees,
 and private server ownership.
 
-[![Version](https://img.shields.io/badge/version-2.5.0-blue.svg)](#)
+[![Version](https://img.shields.io/badge/version-2.6.0-blue.svg)](#)
 [![Electron](https://img.shields.io/badge/Electron-34-47848F?logo=electron&logoColor=white)](https://www.electronjs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D20-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
@@ -34,7 +34,7 @@ and private server ownership.
 - **AI Noise Cancelling** — Real-time AI denoising (DeepFilterNet3, running fully self-hosted via WebAssembly) suppresses keyboard clicks, fan noise, and other background sound, toggleable from Voice & Shortcuts, with an adjustable strength slider to dial back suppression if it fades a quiet voice too aggressively.
 - **Hear Yourself** — A "Hear Yourself" toggle next to the live mic meter lets you monitor your own processed mic in real time with every adjustment applied, so you can judge how you actually sound. Automatically mutes and deafens you while active if you're in a voice channel.
 - **Mic Sensitivity (Noise Gate)** — Configurable decibel threshold to selectively filter out background noise, with a smooth attack/hold/release fade rather than an abrupt cutoff.
-- **Microphone Volume** — Scale your own outgoing mic signal from 0–200%, independent of your OS's input level.
+- **Microphone Volume** — Scale your own outgoing mic signal from 0–300%, independent of your OS's input level; above 100%, loud peaks are softly limited instead of crackling.
 - **Live Microphone Meter** — Always-visible input level meter in Voice & Shortcuts, reflecting every change to mic volume, noise cancelling, or the noise gate in real time.
 - **Voice Session Timers** — Live elapsed timers indicating how long a voice conversation has been active.
 - **Per-User Volume & Local Mute** — Right-click anyone in a voice channel to adjust their volume (0–200%) or mute them locally — just for you, with no effect on what anyone else hears.
@@ -62,13 +62,17 @@ and private server ownership.
 - **Real-Time Presence** — See who's online and in which channel, instantly updated across all connected clients — including promptly reflecting when someone quits the app, rather than showing them as online for a lingering delay, and staying correctly online through a quick network drop and reconnect.
 
 ### 💬 Text & Messaging
-- **Tabbed Text Chat** — Per-channel text messaging with rich formatting, file attachments, and message history. Always opens scrolled to the latest message, loading the next 20 older messages seamlessly as you scroll up rather than fetching the entire history at once.
+- **Tabbed Text Chat** — Per-channel text messaging with rich formatting, file attachments, and message history. Always opens scrolled to the latest message, loading older messages seamlessly as you scroll up rather than fetching the entire history at once.
+- **Preview Tabs & "Keep Tab Open"** — Clicking text channels opens them in a single preview tab (in italics) that the next channel replaces, so tabs never pile up. Right-click a tab or channel and choose **Keep Tab Open** to keep it — kept tabs get a bookmark icon and reopen the next time you connect.
+- **Unread Dots on Tabs** — An open channel tab you're not looking at shows a red dot and a bold name when new messages arrive (muted channels stay quiet).
 - **Jump to Most Recent Message** — A floating button appears whenever you've scrolled away from the latest message, jumping you straight back down with one click.
-- **Multi-Line Messages & Markdown** — Shift+Enter adds a new line, and messages render Discord-style Markdown: `**bold**`, `*italic*`, `__underline__`, `~~strikethrough~~`, quotes, lists, titles, `inline code`, code blocks, and auto-linked URLs. Raw HTML and masked links are never rendered.
+- **Multi-Line Messages & Markdown** — Shift+Enter adds a new line (a line with just a space becomes a visible blank line, to separate paragraphs), and messages render Discord-style Markdown: `**bold**`, `*italic*`, `__underline__`, `~~strikethrough~~`, quotes, lists, titles, `inline code`, code blocks, and auto-linked URLs. Raw HTML and masked links are never rendered.
 - **Replies** — Press the Reply button on any message (channels and DMs) and answer it directly: a bar above the input shows who you're answering, and your message appears with a faded one-line snippet of the original on top. Click the snippet to jump to the original — even far back in the history — and it updates if the original is edited, or reads "Original message was deleted" if it's removed.
-- **Grouped Messages** — Consecutive messages from the same person within 5 minutes share one name and time (HH:MM, with the full date on hover) instead of repeating it; a reply always gets its own header.
+- **Avatars** — Pick a Libravatar or Gravatar picture in Settings → Application → Profile (only an anonymous hash of your email is ever shared); it shows next to your messages for everyone. People without one get a fun generated avatar, and a switch turns external avatars into colored initials if you prefer no requests to those services.
+- **User Profile Card** — Click anyone's avatar or nickname in a chat to see when they first joined, their roles, whether they're online, and shortcuts to message or nudge them.
+- **Grouped Messages** — Consecutive messages from the same person within 5 minutes share one avatar, name and time (HH:MM, with the full date on hover) instead of repeating it; hovering a grouped message shows its time, and a reply always gets its own header.
 - **Floating Message Toolbar** — React, Reply, Edit, Pin and Delete live in a small toolbar that appears when you hover a message, so a message only takes extra room when it actually has reactions.
-- **Emoji Autocomplete** — Type `:` and a letter for a floating list of matching emoji (standard and custom) above your cursor; arrow keys, Enter or Tab (or a click) insert one, and a full name like `:red_heart:` turns into the emoji.
+- **Emoji Autocomplete** — Type `:` and a letter for a floating list of matching emoji (standard and custom) above your cursor — in the chat box and when editing a message; arrow keys, Enter or Tab (or a click) insert one, and a full name like `:red_heart:` turns into the emoji.
 - **Edit & Delete Messages** — Fix a typo within 2 minutes of sending, or remove a message (and all of its images) entirely.
 - **Unread Channel Indicators** — Text channels with unseen activity show a highlighted dot until you open them.
 - **Multi-Image Messages** — Attach up to 10 images per message from the paperclip, by pasting, or by dragging them onto the chat. They appear as large preview cards above the input that stay after uploading, each with a button to open it full size (zoom only), remove it, or retry a failed upload; sent images show as a tidy grid.
@@ -80,12 +84,13 @@ and private server ownership.
 - **Same Emoji on Every OS** — Reson8 bundles Google's Noto Color Emoji, so emoji (flags included) look identical on Windows, Linux and macOS.
 - **Image Viewer** — Open any image full-screen with an icon toolbar (a lighter, zoom-only version opens your pending attachments): zoom up to 200% of its real size (mouse wheel, drag to pan), copy the image or its link, open it in your browser, download it, and see who sent it and when.
 - **Custom Emoji** — Upload your own emoji with a built-in crop tool, or upload an animated GIF via a dedicated crop-free path to preserve the animation; new uploads are queued for admin approval before becoming usable server-wide.
-- **Link Previews** — URLs in chat auto-expand with title, description, and image. YouTube/video embeds supported; a hidden-browser fallback recovers previews from sites that block simple automated requests outright.
-- **Pinned Messages** — Admins can pin one message per text channel; a high-contrast dark-yellow bar above the chat shows a plain-text preview and jumps you straight to it (loading older history if needed), with a click.
+- **Link Previews** — URLs in chat auto-expand with title, description, and image. Links to YouTube, X/Twitter, Instagram, Reddit, Twitch, Bluesky and Imgur first try an embed-friendly service, so videos often play right in the chat; a hidden-browser fallback recovers previews from sites that block simple automated requests outright.
+- **Pinned Messages** — Admins can pin one message per text channel; a high-contrast dark-yellow bar above the chat shows a plain-text preview and jumps you straight to it — even far back in the history — and you can keep scrolling down from there to newer messages.
 - **Message Length Limit** — A safe default cap on message length protects the server against oversized messages, with an admin override in Settings → Server.
-- **Long Message Truncation** — Long messages collapse behind a pill-shaped "See more" button, positioned directly above the message's reactions. Expanded messages always reset — minimizing the app, switching channels, or relaunching all re-collapse them.
+- **Long Message Truncation** — Messages longer than about 15 lines collapse to 4 lines behind a pill-shaped "See more" button, positioned directly above the message's reactions. Expanded messages always reset — minimizing the app, switching channels, or relaunching all re-collapse them.
 
 ### 🛡️ Administration & Security
+- **Identity Protection** — No accounts or passwords, yet nobody can impersonate you: each install has its own private key and proves it on every connection, and the first connection binds it to your identity. Admins can lock the admin account to their own key (`ADMIN_KEY_FINGERPRINT`), refuse older clients once everyone has updated (`REQUIRE_SIGNED_IDENTITY`), see who's protected (🔒) and reset a user's key from User Management. Your key's fingerprint is in Settings → About.
 - **Role-Based Permissions** — Bitwise permission system with admin role management. Fine-grained access control.
 - **Server Password Protection** — Optional `SERVER_PRIVATE_PASSWORD` env var with client-side password input.
 - **Upload Ownership & Cleanup** — The server keeps its own record of every file it stores: only the uploader can attach a file (once) as a message image, emoji or channel icon, and the server never deletes anything a client merely points at. Unused uploads are cleaned up automatically (immediately when you remove a picked image, after 24 hours otherwise, and with a deleted channel); self-hosters can also run `npm run uploads:prune` — see "Maintenance" below.
@@ -103,7 +108,7 @@ and private server ownership.
 - **Sound Alerts & Connectivity** — Audible notifications for key events and a real-time latency ping display.
 - **Nudge** — Get a user's attention with a sound, toast, and taskbar/dock flash. Admin-toggleable server-wide, with a per-target cooldown to prevent spam.
 - **Always-Accessible Settings** — Tweak audio devices and application preferences even when disconnected.
-- **Self-Hosted** — Your data stays on your hardware. No third-party servers, no telemetry, no compromises.
+- **Self-Hosted** — Your data stays on your hardware. No telemetry, no accounts with anyone. (Avatars load from Libravatar/Gravatar and some link previews use public embed services — avatars can be switched off in Settings.)
 - **One-Command Server** — Spin up the entire stack with `docker compose up`. Postgres, Redis, and the Reson8 server, all containerized.
 
 ---
@@ -179,6 +184,11 @@ SEED_DEFAULT_TEMPLATE=true
 ADMIN_INSTANCE_ID=<your-instance-id>            # Grants admin role on connect
 SERVER_PRIVATE_PASSWORD=<server-password>        # Password-protects the server
 MEDIASOUP_PRIVATE_ANNOUNCED_IP=<lan-ip>          # For LAN/WAN dual-announce
+
+# Identity protection (optional, 2.6.0+ — see .env.example)
+ADMIN_KEY_FINGERPRINT=SHA256:...                 # Only this key can be the admin (Settings → About)
+REQUIRE_SIGNED_IDENTITY=true                     # Refuse pre-2.6.0 clients (once everyone updated)
+AUTH_ALLOWED_HOSTS=chat.example.com              # Accept proofs only for these host[:port] names
 ```
 
 </details>
@@ -319,6 +329,10 @@ reson8/
 │   │   │   ├── preload.ts           # contextBridge API for the main window (60+ methods)
 │   │   │   ├── preload-viewer.ts    # Scoped contextBridge API for the screen-share Viewer window
 │   │   │   ├── markdown.ts          # Pure chat Markdown renderer (used via the preload)
+│   │   │   ├── identity-key.ts      # This install's identity key (main process only)
+│   │   │   ├── identity-proof.ts    # Signs server challenges (pure)
+│   │   │   ├── avatar.ts            # Libravatar/Gravatar hashing + URLs (pure)
+│   │   │   ├── link-fixers.ts       # Social-media embed "fixers" for link previews (pure)
 │   │   │   ├── window-state.ts      # Remembers window size/position between sessions
 │   │   │   ├── renderer/            # Main window UI (HTML + TypeScript)
 │   │   │   │   ├── index.html / renderer.ts    # Main window
@@ -338,9 +352,11 @@ reson8/
 │       │   │   ├── admin.handler.ts        # Role management
 │       │   │   ├── nudge.handler.ts        # Nudge + server-wide settings (screen share toggle, etc.)
 │       │   │   ├── upload.handler.ts       # Upload tokens + discarding unused uploads
+│       │   │   ├── profile.handler.ts      # Avatars + the user profile card
 │       │   │   └── moderation.handler.ts   # Kick & ban
 │       │   ├── services/       # mediasoup, presence, permissions, socket ownership, reactions,
-│       │   │                   #   stored-file ledger, attachments, replies, upload sweeper
+│       │   │                   #   stored-file ledger, attachments, replies, upload sweeper,
+│       │   │                   #   identity, viewer tickets, avatars, profiles, pagination
 │       │   ├── config/         # mediasoup, message-length, upload, and version configuration
 │       │   └── plugins/        # Prisma, Redis Fastify plugins
 │       ├── prisma/
@@ -380,6 +396,7 @@ reson8/
 | 14 | **Chat & Channel Management, Voice Self-Monitoring** — Cursor-paginated chat history with infinite scroll-up and a "Jump to Most Recent Message" button; channel re-parenting, parent-channel renaming, and custom text-channel icons; a self-hear mic monitor and an adjustable noise-cancelling strength slider; a reorganized, decluttered Voice & Shortcuts tab; plus fixes for the chat scroll-position bug, the DM sound alert, the Settings modal's per-tab height, own-voice active-speaker latency, and rich link previews on bot-walled sites | ✅ Done |
 | 15 | **Rich Chat & Sturdier Connections** — Multi-line messages with Discord-style Markdown, a redesigned image viewer (zoom, copy, open in browser, "sent by"), a reaction hover card, bundled Google Noto emoji on every OS, remembered window size/position, a dark-yellow pinned bar and a disabled self-Ban button; plus fixes for users showing offline (and voice dropping a second time) after a quick reconnect, the own voice halo showing while muted, and the Windows re-launch freeze, and richer disconnect diagnostics | ✅ Done |
 | 16 | **Replies, Grouped Chat & Secure Uploads** — Message replies in channels and DMs with jump-to-original snippets, grouped messages with HH:MM times, a floating message toolbar, emoji autocomplete, multi-image messages (up to 10) with persistent previews, a preview viewer and drag & drop, NSFW warning/blur preferences, per-user channel muting and a highlight for the open channel; plus a security fix that stops the server trusting client-supplied file URLs (a stored-file ledger with upload tokens), and automatic cleanup of unused uploads | ✅ Done |
+| 17 | **Avatars, Smarter Tabs & Identity Protection** — Libravatar/Gravatar avatars in chat and a user profile card; preview tabs with "Keep Tab Open" and unread dots; mic volume up to 300% with a soft limiter; a 15-line collapse threshold; social-media videos playing inline; blank lines in messages and emoji autocomplete while editing; plus a fixed pinned-message jump with two-way history paging, and cryptographic identity so nobody can impersonate another user | ✅ Done |
 
 ---
 
