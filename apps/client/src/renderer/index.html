@@ -717,9 +717,25 @@
       font-style: italic;
     }
 
-    /* Filled in by PRD 17.6 (unread on unfocused tabs). */
+    /* Unread on an open, unfocused channel tab (PRD 17.6) — the same red dot
+       as the tree's .unread-dot, and the label lifts from muted to the
+       normal text color. */
     .tab .tab-unread-dot {
       display: none;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--danger);
+      flex-shrink: 0;
+    }
+
+    .tab.has-unread {
+      color: var(--text-primary);
+      font-weight: 600;
+    }
+
+    .tab.has-unread .tab-unread-dot {
+      display: inline-block;
     }
 
     #tab-content-area {

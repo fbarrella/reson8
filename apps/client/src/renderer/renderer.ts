@@ -1818,6 +1818,21 @@ function fillTabElement(tabEl: HTMLElement, icon: string, name: string): void {
     (tabEl.querySelector(".tab-label") as HTMLElement).textContent = name;
 }
 
+/**
+ * Unread indicator on an open, unfocused channel tab (PRD 17.6) — kept or
+ * preview alike, never for a muted channel. Derived from the same state the
+ * tree uses (`unreadChannelIds` + `isChannelMuted`), so the two can't
+ * disagree. DM tabs are out of scope (DMs are marked read on arrival).
+ */
+function refreshTabUnread(channelId: string): void {
+    const tab = chatTabs.get(channelId);
+    if (!tab || tab.kind !== "channel") return;
+    const show = unreadChannelIds.has(channelId) && !isChannelMuted(channelId) && activeTabId !== channelId;
+    tab.tabEl.classList.toggle("has-unread", show);
+    if (show) tab.tabEl.setAttribute("aria-label", `${tab.channelName} (unread)`);
+    else tab.tabEl.removeAttribute("aria-label");
+}
+
 /** Applies a channel tab's mode to its element (classes + tooltip). */
 function renderTabMode(tab: ChatTab): void {
     const kept = tab.mode === "kept";
@@ -2139,6 +2154,7 @@ function setChannelMuted(channelId: string, muted: boolean): void {
 
 /** Targeted DOM update (no renderTree(), which would reset collapsed categories). */
 function applyChannelMuteState(channelId: string): void {
+    refreshTabUnread(channelId); // muting hides the tab's dot too; unmuting reveals it (PRD 17.6)
     const el = channelTree.querySelector(`.tree-channel[data-channel-id="${CSS.escape(channelId)}"]`);
     if (!el) return;
     const muted = isChannelMuted(channelId);
@@ -3488,6 +3504,8 @@ api.on("channel-tree", (data: { serverId: string; tree: TreeNode[] }) => {
     syncOpenTabNames(data.tree);
     pruneClosedChannelTabs(data.tree); // PRD 17.5
     restoreKeptTabs(data.tree, data.serverId);
+    // renderTree() can seed unread state from the tree (hasUnread) (PRD 17.6).
+    for (const id of chatTabs.keys()) refreshTabUnread(id);
 });
 
 /** Keeps already-open chat tabs' displayed names in sync after a channel rename. */
@@ -4309,6 +4327,7 @@ function openChatTab(
     chatTabs.set(channelId, chatTab);
     setupInfiniteScroll(chatTab);
     renderTabMode(chatTab);
+    refreshTabUnread(channelId); // e.g. a kept tab restored for a channel with unread messages
 
     // Dispose of the replaced preview AFTER the new tab exists, without the
     // usual fall-back to the Server Log in between (no flicker).
@@ -5824,6 +5843,7 @@ api.on("message", (msg: ChatMessage) => {
 function markChannelUnread(channelId: string): void {
     if (unreadChannelIds.has(channelId)) return;
     unreadChannelIds.add(channelId);
+    refreshTabUnread(channelId); // an open, unfocused tab shows it too (PRD 17.6)
     if (isChannelMuted(channelId)) return; // still tracked, just not painted (PRD 16.4)
 
     const el = channelTree.querySelector(`.tree-channel[data-channel-id="${CSS.escape(channelId)}"]`);
@@ -5856,6 +5876,7 @@ function markChannelRead(channelId: string): void {
 
     if (!unreadChannelIds.has(channelId)) return;
     unreadChannelIds.delete(channelId);
+    refreshTabUnread(channelId); // PRD 17.6
 
     const el = channelTree.querySelector(`.tree-channel[data-channel-id="${CSS.escape(channelId)}"]`);
     el?.classList.remove("unread");

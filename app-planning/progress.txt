@@ -1148,3 +1148,65 @@ Feature/Fix: PRD 17.5 — Preview tabs and "Keep Tab Open" for text channels
 
   Next Step: PRD 17.6 — unread indicator on unfocused channel tabs (fills
   the .tab-unread-dot slot added here).
+
+--- Entry: 08/10/2026 ---
+
+Feature/Fix: PRD 17.6 — Unread indicator on unfocused channel tabs
+
+  Problem: An open channel tab that wasn't focused showed nothing when new
+  messages arrived; only the channel tree did. With kept tabs (17.5) the
+  tab bar became a natural place to watch, so unfocused tabs needed their
+  own unread alert, except for muted channels, whose tab shows only the
+  name.
+
+  Solution: One helper, refreshTabUnread(channelId), derives the tab's state
+  from the SAME source the tree uses: show the dot when the channel is in
+  unreadChannelIds, is not muted, and is not the active tab. It is called
+  from the three functions that already own that state, so tab and tree
+  can't disagree:
+    - markChannelUnread() (before its muted early-return, since the
+      tracking happens either way);
+    - markChannelRead() (switchTab() calls it, so focusing clears it);
+    - applyChannelMuteState() (mute hides an existing dot, unmute reveals
+      what was missed).
+  It also runs when a channel tab is created (a kept tab restored for a
+  channel with unread messages starts with the dot) and for every open tab
+  after each channel-tree render (renderTree() can seed unread state from
+  the tree's hasUnread). Applies to every open channel tab, kept or preview
+  (user decision); DM tabs are out of scope (DMs are marked read on
+  arrival).
+
+  Client Changes:
+    - renderer.ts: refreshTabUnread(); calls in markChannelUnread,
+      markChannelRead, applyChannelMuteState, openChatTab and the
+      channel-tree handler. While unread the tab also gets aria-label
+      "<name> (unread)", removed when read.
+    - index.html: .tab.has-unread lifts the label from muted to the normal
+      text color + semibold and shows .tab-unread-dot (the slot added in
+      17.5), a 6px dot in the same red (--danger) as the tree's
+      .unread-dot. The PRD said "accent"; it was matched to the tree's
+      existing red so the two read as the same signal.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/renderer/index.html
+
+  Verification:
+    - npx tsc --noEmit (client); npm run test:markdown passes.
+    - Real built server (fresh scratch DB, 7 text channels) + a second
+      scripted user sending messages; real built client under Xvfb over CDP.
+      14/14 pass:
+      - kept + unfocused → red dot, bold label, aria-label, tree dot too;
+      - active tab → no dot; switching clears tab and tree;
+      - preview + unfocused → dot;
+      - muted → no dot (normal weight) while unread is still tracked;
+        unmute reveals it; muting hides an existing dot;
+      - after a disconnect + a message sent while away + reconnect, the
+        restored kept tab starts with the dot;
+      - DM tabs never get the class.
+    - Screenshots inspected (unfocused kept tab with dot next to the
+      active preview; restored tab with dot while on the Server Log).
+    - Not yet hand-tested by the user.
+
+  Next Step: PRD 17.7 — collapse only messages longer than ~15 lines (and
+  measure messages rendered in hidden tabs once they're shown).
