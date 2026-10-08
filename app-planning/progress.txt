@@ -1210,3 +1210,61 @@ Feature/Fix: PRD 17.6 — Unread indicator on unfocused channel tabs
 
   Next Step: PRD 17.7 — collapse only messages longer than ~15 lines (and
   measure messages rendered in hidden tabs once they're shown).
+
+--- Entry: 08/10/2026 ---
+
+Feature/Fix: PRD 17.7 — Collapse only messages longer than ~15 lines
+
+  Problem: Messages collapsed behind "See more" as soon as they passed 4
+  lines, which hid most of any warning-style message. The collapse
+  threshold was the same number as the collapsed size: the code added the
+  4-line clamp class and kept it if anything overflowed. The user wanted a
+  much larger threshold (~15 lines), while a collapsed message should still
+  show 4 lines.
+
+  Solution: attachMessageTruncation() now measures the message's NATURAL
+  height (clamp classes removed) and collapses only when it is taller than
+  COLLAPSE_THRESHOLD_LINES = 15 rendered lines (computed line-height x 15,
+  +2px tolerance). A collapsed message still uses the existing 4-line clamp
+  CSS, unchanged. "Lines" are rendered lines, so one long wrapped paragraph
+  counts by its real height.
+
+  Details worth knowing:
+    - Measured with getBoundingClientRect().height, not scrollHeight: a
+      plain single-paragraph message is an inline <span>, whose scrollHeight
+      is 0 but whose box covers all of its wrapped lines.
+    - Pre-existing bug fixed here (as planned in the PRD): a message
+      rendered into a HIDDEN tab (.tab-content is display: none) measured 0
+      and was therefore never collapsed. That became common once kept tabs
+      (17.5) sit in the background. attachMessageTruncation() now marks such
+      a message data-truncation-pending, and switchTab() measures all
+      pending messages of a tab right after showing it. The tab is already
+      scrolled to the bottom at that point, and collapsing only shortens
+      content, so it stays at the bottom.
+    - Unchanged callers: the append path, the prepend path, the edit path
+      and applyMessageEdit() all call the same function; See more/See less,
+      collapse-on-minimize, solo-emoji exemption, and DMs never being
+      truncated (documented in buildDmMessageElement) are as before.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts
+
+  Verification:
+    - npx tsc --noEmit (client); npm run test:markdown passes.
+    - Real built server (fresh scratch DB) + a scripted sender; real built
+      client under Xvfb over CDP. 14/14 pass:
+      - 4, 14 and 15 lines shown in full (14 and 15 measured as 14 and 15
+        visible lines); 16 and 40 lines collapsed to exactly 4 visible
+        lines with See more;
+      - a long wrapped paragraph collapsed; a paragraph wrapping to 3 lines
+        not collapsed; a 20-item Markdown list collapsed;
+      - See more → all 40 lines; See less → 4;
+      - a 40-line message arriving while its tab is hidden → pending, not
+        clamped; switching to the tab → collapsed to 4 + See more, no
+        longer pending, still scrolled to the bottom;
+      - editing your own short message into 20 lines → collapsed.
+    - Screenshot inspected (15 lines in full, 16/40/wrapped collapsed).
+    - Not yet hand-tested by the user.
+
+  Next Step: PRD 17.8 — pinned-message jump with paginated history (two-way
+  pagination, including the under-filled first page found in 17.2).

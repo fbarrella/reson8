@@ -4222,6 +4222,14 @@ function switchTab(tabId: string): void {
     // A kept tab restored at connect loads its history on first view (PRD 17.5).
     if (tab && !tab.loaded) loadChatHistory(tab);
 
+    // Messages that arrived while this tab was hidden couldn't be measured
+    // for "See more" — do it now that it's visible (PRD 17.7).
+    contentEl?.querySelectorAll<HTMLDivElement>(".chat-msg[data-truncation-pending]").forEach((msgEl) => {
+        const textEl = msgEl.querySelector<HTMLElement>(".msg-text");
+        if (textEl) attachMessageTruncation(msgEl, textEl);
+        else delete msgEl.dataset.truncationPending;
+    });
+
     updateViewingIndicator();
     renderReplyBar();
 }
@@ -5306,6 +5314,10 @@ function prependOlderMessages(tab: ChatTab, messages: ChatMessage[] | DirectMess
  * `collapseAllExpandedMessages()` below, wired to the "window-minimized"
  * push from main.ts.
  */
+/** A message collapses only when its text is taller than this many rendered
+ *  lines (PRD 17.7); a collapsed one still shows 4 (the clamp in index.html). */
+const COLLAPSE_THRESHOLD_LINES = 15;
+
 function attachMessageTruncation(el: HTMLDivElement, textEl: HTMLElement): void {
     // A solo-emoji message (PRD 13.14) is a single character rendered at
     // ~4x size — never actually multi-line content to truncate, just
@@ -5313,13 +5325,27 @@ function attachMessageTruncation(el: HTMLDivElement, textEl: HTMLElement): void 
     // from that height, with no hidden text to reveal via "See more".
     if (textEl.classList.contains("msg-text-solo-emoji")) return;
 
-    textEl.classList.add("msg-text-clamped");
-    if (textEl.scrollHeight <= textEl.clientHeight + 1) {
-        // Fits within the clamp already — no truncation actually happened,
-        // so there's nothing to offer "See more" for.
-        textEl.classList.remove("msg-text-clamped");
+    // A message rendered into a hidden (display: none) tab measures 0, so it
+    // could never be collapsed. Defer: switchTab() measures it once the tab
+    // is shown (PRD 17.7).
+    if (!textEl.isConnected || textEl.offsetParent === null) {
+        el.dataset.truncationPending = "1";
         return;
     }
+    delete el.dataset.truncationPending;
+
+    // Measure the NATURAL height (no clamp) against the threshold — the
+    // threshold (15 lines) and the collapsed size (4 lines) are independent.
+    // getBoundingClientRect, not scrollHeight: a plain single-paragraph
+    // message is an inline <span>, whose box spans all its wrapped lines but
+    // whose scrollHeight is 0. "Lines" are rendered lines, so one long
+    // wrapped paragraph counts by how tall it actually is.
+    textEl.classList.remove("msg-text-clamped", "msg-text-expanded");
+    const lineHeight = parseFloat(getComputedStyle(textEl).lineHeight) || 18;
+    if (textEl.getBoundingClientRect().height <= lineHeight * COLLAPSE_THRESHOLD_LINES + 2) {
+        return; // short enough: shown in full, no "See more"
+    }
+    textEl.classList.add("msg-text-clamped");
 
     const btnSeeMore = document.createElement("button");
     btnSeeMore.className = "btn-see-more";
