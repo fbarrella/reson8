@@ -109,6 +109,37 @@ export interface IUser {
     username: string;
     nickname: string;
     createdAt: string;
+    /** Server-built avatar URL (PRD 17.1); null/absent = the client's default avatar. */
+    avatarUrl?: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// Avatar (PRD 17.1)
+// ---------------------------------------------------------------------------
+
+export type AvatarProvider = "libravatar" | "gravatar";
+
+/**
+ * What a client sends to choose its avatar — never a URL. The server builds
+ * the URL itself from a fixed template, so a client can't make everyone load
+ * an image from a host of its choosing. `hash` is the lower-case SHA-256 hex
+ * of the trimmed, lower-cased email; the email itself never leaves the client.
+ */
+export interface IAvatarSelection {
+    provider: AvatarProvider;
+    hash: string;
+}
+
+/** What the user profile card shows (PRD 17.3). */
+export interface IUserProfile {
+    userId: string;
+    nickname: string;
+    avatarUrl: string | null;
+    /** ISO time of the user's first login: User.createdAt, written once when the row is created. */
+    memberSince: string;
+    /** This server's roles, highest powerLevel first. */
+    roles: { id: string; name: string; color: string | null; powerLevel: number }[];
+    isOnline: boolean;
 }
 
 /** Lightweight presence record for channel occupants. */
@@ -186,6 +217,8 @@ export interface IMessage {
     channelId: string;
     userId: string;
     nickname: string;
+    /** The author's CURRENT avatar URL (PRD 17.2); null = default avatar, absent = pre-v2.6.0 server. */
+    avatarUrl?: string | null;
     content: string;
     /** Set when this message is a reply (PRD 16.11). Only the message directly answered — snippets never nest. */
     replyTo?: IReplyPreview | null;
@@ -206,6 +239,8 @@ export interface IDirectMessage {
     id: string;
     senderId: string;
     senderNickname: string;
+    /** The sender's CURRENT avatar URL (PRD 17.2); null = default avatar, absent = pre-v2.6.0 server. */
+    senderAvatarUrl?: string | null;
     receiverId: string;
     content: string;
     /** Set when this DM is a reply (PRD 16.11). Only the message directly answered. */

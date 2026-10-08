@@ -86,8 +86,14 @@ if (document.readyState === "loading") {
 // mirroring `preload.ts`'s `createSignaling()` rather than a single generic
 // helper, since a generic keyed off `ClientToServerEvents` can't reliably
 // tell ack-taking events apart from fire-and-forget ones at the type level.
-function viewerAuthenticate(instanceId: string): Promise<{ success: boolean; error?: string }> {
-    return new Promise((resolve) => socket!.emit("VIEWER_AUTHENTICATE", { instanceId }, resolve));
+/**
+ * Authenticates this Viewer socket (PRD 17.12): with the ticket the main
+ * window's authenticated socket obtained, or — only against a server older
+ * than 2.6.0, which issues no tickets — with the bare instance id.
+ */
+function viewerAuthenticate(ticket: string | null, instanceId: string): Promise<{ success: boolean; error?: string }> {
+    const payload = ticket ? { ticket } : { instanceId };
+    return new Promise((resolve) => socket!.emit("VIEWER_AUTHENTICATE", payload, resolve));
 }
 
 function watchScreenShare(): Promise<{
@@ -193,10 +199,10 @@ async function consumeProducer(producerId: string): Promise<MediaStreamTrack> {
     return consumer.track;
 }
 
-async function authenticateAndWatch(instanceId: string): Promise<void> {
+async function authenticateAndWatch(ticket: string | null, instanceId: string): Promise<void> {
     setStatus("connecting");
 
-    const authRes = await viewerAuthenticate(instanceId);
+    const authRes = await viewerAuthenticate(ticket, instanceId);
     if (!authRes.success) {
         throw new Error(authRes.error ?? "Failed to authenticate");
     }
@@ -249,15 +255,18 @@ async function start(): Promise<void> {
     }
 
     const instanceId: string = await ipcRenderer.invoke("get-instance-id");
+    // Kept by the main process for this window only (PRD 17.12) — never on
+    // the command line. Null against a pre-2.6.0 server.
+    const ticket: string | null = await ipcRenderer.invoke("viewer-get-ticket");
 
     socket = io(serverBaseUrl, {
-        query: { instanceId, role: "viewer" },
+        query: { role: "viewer" },
         transports: ["websocket"],
     }) as TypedSocket;
 
     socket.on("connect", async () => {
         try {
-            await authenticateAndWatch(instanceId);
+            await authenticateAndWatch(ticket, instanceId);
         } catch (err: any) {
             setStatus("error", err?.message ?? "Failed to start watching");
         }

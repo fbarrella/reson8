@@ -22,6 +22,8 @@ import type {
     IConsumerInfo,
     ICustomEmoji,
     IReactionSummary,
+    IAvatarSelection,
+    IUserProfile,
 } from "./models.js";
 
 // ---------------------------------------------------------------------------
@@ -33,8 +35,48 @@ export interface ClientToServerEvents {
      * Client requests to join a server instance.
      */
     USER_JOIN_SERVER: (
-        payload: { serverId?: string; nickname: string; instanceId: string; password?: string },
+        payload: {
+            serverId?: string;
+            nickname: string;
+            instanceId: string;
+            password?: string;
+            /**
+             * The user's avatar choice (PRD 17.1), refreshed on every join.
+             * Absent (a pre-v2.6.0 client) = leave the stored avatar alone;
+             * `null` = clear it (back to the default avatar).
+             */
+            avatar?: IAvatarSelection | null;
+            /**
+             * Proof that this install owns `instanceId` (PRD 17.12): an
+             * Ed25519 signature over "reson8-auth-v1\n<nonce>\n<host>",
+             * where the nonce came from REQUEST_AUTH_CHALLENGE on THIS
+             * socket. Absent = a pre-v2.6.0 client (legacy join rules).
+             */
+            identity?: { publicKey: string; signature: string; host: string };
+        },
         ack: (response: { success: boolean; serverId?: string; error?: string }) => void,
+    ) => void;
+
+    /**
+     * A fresh single-use challenge for this socket's next USER_JOIN_SERVER
+     * (PRD 17.12). Expires after 60 s.
+     */
+    REQUEST_AUTH_CHALLENGE: (ack: (response: { nonce: string }) => void) => void;
+
+    /**
+     * A ticket the screen-share Viewer window presents in VIEWER_AUTHENTICATE
+     * instead of an id (PRD 17.12). Primary, joined sockets only.
+     */
+    REQUEST_VIEWER_TICKET: (ack: (response: { success: boolean; ticket?: string; error?: string }) => void) => void;
+
+    /**
+     * ADMIN only (PRD 17.12): forgets a user's bound identity key and
+     * disconnects their sockets, so the next device that connects as them
+     * binds a new key (reinstall, new computer, or an impostor bound it first).
+     */
+    RESET_IDENTITY_KEY: (
+        payload: { userId: string },
+        ack: (response: { success: boolean; error?: string }) => void,
     ) => void;
 
     /** Client signals they are leaving the server. */
@@ -148,8 +190,23 @@ export interface ClientToServerEvents {
      * avoid re-querying it on every "load more" scroll.
      */
     FETCH_MESSAGES: (
-        payload: { channelId: string; before?: string; limit?: number; aroundMessageId?: string },
-        ack: (response: { success: boolean; messages?: IMessage[]; pinnedMessage?: IPinnedMessage | null; error?: string }) => void,
+        payload: {
+            channelId: string;
+            before?: string;
+            /** Newer than this cursor, oldest first (PRD 17.8). Exclusive with `before`/`aroundMessageId`. */
+            after?: string;
+            limit?: number;
+            aroundMessageId?: string;
+        },
+        ack: (response: {
+            success: boolean;
+            messages?: IMessage[];
+            pinnedMessage?: IPinnedMessage | null;
+            /** Whether older/newer history exists beyond this page (PRD 17.8); absent = unknown (older server). */
+            hasMoreBefore?: boolean;
+            hasMoreAfter?: boolean;
+            error?: string;
+        }) => void,
     ) => void;
 
     /** Client marks a text channel as read up to now (clears the unread indicator). */
@@ -199,8 +256,22 @@ export interface ClientToServerEvents {
      * FETCH_MESSAGES' `aroundMessageId`.
      */
     FETCH_DIRECT_MESSAGES: (
-        payload: { partnerId: string; before?: string; limit?: number; aroundMessageId?: string },
-        ack: (response: { success: boolean; messages?: IDirectMessage[]; error?: string }) => void,
+        payload: {
+            partnerId: string;
+            before?: string;
+            /** Newer than this cursor, oldest first (PRD 17.8). Exclusive with `before`/`aroundMessageId`. */
+            after?: string;
+            limit?: number;
+            aroundMessageId?: string;
+        },
+        ack: (response: {
+            success: boolean;
+            messages?: IDirectMessage[];
+            /** Whether older/newer history exists beyond this page (PRD 17.8); absent = unknown (older server). */
+            hasMoreBefore?: boolean;
+            hasMoreAfter?: boolean;
+            error?: string;
+        }) => void,
     ) => void;
 
     /** Client deletes their own direct message (hard delete — including its attachment, if any). */
@@ -233,7 +304,8 @@ export interface ClientToServerEvents {
         payload: { serverId: string },
         ack: (response: {
             success: boolean;
-            users?: Array<IUser & { roles: IRole[]; isBanned: boolean }>;
+            /** `hasIdentityKey` (PRD 17.12): whether a key is bound — never the key itself. */
+            users?: Array<IUser & { roles: IRole[]; isBanned: boolean; hasIdentityKey?: boolean }>;
             error?: string;
         }) => void,
     ) => void;
@@ -471,13 +543,34 @@ export interface ClientToServerEvents {
     ) => void;
 
     /**
+     * Changes the caller's avatar while connected (PRD 17.1). `null` clears it.
+     * The server validates the selection, builds the URL itself, and
+     * broadcasts `USER_AVATAR_UPDATED` when it actually changed.
+     */
+    SET_AVATAR: (
+        payload: { avatar: IAvatarSelection | null },
+        ack: (response: { success: boolean; avatarUrl?: string | null; error?: string }) => void,
+    ) => void;
+
+    /**
+     * Everything the user profile card shows about one user (PRD 17.3):
+     * nickname, avatar, first login, this server's roles, online status.
+     * Any joined member may ask; nothing on it is private.
+     */
+    GET_USER_PROFILE: (
+        payload: { userId: string },
+        ack: (response: { success: boolean; profile?: IUserProfile; error?: string }) => void,
+    ) => void;
+
+    /**
      * Resolves this viewer socket's `userId` from the same persisted
      * instance ID the primary connection uses, WITHOUT touching presence,
      * rooms, or anything `USER_JOIN_SERVER` would (that's the whole point —
      * this socket must stay invisible to everyone else).
      */
     VIEWER_AUTHENTICATE: (
-        payload: { instanceId: string },
+        /** `ticket` from REQUEST_VIEWER_TICKET (PRD 17.12); `instanceId` only for pre-v2.6.0 clients. */
+        payload: { ticket?: string; instanceId?: string },
         ack: (response: { success: boolean; error?: string }) => void,
     ) => void;
 
@@ -701,6 +794,9 @@ export interface ServerToClientEvents {
     /** Broadcasts a newly-approved custom emoji so every connected picker updates live. */
     CUSTOM_EMOJI_APPROVED: (payload: { serverId: string; emoji: ICustomEmoji }) => void;
 
+    /** A user's avatar changed (PRD 17.1); `null` = back to the default avatar. */
+    USER_AVATAR_UPDATED: (payload: { userId: string; avatarUrl: string | null }) => void;
+
     /** Delivered to the target of a NUDGE_USER call. */
     NUDGE_RECEIVED: (payload: { fromUserId: string; fromNickname: string }) => void;
 
@@ -772,4 +868,8 @@ export interface SocketData {
      *  eventual `disconnect` must not touch the userId-keyed state the newer
      *  socket now owns. */
     superseded?: boolean;
+    /** The pending REQUEST_AUTH_CHALLENGE nonce for this socket (PRD 17.12) — single use. */
+    authNonce?: string;
+    /** When `authNonce` was issued (ms epoch); it expires after 60 s. */
+    authNonceIssuedAt?: number;
 }

@@ -697,6 +697,47 @@
       background: rgba(255, 255, 255, 0.1);
     }
 
+    /* Preview & kept tabs (PRD 17.5). A preview tab's title is italic (the
+       VS Code convention); a kept tab shows a bookmark — not the pushpin,
+       which already means "pinned message" here. */
+    .tab .tab-icon {
+      display: inline-flex;
+    }
+
+    .tab .tab-kept-icon {
+      display: none;
+      color: var(--accent);
+    }
+
+    .tab.kept .tab-kept-icon {
+      display: inline-flex;
+    }
+
+    .tab.preview .tab-label {
+      font-style: italic;
+    }
+
+    /* Unread on an open, unfocused channel tab (PRD 17.6) — the same red dot
+       as the tree's .unread-dot, and the label lifts from muted to the
+       normal text color. */
+    .tab .tab-unread-dot {
+      display: none;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--danger);
+      flex-shrink: 0;
+    }
+
+    .tab.has-unread {
+      color: var(--text-primary);
+      font-weight: 600;
+    }
+
+    .tab.has-unread .tab-unread-dot {
+      display: inline-block;
+    }
+
     #tab-content-area {
       flex: 1;
       position: relative;
@@ -791,7 +832,9 @@
 
     .chat-msg {
       position: relative; /* anchors the floating action toolbar (PRD 16.5) */
-      padding: 3px 6px;
+      /* Left gutter for the avatar (PRD 17.2): 6px + 40px avatar + 10px gap. */
+      --msg-gutter: 56px;
+      padding: 3px 6px 3px var(--msg-gutter);
       margin: 0 -6px; /* the padding above gives the hover tint breathing room without shifting content */
       border-radius: 4px;
       font-size: 13px;
@@ -806,9 +849,45 @@
        own line(s) in .msg-body below it. A continuation message (same author
        within the grouping window, see applyGrouping()) hides the header. */
     .chat-msg .msg-header {
+      position: relative; /* anchors the gutter avatar (PRD 17.2) */
       display: flex;
       align-items: baseline;
       gap: 6px;
+    }
+
+    /* The group's avatar, out in the gutter, top-aligned with the name. */
+    .chat-msg .msg-header > .avatar {
+      position: absolute;
+      left: calc(6px - var(--msg-gutter));
+      top: 1px;
+    }
+
+    /* A group start is never shorter than its avatar, so a one-line message
+       can't let the avatar overlap the next row. flex-shrink: 0 is required
+       with it: .chat-messages is a scrolling flex column, and an explicit
+       min-height replaces the default `min-height: auto` that was what kept
+       flex items from shrinking below their content once the list overflows
+       (without it, every taller message got squashed to 47px and overlapped). */
+    .chat-msg {
+      flex-shrink: 0;
+    }
+
+    .chat-msg.msg-group-start {
+      min-height: 47px;
+    }
+
+    /* A continuation's time, shown in the gutter while hovered. */
+    .chat-msg.msg-continuation:hover::before {
+      content: attr(data-hhmm);
+      position: absolute;
+      left: 0;
+      width: var(--msg-gutter);
+      top: 5px;
+      text-align: center;
+      font-size: 10px;
+      line-height: 1.4;
+      color: var(--text-muted);
+      pointer-events: none;
     }
 
     .chat-msg .msg-time {
@@ -1617,7 +1696,7 @@
       min-width: 0;
       /* Lifted slightly (-1px) and given 5px of air below, so it can't be
          mistaken for part of the message under it. */
-      margin: -1px 0 5px 18px;
+      margin: -1px 0 5px 0;
       font-size: 12px;
       line-height: 1.4;
       color: var(--text-secondary);
@@ -1633,14 +1712,15 @@
       opacity: 0.95;
     }
 
+    /* From the snippet's middle, out into the gutter and down to the top of
+       the avatar below (PRD 17.2): it starts right above the avatar's centre
+       (26px into the gutter, i.e. 30px left of the text column), as in Discord. */
     .msg-reply-spine {
       position: absolute;
-      left: -14px;
+      left: calc(26px - var(--msg-gutter));
       top: 50%;
-      width: 10px;
-      /* From the snippet's middle down to the TOP edge of the header below
-         (half a line + the 5px margin) — it points at the message, not into it. */
-      height: calc(50% + 5px);
+      width: calc(var(--msg-gutter) - 30px);
+      height: calc(50% + 6px);
       border-left: 2px solid var(--border);
       border-top: 2px solid var(--border);
       border-top-left-radius: 6px;
@@ -2868,6 +2948,211 @@
       line-height: 1.5;
     }
 
+    /* ── Avatars (PRD 17.1) ─────────────────────────────────────────────
+       One .avatar element everywhere (Settings preview, chat, profile card):
+       a fixed-size circle holding either the image or initials, so an avatar
+       never shifts layout while it loads. */
+    .avatar {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      overflow: hidden;
+      background: var(--avatar-bg, var(--bg-tertiary));
+      color: #fff;
+      font-weight: 600;
+      font-size: 15px;
+      line-height: 1;
+      user-select: none;
+    }
+
+    /* The image sits over the initials and fades in once loaded, so a slow or
+       failing load shows initials rather than an empty or broken image. */
+    .avatar img {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+      opacity: 0;
+      transition: opacity 0.15s ease-out;
+    }
+
+    .avatar img.loaded {
+      opacity: 1;
+    }
+
+    .avatar .avatar-initials {
+      letter-spacing: 0.3px;
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+    }
+
+    /* Profile section (Settings → Application). Scoped selectors on purpose:
+       .modal-content's generic label/input rules would otherwise stretch
+       these controls (the PRD 16.1 switch-row lesson). */
+    .profile-card {
+      display: flex;
+      gap: 16px;
+      padding: 14px;
+      margin-bottom: 10px;
+      border-radius: var(--radius);
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+    }
+
+    .profile-avatar-col {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+      width: 112px;
+      flex-shrink: 0;
+    }
+
+    .avatar.profile-avatar-preview {
+      width: 96px;
+      height: 96px;
+      font-size: 34px;
+      box-shadow: 0 0 0 3px var(--bg-secondary), 0 0 0 4px var(--border);
+    }
+
+    .profile-avatar-status {
+      min-height: 28px;
+      font-size: 11px;
+      line-height: 1.3;
+      text-align: center;
+      color: var(--text-muted);
+    }
+
+    .profile-avatar-status.found {
+      color: var(--success);
+    }
+
+    .profile-fields {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .profile-field {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+
+    .profile-field-label {
+      font-size: 11px;
+      color: var(--text-secondary);
+    }
+
+    .modal-content input.profile-email-input {
+      margin-bottom: 0;
+    }
+
+    .modal-content input.profile-email-input.invalid {
+      border-color: var(--danger);
+    }
+
+    .profile-field-error {
+      min-height: 0;
+      font-size: 11px;
+      color: var(--danger);
+    }
+
+    .profile-field-error:empty {
+      display: none;
+    }
+
+    .segmented {
+      display: inline-flex;
+      align-self: flex-start;
+      padding: 2px;
+      border-radius: var(--radius);
+      background: var(--bg-primary);
+      border: 1px solid var(--border);
+    }
+
+    .segmented-option {
+      padding: 4px 14px;
+      border: none;
+      border-radius: 4px;
+      background: transparent;
+      color: var(--text-secondary);
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+    }
+
+    .segmented-option:hover {
+      color: var(--text-primary);
+    }
+
+    .segmented-option[aria-checked="true"] {
+      background: var(--accent-dim);
+      color: var(--text-primary);
+    }
+
+    .segmented-option:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 1px;
+    }
+
+    .modal-content p.profile-hint {
+      display: flex;
+      gap: 6px;
+      align-items: flex-start;
+      margin: 0;
+      font-size: 11px;
+      line-height: 1.45;
+      color: var(--text-muted);
+    }
+
+    .profile-hint svg {
+      flex-shrink: 0;
+      margin-top: 1px;
+    }
+
+    .profile-provider-link {
+      color: var(--accent);
+      text-decoration: none;
+    }
+
+    .profile-provider-link:hover {
+      text-decoration: underline;
+    }
+
+    .profile-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+
+    .profile-actions .btn {
+      padding: 6px 14px;
+    }
+
+    .profile-actions .btn:disabled {
+      opacity: 0.45;
+      cursor: default;
+    }
+
+    /* The accent stays vivid even at low opacity, so a disabled Save gets a
+       neutral look instead (and no hover change). */
+    .profile-actions .btn-create:disabled,
+    .profile-actions .btn-create:disabled:hover {
+      opacity: 1;
+      background: var(--bg-tertiary);
+      color: var(--text-muted);
+    }
+
     .modal-actions {
       display: flex;
       gap: 8px;
@@ -2936,6 +3221,364 @@
 
     #online-users-modal.visible {
       display: flex;
+    }
+
+    /* ── User Profile Card (PRD 17.3) ─────────────────────────────────── */
+    #user-profile-modal {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.6);
+      z-index: 100;
+      align-items: center;
+      justify-content: center;
+      -webkit-app-region: no-drag;
+    }
+
+    #user-profile-modal.visible {
+      display: flex;
+    }
+
+    .user-profile-card {
+      position: relative;
+      width: 340px;
+      max-width: calc(100vw - 32px);
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+      animation: user-profile-in 0.14s ease-out;
+    }
+
+    @keyframes user-profile-in {
+      from { opacity: 0; transform: translateY(6px) scale(0.98); }
+      to { opacity: 1; transform: none; }
+    }
+
+    /* Tinted with the user's own avatar color (--profile-tint), so every
+       card feels a little personal even with a generated avatar. */
+    .user-profile-banner {
+      position: relative;
+      height: 76px;
+      background:
+        linear-gradient(135deg, var(--profile-tint, var(--accent-dim)) 0%, var(--bg-tertiary) 100%);
+    }
+
+    .user-profile-close {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      width: 28px;
+      height: 28px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: none;
+      border-radius: 50%;
+      background: rgba(0, 0, 0, 0.35);
+      color: #fff;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+
+    .user-profile-close:hover {
+      background: rgba(0, 0, 0, 0.55);
+    }
+
+    .user-profile-close:focus-visible,
+    .user-profile-retry:focus-visible,
+    .user-profile-actions button:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+
+    .user-profile-avatar-wrap {
+      position: relative;
+      width: 96px;
+      height: 96px;
+      margin: -48px 0 0 20px;
+    }
+
+    .avatar.user-profile-avatar {
+      width: 96px;
+      height: 96px;
+      font-size: 34px;
+      box-shadow: 0 0 0 6px var(--bg-secondary);
+    }
+
+    .user-profile-presence {
+      position: absolute;
+      right: 2px;
+      bottom: 2px;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: var(--text-muted);
+      box-shadow: 0 0 0 4px var(--bg-secondary);
+    }
+
+    .user-profile-presence.online {
+      background: var(--success);
+    }
+
+    .user-profile-presence.unknown {
+      display: none;
+    }
+
+    .user-profile-body {
+      padding: 10px 20px 20px;
+    }
+
+    .user-profile-name {
+      margin: 0;
+      font-size: 20px;
+      font-weight: 700;
+      color: var(--text-primary);
+      overflow-wrap: anywhere;
+    }
+
+    .user-profile-since {
+      margin-top: 2px;
+      min-height: 17px;
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+
+    .user-profile-section {
+      margin-top: 16px;
+    }
+
+    .user-profile-label {
+      margin-bottom: 6px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      color: var(--text-muted);
+    }
+
+    .user-profile-roles {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      min-height: 24px;
+    }
+
+    .user-profile-role {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 9px;
+      border-radius: 999px;
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      font-size: 12px;
+      color: var(--text-primary);
+    }
+
+    .user-profile-role-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--role-color, var(--text-muted));
+    }
+
+    .user-profile-empty {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .user-profile-status {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 18px;
+      font-size: 13px;
+      color: var(--text-primary);
+    }
+
+    .user-profile-status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--text-muted);
+    }
+
+    .user-profile-status-dot.online {
+      background: var(--success);
+    }
+
+    /* Skeleton bars while the profile loads. */
+    .user-profile-skeleton {
+      display: inline-block;
+      height: 12px;
+      border-radius: 6px;
+      background: linear-gradient(90deg, var(--bg-input) 0%, var(--border) 50%, var(--bg-input) 100%);
+      background-size: 200% 100%;
+      animation: user-profile-shimmer 1.2s linear infinite;
+    }
+
+    @keyframes user-profile-shimmer {
+      from { background-position: 200% 0; }
+      to { background-position: -200% 0; }
+    }
+
+    .user-profile-error {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-top: 16px;
+      padding: 8px 10px;
+      border-radius: var(--radius);
+      background: rgba(239, 83, 80, 0.1);
+      border: 1px solid rgba(239, 83, 80, 0.35);
+      font-size: 12px;
+      color: var(--text-primary);
+    }
+
+    .user-profile-error[hidden] {
+      display: none;
+    }
+
+    .user-profile-retry {
+      flex-shrink: 0;
+      padding: 3px 10px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--bg-input);
+      color: var(--text-primary);
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    .user-profile-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 20px;
+    }
+
+    .user-profile-actions:empty {
+      display: none;
+    }
+
+    .user-profile-actions .btn-dm,
+    .user-profile-actions .btn-nudge {
+      flex: 1;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 8px 12px;
+      font-size: 13px;
+    }
+
+    .user-profile-self {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+
+    .user-profile-self button {
+      padding: 6px 12px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--bg-input);
+      color: var(--text-primary);
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    .user-profile-self button:hover {
+      border-color: var(--accent);
+    }
+
+    /* ── Identity (PRD 17.12) ─────────────────────────────────────────── */
+    .identity-row {
+      margin-top: 18px;
+      padding: 12px;
+      border-radius: var(--radius);
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+    }
+
+    .identity-row-label {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      margin-bottom: 6px;
+    }
+
+    .identity-row-value {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .identity-row-value code {
+      flex: 1;
+      min-width: 0;
+      overflow-wrap: anywhere;
+      font-size: 11px;
+      color: var(--text-primary);
+    }
+
+    .identity-row-hint {
+      margin-top: 6px;
+      font-size: 11px;
+      line-height: 1.4;
+      color: var(--text-muted);
+    }
+
+    .user-key-badge {
+      font-size: 11px;
+      margin-left: 4px;
+      cursor: help;
+    }
+
+    .btn-reset-key {
+      flex-shrink: 0;
+      padding: 4px 10px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--bg-input);
+      color: var(--text-secondary);
+      font-size: 11px;
+      cursor: pointer;
+    }
+
+    .btn-reset-key:hover {
+      border-color: var(--warning);
+      color: var(--text-primary);
+    }
+
+    .btn-reset-key.armed {
+      border-color: var(--danger);
+      background: rgba(239, 83, 80, 0.15);
+      color: var(--text-primary);
+    }
+
+    /* Message avatars and nicknames open the card (PRD 17.3). */
+    .chat-msg .msg-header > .avatar,
+    .chat-msg .msg-nick {
+      cursor: pointer;
+    }
+
+    .chat-msg .msg-nick:hover,
+    .chat-msg .msg-nick:focus-visible {
+      text-decoration: underline;
+      outline: none;
+    }
+
+    .chat-msg .msg-header > .avatar:hover {
+      filter: brightness(1.12);
     }
 
     .online-user-list {
@@ -4522,11 +5165,11 @@
         <div id="mic-volume-wrap" style="margin-bottom:14px;">
           <label style="display:block; margin-bottom:6px;">Microphone Volume</label>
           <div class="sensitivity-slider-row">
-            <input type="range" id="mic-volume-slider" min="0" max="200" value="100" step="5">
+            <input type="range" id="mic-volume-slider" min="0" max="300" value="100" step="5">
             <span class="sensitivity-value" id="mic-volume-value">100%</span>
           </div>
           <div class="sensitivity-labels">
-            <span>Scales your outgoing mic signal — 100% is your unprocessed input level</span>
+            <span>Scales your outgoing mic signal — 100% is your unprocessed input level. Above 100%, loud peaks are softly limited instead of distorting.</span>
           </div>
         </div>
 
@@ -4677,7 +5320,61 @@
 
       <!-- Application Tab -->
       <div class="settings-panel" data-settings-panel="app">
-        <label style="font-size:11px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px; display:block; margin-bottom:10px;">System Tray</label>
+        <!-- Profile (PRD 17.1) — avatar from Libravatar/Gravatar. Client-side
+             preference; only { provider, hash } is ever sent to the server. -->
+        <label style="font-size:11px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px; display:block; margin-bottom:10px;">Profile</label>
+
+        <div class="profile-card" id="profile-card">
+          <div class="profile-avatar-col">
+            <span class="avatar profile-avatar-preview" id="profile-avatar-preview" aria-hidden="true"></span>
+            <span class="profile-avatar-status" id="profile-avatar-status" role="status" aria-live="polite"></span>
+          </div>
+
+          <div class="profile-fields">
+            <div class="profile-field">
+              <span class="profile-field-label" id="profile-provider-label">Avatar source</span>
+              <div class="segmented" role="radiogroup" aria-labelledby="profile-provider-label">
+                <button type="button" class="segmented-option" role="radio" data-avatar-provider="libravatar">Libravatar</button>
+                <button type="button" class="segmented-option" role="radio" data-avatar-provider="gravatar">Gravatar</button>
+              </div>
+            </div>
+
+            <div class="profile-field">
+              <span class="profile-field-label" id="profile-email-label">Email</span>
+              <input type="email" class="profile-email-input" id="profile-email-input" aria-labelledby="profile-email-label"
+                placeholder="you@example.com" autocomplete="email" spellcheck="false" maxlength="254">
+              <span class="profile-field-error" id="profile-email-error" role="alert"></span>
+            </div>
+
+            <p class="profile-hint">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+              <span>Create a free account at <a href="#" class="profile-provider-link" id="profile-provider-link">libravatar.org</a> with this email and upload your picture there. Your email never leaves this computer &mdash; only an anonymous hash of it is shared.</span>
+            </p>
+
+            <div class="profile-actions">
+              <button type="button" class="btn btn-cancel" id="btn-profile-remove">Remove</button>
+              <button type="button" class="btn btn-create" id="btn-profile-save">Save avatar</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="toggle-row">
+          <div class="toggle-row-info">
+            <div class="toggle-row-icon">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+            </div>
+            <div class="toggle-row-text">
+              <span class="toggle-row-title">Load avatars from Libravatar/Gravatar</span>
+              <span class="toggle-row-desc">Turn off to show initials instead, with no requests to those services</span>
+            </div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="chk-avatars-external">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+
+        <label style="font-size:11px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px; display:block; margin-bottom:10px; margin-top:6px;">System Tray</label>
 
         <div class="toggle-row">
           <div class="toggle-row-info">
@@ -4808,6 +5505,16 @@
         </p>
         <button class="btn btn-create" id="btn-check-updates" style="width:100%;">Check for Updates</button>
         <div id="about-update-status" style="font-size:12px; color:var(--text-secondary); margin-top:10px; min-height:16px;"></div>
+
+        <!-- Identity key fingerprint (PRD 17.12) -->
+        <div class="identity-row">
+          <div class="identity-row-label">Identity</div>
+          <div class="identity-row-value">
+            <code id="about-identity-fingerprint">…</code>
+            <button type="button" class="btn btn-cancel" id="btn-copy-fingerprint">Copy</button>
+          </div>
+          <div class="identity-row-hint">Your server admin may ask for this to protect the admin account (<code>ADMIN_KEY_FINGERPRINT</code>).</div>
+        </div>
       </div>
 
       <div class="modal-actions">
@@ -4825,6 +5532,44 @@
       </div>
       <div class="modal-actions" style="padding-right: 10px;">
         <button class="btn btn-cancel" id="btn-online-close">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── User Profile Card (PRD 17.3) ───────────────────────────────
+       Opened from a message's avatar or nickname. Filled by
+       openUserProfile() in renderer.ts. -->
+  <div id="user-profile-modal" aria-hidden="true">
+    <div class="user-profile-card" role="dialog" aria-modal="true" aria-labelledby="user-profile-name">
+      <div class="user-profile-banner" id="user-profile-banner">
+        <button type="button" class="user-profile-close" id="btn-user-profile-close" aria-label="Close profile">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div class="user-profile-avatar-wrap">
+        <span class="avatar user-profile-avatar" id="user-profile-avatar" aria-hidden="true"></span>
+        <span class="user-profile-presence" id="user-profile-presence" aria-hidden="true"></span>
+      </div>
+      <div class="user-profile-body">
+        <h2 class="user-profile-name" id="user-profile-name"></h2>
+        <div class="user-profile-since" id="user-profile-since"></div>
+
+        <div class="user-profile-section">
+          <div class="user-profile-label">Roles</div>
+          <div class="user-profile-roles" id="user-profile-roles"></div>
+        </div>
+
+        <div class="user-profile-section">
+          <div class="user-profile-label">Status</div>
+          <div class="user-profile-status" id="user-profile-status"></div>
+        </div>
+
+        <div class="user-profile-error" id="user-profile-error" hidden>
+          <span id="user-profile-error-text">Couldn't load this profile.</span>
+          <button type="button" class="user-profile-retry" id="btn-user-profile-retry">Retry</button>
+        </div>
+
+        <div class="user-profile-actions" id="user-profile-actions"></div>
       </div>
     </div>
   </div>

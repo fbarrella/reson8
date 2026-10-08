@@ -37,6 +37,7 @@ import {
 import { DEFAULT_MAX_MESSAGE_LENGTH } from "../config/message.config.js";
 import { normalizeNewlines } from "../services/message-text.js";
 import { aggregateReactionRows, loadReactorNicknames } from "../services/reaction.service.js";
+import { parseHistoryQuery, trimExtra, windowHalves } from "../services/pagination.service.js";
 
 type TypedIO = SocketIOServer<
     ClientToServerEvents,
@@ -53,7 +54,7 @@ type TypedSocket = Socket<
 >;
 
 const messageInclude = {
-    user: { select: { nickname: true } },
+    user: { select: { nickname: true, avatarUrl: true } },
     reactions: { select: { emoji: true, userId: true }, orderBy: { createdAt: "asc" as const } },
     attachments: attachmentInclude,
 };
@@ -69,7 +70,7 @@ type MessageWithRelations = {
     attachments: AttachmentRow[];
     createdAt: Date;
     editedAt: Date | null;
-    user: { nickname: string };
+    user: { nickname: string; avatarUrl: string | null };
     reactions: { emoji: string; userId: string }[];
 };
 
@@ -86,6 +87,7 @@ function toMessageDto(
         channelId: m.channelId,
         userId: m.userId,
         nickname: m.user.nickname,
+        avatarUrl: m.user.avatarUrl,
         content: m.content,
         replyTo: replyPreviewFor(m.replyToId, replyPreviews),
         ...attachmentFields(m.attachments, m.attachmentUrl),
@@ -218,7 +220,7 @@ export function registerMessageHandlers(
                                 create: files.map((f, position) => ({ url: f.url, publicId: f.publicId, position })),
                             },
                         },
-                        include: { attachments: attachmentInclude },
+                        include: { attachments: attachmentInclude, user: { select: { avatarUrl: true } } },
                     });
                 });
 
@@ -228,6 +230,7 @@ export function registerMessageHandlers(
                     channelId: message.channelId,
                     userId: message.userId,
                     nickname: socket.data.nickname,
+                    avatarUrl: message.user.avatarUrl,
                     content: message.content,
                     replyTo: replyPreviewFor(replyToId, replyPreviews),
                     ...attachmentFields(message.attachments),
@@ -269,68 +272,88 @@ export function registerMessageHandlers(
         // ── FETCH_MESSAGES ─────────────────────────────────────────────────
         socket.on("FETCH_MESSAGES", async (payload, ack) => {
             try {
-                const { channelId, before, limit = 50, aroundMessageId } = payload;
-                const take = Math.min(limit, 100); // cap at 100
+                const { channelId } = payload;
+                const parsed = parseHistoryQuery(payload);
+                if (!parsed.ok) {
+                    ack({ success: false, error: parsed.error });
+                    return;
+                }
+                const q = parsed.query;
 
                 let dtos: IMessage[];
+                // Whether more history lies beyond this page (PRD 17.8). Each
+                // query fetches one extra row per direction to know for sure.
+                let hasMoreBefore: boolean | undefined;
+                let hasMoreAfter: boolean | undefined;
 
-                if (aroundMessageId) {
+                if (q.kind === "around") {
                     // Jump-to-message: fetch a window centered on a specific
                     // message rather than the most recent page — used when
-                    // clicking the pinned-message bar for a pin outside the
-                    // currently-loaded history (PRD 11.5).
+                    // clicking the pinned-message bar or a reply snippet for
+                    // a message outside the currently-loaded history (PRD 11.5).
                     const target = await app.prisma.message.findUnique({
-                        where: { id: aroundMessageId },
+                        where: { id: q.messageId },
                     });
                     if (!target || target.channelId !== channelId) {
                         ack({ success: false, error: "Message not found" });
                         return;
                     }
 
-                    const halfBefore = Math.floor((take - 1) / 2);
-                    const halfAfter = take - 1 - halfBefore;
-
-                    const [beforeMsgs, targetMsg, afterMsgs] = await Promise.all([
+                    const halves = windowHalves(q.take);
+                    const [beforeRows, targetMsg, afterRows] = await Promise.all([
                         app.prisma.message.findMany({
                             where: { channelId, createdAt: { lt: target.createdAt } },
                             orderBy: { createdAt: "desc" },
-                            take: halfBefore,
+                            take: halves.before + 1,
                             include: messageInclude,
                         }),
                         app.prisma.message.findUniqueOrThrow({
-                            where: { id: aroundMessageId },
+                            where: { id: q.messageId },
                             include: messageInclude,
                         }),
                         app.prisma.message.findMany({
                             where: { channelId, createdAt: { gt: target.createdAt } },
                             orderBy: { createdAt: "asc" },
-                            take: halfAfter,
+                            take: halves.after + 1,
                             include: messageInclude,
                         }),
                     ]);
+                    const older = trimExtra(beforeRows, halves.before);
+                    const newer = trimExtra(afterRows, halves.after);
+                    hasMoreBefore = older.hasMore;
+                    hasMoreAfter = newer.hasMore;
 
-                    dtos = await toMessageDtos(app.prisma, [...beforeMsgs.reverse(), targetMsg, ...afterMsgs]);
-                } else {
-                    const where: any = { channelId };
-                    if (before) {
-                        where.createdAt = { lt: new Date(before) };
-                    }
-
-                    const messages = await app.prisma.message.findMany({
-                        where,
-                        orderBy: { createdAt: "desc" },
-                        take,
+                    dtos = await toMessageDtos(app.prisma, [...older.rows.reverse(), targetMsg, ...newer.rows]);
+                } else if (q.kind === "after") {
+                    // Scrolling DOWN from a jump window (PRD 17.8): oldest first.
+                    const rows = await app.prisma.message.findMany({
+                        where: { channelId, createdAt: { gt: q.cursor } },
+                        orderBy: { createdAt: "asc" },
+                        take: q.take + 1,
                         include: messageInclude,
                     });
+                    const page = trimExtra(rows, q.take);
+                    hasMoreAfter = page.hasMore;
+                    dtos = await toMessageDtos(app.prisma, page.rows);
+                } else {
+                    const rows = await app.prisma.message.findMany({
+                        where: { channelId, ...(q.kind === "before" ? { createdAt: { lt: q.cursor } } : {}) },
+                        orderBy: { createdAt: "desc" },
+                        take: q.take + 1,
+                        include: messageInclude,
+                    });
+                    const page = trimExtra(rows, q.take);
+                    hasMoreBefore = page.hasMore;
+                    if (q.kind === "latest") hasMoreAfter = false;
 
-                    dtos = await toMessageDtos(app.prisma, messages.reverse());
+                    dtos = await toMessageDtos(app.prisma, page.rows.reverse());
                 }
 
                 // Only resolve the channel's current pin on the initial load
                 // (not on "load more"/jump-to-message calls) to avoid an
                 // extra query on every scroll-triggered page fetch.
                 let pinnedMessage: IPinnedMessage | null = null;
-                if (!before && !aroundMessageId) {
+                if (q.kind === "latest") {
                     const channel = await app.prisma.channel.findUnique({
                         where: { id: channelId },
                         select: {
@@ -354,7 +377,7 @@ export function registerMessageHandlers(
                     }
                 }
 
-                ack({ success: true, messages: dtos, pinnedMessage });
+                ack({ success: true, messages: dtos, pinnedMessage, hasMoreBefore, hasMoreAfter });
             } catch (err) {
                 app.log.error({ err }, "Error in FETCH_MESSAGES");
                 ack({ success: false, error: "Failed to fetch messages" });
@@ -497,6 +520,7 @@ export function registerMessageHandlers(
                 const updated = await app.prisma.message.update({
                     where: { id: messageId },
                     data: { content: trimmed, editedAt: new Date() },
+                    include: { user: { select: { avatarUrl: true } } },
                 });
 
                 // An edited reply is still a reply — keep its snippet in the broadcast.
@@ -506,6 +530,7 @@ export function registerMessageHandlers(
                     channelId: updated.channelId,
                     userId: updated.userId,
                     nickname: socket.data.nickname,
+                    avatarUrl: updated.user.avatarUrl,
                     content: updated.content,
                     replyTo: replyPreviewFor(updated.replyToId, replyPreviews),
                     // Image messages can't be edited (checked above), so an edited message has none.

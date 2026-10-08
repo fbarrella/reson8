@@ -13,6 +13,8 @@ import { startCapture, resolvePidForWindowSourceId, listAudioProducingApps, plat
 import type { CaptureHandle } from "@reson8/native-audio";
 import MarkdownIt from "markdown-it";
 import { loadWindowState, trackWindowState } from "./window-state.js";
+import { FIXER_USER_AGENT, decodeHtmlEntities, displayDomain, toFixerUrl } from "./link-fixers.js";
+import { getIdentityPublic, signAuthChallenge } from "./identity-key.js";
 
 // ── Single-instance lock (PRD 13.18) ────────────────────────────────────
 // Requested as early as possible, before any other startup work. Opening
@@ -99,12 +101,15 @@ function extractOgTags(html: string): Record<string, string> {
     const regex = /<meta\s+(?:property|name)=["'](og:[^"']+|twitter:[^"']+)["']\s+content=["']([^"']*)["']\s*\/?>/gi;
     const reverseRegex = /<meta\s+content=["']([^"']*)["']\s+(?:property|name)=["'](og:[^"']+|twitter:[^"']+)["']\s*\/?>/gi;
 
+    // Values are decoded (PRD 17.9): a regex-extracted attribute still holds
+    // HTML character references (`&amp;`, `&#x1F441;`), which the card would
+    // otherwise show literally.
     let match;
     while ((match = regex.exec(html)) !== null) {
-        tags[match[1].toLowerCase()] = match[2];
+        tags[match[1].toLowerCase()] = decodeHtmlEntities(match[2]);
     }
     while ((match = reverseRegex.exec(html)) !== null) {
-        tags[match[2].toLowerCase()] = match[1];
+        tags[match[2].toLowerCase()] = decodeHtmlEntities(match[1]);
     }
     return tags;
 }
@@ -280,8 +285,18 @@ async function fetchLinkPreviewViaHiddenWindow(url: string): Promise<LinkPreview
 /** The original plain-`fetch()` + metascraper + OG-fallback path — fast,
  *  and works for the vast majority of links. Returns null (never caches)
  *  on any failure, including a blocked/non-2xx response, so the caller can
- *  decide whether to escalate to the heavier hidden-window fallback. */
-async function fetchLinkPreviewFast(url: string): Promise<LinkPreviewData | null> {
+ *  decide whether to escalate to the heavier hidden-window fallback.
+ *
+ *  `opts` (PRD 17.9) is only used for a link-fixer request: its own
+ *  User-Agent, and `strict` success rules — the response must still come
+ *  from the fixer's host (fixers redirect visitors they won't serve back to
+ *  the original site, or to a download page) and must carry an image or a
+ *  video (a title alone is a fixer's error page, e.g. "Temporarily
+ *  unavailable"). Defaults keep the original behavior exactly. */
+async function fetchLinkPreviewFast(
+    url: string,
+    opts: { userAgent?: string; strict?: { expectedHost: string } } = {},
+): Promise<LinkPreviewData | null> {
     try {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 5000);
@@ -290,13 +305,20 @@ async function fetchLinkPreviewFast(url: string): Promise<LinkPreviewData | null
             signal: controller.signal,
             headers: {
                 // Bot-like UA so embed-focused sites (fxtwitter, etc.) serve OG tags
-                "User-Agent": "Mozilla/5.0 (compatible; Reson8Bot/1.0; +https://github.com/fbarrella/reson8)",
+                "User-Agent": opts.userAgent ?? "Mozilla/5.0 (compatible; Reson8Bot/1.0; +https://github.com/fbarrella/reson8)",
             },
         });
         clearTimeout(timeout);
 
         if (!response.ok) {
             return null;
+        }
+        if (opts.strict) {
+            let finalHost = "";
+            try {
+                finalHost = new URL(response.url).hostname.toLowerCase();
+            } catch { /* leave empty → refused */ }
+            if (finalHost !== opts.strict.expectedHost) return null;
         }
 
         const html = await response.text();
@@ -338,6 +360,8 @@ async function fetchLinkPreviewFast(url: string): Promise<LinkPreviewData | null
 
         const result: LinkPreviewData = { title, description, image, video, videoType, url: metadata.url || url, domain, siteName };
 
+        // A fixer must deliver media — that's its whole point (PRD 17.9).
+        if (opts.strict) return image || video ? result : null;
         // Only a genuine result if we got at least a title or image
         return title || image ? result : null;
     } catch {
@@ -358,14 +382,38 @@ async function fetchLinkPreview(url: string): Promise<LinkPreviewData | null> {
         return linkPreviewCache.get(url) ?? null;
     }
 
-    const fastResult = await fetchLinkPreviewFast(url);
-    const result = fastResult ?? await fetchLinkPreviewViaHiddenWindow(url);
+    // Social-media "fixers" first (PRD 17.9): for YouTube, X, Instagram,
+    // Reddit, Twitch, Bluesky and Imgur links, ask the matching fixer service,
+    // which usually returns a DIRECT video the card can play inline. If it
+    // doesn't deliver, the normal flow below runs on the ORIGINAL url,
+    // exactly as for every other link.
+    let result: LinkPreviewData | null = null;
+    const fixer = toFixerUrl(url);
+    if (fixer) {
+        const fixed = await fetchLinkPreviewFast(fixer.fixerUrl, {
+            userAgent: FIXER_USER_AGENT,
+            strict: { expectedHost: fixer.fixerHost },
+        });
+        if (fixed) {
+            // Clicking the card opens the real post, and the card names the
+            // real site — never the proxy (fixers stuff og:site_name with
+            // their own branding and stats).
+            result = { ...fixed, url, domain: displayDomain(url), siteName: fixer.network };
+        }
+    }
+
+    if (!result) {
+        const fastResult = await fetchLinkPreviewFast(url);
+        result = fastResult ?? await fetchLinkPreviewViaHiddenWindow(url);
+    }
 
     linkPreviewCache.set(url, result);
     return result;
 }
 
 let mainWindow: BrowserWindow | null = null;
+/** webContents id of a Viewer window → its viewer ticket (PRD 17.12). */
+const viewerTickets = new Map<number, string>();
 let pttKey: string | null = null;
 
 // Set by `setDisplayMediaRequestHandler` (Linux/Wayland screen-share
@@ -791,6 +839,13 @@ app.whenReady().then(() => {
     const instanceId = getInstanceId();
     ipcMain.handle("get-instance-id", () => instanceId);
 
+    // Identity (PRD 17.12): the private key never leaves this process. The
+    // preload gets the public half, and signatures over server challenges
+    // only — identity-key.ts refuses anything that isn't a well-formed
+    // nonce + host, so a compromised renderer can't get arbitrary data signed.
+    ipcMain.handle("identity-get-public", () => getIdentityPublic());
+    ipcMain.handle("identity-sign-challenge", (_event, nonce: unknown, host: unknown) => signAuthChallenge(nonce, host));
+
     // PTT shortcut IPC
     ipcMain.on("set-ptt-key", (_event, key: string) => {
         registerPttShortcut(key);
@@ -1067,7 +1122,7 @@ app.whenReady().then(() => {
         "open-screen-share-viewer",
         (
             _event,
-            args: { targetUserId: string; nickname: string; channelId: string; serverBaseUrl: string },
+            args: { targetUserId: string; nickname: string; channelId: string; serverBaseUrl: string; viewerTicket?: string },
         ) => {
             const viewerWindow = new BrowserWindow({
                 width: 960,
@@ -1090,6 +1145,13 @@ app.whenReady().then(() => {
                     ],
                 },
             });
+            // The viewer ticket (PRD 17.12) is a credential, so it is NOT
+            // passed in additionalArguments (they end up on the process's
+            // command line, readable by other local users). The window's
+            // preload fetches it over IPC instead.
+            const contentsId = viewerWindow.webContents.id;
+            if (typeof args.viewerTicket === "string") viewerTickets.set(contentsId, args.viewerTicket);
+            viewerWindow.on("closed", () => viewerTickets.delete(contentsId));
             viewerWindow.loadFile(path.join(__dirname, "renderer", "viewer.html"));
             return { success: true };
         },
@@ -1109,6 +1171,10 @@ app.whenReady().then(() => {
     // as "fullscreen video" while keeping the controls bar reachable.
     // Registered once (not per-window) and resolves the target window from
     // the invoking `event.sender`, so it works for any open Viewer window.
+    // A Viewer window asks for its own ticket (PRD 17.12) — only the window it
+    // was issued for gets it.
+    ipcMain.handle("viewer-get-ticket", (event) => viewerTickets.get(event.sender.id) ?? null);
+
     ipcMain.handle("viewer-toggle-fullscreen", (event) => {
         const win = BrowserWindow.fromWebContents(event.sender);
         if (!win) return false;

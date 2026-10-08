@@ -49,6 +49,8 @@ interface ChatMessage {
     channelId: string;
     userId: string;
     nickname: string;
+    /** Author's current avatar URL (PRD 17.2); undefined from a pre-v2.6.0 server. */
+    avatarUrl?: string | null;
     content: string;
     /** Set when this message is a reply (PRD 16.11). */
     replyTo?: ReplyPreview | null;
@@ -68,10 +70,22 @@ interface PinnedMessage {
     createdAt: string;
 }
 
+/** The profile card's data (PRD 17.3) — mirrors shared-types' IUserProfile. */
+interface UserProfile {
+    userId: string;
+    nickname: string;
+    avatarUrl: string | null;
+    memberSince: string;
+    roles: { id: string; name: string; color: string | null; powerLevel: number }[];
+    isOnline: boolean;
+}
+
 interface DirectMessage {
     id: string;
     senderId: string;
     senderNickname: string;
+    /** Sender's current avatar URL (PRD 17.2); undefined from a pre-v2.6.0 server. */
+    senderAvatarUrl?: string | null;
     receiverId: string;
     content: string;
     /** Set when this DM is a reply (PRD 16.11). */
@@ -781,7 +795,7 @@ interface Reson8Api {
     sendMessage(channelId: string, content: string, attachments?: UploadResult[], replyToId?: string): Promise<{ success: boolean; messageId?: string; error?: string }>;
     deleteMessage(messageId: string): Promise<{ success: boolean; error?: string }>;
     editMessage(messageId: string, content: string): Promise<{ success: boolean; error?: string }>;
-    fetchMessages(channelId: string, before?: string, limit?: number, aroundMessageId?: string): Promise<{ success: boolean; messages?: ChatMessage[]; pinnedMessage?: PinnedMessage | null; error?: string }>;
+    fetchMessages(channelId: string, before?: string, limit?: number, aroundMessageId?: string, after?: string): Promise<{ success: boolean; messages?: ChatMessage[]; pinnedMessage?: PinnedMessage | null; hasMoreBefore?: boolean; hasMoreAfter?: boolean; error?: string }>;
     pinMessage(channelId: string, messageId: string): Promise<{ success: boolean; error?: string }>;
     unpinMessage(channelId: string): Promise<{ success: boolean; error?: string }>;
     markChannelRead(channelId: string): Promise<{ success: boolean }>;
@@ -792,7 +806,7 @@ interface Reson8Api {
     setAudioInputDevice(deviceId: string | null): void;
     sendDirectMessage(recipientId: string, content: string, attachments?: UploadResult[], replyToId?: string): Promise<{ success: boolean; messageId?: string; error?: string }>;
     deleteDirectMessage(dmId: string): Promise<{ success: boolean; error?: string }>;
-    fetchDirectMessages(partnerId: string, before?: string, limit?: number, aroundMessageId?: string): Promise<{ success: boolean; messages?: DirectMessage[]; error?: string }>;
+    fetchDirectMessages(partnerId: string, before?: string, limit?: number, aroundMessageId?: string, after?: string): Promise<{ success: boolean; messages?: DirectMessage[]; hasMoreBefore?: boolean; hasMoreAfter?: boolean; error?: string }>;
     getOnlineUsers(): Promise<{ success: boolean; users?: { userId: string; nickname: string; isOnline: boolean }[]; error?: string }>;
     markDmsRead(partnerId: string): Promise<{ success: boolean; error?: string }>;
     getUnreadDmPartners(): Promise<{ success: boolean; partners?: { partnerId: string; partnerNickname: string; unreadCount: number }[]; error?: string }>;
@@ -804,6 +818,28 @@ interface Reson8Api {
     downloadImage(url: string): void;
     setCustomEmojis(list: Array<{ name: string; imageUrl: string }>): void;
     renderMarkdown(text: string): { html: string; block: boolean };
+    avatar: {
+        isPlausibleEmail(email: string): boolean;
+        selectionFor(provider: "libravatar" | "gravatar", email: string): { provider: "libravatar" | "gravatar"; hash: string };
+        previewUrl(selection: { provider: "libravatar" | "gravatar"; hash: string }, fallback: "wavatar" | "404"): string;
+        defaultUrl(userId: string): string;
+        withSize(url: string, px: number): string;
+    };
+    setAvatarSelection(selection: { provider: "libravatar" | "gravatar"; hash: string } | null): void;
+    getIdentityFingerprint(): Promise<string>;
+    resetIdentityKey(userId: string): Promise<{ success: boolean; error?: string }>;
+    getUserProfile(userId: string): Promise<{
+        success: boolean;
+        profile?: UserProfile;
+        unsupported?: boolean;
+        error?: string;
+    }>;
+    setAvatar(selection: { provider: "libravatar" | "gravatar"; hash: string } | null): Promise<{
+        success: boolean;
+        avatarUrl?: string | null;
+        unsupported?: boolean;
+        error?: string;
+    }>;
     markdownToPlainText(text: string): string;
     openExternal(url: string): Promise<{ success: boolean; error?: string }>;
     copyText(text: string): Promise<boolean>;
@@ -1086,6 +1122,12 @@ let emojiAcItems: EmojiAcItem[] = [];
 let emojiAcActive = 0;
 let emojiAcColonIndex = 0; // index of the ":" that opened the card
 let emojiAcQuery = "";
+/** The textarea the card currently serves — the composer, or a message's
+ *  edit box (PRD 17.11). Set when an attached textarea gains focus. */
+let emojiAcTarget: HTMLTextAreaElement | null = null;
+/** What to run after an insertion in the current target (the composer
+ *  re-sizes itself; the edit box needs nothing). */
+let emojiAcAfterInsert: (() => void) | null = null;
 const btnSend = document.getElementById("btn-send") as HTMLButtonElement;
 const btnAttach = document.getElementById("btn-attach") as HTMLButtonElement;
 const btnEmoji = document.getElementById("btn-emoji") as HTMLButtonElement;
@@ -1241,10 +1283,15 @@ let soundAlertsMuted = localStorage.getItem("reson8-mute-alerts") === "true";
 let nudgeVolume = Number(localStorage.getItem("reson8-nudge-volume") ?? "100");
 let alertVolume = Number(localStorage.getItem("reson8-alert-volume") ?? "100");
 let voiceVolume = Number(localStorage.getItem("reson8-voice-volume") ?? "100");
-// Mic input volume (PRD 13.3) — 0-200%, scales the outgoing mic signal itself
-// (not local playback), lives in the Voice & Shortcuts tab alongside the
-// noise gate rather than the Audio tab's other volume sliders.
-let micVolume = Number(localStorage.getItem("reson8-mic-volume") ?? "100");
+// Mic input volume (PRD 13.3; 0-300% since PRD 17.4) — scales the outgoing
+// mic signal itself (not local playback), lives in the Voice & Shortcuts tab
+// alongside the noise gate rather than the Audio tab's other volume sliders.
+// Clamped on load so a corrupt stored value can't become a NaN gain.
+const MIC_VOLUME_MAX_PERCENT = 300;
+let micVolume = (() => {
+    const stored = Number(localStorage.getItem("reson8-mic-volume") ?? "100");
+    return Number.isFinite(stored) ? Math.max(0, Math.min(MIC_VOLUME_MAX_PERCENT, stored)) : 100;
+})();
 // AI noise cancelling (PRD 13.1) — off by default (a real CPU/latency cost),
 // persisted like the noise gate's own enabled flag.
 let noiseCancelEnabled = localStorage.getItem("reson8-noise-cancel-enabled") === "true";
@@ -1370,6 +1417,162 @@ function setNsfwBlurEnabled(enabled: boolean): void {
 /** Pure CSS switch — see `body.nsfw-blur-off` in index.html. Applies live to every rendered message. */
 function applyNsfwBlurPreference(): void {
     document.body.classList.toggle("nsfw-blur-off", !isNsfwBlurEnabled());
+}
+
+// ── Avatars (PRD 17.1) ──────────────────────────────────────────────────────
+// A user's avatar is a Libravatar/Gravatar URL the SERVER built from the
+// { provider, hash } the user chose; users without one get a generated
+// Libravatar "wavatar" keyed by sha256(userId). Every avatar on screen is one
+// `.avatar` element carrying `data-avatar-user-id`, so a change (or the
+// external-avatars switch) is re-applied with refreshAvatars().
+
+type AvatarProvider = "libravatar" | "gravatar";
+interface AvatarSelection {
+    provider: AvatarProvider;
+    hash: string;
+}
+
+const AVATAR_PROVIDER_KEY = "reson8-avatar-provider";
+const AVATAR_EMAIL_KEY = "reson8-avatar-email";
+const AVATARS_EXTERNAL_KEY = "reson8-avatars-external";
+
+function readAvatarPrefs(): { provider: AvatarProvider; email: string } {
+    try {
+        const provider = localStorage.getItem(AVATAR_PROVIDER_KEY) === "gravatar" ? "gravatar" : "libravatar";
+        return { provider, email: localStorage.getItem(AVATAR_EMAIL_KEY) ?? "" };
+    } catch {
+        return { provider: "libravatar", email: "" };
+    }
+}
+
+function writeAvatarPrefs(provider: AvatarProvider, email: string): void {
+    try {
+        localStorage.setItem(AVATAR_PROVIDER_KEY, provider);
+        if (email) localStorage.setItem(AVATAR_EMAIL_KEY, email);
+        else localStorage.removeItem(AVATAR_EMAIL_KEY);
+    } catch {
+        /* storage unavailable — the preference just won't persist */
+    }
+}
+
+/** What the server is told: `null` (default avatar) unless a usable email is saved. */
+function currentAvatarSelection(): AvatarSelection | null {
+    const { provider, email } = readAvatarPrefs();
+    return email && api.avatar.isPlausibleEmail(email) ? api.avatar.selectionFor(provider, email) : null;
+}
+
+/** "Load avatars from Libravatar/Gravatar" — on unless explicitly "false". */
+function areExternalAvatarsEnabled(): boolean {
+    try {
+        return localStorage.getItem(AVATARS_EXTERNAL_KEY) !== "false";
+    } catch {
+        return true;
+    }
+}
+
+function setExternalAvatarsEnabled(enabled: boolean): void {
+    try {
+        if (enabled) localStorage.removeItem(AVATARS_EXTERNAL_KEY);
+        else localStorage.setItem(AVATARS_EXTERNAL_KEY, "false");
+    } catch {
+        /* storage unavailable — the preference just won't persist */
+    }
+    refreshAvatars();
+}
+
+/** userId → the avatar URL the server stored (`null` = default avatar). Absent = not known yet. */
+const avatarUrlCache = new Map<string, string | null>();
+
+/** Records a DTO's avatar URL; `undefined` (an older server) leaves the cache alone. */
+function rememberAvatarUrl(userId: string, avatarUrl: string | null | undefined): void {
+    if (avatarUrl !== undefined) avatarUrlCache.set(userId, avatarUrl);
+}
+
+/** Up to two letters from the nickname's words — code points, so an emoji is never split. */
+function avatarInitials(nickname: string): string {
+    const words = nickname.trim().split(/\s+/).filter(Boolean);
+    const letters = words.length > 1
+        ? [Array.from(words[0])[0], Array.from(words[words.length - 1])[0]]
+        : Array.from(words[0] ?? "").slice(0, 1);
+    return letters.join("").toUpperCase() || "?";
+}
+
+/** A stable background per user (same color on every client), dark enough for white text. */
+function avatarColor(userId: string): string {
+    let hash = 0;
+    for (let i = 0; i < userId.length; i++) hash = (hash * 31 + userId.charCodeAt(i)) | 0;
+    return `hsl(${Math.abs(hash) % 360} 45% 38%)`;
+}
+
+/** The URLs to try, in order, for a user's avatar at a CSS size. */
+function avatarCandidates(userId: string, cssPx: number): string[] {
+    const px = cssPx * 2; // HiDPI
+    const stored = avatarUrlCache.get(userId);
+    const fallback = api.avatar.withSize(api.avatar.defaultUrl(userId), px);
+    return stored ? [api.avatar.withSize(stored, px), fallback] : [fallback];
+}
+
+/**
+ * (Re)fills an `.avatar` element: initials always sit underneath, and an image
+ * fades in over them once it loads. On an error it tries the next candidate;
+ * when none is left the initials simply stay — never a broken-image icon.
+ * `candidates` overrides the cache (the Settings preview).
+ */
+function applyAvatar(el: HTMLElement, candidates?: string[]): void {
+    const userId = el.dataset.avatarUserId ?? "";
+    const nickname = el.dataset.avatarNick ?? "";
+    const cssPx = Number(el.dataset.avatarPx) || 40;
+    el.style.setProperty("--avatar-bg", avatarColor(userId));
+
+    const initials = document.createElement("span");
+    initials.className = "avatar-initials";
+    initials.textContent = avatarInitials(nickname);
+    el.replaceChildren(initials);
+
+    if (!areExternalAvatarsEnabled()) return;
+
+    const urls = candidates ?? avatarCandidates(userId, cssPx);
+    if (urls.length === 0) return;
+
+    const img = document.createElement("img");
+    img.width = cssPx;
+    img.height = cssPx;
+    img.alt = "";
+    img.decoding = "async";
+    img.loading = "lazy";
+    img.referrerPolicy = "no-referrer";
+    img.draggable = false;
+    let index = 0;
+    img.addEventListener("load", () => img.classList.add("loaded"));
+    img.addEventListener("error", () => {
+        index++;
+        if (index < urls.length) img.src = urls[index];
+        else img.remove();
+    });
+    img.src = urls[0];
+    el.appendChild(img);
+}
+
+/** A new avatar element for a user, sized in CSS pixels. */
+function createAvatarElement(userId: string, nickname: string, cssPx: number): HTMLSpanElement {
+    const el = document.createElement("span");
+    el.className = "avatar";
+    el.dataset.avatarUserId = userId;
+    el.dataset.avatarNick = nickname;
+    el.dataset.avatarPx = String(cssPx);
+    el.style.width = `${cssPx}px`;
+    el.style.height = `${cssPx}px`;
+    el.style.fontSize = `${Math.round(cssPx * 0.38)}px`;
+    applyAvatar(el);
+    return el;
+}
+
+/** Re-applies every rendered avatar (of one user, or all of them). */
+function refreshAvatars(userId?: string): void {
+    document.querySelectorAll<HTMLElement>(".avatar[data-avatar-user-id]").forEach((el) => {
+        if (el.dataset.avatarPreview) return; // the Settings preview manages itself
+        if (userId === undefined || el.dataset.avatarUserId === userId) applyAvatar(el);
+    });
 }
 
 // ── Pin-Replace Confirmation Modal (PRD 11.5) ───────────────────────────────
@@ -1548,8 +1751,115 @@ interface ChatTab {
      *  rendered message is by definition the true latest, so this stays
      *  true throughout ordinary use. */
     atTrueLatest: boolean;
+    /** `createdAt` of the newest message rendered — the cursor passed as
+     *  `after` when scrolling down from a jump window loads newer pages
+     *  (PRD 17.8). */
+    newestLoadedTimestamp?: string;
+    /** Guards against overlapping "load newer" fetches (PRD 17.8). */
+    loadingNewer: boolean;
+    /** True while jumpToMessage() builds and lands on a window: both
+     *  sentinels' loaders stand down, so a prepend can't cancel the scroll
+     *  to the target (PRD 17.8). */
+    jumpInProgress: boolean;
+    /** Text channel vs DM (PRD 17.5). Only channel tabs have a mode. */
+    kind: "channel" | "dm";
+    /** "preview" = replaced by the next channel opened; "kept" = stays open
+     *  and is remembered across restarts (PRD 17.5). Channel tabs only. */
+    mode?: "preview" | "kept";
 }
 const chatTabs = new Map<string, ChatTab>();
+
+// ── Preview tabs & "Keep Tab Open" (PRD 17.5) ────────────────────────────────
+// Clicking a text channel opens it in THE preview tab (at most one), which the
+// next channel replaces in place. "Keep Tab Open" makes a tab permanent and
+// remembers it per server (`reson8-kept-tabs`, same shape and try/catch
+// discipline as `reson8-muted-channels`). DM tabs are unaffected.
+
+/** The single preview tab, if any. */
+let previewTabId: string | null = null;
+/** Kept tabs are restored once per connection, after the first channel tree. */
+let keptTabsRestored = false;
+/**
+ * The server the kept list belongs to — taken from the channel tree's own
+ * payload, because the first CHANNEL_TREE_UPDATE arrives DURING the join,
+ * before the "connected" event sets currentServerId (the muted-channels store
+ * does the same, PRD 16.4).
+ */
+let keptTabsServerId: string | null = null;
+
+const KEPT_TABS_KEY = "reson8-kept-tabs";
+
+function readKeptTabsStore(): Record<string, string[]> {
+    try {
+        const parsed = JSON.parse(localStorage.getItem(KEPT_TABS_KEY) ?? "{}");
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+        const clean: Record<string, string[]> = {};
+        for (const [serverId, ids] of Object.entries(parsed)) {
+            if (Array.isArray(ids)) clean[serverId] = ids.filter((id): id is string => typeof id === "string");
+        }
+        return clean;
+    } catch {
+        return {}; // missing, malformed or storage unavailable — treat as empty
+    }
+}
+
+/** Writes the current server's kept channels, in tab-bar order. */
+function persistKeptTabs(): void {
+    if (!keptTabsServerId) return;
+    const ids = Array.from(tabBar.querySelectorAll<HTMLElement>(".tab.kept"))
+        .map((el) => el.dataset.tabId ?? "")
+        .filter((id) => chatTabs.get(id)?.kind === "channel");
+    try {
+        const store = readKeptTabsStore();
+        if (ids.length > 0) store[keptTabsServerId] = ids;
+        else delete store[keptTabsServerId];
+        localStorage.setItem(KEPT_TABS_KEY, JSON.stringify(store));
+    } catch {
+        /* storage unavailable — kept tabs just won't be remembered */
+    }
+}
+
+const TAB_KEPT_ICON_SVG =
+    `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/></svg>`;
+
+/**
+ * Fills a tab element with its structured parts (PRD 17.5), so a rename only
+ * touches `.tab-label` and the kept icon / unread dot survive it.
+ */
+function fillTabElement(tabEl: HTMLElement, icon: string, name: string): void {
+    tabEl.innerHTML =
+        `<span class="tab-icon" aria-hidden="true">${icon}</span>` +
+        `<span class="tab-kept-icon">${TAB_KEPT_ICON_SVG}</span>` +
+        `<span class="tab-label"></span>` +
+        `<span class="tab-unread-dot" aria-hidden="true"></span>` +
+        `<span class="tab-close" role="button" aria-label="Close tab">✕</span>`;
+    (tabEl.querySelector(".tab-label") as HTMLElement).textContent = name;
+}
+
+/**
+ * Unread indicator on an open, unfocused channel tab (PRD 17.6) — kept or
+ * preview alike, never for a muted channel. Derived from the same state the
+ * tree uses (`unreadChannelIds` + `isChannelMuted`), so the two can't
+ * disagree. DM tabs are out of scope (DMs are marked read on arrival).
+ */
+function refreshTabUnread(channelId: string): void {
+    const tab = chatTabs.get(channelId);
+    if (!tab || tab.kind !== "channel") return;
+    const show = unreadChannelIds.has(channelId) && !isChannelMuted(channelId) && activeTabId !== channelId;
+    tab.tabEl.classList.toggle("has-unread", show);
+    if (show) tab.tabEl.setAttribute("aria-label", `${tab.channelName} (unread)`);
+    else tab.tabEl.removeAttribute("aria-label");
+}
+
+/** Applies a channel tab's mode to its element (classes + tooltip). */
+function renderTabMode(tab: ChatTab): void {
+    const kept = tab.mode === "kept";
+    tab.tabEl.classList.toggle("kept", kept);
+    tab.tabEl.classList.toggle("preview", tab.mode === "preview");
+    tab.tabEl.title = kept
+        ? `${tab.channelName} — kept open`
+        : `${tab.channelName} — preview: opening another channel replaces this tab. Right-click → Keep Tab Open to keep it.`;
+}
 /** Initial + "load older" page size for both channel and DM history (PRD 14.2). */
 const CHAT_PAGE_SIZE = 20;
 let activeTabId = "server-log"; // default active tab
@@ -1862,6 +2172,7 @@ function setChannelMuted(channelId: string, muted: boolean): void {
 
 /** Targeted DOM update (no renderTree(), which would reset collapsed categories). */
 function applyChannelMuteState(channelId: string): void {
+    refreshTabUnread(channelId); // muting hides the tab's dot too; unmuting reveals it (PRD 17.6)
     const el = channelTree.querySelector(`.tree-channel[data-channel-id="${CSS.escape(channelId)}"]`);
     if (!el) return;
     const muted = isChannelMuted(channelId);
@@ -2014,8 +2325,11 @@ function attachChannelContextMenu(el: HTMLElement, node: TreeNode, canMute = fal
 
         // Mute is personal (client-side, no permission) and only offered on an
         // openable text channel — never voice channels or category rows (PRD 16.4).
+        // Keep Tab Open (PRD 17.5) sits with Mute: both are personal, text-channel-only.
+        const isKept = chatTabs.get(node.id)?.mode === "kept";
         const muteItem = canMute
-            ? `<button class="channel-ctx-menu-item ctx-mute-btn">${isChannelMuted(node.id) ? "🔔 Unmute Channel" : "🔕 Mute Channel"}</button><div class="ctx-menu-divider"></div>`
+            ? `<button class="channel-ctx-menu-item ctx-keep-btn">🔖 ${isKept ? "Stop Keeping Open" : "Keep Tab Open"}</button>`
+              + `<button class="channel-ctx-menu-item ctx-mute-btn">${isChannelMuted(node.id) ? "🔔 Unmute Channel" : "🔕 Mute Channel"}</button><div class="ctx-menu-divider"></div>`
             : "";
 
         menu.innerHTML = `
@@ -2030,6 +2344,11 @@ function attachChannelContextMenu(el: HTMLElement, node: TreeNode, canMute = fal
         menu.querySelector(".ctx-mute-btn")?.addEventListener("click", () => {
             menu.remove();
             setChannelMuted(node.id, !isChannelMuted(node.id));
+        });
+
+        menu.querySelector(".ctx-keep-btn")?.addEventListener("click", () => {
+            menu.remove();
+            setTabKept(node.id, !isKept);
         });
 
         menu.querySelector(".ctx-rename-btn")?.addEventListener("click", () => {
@@ -3086,9 +3405,13 @@ api.on("disconnected", (data?: { reason?: string }) => {
         </div>
     `;
     // Close all chat tabs (including DM tabs)
+    // A kept tab stays remembered and comes back on the next connect (PRD 17.5).
     for (const [tabId] of chatTabs) {
-        closeTab(tabId);
+        closeTab(tabId, { reason: "disconnect" });
     }
+    previewTabId = null;
+    keptTabsRestored = false;
+    keptTabsServerId = null;
     switchTab("server-log");
     log(`Disconnected from server (${disconnectReason})`, "error");
     SoundAlert.play("disconnected.mp3");
@@ -3197,6 +3520,10 @@ api.on("channel-tree", (data: { serverId: string; tree: TreeNode[] }) => {
     pruneMutedChannels(data.tree);
     renderTree(data.tree);
     syncOpenTabNames(data.tree);
+    pruneClosedChannelTabs(data.tree); // PRD 17.5
+    restoreKeptTabs(data.tree, data.serverId);
+    // renderTree() can seed unread state from the tree (hasUnread) (PRD 17.6).
+    for (const id of chatTabs.keys()) refreshTabUnread(id);
 });
 
 /** Keeps already-open chat tabs' displayed names in sync after a channel rename. */
@@ -3208,7 +3535,10 @@ function syncOpenTabNames(tree: TreeNode[]): void {
             const tab = chatTabs.get(node.id);
             if (tab && tab.channelName !== node.name) {
                 tab.channelName = node.name;
-                tab.tabEl.innerHTML = `💬 ${escapeHtml(node.name)} <span class="tab-close">✕</span>`;
+                // Only the label: the kept icon and unread dot stay (PRD 17.5).
+                const label = tab.tabEl.querySelector(".tab-label");
+                if (label) label.textContent = node.name;
+                renderTabMode(tab);
             }
             if (node.children.length > 0) walk(node.children);
         }
@@ -3273,14 +3603,16 @@ api.on("presence", (data: { channelId: string; occupants: any[]; sessionStartedA
     }
 });
 
-api.on("user-joined", (data: { nickname: string }) => {
+api.on("user-joined", (data: { userId: string; nickname: string }) => {
     log(`${data.nickname} joined the server`, "info");
     updateOnlineDot();
+    if (data.userId === profileUserId && profileIsOnline !== null) setProfilePresence(true); // PRD 17.3
 });
 
 api.on("user-left", (data: { userId: string }) => {
     log(`A user left the server`, "info");
     updateOnlineDot();
+    if (data.userId === profileUserId && profileIsOnline !== null) setProfilePresence(false); // PRD 17.3
 });
 
 // ── Active Speaker Indicator ──────────────────────────────────────────────
@@ -3328,6 +3660,8 @@ api.on("active-speakers", (data: { channelId: string; speakers: string[] }) => {
 
 api.on("channel-deleted", (data: { channelId: string }) => {
     sessionTimers.delete(data.channelId);
+    // Its tab (preview or kept) goes too, and a kept one is forgotten (PRD 17.5).
+    closeTab(data.channelId, { reason: "deleted" });
     if (currentChannelId === data.channelId) {
         currentChannelId = null;
         if (isInVoice) {
@@ -3762,6 +4096,17 @@ function renderAdminUsers(users: any[]): void {
     }
 
     const myId = api.getInstanceId();
+    // "Reset key" (PRD 17.12) is ADMIN-only on the server; derive it from my
+    // own roles in this same list rather than offer a button that can only
+    // fail for a MANAGE_ROLES-only holder.
+    const ADMIN_FLAG = 1n << 8n; // PermissionFlags.ADMIN
+    const iAmAdmin = (users.find((u) => u.id === myId)?.roles ?? []).some((r: any) => {
+        try {
+            return (BigInt(r.permissions) & ADMIN_FLAG) !== 0n;
+        } catch {
+            return false;
+        }
+    });
 
     for (const user of users) {
         const row = document.createElement("div");
@@ -3773,8 +4118,12 @@ function renderAdminUsers(users: any[]): void {
         const infoEl = document.createElement("div");
         infoEl.className = "admin-user-info";
         const bannedBadge = user.isBanned ? ' <span class="user-banned-badge">BANNED</span>' : "";
+        // 🔒 = this identity has bound a key on this server (PRD 17.12).
+        const keyBadge = user.hasIdentityKey
+            ? ' <span class="user-key-badge" title="Identity key bound — only this user\'s device can connect as them" aria-label="Identity key bound">🔒</span>'
+            : "";
         infoEl.innerHTML = `
-            <div class="admin-user-nickname">${escapeHtml(user.nickname)}${bannedBadge}</div>
+            <div class="admin-user-nickname">${escapeHtml(user.nickname)}${keyBadge}${bannedBadge}</div>
             <div class="admin-user-id">${escapeHtml(user.id)}</div>
         `;
         row.appendChild(infoEl);
@@ -3862,6 +4211,43 @@ function renderAdminUsers(users: any[]): void {
             row.appendChild(banBtn);
         }
 
+        // Reset identity key (PRD 17.12): ADMIN only, never on your own row.
+        // Two-step: the first click arms it, a second within 4 s confirms.
+        if (iAmAdmin && user.hasIdentityKey && user.id !== myId) {
+            const resetBtn = document.createElement("button");
+            resetBtn.className = "btn-reset-key";
+            resetBtn.textContent = "Reset key";
+            resetBtn.title = `The next device that connects as ${user.nickname} will be bound to this identity. Use it if they reinstalled, changed computer, or someone else claimed their identity. Disconnects them now.`;
+            let armedUntil = 0;
+            let disarmTimer: ReturnType<typeof setTimeout> | null = null;
+            resetBtn.addEventListener("click", async () => {
+                if (Date.now() > armedUntil) {
+                    armedUntil = Date.now() + 4000;
+                    resetBtn.textContent = "Confirm reset";
+                    resetBtn.classList.add("armed");
+                    if (disarmTimer) clearTimeout(disarmTimer);
+                    disarmTimer = setTimeout(() => {
+                        resetBtn.textContent = "Reset key";
+                        resetBtn.classList.remove("armed");
+                    }, 4000);
+                    return;
+                }
+                if (disarmTimer) clearTimeout(disarmTimer);
+                resetBtn.disabled = true;
+                const res = await api.resetIdentityKey(user.id);
+                if (res.success) {
+                    log(`Identity key of ${escapeHtml(user.nickname)} reset — their next connection binds a new key`, "success");
+                    openSettingsPanel(); // refresh the list
+                } else {
+                    resetBtn.disabled = false;
+                    resetBtn.textContent = "Reset key";
+                    resetBtn.classList.remove("armed");
+                    log(`Failed to reset identity key: ${escapeHtml(res.error ?? "unknown error")}`, "error");
+                }
+            });
+            row.appendChild(resetBtn);
+        }
+
         adminUserList.appendChild(row);
     }
 }
@@ -3903,23 +4289,52 @@ function switchTab(tabId: string): void {
     if (tab?.initialLoadDone) {
         tab.messagesEl.scrollTop = tab.messagesEl.scrollHeight;
     }
+    // A kept tab restored at connect loads its history on first view (PRD 17.5).
+    if (tab && !tab.loaded) loadChatHistory(tab);
+
+    // Messages that arrived while this tab was hidden couldn't be measured
+    // for "See more" — do it now that it's visible (PRD 17.7).
+    contentEl?.querySelectorAll<HTMLDivElement>(".chat-msg[data-truncation-pending]").forEach((msgEl) => {
+        const textEl = msgEl.querySelector<HTMLElement>(".msg-text");
+        if (textEl) attachMessageTruncation(msgEl, textEl);
+        else delete msgEl.dataset.truncationPending;
+    });
 
     updateViewingIndicator();
     renderReplyBar();
 }
 
-function openChatTab(channelId: string, channelName: string): void {
-    // If tab already exists, just switch to it
-    if (chatTabs.has(channelId)) {
-        switchTab(channelId);
+/**
+ * Opens (or focuses) a text channel's tab (PRD 17.5). By default it opens in
+ * the preview tab, replacing the current preview in place; `mode: "kept"`
+ * opens it as a kept tab. `focus: false` + `deferLoad` are used to restore
+ * kept tabs at connect without stealing focus or fetching N histories (the
+ * history loads when the tab is first activated — see switchTab()).
+ */
+function openChatTab(
+    channelId: string,
+    channelName: string,
+    opts: { mode?: "preview" | "kept"; focus?: boolean; deferLoad?: boolean } = {},
+): void {
+    const focus = opts.focus !== false;
+
+    // Already open: focus it; "Keep Tab Open" on a preview tab keeps it in place.
+    const existing = chatTabs.get(channelId);
+    if (existing) {
+        if (opts.mode === "kept" && existing.mode !== "kept") setTabKept(channelId, true);
+        if (focus) switchTab(channelId);
         return;
     }
+
+    const mode = opts.mode ?? "preview";
+    // The preview tab this one replaces, if any (only a new PREVIEW replaces).
+    const replaced = mode === "preview" && previewTabId ? chatTabs.get(previewTabId) ?? null : null;
 
     // Create tab button
     const tabEl = document.createElement("div");
     tabEl.className = "tab";
     tabEl.dataset.tabId = channelId;
-    tabEl.innerHTML = `💬 ${escapeHtml(channelName)} <span class="tab-close">✕</span>`;
+    fillTabElement(tabEl, "💬", channelName);
 
     tabEl.addEventListener("click", (e) => {
         // Check if close button was clicked
@@ -3929,8 +4344,11 @@ function openChatTab(channelId: string, channelName: string): void {
             switchTab(channelId);
         }
     });
+    tabEl.addEventListener("contextmenu", (e) => showChannelTabContextMenu(e, channelId));
 
-    tabBar.appendChild(tabEl);
+    // A replacement takes the replaced tab's slot in the bar.
+    if (replaced) tabBar.insertBefore(tabEl, replaced.tabEl);
+    else tabBar.appendChild(tabEl);
 
     // Create tab content
     const contentEl = document.createElement("div");
@@ -3981,15 +4399,26 @@ function openChatTab(channelId: string, channelName: string): void {
         bottomSentinelEl,
         jumpToRecentBtn,
         atTrueLatest: true,
+        loadingNewer: false,
+        jumpInProgress: false,
+        kind: "channel",
+        mode,
     };
     chatTabs.set(channelId, chatTab);
     setupInfiniteScroll(chatTab);
+    renderTabMode(chatTab);
+    refreshTabUnread(channelId); // e.g. a kept tab restored for a channel with unread messages
 
-    // Switch to the new tab
-    switchTab(channelId);
+    // Dispose of the replaced preview AFTER the new tab exists, without the
+    // usual fall-back to the Server Log in between (no flicker).
+    if (replaced) closeTab(replaced.channelId, { reason: "replaced" });
+    if (mode === "preview") previewTabId = channelId;
+    else persistKeptTabs();
 
-    // Fetch message history
-    loadChatHistory(chatTab);
+    if (focus) switchTab(channelId);
+
+    // Fetch message history (a deferred tab loads on first activation).
+    if (!opts.deferLoad) loadChatHistory(chatTab);
 }
 
 // ── DM Tab Management ─────────────────────────────────────────────────────
@@ -4007,7 +4436,7 @@ function openDmTab(userId: string, nickname: string, unreadCountHint?: number): 
     const tabEl = document.createElement("div");
     tabEl.className = "tab";
     tabEl.dataset.tabId = tabKey;
-    tabEl.innerHTML = `✉️ ${escapeHtml(nickname)} <span class="tab-close">✕</span>`;
+    fillTabElement(tabEl, "✉️", nickname);
 
     tabEl.addEventListener("click", (e) => {
         if ((e.target as HTMLElement).classList.contains("tab-close")) {
@@ -4053,6 +4482,9 @@ function openDmTab(userId: string, nickname: string, unreadCountHint?: number): 
         bottomSentinelEl,
         jumpToRecentBtn,
         atTrueLatest: true,
+        loadingNewer: false,
+        jumpInProgress: false,
+        kind: "dm",
     };
     chatTabs.set(tabKey, chatTab);
     setupInfiniteScroll(chatTab);
@@ -4064,7 +4496,18 @@ function openDmTab(userId: string, nickname: string, unreadCountHint?: number): 
     loadChatHistory(chatTab, unreadCountHint);
 }
 
-function closeTab(channelId: string): void {
+/**
+ * Closes a tab. `reason` (PRD 17.5) decides the bookkeeping:
+ * - "user" (✕, menu) and "deleted" (channel gone) forget a kept tab;
+ * - "disconnect" keeps it remembered, to be restored on the next connect;
+ * - "replaced" (a new preview took its slot) also skips the fall-back to the
+ *   Server Log, since the replacement is about to be focused.
+ */
+function closeTab(
+    channelId: string,
+    opts: { reason?: "user" | "replaced" | "disconnect" | "deleted" } = {},
+): void {
+    const reason = opts.reason ?? "user";
     const tab = chatTabs.get(channelId);
     if (!tab) return;
 
@@ -4074,9 +4517,113 @@ function closeTab(channelId: string): void {
     chatTabs.delete(channelId);
     replyTargets.delete(channelId); // a draft reply dies with its conversation's tab (PRD 16.11)
 
+    if (previewTabId === channelId) previewTabId = null;
+    if (tab.mode === "kept" && (reason === "user" || reason === "deleted")) persistKeptTabs();
+
     // If this was the active tab, switch to server log
-    if (activeTabId === channelId) {
+    if (activeTabId === channelId && reason !== "replaced") {
         switchTab("server-log");
+    }
+}
+
+/**
+ * Keep Tab Open / Stop Keeping Open (PRD 17.5). Keeping a channel that has no
+ * tab opens it as a kept tab and focuses it. Unkeeping turns the tab back into
+ * THE preview tab; if another preview tab is open, the one the user is
+ * looking at survives and the other closes.
+ */
+function setTabKept(channelId: string, kept: boolean): void {
+    const tab = chatTabs.get(channelId);
+    if (kept) {
+        if (!tab) {
+            const node = findChannelNodeById(currentTree, channelId);
+            if (node) openChatTab(node.id, node.name, { mode: "kept" });
+            return;
+        }
+        if (tab.kind !== "channel" || tab.mode === "kept") return;
+        tab.mode = "kept";
+        if (previewTabId === channelId) previewTabId = null;
+        renderTabMode(tab);
+        persistKeptTabs();
+        return;
+    }
+
+    if (!tab || tab.kind !== "channel" || tab.mode !== "kept") return;
+    const otherPreview = previewTabId && previewTabId !== channelId ? chatTabs.get(previewTabId) : undefined;
+    tab.mode = "preview";
+    renderTabMode(tab);
+    if (otherPreview && activeTabId === otherPreview.channelId) {
+        // The user is looking at the other preview: this one gives way.
+        closeTab(channelId, { reason: "user" });
+    } else {
+        if (otherPreview) closeTab(otherPreview.channelId, { reason: "user" });
+        previewTabId = channelId;
+    }
+    persistKeptTabs();
+}
+
+/** Right-click on a channel tab (PRD 17.5): Keep Tab Open / Stop Keeping Open, Close Tab. */
+function showChannelTabContextMenu(e: MouseEvent, channelId: string): void {
+    e.preventDefault();
+    e.stopPropagation();
+    const tab = chatTabs.get(channelId);
+    if (!tab) return;
+
+    document.querySelector(".occupant-ctx-menu")?.remove();
+    const menu = document.createElement("div");
+    menu.className = "occupant-ctx-menu";
+    menu.style.left = `${e.clientX}px`;
+    menu.style.top = `${e.clientY}px`;
+    const kept = tab.mode === "kept";
+    menu.innerHTML = `
+        <button class="channel-ctx-menu-item ctx-keep-btn">🔖 ${kept ? "Stop Keeping Open" : "Keep Tab Open"}</button>
+        <div class="ctx-menu-divider"></div>
+        <button class="channel-ctx-menu-item ctx-close-tab-btn">✕ Close Tab</button>
+    `;
+    menu.querySelector(".ctx-keep-btn")?.addEventListener("click", () => {
+        menu.remove();
+        setTabKept(channelId, !kept);
+    });
+    menu.querySelector(".ctx-close-tab-btn")?.addEventListener("click", () => {
+        menu.remove();
+        closeTab(channelId);
+    });
+    document.body.appendChild(menu);
+
+    const closeCtx = (ev: MouseEvent) => {
+        if (!menu.contains(ev.target as Node)) {
+            menu.remove();
+            document.removeEventListener("click", closeCtx, true);
+        }
+    };
+    setTimeout(() => document.addEventListener("click", closeCtx, true), 0);
+}
+
+/**
+ * Re-opens the current server's kept tabs (PRD 17.5) once per connection,
+ * after the first channel tree: in their saved order, unfocused, with history
+ * deferred until each is first opened. Channels that no longer exist (or are
+ * no longer text channels) are dropped from the store.
+ */
+function restoreKeptTabs(tree: TreeNode[], serverId: string): void {
+    keptTabsServerId = serverId;
+    if (keptTabsRestored || tree.length === 0) return;
+    keptTabsRestored = true;
+    const saved = readKeptTabsStore()[serverId] ?? [];
+    for (const id of saved) {
+        const node = findChannelNodeById(tree, id);
+        if (node && node.type === "TEXT") openChatTab(node.id, node.name, { mode: "kept", focus: false, deferLoad: true });
+    }
+    persistKeptTabs(); // drops ids that weren't restored
+}
+
+/** Closes kept/preview channel tabs whose channel vanished from the tree (PRD 17.5). */
+function pruneClosedChannelTabs(tree: TreeNode[]): void {
+    if (tree.length === 0) return; // an empty tree is transient — never prune on it
+    for (const tab of [...chatTabs.values()]) {
+        if (tab.kind !== "channel") continue;
+        const node = findChannelNodeById(tree, tab.channelId);
+        if (!node || node.type !== "TEXT") closeTab(tab.channelId, { reason: "deleted" });
     }
 }
 
@@ -4094,6 +4641,8 @@ async function loadChatHistory(tab: ChatTab, unreadCountHint?: number): Promise<
 
     await fetchAndRenderLatestPage(tab, unreadCountHint);
     tab.initialLoadDone = true;
+    tab.atTrueLatest = true;
+    ensureHistoryFilled(tab); // an under-filled first page would never load more (PRD 17.8)
 }
 
 /**
@@ -4131,7 +4680,8 @@ async function fetchAndRenderLatestPage(tab: ChatTab, unreadCountHint?: number):
                 api.markDmsRead(partnerId);
             }
 
-            tab.hasMoreOlder = result.messages.length >= initialLimit;
+            // The server says for sure since 2.6.0 (PRD 17.8); guess for older ones.
+            tab.hasMoreOlder = result.hasMoreBefore ?? result.messages.length >= initialLimit;
         }
     } else {
         // Channel tab — fetch channel messages
@@ -4144,7 +4694,7 @@ async function fetchAndRenderLatestPage(tab: ChatTab, unreadCountHint?: number):
                 renderChatMessage(tab, msg);
             }
             updatePinBarUI(tab, result.pinnedMessage ?? null);
-            tab.hasMoreOlder = result.messages.length >= CHAT_PAGE_SIZE;
+            tab.hasMoreOlder = result.hasMoreBefore ?? result.messages.length >= CHAT_PAGE_SIZE;
         }
     }
 }
@@ -4162,12 +4712,15 @@ async function rebuildTabAtLatest(tab: ChatTab): Promise<void> {
     tab.lastRenderedDateKey = undefined;
     tab.oldestRenderedDateKey = undefined;
     tab.oldestLoadedTimestamp = undefined;
+    tab.newestLoadedTimestamp = undefined;
     tab.messagesEl.appendChild(tab.topSentinelEl);
     tab.messagesEl.appendChild(tab.bottomSentinelEl);
     tab.loadingOlder = false;
+    tab.loadingNewer = false;
 
     await fetchAndRenderLatestPage(tab);
     tab.atTrueLatest = true;
+    ensureHistoryFilled(tab);
 }
 
 /** Click handler for the floating "Jump to Most Recent Message" button
@@ -4216,7 +4769,7 @@ function createJumpToRecentControls(
  * `createdAt` of whatever message is currently the earliest rendered.
  */
 async function loadOlderMessages(tab: ChatTab): Promise<void> {
-    if (!tab.initialLoadDone || tab.loadingOlder || !tab.hasMoreOlder) return;
+    if (!tab.initialLoadDone || tab.loadingOlder || !tab.hasMoreOlder || tab.jumpInProgress) return;
 
     tab.loadingOlder = true;
     tab.topSentinelEl.classList.add("loading");
@@ -4236,11 +4789,18 @@ async function loadOlderMessages(tab: ChatTab): Promise<void> {
         return;
     }
 
-    tab.hasMoreOlder = result.messages.length >= CHAT_PAGE_SIZE;
+    tab.hasMoreOlder = result.hasMoreBefore ?? result.messages.length >= CHAT_PAGE_SIZE;
 
     // Preserve the user's visual anchor across the prepend (Slack/Discord/
-    // Teams pattern) — record height before insert, then correct scrollTop
-    // by exactly the height the prepended content added.
+    // Teams pattern). Anchored on an ELEMENT — the first message whose text is
+    // in view — rather than on the scrollHeight difference: the junction
+    // repair can turn the old first message into a continuation, which drops
+    // its header/avatar and min-height (PRD 17.2), so the height difference
+    // alone no longer says where the text the user is reading went.
+    const viewTop = tab.messagesEl.getBoundingClientRect().top;
+    const anchorBody = Array.from(tab.messagesEl.querySelectorAll<HTMLElement>(".chat-msg .msg-body"))
+        .find((b) => b.getBoundingClientRect().bottom > viewTop);
+    const anchorTopBefore = anchorBody?.getBoundingClientRect().top ?? 0;
     const oldScrollHeight = tab.messagesEl.scrollHeight;
     const oldScrollTop = tab.messagesEl.scrollTop;
 
@@ -4250,8 +4810,12 @@ async function loadOlderMessages(tab: ChatTab): Promise<void> {
         prependOlderMessages(tab, result.messages as ChatMessage[], false);
     }
 
-    const newScrollHeight = tab.messagesEl.scrollHeight;
-    tab.messagesEl.scrollTop = oldScrollTop + (newScrollHeight - oldScrollHeight);
+    if (anchorBody?.isConnected) {
+        tab.messagesEl.scrollTop += anchorBody.getBoundingClientRect().top - anchorTopBefore;
+    } else {
+        tab.messagesEl.scrollTop = oldScrollTop + (tab.messagesEl.scrollHeight - oldScrollHeight);
+    }
+    ensureHistoryFilled(tab); // a short page can still leave the sentinel in view
 }
 
 /** One `IntersectionObserver` per tab, watching both the top sentinel
@@ -4265,7 +4829,10 @@ function setupInfiniteScroll(tab: ChatTab): void {
                 if (entry.target === tab.topSentinelEl) {
                     if (entry.isIntersecting) loadOlderMessages(tab);
                 } else if (entry.target === tab.bottomSentinelEl) {
-                    setJumpToRecentVisible(tab, !entry.isIntersecting);
+                    // While newer history is still unloaded the button stays,
+                    // even at the window's bottom (PRD 17.8).
+                    setJumpToRecentVisible(tab, !entry.isIntersecting || !tab.atTrueLatest);
+                    if (entry.isIntersecting) loadNewerMessages(tab);
                 }
             }
         },
@@ -4274,6 +4841,100 @@ function setupInfiniteScroll(tab: ChatTab): void {
     observer.observe(tab.topSentinelEl);
     observer.observe(tab.bottomSentinelEl);
     tab.scrollObserver = observer;
+}
+
+/** Messages fetched around a jump target (PRD 17.8): 20 + target + 20. */
+const JUMP_WINDOW_SIZE = 41;
+
+/**
+ * Scrolling DOWN from a jump window (PRD 17.8): loads the next newer page
+ * once the bottom sentinel comes into view, until the present is reached —
+ * after which live messages render normally again. Appending below the
+ * viewport doesn't move what the user is reading.
+ */
+async function loadNewerMessages(tab: ChatTab): Promise<void> {
+    if (!tab.initialLoadDone || tab.loadingNewer || tab.atTrueLatest || tab.jumpInProgress || !tab.newestLoadedTimestamp) return;
+
+    tab.loadingNewer = true;
+    tab.bottomSentinelEl.classList.add("loading");
+    tab.bottomSentinelEl.textContent = "Loading newer messages…";
+
+    const isDm = tab.channelId.startsWith("dm:");
+    const result = isDm
+        ? await api.fetchDirectMessages(tab.channelId.slice(3), undefined, CHAT_PAGE_SIZE, undefined, tab.newestLoadedTimestamp)
+        : await api.fetchMessages(tab.channelId, undefined, CHAT_PAGE_SIZE, undefined, tab.newestLoadedTimestamp);
+
+    tab.loadingNewer = false;
+    tab.bottomSentinelEl.classList.remove("loading");
+    tab.bottomSentinelEl.textContent = "";
+    if (!result.success || !result.messages) return;
+
+    if (result.hasMoreAfter === undefined) {
+        // A pre-2.6.0 server ignores `after` and answered with the LATEST
+        // page; appending it would leave a hidden gap. Fall back to the old
+        // behavior: rebuild the tab at the present.
+        await rebuildTabAtLatest(tab);
+        tab.messagesEl.scrollTop = tab.messagesEl.scrollHeight;
+        return;
+    }
+
+    for (const msg of result.messages) {
+        // A live message rendered meanwhile (e.g. your own) isn't added twice.
+        if (tab.messagesEl.querySelector(`.chat-msg[data-msg-id="${CSS.escape(msg.id)}"]`)) continue;
+        if (isDm) renderDmMessage(tab, msg as DirectMessage, { stick: false });
+        else renderChatMessage(tab, msg as ChatMessage, { stick: false });
+    }
+    tab.atTrueLatest = !result.hasMoreAfter;
+    setJumpToRecentVisible(tab, !tab.atTrueLatest || !isNearBottom(tab.messagesEl));
+    ensureHistoryFilled(tab);
+}
+
+/**
+ * Loads more history while a sentinel is still inside the viewport (PRD
+ * 17.8). The IntersectionObserver only fires on a CHANGE, so a page that
+ * doesn't fill the list (short messages, a tall window) used to leave the
+ * top sentinel visible forever with nothing to scroll — and older history
+ * never loaded. Runs after every load; each load calls it again, so it
+ * repeats until the list overflows or history runs out.
+ */
+function ensureHistoryFilled(tab: ChatTab): void {
+    if (!tab.initialLoadDone || tab.jumpInProgress || !tab.messagesEl.isConnected) return;
+    if (tab.messagesEl.offsetParent === null) return; // hidden tab — switching to it re-triggers the observer
+    const view = tab.messagesEl.getBoundingClientRect();
+    const visible = (el: HTMLElement): boolean => {
+        const r = el.getBoundingClientRect();
+        return r.bottom >= view.top && r.top <= view.bottom;
+    };
+    if (tab.hasMoreOlder && !tab.loadingOlder && visible(tab.topSentinelEl)) {
+        loadOlderMessages(tab);
+    } else if (!tab.atTrueLatest && !tab.loadingNewer && visible(tab.bottomSentinelEl)) {
+        loadNewerMessages(tab);
+    }
+}
+
+/**
+ * Keeps a jump target centred for a moment while images above it finish
+ * loading (PRD 17.8). Chromium's CSS scroll anchoring already compensates for
+ * content growing above the viewport; this is belt and braces. Stops at once
+ * when the user takes over (wheel, touch, keys, pointer).
+ */
+function holdJumpTarget(tab: ChatTab, el: HTMLElement, ms = 1500): void {
+    const scroller = tab.messagesEl;
+    const recenter = (): void => {
+        if (el.isConnected) el.scrollIntoView({ behavior: "instant", block: "center" });
+    };
+    const stop = (): void => {
+        scroller.removeEventListener("load", recenter, true);
+        for (const type of ["wheel", "touchstart", "keydown", "pointerdown"]) scroller.removeEventListener(type, stop);
+    };
+    scroller.addEventListener("load", recenter, true); // <img> load doesn't bubble; capture sees it
+    for (const type of ["wheel", "touchstart", "keydown", "pointerdown"]) scroller.addEventListener(type, stop, { passive: true });
+    setTimeout(stop, ms);
+}
+
+function highlightMessage(el: HTMLElement): void {
+    el.classList.add("msg-highlight");
+    setTimeout(() => el.classList.remove("msg-highlight"), 2000);
 }
 
 /** "13th", "1st", "22nd", etc. */
@@ -4562,6 +5223,8 @@ function buildMessageShell(opts: {
     id: string;
     ownerId: string;
     nickname: string;
+    /** The author's avatar URL from the DTO (PRD 17.2); undefined = keep what the cache knows. */
+    avatarUrl?: string | null;
     createdAt: string;
     content: string;
     edited?: boolean;
@@ -4576,15 +5239,23 @@ function buildMessageShell(opts: {
     el.setAttribute("data-msg-type", opts.kind);
     el.setAttribute("data-msg-owner", opts.ownerId);
     el.setAttribute("data-created-at", opts.createdAt);
+    // Shown in the gutter while a continuation (no header) is hovered (PRD 17.2).
+    el.dataset.hhmm = formatMessageTime(opts.createdAt);
 
     const editedLabel = opts.edited ? `<span class="msg-edited">(edited)</span>` : "";
     const text = opts.content ? `<span class="msg-text"></span>` : "";
-    el.innerHTML = `<div class="msg-header"><span class="msg-nick">${escapeHtml(opts.nickname)}</span><span class="msg-time" title="${escapeHtml(formatMessageFullDate(opts.createdAt))}">${formatMessageTime(opts.createdAt)}</span></div>`
+    el.innerHTML = `<div class="msg-header"><span class="msg-nick" role="button" tabindex="0" title="View profile">${escapeHtml(opts.nickname)}</span><span class="msg-time" title="${escapeHtml(formatMessageFullDate(opts.createdAt))}">${formatMessageTime(opts.createdAt)}</span></div>`
         + `<div class="msg-body">${text}${editedLabel}</div>`;
 
     if (opts.content) {
         setMessageBody(el.querySelector(".msg-text") as HTMLElement, opts.content);
     }
+
+    // Avatar in the left gutter (PRD 17.2), inside the header so it shows and
+    // hides with it — grouping (applyGrouping) needs no changes — and stays
+    // level with the name even when a reply snippet sits above the header.
+    rememberAvatarUrl(opts.ownerId, opts.avatarUrl);
+    el.querySelector(".msg-header")?.prepend(createAvatarElement(opts.ownerId, opts.nickname, 40));
 
     // A reply always opens its own group with its header showing, under the
     // snippet (PRD 16.6 rule 5 / 16.11) — applyGrouping() reads this flag.
@@ -4664,6 +5335,7 @@ function buildChatMessageElement(tab: ChatTab, msg: ChatMessage): HTMLDivElement
         id: msg.id,
         ownerId: msg.userId,
         nickname: msg.nickname,
+        avatarUrl: msg.avatarUrl,
         createdAt: msg.createdAt,
         content: msg.content,
         edited: !!msg.editedAt,
@@ -4704,14 +5376,23 @@ function buildChatMessageElement(tab: ChatTab, msg: ChatMessage): HTMLDivElement
     return el;
 }
 
-function renderChatMessage(tab: ChatTab, msg: ChatMessage): void {
-    const wasNearBottom = isNearBottom(tab.messagesEl);
+/**
+ * Appends a message below everything rendered. `stick: false` (PRD 17.8) is
+ * for content that is NOT the live bottom of the conversation — a jump
+ * window, a page of newer history — where following the bottom (now, or
+ * later when images/previews load) would yank the view off what the user is
+ * looking at. That was the pinned-jump bug: rendering into the just-emptied
+ * list counted as "at the bottom" for every message.
+ */
+function renderChatMessage(tab: ChatTab, msg: ChatMessage, opts: { stick?: boolean } = {}): void {
+    const wasNearBottom = opts.stick === false ? false : isNearBottom(tab.messagesEl);
 
     maybeInsertDateDivider(tab, new Date(msg.createdAt));
     const el = buildChatMessageElement(tab, msg);
     tab.bottomSentinelEl.insertAdjacentElement("beforebegin", el);
     applyGrouping(el); // after insertion: needs the previous sibling (PRD 16.6)
     trackOldestOnFirstAppend(tab, msg.createdAt);
+    tab.newestLoadedTimestamp = msg.createdAt; // appends are always the newest (PRD 17.8)
 
     if (wasNearBottom) stickToBottom(tab);
 
@@ -4820,6 +5501,10 @@ function prependOlderMessages(tab: ChatTab, messages: ChatMessage[] | DirectMess
  * `collapseAllExpandedMessages()` below, wired to the "window-minimized"
  * push from main.ts.
  */
+/** A message collapses only when its text is taller than this many rendered
+ *  lines (PRD 17.7); a collapsed one still shows 4 (the clamp in index.html). */
+const COLLAPSE_THRESHOLD_LINES = 15;
+
 function attachMessageTruncation(el: HTMLDivElement, textEl: HTMLElement): void {
     // A solo-emoji message (PRD 13.14) is a single character rendered at
     // ~4x size — never actually multi-line content to truncate, just
@@ -4827,13 +5512,27 @@ function attachMessageTruncation(el: HTMLDivElement, textEl: HTMLElement): void 
     // from that height, with no hidden text to reveal via "See more".
     if (textEl.classList.contains("msg-text-solo-emoji")) return;
 
-    textEl.classList.add("msg-text-clamped");
-    if (textEl.scrollHeight <= textEl.clientHeight + 1) {
-        // Fits within the clamp already — no truncation actually happened,
-        // so there's nothing to offer "See more" for.
-        textEl.classList.remove("msg-text-clamped");
+    // A message rendered into a hidden (display: none) tab measures 0, so it
+    // could never be collapsed. Defer: switchTab() measures it once the tab
+    // is shown (PRD 17.7).
+    if (!textEl.isConnected || textEl.offsetParent === null) {
+        el.dataset.truncationPending = "1";
         return;
     }
+    delete el.dataset.truncationPending;
+
+    // Measure the NATURAL height (no clamp) against the threshold — the
+    // threshold (15 lines) and the collapsed size (4 lines) are independent.
+    // getBoundingClientRect, not scrollHeight: a plain single-paragraph
+    // message is an inline <span>, whose box spans all its wrapped lines but
+    // whose scrollHeight is 0. "Lines" are rendered lines, so one long
+    // wrapped paragraph counts by how tall it actually is.
+    textEl.classList.remove("msg-text-clamped", "msg-text-expanded");
+    const lineHeight = parseFloat(getComputedStyle(textEl).lineHeight) || 18;
+    if (textEl.getBoundingClientRect().height <= lineHeight * COLLAPSE_THRESHOLD_LINES + 2) {
+        return; // short enough: shown in full, no "See more"
+    }
+    textEl.classList.add("msg-text-clamped");
 
     const btnSeeMore = document.createElement("button");
     btnSeeMore.className = "btn-see-more";
@@ -5154,7 +5853,7 @@ function renderEmojiAutocomplete(): void {
         row.addEventListener("click", () => selectEmojiAutocompleteItem(i));
         emojiAcList.appendChild(row);
     });
-    chatInput.setAttribute("aria-activedescendant", `emoji-ac-item-${emojiAcActive}`);
+    acTarget().setAttribute("aria-activedescendant", `emoji-ac-item-${emojiAcActive}`);
 }
 
 function setEmojiAutocompleteActive(index: number, scroll: boolean): void {
@@ -5164,24 +5863,34 @@ function setEmojiAutocompleteActive(index: number, scroll: boolean): void {
         el.classList.toggle("active", i === index);
         el.setAttribute("aria-selected", String(i === index));
     });
-    chatInput.setAttribute("aria-activedescendant", `emoji-ac-item-${index}`);
+    acTarget().setAttribute("aria-activedescendant", `emoji-ac-item-${index}`);
     if (scroll) emojiAcList.children[index]?.scrollIntoView({ block: "nearest" });
 }
 
 /** Opens the card above the colon, kept fully inside the window. */
 function positionEmojiAutocomplete(): void {
-    const colon = getTextareaCharCoords(chatInput, emojiAcColonIndex);
+    const target = acTarget();
+    const colon = getTextareaCharCoords(target, emojiAcColonIndex);
     const margin = 8;
+    const lineHeight = parseFloat(getComputedStyle(target).lineHeight) || 18;
 
-    // It opens upward (the input sits at the bottom of the window); in a tiny
-    // window shrink the card rather than push it off the top.
+    // It opens upward (the composer sits at the bottom of the window). An
+    // edit box near the top of the message list may have no room above, so
+    // then it opens BELOW the caret's line instead (PRD 17.11); for the
+    // composer that never happens. In a tiny window the card shrinks rather
+    // than leave the screen.
     const roomAbove = colon.top - 6 - margin;
-    emojiAutocompleteEl.style.maxHeight = `${Math.max(120, Math.min(320, roomAbove))}px`;
+    const below = roomAbove < 120;
+    const belowTop = colon.top + lineHeight + 6;
+    const room = below ? window.innerHeight - belowTop - margin : roomAbove;
+    emojiAutocompleteEl.style.maxHeight = `${Math.max(120, Math.min(320, room))}px`;
 
     const width = emojiAutocompleteEl.offsetWidth;
     const height = emojiAutocompleteEl.offsetHeight;
     const left = Math.max(margin, Math.min(colon.left, window.innerWidth - width - margin));
-    const top = Math.max(margin, colon.top - 6 - height);
+    const top = below
+        ? Math.min(belowTop, window.innerHeight - height - margin)
+        : Math.max(margin, colon.top - 6 - height);
     emojiAutocompleteEl.style.left = `${left}px`;
     emojiAutocompleteEl.style.top = `${top}px`;
 }
@@ -5191,18 +5900,18 @@ function closeEmojiAutocomplete(): void {
     emojiAcOpen = false;
     emojiAcItems = [];
     emojiAutocompleteEl.classList.remove("visible");
-    chatInput.setAttribute("aria-expanded", "false");
-    chatInput.removeAttribute("aria-activedescendant");
+    acTarget().setAttribute("aria-expanded", "false");
+    acTarget().removeAttribute("aria-activedescendant");
 }
 
 /** Re-evaluates the text before the caret: open, refresh or close the card. */
 function updateEmojiAutocomplete(): void {
-    if (chatInput.selectionStart !== chatInput.selectionEnd) {
+    if (acTarget().selectionStart !== acTarget().selectionEnd) {
         closeEmojiAutocomplete();
         return;
     }
-    const caret = chatInput.selectionStart ?? chatInput.value.length;
-    const match = EMOJI_AC_OPEN_RE.exec(chatInput.value.slice(0, caret));
+    const caret = acTarget().selectionStart ?? acTarget().value.length;
+    const match = EMOJI_AC_OPEN_RE.exec(acTarget().value.slice(0, caret));
     if (!match) {
         closeEmojiAutocomplete();
         return;
@@ -5228,8 +5937,8 @@ function updateEmojiAutocomplete(): void {
         // different flow, but it never coexists with typing anyway).
         if (emojiPicker.classList.contains("visible")) closeEmojiPicker();
         emojiAcOpen = true;
-        chatInput.setAttribute("aria-expanded", "true");
-        chatInput.setAttribute("aria-controls", "emoji-autocomplete");
+        acTarget().setAttribute("aria-expanded", "true");
+        acTarget().setAttribute("aria-controls", "emoji-autocomplete");
     }
     renderEmojiAutocomplete();
     emojiAutocompleteEl.classList.add("visible");
@@ -5240,13 +5949,13 @@ function updateEmojiAutocomplete(): void {
 function selectEmojiAutocompleteItem(index: number): void {
     const item = emojiAcItems[index];
     if (!item) return;
-    const caret = chatInput.selectionStart ?? chatInput.value.length;
-    const nextChar = chatInput.value.charAt(caret);
+    const caret = acTarget().selectionStart ?? acTarget().value.length;
+    const nextChar = acTarget().value.charAt(caret);
     const suffix = nextChar === "" || !/\s/.test(nextChar) ? " " : "";
-    chatInput.setRangeText(item.insert + suffix, emojiAcColonIndex, caret, "end");
+    acTarget().setRangeText(item.insert + suffix, emojiAcColonIndex, caret, "end");
     closeEmojiAutocomplete();
-    autosizeChatInput();
-    chatInput.focus();
+    emojiAcAfterInsert?.();
+    acTarget().focus();
 }
 
 /**
@@ -5255,15 +5964,15 @@ function selectEmojiAutocompleteItem(index: number): void {
  * already render from `:name:` text. Returns true when it converted.
  */
 function convertClosedEmojiShortcode(): boolean {
-    const caret = chatInput.selectionStart ?? chatInput.value.length;
-    const match = EMOJI_AC_CLOSED_RE.exec(chatInput.value.slice(0, caret));
+    const caret = acTarget().selectionStart ?? acTarget().value.length;
+    const match = EMOJI_AC_CLOSED_RE.exec(acTarget().value.slice(0, caret));
     if (!match) return false;
     getUnicodeEmojiIndex();
     // Group 1 is ":name:" (both colons), group 2 is just "name".
     const emoji = unicodeEmojiBySnake?.get(match[2].toLowerCase());
     if (!emoji) return false;
-    chatInput.setRangeText(emoji, caret - match[1].length, caret, "end");
-    autosizeChatInput();
+    acTarget().setRangeText(emoji, caret - match[1].length, caret, "end");
+    emojiAcAfterInsert?.();
     return true;
 }
 
@@ -5301,29 +6010,87 @@ function handleEmojiAutocompleteKeydown(e: KeyboardEvent): boolean {
     }
 }
 
-chatInput.setAttribute("aria-autocomplete", "list");
-chatInput.setAttribute("aria-expanded", "false");
+/** The textarea the card serves (the composer unless another one has focus). */
+function acTarget(): HTMLTextAreaElement {
+    return emojiAcTarget ?? chatInput;
+}
+
+/**
+ * Gives a textarea the emoji autocomplete (PRD 16.7; generalized for the edit
+ * box in PRD 17.11). The card, search and keys are shared; the textarea
+ * becomes the card's target when it gains focus. Its OWN keydown handler must
+ * call handleEmojiAutocompleteKeydown(e) first and stop if it returns true.
+ * Returns a function that detaches everything again.
+ */
+function attachEmojiAutocomplete(ta: HTMLTextAreaElement, opts: { onAfterInsert?: () => void } = {}): () => void {
+    ta.setAttribute("aria-autocomplete", "list");
+    ta.setAttribute("aria-expanded", "false");
+
+    const claim = (): void => {
+        if (emojiAcTarget !== ta) {
+            if (emojiAcOpen) closeEmojiAutocomplete();
+            emojiAcTarget = ta;
+        }
+        emojiAcAfterInsert = opts.onAfterInsert ?? null;
+    };
+    const onInput = (e: Event): void => {
+        claim();
+        if ((e as InputEvent).isComposing) return; // wait for the IME to commit
+        if ((e as InputEvent).data === ":" && convertClosedEmojiShortcode()) {
+            closeEmojiAutocomplete();
+            return;
+        }
+        updateEmojiAutocomplete();
+    };
+    const onClick = (): void => {
+        claim();
+        updateEmojiAutocomplete();
+    };
+    // Caret moves that don't fire "input": clicking, Home/End, and Left/Right
+    // (Up/Down/Enter/Tab/Escape are consumed by the card itself while it's open).
+    const onKeyup = (e: KeyboardEvent): void => {
+        if (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "Home" || e.key === "End") {
+            claim();
+            updateEmojiAutocomplete();
+        }
+    };
+    const onBlur = (): void => {
+        if (emojiAcTarget === ta) closeEmojiAutocomplete();
+    };
+    // A textarea inside the message list moves when the list scrolls.
+    const scroller = ta.closest(".chat-messages");
+    const onScroll = (): void => {
+        if (emojiAcTarget === ta) closeEmojiAutocomplete();
+    };
+
+    ta.addEventListener("focus", claim);
+    ta.addEventListener("input", onInput);
+    ta.addEventListener("click", onClick);
+    ta.addEventListener("keyup", onKeyup);
+    ta.addEventListener("blur", onBlur);
+    scroller?.addEventListener("scroll", onScroll, { passive: true });
+
+    return () => {
+        ta.removeEventListener("focus", claim);
+        ta.removeEventListener("input", onInput);
+        ta.removeEventListener("click", onClick);
+        ta.removeEventListener("keyup", onKeyup);
+        ta.removeEventListener("blur", onBlur);
+        scroller?.removeEventListener("scroll", onScroll);
+        if (emojiAcTarget === ta) {
+            closeEmojiAutocomplete();
+            emojiAcTarget = null;
+            emojiAcAfterInsert = null;
+        }
+    };
+}
+
 // Grabbing the card's scrollbar (or its header) must not blur the textarea,
 // which would close the card mid-interaction.
 emojiAutocompleteEl.addEventListener("mousedown", (e) => e.preventDefault());
 
-chatInput.addEventListener("input", (e) => {
-    if ((e as InputEvent).isComposing) return; // wait for the IME to commit
-    if ((e as InputEvent).data === ":" && convertClosedEmojiShortcode()) {
-        closeEmojiAutocomplete();
-        return;
-    }
-    updateEmojiAutocomplete();
-});
-// Caret moves that don't fire "input": clicking, Home/End, and Left/Right
-// (Up/Down/Enter/Tab/Escape are consumed by the card itself while it's open).
-chatInput.addEventListener("click", updateEmojiAutocomplete);
-chatInput.addEventListener("keyup", (e) => {
-    if (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "Home" || e.key === "End") {
-        updateEmojiAutocomplete();
-    }
-});
-chatInput.addEventListener("blur", closeEmojiAutocomplete);
+// The composer: unchanged behavior, it just goes through the shared wiring now.
+attachEmojiAutocomplete(chatInput, { onAfterInsert: autosizeChatInput });
 window.addEventListener("resize", () => {
     if (emojiAcOpen) positionEmojiAutocomplete();
 });
@@ -5338,11 +6105,19 @@ serverLogTab?.addEventListener("click", () => switchTab("server-log"));
 api.on("message", (msg: ChatMessage) => {
     const tab = chatTabs.get(msg.channelId);
     if (tab) {
-        renderChatMessage(tab, msg);
-        // A live message is by definition the channel's true latest right
-        // now — resolves any earlier "might be missing newer messages"
-        // state from a `jumpToMessage` window rebuild (PRD 14.3).
-        tab.atTrueLatest = true;
+        if (tab.atTrueLatest) {
+            renderChatMessage(tab, msg);
+        } else if (msg.userId === api.getInstanceId()) {
+            // You sent it while reading older history: go to the present so
+            // you see it (PRD 17.8), as other chat apps do.
+            rebuildTabAtLatest(tab).then(() => {
+                tab.messagesEl.scrollTop = tab.messagesEl.scrollHeight;
+            });
+        }
+        // Otherwise the tab shows a detached window (after a jump): rendering
+        // it now would leave an invisible gap of unloaded messages before it.
+        // Forward pagination reaches it, and "Jump to Most Recent" stays up
+        // (PRD 17.8). Unread tracking below doesn't depend on rendering.
     }
 
     // Unread indicator (PRD 4.13): MESSAGE_RECEIVED already broadcasts to
@@ -5357,6 +6132,7 @@ api.on("message", (msg: ChatMessage) => {
 function markChannelUnread(channelId: string): void {
     if (unreadChannelIds.has(channelId)) return;
     unreadChannelIds.add(channelId);
+    refreshTabUnread(channelId); // an open, unfocused tab shows it too (PRD 17.6)
     if (isChannelMuted(channelId)) return; // still tracked, just not painted (PRD 16.4)
 
     const el = channelTree.querySelector(`.tree-channel[data-channel-id="${CSS.escape(channelId)}"]`);
@@ -5389,6 +6165,7 @@ function markChannelRead(channelId: string): void {
 
     if (!unreadChannelIds.has(channelId)) return;
     unreadChannelIds.delete(channelId);
+    refreshTabUnread(channelId); // PRD 17.6
 
     const el = channelTree.querySelector(`.tree-channel[data-channel-id="${CSS.escape(channelId)}"]`);
     el?.classList.remove("unread");
@@ -5410,6 +6187,7 @@ function buildDmMessageElement(tab: ChatTab, msg: DirectMessage): HTMLDivElement
         id: msg.id,
         ownerId: msg.senderId,
         nickname: msg.senderNickname,
+        avatarUrl: msg.senderAvatarUrl,
         createdAt: msg.createdAt,
         content: msg.content,
         replyTo: msg.replyTo,
@@ -5431,14 +6209,16 @@ function buildDmMessageElement(tab: ChatTab, msg: DirectMessage): HTMLDivElement
     return el;
 }
 
-function renderDmMessage(tab: ChatTab, msg: DirectMessage): void {
-    const wasNearBottom = isNearBottom(tab.messagesEl);
+/** DM counterpart of renderChatMessage() — same `stick` option (PRD 17.8). */
+function renderDmMessage(tab: ChatTab, msg: DirectMessage, opts: { stick?: boolean } = {}): void {
+    const wasNearBottom = opts.stick === false ? false : isNearBottom(tab.messagesEl);
 
     maybeInsertDateDivider(tab, new Date(msg.createdAt));
     const el = buildDmMessageElement(tab, msg);
     tab.bottomSentinelEl.insertAdjacentElement("beforebegin", el);
     applyGrouping(el); // after insertion: needs the previous sibling (PRD 16.6)
     trackOldestOnFirstAppend(tab, msg.createdAt);
+    tab.newestLoadedTimestamp = msg.createdAt; // appends are always the newest (PRD 17.8)
 
     if (wasNearBottom) stickToBottom(tab);
 
@@ -5474,8 +6254,14 @@ api.on("dm-received", async (msg: DirectMessage) => {
 
     const tab = chatTabs.get(tabKey);
     if (tab) {
-        renderDmMessage(tab, msg);
-        tab.atTrueLatest = true;
+        // Same detached-window rules as channel messages (PRD 17.8).
+        if (tab.atTrueLatest) {
+            renderDmMessage(tab, msg);
+        } else if (msg.senderId === myId) {
+            rebuildTabAtLatest(tab).then(() => {
+                tab.messagesEl.scrollTop = tab.messagesEl.scrollHeight;
+            });
+        }
         // Mark as read immediately if the message is from someone else
         if (msg.senderId !== myId) {
             api.markDmsRead(partnerId);
@@ -5582,54 +6368,9 @@ function createUserRow(user: { userId: string; nickname: string; isOnline: boole
     });
     btnGroup.appendChild(dmBtn);
 
-    const myId = api.getInstanceId();
-
     // Nudge — online users only, never yourself, only when the server allows it
-    if (user.isOnline && user.userId !== myId && serverNudgeEnabled) {
-        const nudgeBtn = document.createElement("button");
-        nudgeBtn.className = "btn-nudge";
-        nudgeBtn.textContent = "👋 Nudge";
-
-        let cooldownInterval: ReturnType<typeof setInterval> | null = null;
-        const applyCooldownState = (): void => {
-            if (!document.body.contains(nudgeBtn)) {
-                if (cooldownInterval) clearInterval(cooldownInterval);
-                return;
-            }
-            const last = lastNudgeSentAt.get(user.userId);
-            const remaining = last ? NUDGE_COOLDOWN_MS - (Date.now() - last) : 0;
-            if (remaining <= 0) {
-                nudgeBtn.disabled = false;
-                nudgeBtn.textContent = "👋 Nudge";
-                if (cooldownInterval) {
-                    clearInterval(cooldownInterval);
-                    cooldownInterval = null;
-                }
-                return;
-            }
-            nudgeBtn.disabled = true;
-            nudgeBtn.textContent = `${Math.ceil(remaining / 1000)}s`;
-        };
-
-        if (lastNudgeSentAt.has(user.userId)) {
-            applyCooldownState();
-            cooldownInterval = setInterval(applyCooldownState, 1000);
-        }
-
-        nudgeBtn.addEventListener("click", async () => {
-            nudgeBtn.disabled = true;
-            const res = await api.nudgeUser(user.userId);
-            if (res.success) {
-                lastNudgeSentAt.set(user.userId, Date.now());
-                applyCooldownState();
-                if (!cooldownInterval) cooldownInterval = setInterval(applyCooldownState, 1000);
-                log(`Nudged ${escapeHtml(user.nickname)}`, "success");
-            } else {
-                nudgeBtn.disabled = false;
-                log(`Failed to nudge: ${res.error}`, "error");
-            }
-        });
-        btnGroup.appendChild(nudgeBtn);
+    if (canNudge(user.userId, user.isOnline)) {
+        btnGroup.appendChild(buildNudgeButton(user.userId, user.nickname));
     }
 
     // Ban moved to the User Management settings tab (PRD 13.17) — it
@@ -5638,6 +6379,327 @@ function createUserRow(user: { userId: string; nickname: string; isOnline: boole
     row.appendChild(btnGroup);
     return row;
 }
+
+/** The Nudge rules shared by the Online Users modal and the profile card (PRD 17.3). */
+function canNudge(userId: string, isOnline: boolean): boolean {
+    return isOnline && userId !== api.getInstanceId() && serverNudgeEnabled;
+}
+
+/**
+ * A Nudge button with its 30 s per-target cooldown countdown. Extracted from
+ * the Online Users modal (PRD 17.3) so the profile card shares the exact same
+ * behavior and cooldown (`lastNudgeSentAt`).
+ */
+function buildNudgeButton(userId: string, nickname: string): HTMLButtonElement {
+    const nudgeBtn = document.createElement("button");
+    nudgeBtn.className = "btn-nudge";
+    nudgeBtn.textContent = "👋 Nudge";
+
+    let cooldownInterval: ReturnType<typeof setInterval> | null = null;
+    let wasAttached = false;
+    const applyCooldownState = (): void => {
+        if (!nudgeBtn.isConnected) {
+            // Gone with its modal → stop ticking. Not yet attached → wait.
+            if (wasAttached && cooldownInterval) clearInterval(cooldownInterval);
+            return;
+        }
+        wasAttached = true;
+        const last = lastNudgeSentAt.get(userId);
+        const remaining = last ? NUDGE_COOLDOWN_MS - (Date.now() - last) : 0;
+        if (remaining <= 0) {
+            nudgeBtn.disabled = false;
+            nudgeBtn.textContent = "👋 Nudge";
+            if (cooldownInterval) {
+                clearInterval(cooldownInterval);
+                cooldownInterval = null;
+            }
+            return;
+        }
+        nudgeBtn.disabled = true;
+        nudgeBtn.textContent = `${Math.ceil(remaining / 1000)}s`;
+    };
+
+    if (lastNudgeSentAt.has(userId)) {
+        // Runs once the caller has attached the button (the first tick
+        // would otherwise see it detached and stop the interval).
+        queueMicrotask(applyCooldownState);
+        cooldownInterval = setInterval(applyCooldownState, 1000);
+    }
+
+    nudgeBtn.addEventListener("click", async () => {
+        nudgeBtn.disabled = true;
+        const res = await api.nudgeUser(userId);
+        if (res.success) {
+            lastNudgeSentAt.set(userId, Date.now());
+            applyCooldownState();
+            if (!cooldownInterval) cooldownInterval = setInterval(applyCooldownState, 1000);
+            log(`Nudged ${escapeHtml(nickname)}`, "success");
+        } else {
+            nudgeBtn.disabled = false;
+            log(`Failed to nudge: ${res.error}`, "error");
+        }
+    });
+    return nudgeBtn;
+}
+
+// ── User Profile Card (PRD 17.3) ────────────────────────────────────────────
+// Opened by clicking (or Enter/Space on) a message's avatar or nickname. It
+// opens at once with what the message already knows and fills in when
+// GET_USER_PROFILE answers; a per-open request id drops stale answers.
+
+const userProfileModal = document.getElementById("user-profile-modal") as HTMLDivElement;
+const userProfileCard = userProfileModal.querySelector(".user-profile-card") as HTMLDivElement;
+const userProfileBanner = document.getElementById("user-profile-banner") as HTMLDivElement;
+const userProfileAvatar = document.getElementById("user-profile-avatar") as HTMLSpanElement;
+const userProfilePresence = document.getElementById("user-profile-presence") as HTMLSpanElement;
+const userProfileName = document.getElementById("user-profile-name") as HTMLHeadingElement;
+const userProfileSince = document.getElementById("user-profile-since") as HTMLDivElement;
+const userProfileRoles = document.getElementById("user-profile-roles") as HTMLDivElement;
+const userProfileStatus = document.getElementById("user-profile-status") as HTMLDivElement;
+const userProfileError = document.getElementById("user-profile-error") as HTMLDivElement;
+const userProfileErrorText = document.getElementById("user-profile-error-text") as HTMLSpanElement;
+const userProfileActions = document.getElementById("user-profile-actions") as HTMLDivElement;
+const btnUserProfileClose = document.getElementById("btn-user-profile-close") as HTMLButtonElement;
+const btnUserProfileRetry = document.getElementById("btn-user-profile-retry") as HTMLButtonElement;
+
+let profileUserId: string | null = null;
+let profileNickname = "";
+/** null = not known yet (still loading, or an old server). */
+let profileIsOnline: boolean | null = null;
+let profileRequestId = 0;
+let profileReturnFocus: HTMLElement | null = null;
+
+/** The card reads as an English sentence ("Member since … · 7 months ago"),
+ *  like the rest of the UI, so its dates are English too — the system locale
+ *  produced mixed-language text. */
+const PROFILE_LOCALE = "en";
+
+/** "7 months ago" — the largest unit that fits, via Intl.RelativeTimeFormat. */
+function formatRelativeTime(date: Date): string {
+    const seconds = (date.getTime() - Date.now()) / 1000;
+    const units: [Intl.RelativeTimeFormatUnit, number][] = [
+        ["year", 365 * 24 * 3600],
+        ["month", 30 * 24 * 3600],
+        ["week", 7 * 24 * 3600],
+        ["day", 24 * 3600],
+        ["hour", 3600],
+        ["minute", 60],
+    ];
+    const rtf = new Intl.RelativeTimeFormat(PROFILE_LOCALE, { numeric: "auto" });
+    for (const [unit, size] of units) {
+        if (Math.abs(seconds) >= size) return rtf.format(Math.round(seconds / size), unit);
+    }
+    return rtf.format(0, "minute");
+}
+
+function skeleton(widthPx: number): string {
+    return `<span class="user-profile-skeleton" style="width:${widthPx}px"></span>`;
+}
+
+function setProfilePresence(isOnline: boolean | null): void {
+    profileIsOnline = isOnline;
+    userProfilePresence.classList.toggle("online", isOnline === true);
+    userProfilePresence.classList.toggle("unknown", isOnline === null);
+    if (isOnline === null) {
+        userProfileStatus.innerHTML = skeleton(70);
+    } else {
+        userProfileStatus.innerHTML = `<span class="user-profile-status-dot${isOnline ? " online" : ""}"></span>${isOnline ? "Online" : "Offline"}`;
+    }
+    renderProfileActions();
+}
+
+/** Message + Nudge for someone else; "This is you" + Edit profile for yourself. */
+function renderProfileActions(): void {
+    userProfileActions.replaceChildren();
+    if (!profileUserId) return;
+    const userId = profileUserId;
+    const nickname = profileNickname;
+
+    if (userId === api.getInstanceId()) {
+        const self = document.createElement("div");
+        self.className = "user-profile-self";
+        self.innerHTML = `<span>This is you</span>`;
+        const edit = document.createElement("button");
+        edit.type = "button";
+        edit.textContent = "Edit profile";
+        edit.addEventListener("click", () => {
+            closeUserProfile();
+            openSettingsPanel();
+            (document.querySelector('.settings-tab-btn[data-settings-tab="app"]') as HTMLButtonElement | null)?.click();
+        });
+        self.appendChild(edit);
+        userProfileActions.appendChild(self);
+        return;
+    }
+
+    const message = document.createElement("button");
+    message.type = "button";
+    message.className = "btn-dm";
+    message.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg> Message';
+    message.addEventListener("click", () => {
+        closeUserProfile(false);
+        openDmTab(userId, nickname);
+    });
+    userProfileActions.appendChild(message);
+
+    if (canNudge(userId, profileIsOnline === true)) {
+        userProfileActions.appendChild(buildNudgeButton(userId, nickname));
+    }
+}
+
+function renderProfileRoles(roles: UserProfile["roles"]): void {
+    userProfileRoles.replaceChildren();
+    if (roles.length === 0) {
+        userProfileRoles.innerHTML = `<span class="user-profile-empty">No roles</span>`;
+        return;
+    }
+    for (const role of roles) {
+        const chip = document.createElement("span");
+        chip.className = "user-profile-role";
+        // Only a real hex color reaches CSS; anything else uses the neutral dot.
+        if (role.color && /^#[0-9a-fA-F]{3,8}$/.test(role.color)) chip.style.setProperty("--role-color", role.color);
+        const dot = document.createElement("span");
+        dot.className = "user-profile-role-dot";
+        const name = document.createElement("span");
+        name.textContent = role.name;
+        chip.append(dot, name);
+        userProfileRoles.appendChild(chip);
+    }
+}
+
+async function loadUserProfile(): Promise<void> {
+    if (!profileUserId) return;
+    const requestId = ++profileRequestId;
+    userProfileError.hidden = true;
+    userProfileSince.innerHTML = skeleton(190);
+    userProfileRoles.innerHTML = `${skeleton(64)} ${skeleton(52)}`;
+    setProfilePresence(null);
+
+    const res = await api.getUserProfile(profileUserId);
+    if (requestId !== profileRequestId || !userProfileModal.classList.contains("visible")) return;
+
+    if (!res.success || !res.profile) {
+        userProfileSince.textContent = "";
+        userProfileRoles.replaceChildren();
+        userProfileStatus.textContent = "";
+        userProfileErrorText.textContent = res.unsupported
+            ? "Profile details need a newer server (Reson8 2.6.0)."
+            : "Couldn't load this profile.";
+        btnUserProfileRetry.hidden = !!res.unsupported;
+        userProfileError.hidden = false;
+        return;
+    }
+
+    const p = res.profile;
+    profileNickname = p.nickname;
+    userProfileName.textContent = p.nickname;
+    userProfileAvatar.dataset.avatarNick = p.nickname;
+    rememberAvatarUrl(p.userId, p.avatarUrl);
+    applyAvatar(userProfileAvatar);
+
+    const since = new Date(p.memberSince);
+    const dateText = new Intl.DateTimeFormat(PROFILE_LOCALE, { dateStyle: "long" }).format(since);
+    userProfileSince.textContent = `Member since ${dateText} · ${formatRelativeTime(since)}`;
+    userProfileSince.title = new Intl.DateTimeFormat(PROFILE_LOCALE, { dateStyle: "full", timeStyle: "short" }).format(since);
+
+    renderProfileRoles(p.roles);
+    setProfilePresence(p.isOnline);
+}
+
+/** Opens the card for a user. `trigger` gets focus back when it closes. */
+function openUserProfile(userId: string, nickname: string, trigger?: HTMLElement | null): void {
+    profileUserId = userId;
+    profileNickname = nickname;
+    profileReturnFocus = trigger ?? (document.activeElement as HTMLElement | null);
+
+    userProfileName.textContent = nickname;
+    userProfileBanner.style.setProperty("--profile-tint", avatarColor(userId));
+    userProfileAvatar.dataset.avatarUserId = userId;
+    userProfileAvatar.dataset.avatarNick = nickname;
+    userProfileAvatar.dataset.avatarPx = "96";
+    applyAvatar(userProfileAvatar);
+
+    userProfileModal.classList.add("visible");
+    userProfileModal.setAttribute("aria-hidden", "false");
+    btnUserProfileClose.focus();
+    loadUserProfile();
+}
+
+function closeUserProfile(restoreFocus = true): void {
+    if (!userProfileModal.classList.contains("visible")) return;
+    userProfileModal.classList.remove("visible");
+    userProfileModal.setAttribute("aria-hidden", "true");
+    profileRequestId++; // drop an answer still in flight
+    profileUserId = null;
+    userProfileActions.replaceChildren(); // stops a Nudge countdown's interval
+    if (restoreFocus && profileReturnFocus?.isConnected) profileReturnFocus.focus();
+    profileReturnFocus = null;
+}
+
+btnUserProfileClose.addEventListener("click", () => closeUserProfile());
+btnUserProfileRetry.addEventListener("click", () => loadUserProfile());
+userProfileModal.addEventListener("click", (e) => {
+    if (e.target === userProfileModal) closeUserProfile();
+});
+
+// Handled on the DOCUMENT, not the dialog: focus can leave the card without
+// the user meaning to (the Nudge button disables itself for its cooldown,
+// and a disabled button drops focus to <body>), and Escape must still close
+// it then. Capture phase, so it runs before other Escape handlers.
+document.addEventListener("keydown", (e) => {
+    if (!userProfileModal.classList.contains("visible")) return;
+    if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        closeUserProfile();
+        return;
+    }
+    // Keep Tab inside the dialog while it's open (and bring it back if lost).
+    if (e.key === "Tab") {
+        const focusables = Array.from(
+            userProfileCard.querySelectorAll<HTMLElement>("button:not([disabled]):not([hidden]), [tabindex='0']"),
+        ).filter((el) => el.offsetParent !== null);
+        if (focusables.length === 0) return;
+        const first = focusables[0];
+        const last = focusables[focusables.length - 1];
+        if (!userProfileCard.contains(document.activeElement)) {
+            e.preventDefault();
+            (e.shiftKey ? last : first).focus();
+        } else if (e.shiftKey && document.activeElement === first) {
+            e.preventDefault();
+            last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+            e.preventDefault();
+            first.focus();
+        }
+    }
+}, true);
+
+/** The message's author for a click/keypress on its avatar or nickname, if that's what was hit. */
+function profileTriggerFrom(target: EventTarget | null): { userId: string; nickname: string; el: HTMLElement } | null {
+    const el = (target as HTMLElement | null)?.closest?.(".chat-msg .msg-header > .avatar, .chat-msg .msg-nick") as HTMLElement | null;
+    if (!el) return null;
+    const msg = el.closest(".chat-msg") as HTMLElement | null;
+    const userId = msg?.getAttribute("data-msg-owner");
+    if (!msg || !userId) return null;
+    const nickname = msg.querySelector(".msg-nick")?.textContent ?? "";
+    return { userId, nickname, el: (msg.querySelector(".msg-nick") as HTMLElement | null) ?? el };
+}
+
+tabContentArea.addEventListener("click", (e) => {
+    const hit = profileTriggerFrom(e.target);
+    if (!hit) return;
+    e.stopPropagation();
+    openUserProfile(hit.userId, hit.nickname, hit.el);
+});
+
+tabContentArea.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    const hit = profileTriggerFrom(e.target);
+    if (!hit) return;
+    e.preventDefault();
+    openUserProfile(hit.userId, hit.nickname, hit.el);
+});
 
 /** Checks online user count and toggles the green dot on the Online Users button. */
 async function updateOnlineDot(): Promise<void> {
@@ -5712,6 +6774,7 @@ async function openSettingsPanel(): Promise<void> {
     // The NSFW modal can change this preference while Settings is closed.
     chkNsfwWarn.checked = isNsfwWarningEnabled();
     chkNsfwBlur.checked = isNsfwBlurEnabled();
+    syncProfileSection(); // discard an unsaved avatar draft from a previous visit (PRD 17.1)
     adminModal.classList.add("visible");
 
     // Populate audio devices
@@ -7370,47 +8433,72 @@ async function jumpToMessage(tabId: string, messageId: string): Promise<void> {
     const selector = `.chat-msg[data-msg-id="${CSS.escape(messageId)}"]`;
 
     let el = tab.messagesEl.querySelector(selector) as HTMLDivElement | null;
-
-    if (!el) {
-        const result = isDm
-            ? await api.fetchDirectMessages(tabId.slice(3), undefined, 50, messageId)
-            : await api.fetchMessages(tabId, undefined, 50, messageId);
-        if (!result.success || !result.messages) {
-            log("Couldn't load that message — it may have been deleted", "error");
-            return;
-        }
-        tab.messagesEl.innerHTML = "";
-        tab.lastRenderedDateKey = undefined;
-
-        // The wipe above also destroyed both pagination sentinels (PRD
-        // 14.2/14.3) — rebuild them in order (top, then bottom) so
-        // messages inserted via `bottomSentinelEl.insertAdjacentElement
-        //("beforebegin", …)` land correctly between them. A window-
-        // centered fetch never guarantees this is truly the start (or
-        // end) of history, so hasMoreOlder stays optimistically true and
-        // atTrueLatest is explicitly false — a real "Jump to Most Recent"
-        // click or a live incoming message will resolve the latter.
-        tab.oldestRenderedDateKey = undefined;
-        tab.oldestLoadedTimestamp = undefined;
-        tab.messagesEl.appendChild(tab.topSentinelEl);
-        tab.messagesEl.appendChild(tab.bottomSentinelEl);
-        tab.hasMoreOlder = true;
-        tab.loadingOlder = false;
-
-        if (isDm) {
-            for (const msg of result.messages as DirectMessage[]) renderDmMessage(tab, msg);
-        } else {
-            for (const msg of result.messages as ChatMessage[]) renderChatMessage(tab, msg);
-        }
-        tab.atTrueLatest = false;
-        el = tab.messagesEl.querySelector(selector) as HTMLDivElement | null;
-    }
-
     if (el) {
+        // Already loaded: a smooth scroll reads well over a short distance.
         el.scrollIntoView({ behavior: "smooth", block: "center" });
-        el.classList.add("msg-highlight");
-        setTimeout(() => el?.classList.remove("msg-highlight"), 2000);
+        highlightMessage(el);
+        return;
     }
+
+    // Not loaded: fetch a window around it and land on it (PRD 17.8). While
+    // this runs, neither sentinel may load pages — a prepend's scroll
+    // correction would cancel the landing (the bug's H1 path).
+    tab.jumpInProgress = true;
+    const result = isDm
+        ? await api.fetchDirectMessages(tabId.slice(3), undefined, JUMP_WINDOW_SIZE, messageId)
+        : await api.fetchMessages(tabId, undefined, JUMP_WINDOW_SIZE, messageId);
+    if (!result.success || !result.messages) {
+        tab.jumpInProgress = false;
+        log("Couldn't load that message — it may have been deleted", "error");
+        return;
+    }
+
+    tab.messagesEl.innerHTML = "";
+    tab.lastRenderedDateKey = undefined;
+    // The wipe above also destroyed both pagination sentinels (PRD 14.2/
+    // 14.3) — rebuild them in order (top, then bottom) so messages inserted
+    // via `bottomSentinelEl.insertAdjacentElement("beforebegin", …)` land
+    // correctly between them.
+    tab.oldestRenderedDateKey = undefined;
+    tab.oldestLoadedTimestamp = undefined;
+    tab.newestLoadedTimestamp = undefined;
+    tab.messagesEl.appendChild(tab.topSentinelEl);
+    tab.messagesEl.appendChild(tab.bottomSentinelEl);
+    tab.loadingOlder = false;
+    tab.loadingNewer = false;
+    // A 2.6.0+ server says exactly what lies beyond the window; for an older
+    // one, assume more on both sides (the pre-17.8 behavior).
+    tab.hasMoreOlder = result.hasMoreBefore ?? true;
+    tab.atTrueLatest = result.hasMoreAfter === undefined ? false : !result.hasMoreAfter;
+
+    // stick: false — the window is NOT the live bottom; following the bottom
+    // here (and again as images load) was the bug's actual cause (H2).
+    if (isDm) {
+        for (const msg of result.messages as DirectMessage[]) renderDmMessage(tab, msg, { stick: false });
+    } else {
+        for (const msg of result.messages as ChatMessage[]) renderChatMessage(tab, msg, { stick: false });
+    }
+
+    el = tab.messagesEl.querySelector(selector) as HTMLDivElement | null;
+    if (el) {
+        // Instant: there's nothing meaningful to animate across in a list
+        // that was just rebuilt.
+        el.scrollIntoView({ behavior: "instant", block: "center" });
+        holdJumpTarget(tab, el);
+        highlightMessage(el);
+    }
+
+    // Let the landing settle, then hand the sentinels back.
+    let released = false;
+    const release = (): void => {
+        if (released) return;
+        released = true;
+        tab.jumpInProgress = false;
+        setJumpToRecentVisible(tab, !tab.atTrueLatest || !isNearBottom(tab.messagesEl));
+        ensureHistoryFilled(tab);
+    };
+    tab.messagesEl.addEventListener("scrollend", release, { once: true });
+    setTimeout(release, 600);
 }
 
 pinReplaceConfirmModal.addEventListener("click", (e) => {
@@ -7685,12 +8773,16 @@ function startMessageEdit(el: HTMLDivElement, msg: ChatMessage): void {
     input.className = "msg-edit-input";
     input.value = msg.content;
     textEl.replaceWith(input);
+    // The same emoji autocomplete as the composer (PRD 17.11) — attached
+    // before focus so the focus makes this box the card's target.
+    const detachAutocomplete = attachEmojiAutocomplete(input);
     input.focus();
     input.setSelectionRange(input.value.length, input.value.length);
 
     const finish = async (save: boolean): Promise<void> => {
         input.removeEventListener("keydown", onKeydown);
         input.removeEventListener("blur", onBlur);
+        detachAutocomplete();
 
         if (!save) {
             input.outerHTML = originalHTML;
@@ -7729,6 +8821,10 @@ function startMessageEdit(el: HTMLDivElement, msg: ChatMessage): void {
     };
 
     const onKeydown = (e: KeyboardEvent) => {
+        // The open emoji card gets first refusal (PRD 17.11): Enter/Tab pick
+        // an emoji instead of saving, and Escape closes the card before it
+        // ever cancels the edit — the composer's precedence with replies.
+        if (handleEmojiAutocompleteKeydown(e)) return;
         if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
             e.preventDefault();
             finish(true);
@@ -8626,6 +9722,235 @@ applyNsfwBlurPreference();
 
 chkNsfwBlur.addEventListener("change", () => {
     setNsfwBlurEnabled(chkNsfwBlur.checked);
+});
+
+// ── Identity fingerprint in Settings → About (PRD 17.12) ────────────────────
+const aboutIdentityFingerprint = document.getElementById("about-identity-fingerprint") as HTMLElement;
+const btnCopyFingerprint = document.getElementById("btn-copy-fingerprint") as HTMLButtonElement;
+api.getIdentityFingerprint()
+    .then((fp) => {
+        aboutIdentityFingerprint.textContent = fp;
+    })
+    .catch(() => {
+        aboutIdentityFingerprint.textContent = "Unavailable";
+    });
+btnCopyFingerprint.addEventListener("click", async () => {
+    const fp = aboutIdentityFingerprint.textContent ?? "";
+    if (!fp.startsWith("SHA256:")) return;
+    const ok = await api.copyText(fp);
+    btnCopyFingerprint.textContent = ok ? "Copied!" : "Copy failed";
+    setTimeout(() => (btnCopyFingerprint.textContent = "Copy"), 1500);
+});
+
+// ── Profile: avatar settings (PRD 17.1) ─────────────────────────────────────
+// Settings → Application. Editing is a draft until Save; the preview probes
+// the provider with d=404 to tell "your picture" from "a generated one".
+
+const profileAvatarPreview = document.getElementById("profile-avatar-preview") as HTMLSpanElement;
+const profileAvatarStatus = document.getElementById("profile-avatar-status") as HTMLSpanElement;
+const profileEmailInput = document.getElementById("profile-email-input") as HTMLInputElement;
+const profileEmailError = document.getElementById("profile-email-error") as HTMLSpanElement;
+const profileProviderLink = document.getElementById("profile-provider-link") as HTMLAnchorElement;
+const btnProfileSave = document.getElementById("btn-profile-save") as HTMLButtonElement;
+const btnProfileRemove = document.getElementById("btn-profile-remove") as HTMLButtonElement;
+const chkAvatarsExternal = document.getElementById("chk-avatars-external") as HTMLInputElement;
+const profileProviderButtons = Array.from(
+    document.querySelectorAll<HTMLButtonElement>(".segmented-option[data-avatar-provider]"),
+);
+
+const AVATAR_PROVIDER_INFO: Record<AvatarProvider, { name: string; site: string; url: string }> = {
+    libravatar: { name: "Libravatar", site: "libravatar.org", url: "https://www.libravatar.org/" },
+    gravatar: { name: "Gravatar", site: "gravatar.com", url: "https://gravatar.com/" },
+};
+const PROFILE_PREVIEW_PX = 96;
+
+let profileDraftProvider: AvatarProvider = readAvatarPrefs().provider;
+let profilePreviewTimer: ReturnType<typeof setTimeout> | null = null;
+let profilePreviewToken = 0;
+let profileSaving = false;
+
+profileAvatarPreview.dataset.avatarPreview = "1";
+profileAvatarPreview.dataset.avatarPx = String(PROFILE_PREVIEW_PX);
+
+function setProfileStatus(text: string, found = false): void {
+    profileAvatarStatus.textContent = text;
+    profileAvatarStatus.classList.toggle("found", found);
+}
+
+/** Paints the preview for the current draft; `immediate` skips the typing debounce. */
+function updateProfilePreview(immediate = false): void {
+    if (profilePreviewTimer) clearTimeout(profilePreviewTimer);
+    const run = (): void => {
+        const token = ++profilePreviewToken;
+        const myId = api.getInstanceId();
+        profileAvatarPreview.dataset.avatarUserId = myId;
+        profileAvatarPreview.dataset.avatarNick = nicknameInput.value.trim() || "You";
+        const px = PROFILE_PREVIEW_PX * 2;
+        const email = profileEmailInput.value.trim();
+        const fallback = myId ? [api.avatar.withSize(api.avatar.defaultUrl(myId), px)] : [];
+
+        if (!areExternalAvatarsEnabled()) {
+            applyAvatar(profileAvatarPreview, []);
+            setProfileStatus("External avatars are off");
+            return;
+        }
+        if (!email) {
+            applyAvatar(profileAvatarPreview, fallback);
+            setProfileStatus("Default avatar");
+            return;
+        }
+        if (!api.avatar.isPlausibleEmail(email)) return; // keep the last good preview while typing
+
+        const selection = api.avatar.selectionFor(profileDraftProvider, email);
+        const name = AVATAR_PROVIDER_INFO[profileDraftProvider].name;
+        const chosen = [api.avatar.withSize(api.avatar.previewUrl(selection, "wavatar"), px), ...fallback];
+        setProfileStatus("Checking…");
+        // Libravatar can take several seconds (it proxies Gravatar on a miss),
+        // so the probe gives up after a while instead of "Checking…" forever.
+        const giveUp = setTimeout(() => {
+            if (token !== profilePreviewToken) return;
+            profilePreviewToken++; // a late probe answer must not overwrite this
+            applyAvatar(profileAvatarPreview, chosen);
+            setProfileStatus(`Couldn't reach ${name} right now — your choice will still be used.`);
+        }, 10000);
+        // A detached Image is fine here (it's an image probe, not playback).
+        const probe = new Image();
+        probe.referrerPolicy = "no-referrer";
+        probe.onload = () => {
+            clearTimeout(giveUp);
+            if (token !== profilePreviewToken) return;
+            applyAvatar(profileAvatarPreview, chosen);
+            setProfileStatus("Avatar found ✓", true);
+        };
+        probe.onerror = () => {
+            clearTimeout(giveUp);
+            if (token !== profilePreviewToken) return;
+            applyAvatar(profileAvatarPreview, chosen);
+            setProfileStatus(`No picture on ${name} yet — you'll get a generated one. New pictures can take a few minutes to appear.`);
+        };
+        probe.src = api.avatar.withSize(api.avatar.previewUrl(selection, "404"), px);
+    };
+    if (immediate) run();
+    else profilePreviewTimer = setTimeout(run, 400);
+}
+
+/** Provider toggle, link text, validation message and button states for the draft. */
+function renderProfileControls(): void {
+    for (const btn of profileProviderButtons) {
+        const selected = btn.dataset.avatarProvider === profileDraftProvider;
+        btn.setAttribute("aria-checked", String(selected));
+        btn.tabIndex = selected ? 0 : -1;
+    }
+    profileProviderLink.textContent = AVATAR_PROVIDER_INFO[profileDraftProvider].site;
+
+    const email = profileEmailInput.value.trim();
+    const invalid = email.length > 0 && !api.avatar.isPlausibleEmail(email);
+    profileEmailInput.classList.toggle("invalid", invalid);
+    profileEmailError.textContent = invalid ? "That doesn't look like an email address." : "";
+
+    const saved = readAvatarPrefs();
+    const dirty = profileDraftProvider !== saved.provider || email.toLowerCase() !== saved.email.trim().toLowerCase();
+    btnProfileSave.disabled = profileSaving || invalid || !dirty;
+    btnProfileRemove.disabled = profileSaving || !saved.email;
+}
+
+/** Resets the draft to the saved preferences — every time Settings opens. */
+function syncProfileSection(): void {
+    const saved = readAvatarPrefs();
+    profileDraftProvider = saved.provider;
+    profileEmailInput.value = saved.email;
+    chkAvatarsExternal.checked = areExternalAvatarsEnabled();
+    renderProfileControls();
+    updateProfilePreview(true);
+}
+
+/** Saves the draft (or clears it) and tells the server when connected. */
+async function commitAvatar(provider: AvatarProvider, email: string): Promise<void> {
+    writeAvatarPrefs(provider, email);
+    renderProfileControls(); // the draft is now the saved state
+    const selection = currentAvatarSelection();
+    api.setAvatarSelection(selection); // every future join carries it
+
+    if (!isConnected) {
+        showToast(email ? "Avatar saved — it will be shared when you connect" : "Avatar removed");
+        return;
+    }
+
+    profileSaving = true;
+    renderProfileControls();
+    const res = await api.setAvatar(selection);
+    profileSaving = false;
+    renderProfileControls();
+
+    if (res.success) {
+        const myId = api.getInstanceId();
+        rememberAvatarUrl(myId, res.avatarUrl ?? null);
+        refreshAvatars(myId);
+        showToast(email ? "Avatar saved" : "Avatar removed");
+    } else if (res.unsupported) {
+        showToast("Saved on this computer. This server doesn't support avatars yet — it needs Reson8 2.6.0.", 6000);
+    } else {
+        showToast(`Saved on this computer, but the server refused it: ${escapeHtml(res.error ?? "unknown error")}`, 6000);
+    }
+}
+
+for (const btn of profileProviderButtons) {
+    btn.addEventListener("click", () => {
+        profileDraftProvider = btn.dataset.avatarProvider === "gravatar" ? "gravatar" : "libravatar";
+        renderProfileControls();
+        updateProfilePreview(true);
+    });
+    // Arrow keys move between the two options (radiogroup keyboard pattern).
+    btn.addEventListener("keydown", (e) => {
+        if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) return;
+        e.preventDefault();
+        const next = profileProviderButtons.find((b) => b !== btn);
+        next?.click();
+        next?.focus();
+    });
+}
+
+profileEmailInput.addEventListener("input", () => {
+    renderProfileControls();
+    updateProfilePreview();
+});
+
+profileEmailInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !btnProfileSave.disabled) {
+        e.preventDefault();
+        btnProfileSave.click();
+    }
+});
+
+profileProviderLink.addEventListener("click", (e) => {
+    e.preventDefault();
+    api.openExternal(AVATAR_PROVIDER_INFO[profileDraftProvider].url);
+});
+
+btnProfileSave.addEventListener("click", async () => {
+    const email = profileEmailInput.value.trim();
+    if (email && !api.avatar.isPlausibleEmail(email)) return;
+    await commitAvatar(profileDraftProvider, email);
+});
+
+btnProfileRemove.addEventListener("click", async () => {
+    profileEmailInput.value = "";
+    await commitAvatar(profileDraftProvider, "");
+    updateProfilePreview(true);
+});
+
+chkAvatarsExternal.addEventListener("change", () => {
+    setExternalAvatarsEnabled(chkAvatarsExternal.checked);
+    updateProfilePreview(true);
+});
+
+// Hand the saved choice to the preload before any connect, so the very first
+// USER_JOIN_SERVER (and every reconnect) carries it.
+api.setAvatarSelection(currentAvatarSelection());
+
+api.on("user-avatar-updated", (data: { userId: string; avatarUrl: string | null }) => {
+    rememberAvatarUrl(data.userId, data.avatarUrl);
+    refreshAvatars(data.userId);
 });
 
 // ── Audio Tab Volume Sliders (PRD 10.2) ────────────────────────────────────

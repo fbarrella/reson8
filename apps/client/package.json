@@ -1,6 +1,6 @@
 {
     "name": "@reson8/client",
-    "version": "2.5.0",
+    "version": "2.6.0",
     "description": "Reson8 — Voice and text communication client",
     "author": {
         "name": "Felipe B. Netto",
@@ -21,6 +21,10 @@
         "test-build:linux": "node scripts/test-build.mjs linux",
         "test-build:mac": "node scripts/test-build.mjs mac",
         "test:markdown": "tsc --build && node scripts/markdown-smoke.mjs",
+        "test:avatar": "tsc --build && node scripts/avatar-smoke.mjs",
+        "test:soft-clip": "tsc --build && node scripts/soft-clip-smoke.mjs",
+        "test:link-fixers": "tsc --build && node scripts/link-fixers-smoke.mjs",
+        "test:identity": "tsc --build && node scripts/identity-smoke.mjs",
         "typecheck": "tsc --noEmit"
     },
     "build": {

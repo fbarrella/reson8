@@ -19,6 +19,20 @@ import { PresenceService } from "../services/presence.service.js";
 import { buildChannelTree } from "../services/channel-tree.service.js";
 import type { MediasoupService } from "../services/mediasoup.service.js";
 import { SocketOwnership } from "../services/socket-ownership.js";
+import { buildAvatarUrl, parseAvatarSelection } from "../services/avatar.service.js";
+import {
+    authMessage,
+    decideIdentity,
+    IDENTITY_MESSAGES,
+    isHostAllowed,
+    isNonceFresh,
+    keyFingerprint,
+    newNonce,
+    parseIdentityProof,
+    verifyAuthSignature,
+} from "../services/identity.service.js";
+import { adminKeyFingerprint, authAllowedHosts, requireSignedIdentity } from "../config/identity.config.js";
+import { issueViewerTicket, resolveViewerTicket, revokeViewerTickets } from "../services/viewer-ticket.service.js";
 
 type TypedIO = SocketIOServer<
     ClientToServerEvents,
@@ -240,6 +254,8 @@ export function registerConnectionHandlers(
         }
 
         await presence.leaveServer(userId, serverId);
+        // The session is over: its Viewer windows' tickets go with it (PRD 17.12).
+        await revokeViewerTickets(app.redis, userId).catch(() => {});
 
         io.to(`server:${serverId}`).emit("USER_LEFT", { userId, serverId });
     }
@@ -272,10 +288,42 @@ export function registerConnectionHandlers(
             }
         });
 
+        // ── REQUEST_AUTH_CHALLENGE (PRD 17.12) ────────────────────────────
+        // A fresh nonce for this socket's next join. Single use and short-
+        // lived; a new request replaces any previous one.
+        socket.on("REQUEST_AUTH_CHALLENGE", (ack) => {
+            if (typeof ack !== "function") return;
+            const nonce = newNonce();
+            socket.data.authNonce = nonce;
+            socket.data.authNonceIssuedAt = Date.now();
+            ack({ nonce });
+        });
+
+        // ── REQUEST_VIEWER_TICKET (PRD 17.12) ─────────────────────────────
+        // Only the authenticated primary socket that owns its user id may ask.
+        socket.on("REQUEST_VIEWER_TICKET", async (ack) => {
+            if (typeof ack !== "function") return;
+            try {
+                const { userId, serverId } = socket.data;
+                if (socket.data.role === "viewer" || !userId || !serverId || !ownership.isOwner(userId, socket.id)) {
+                    ack({ success: false, error: "Not connected to a server" });
+                    return;
+                }
+                ack({ success: true, ticket: await issueViewerTicket(app.redis, { userId, serverId }) });
+            } catch (err) {
+                app.log.error({ err }, "Error in REQUEST_VIEWER_TICKET");
+                ack({ success: false, error: "Failed to issue a viewer ticket" });
+            }
+        });
+
         // ── USER_JOIN_SERVER ────────────────────────────────────────────────
         socket.on("USER_JOIN_SERVER", async (payload, ack) => {
             try {
                 const { nickname, instanceId, password } = payload;
+                if (typeof instanceId !== "string" || instanceId.length === 0 || instanceId.length > 128) {
+                    ack({ success: false, error: "Invalid identity" });
+                    return;
+                }
 
                 // Password check (if SERVER_PRIVATE_PASSWORD is set)
                 const serverPassword = process.env.SERVER_PRIVATE_PASSWORD;
@@ -296,32 +344,132 @@ export function registerConnectionHandlers(
                     return;
                 }
 
+                // ── Identity (PRD 17.12) ──────────────────────────────────
+                // Decided BEFORE anything is written. The challenge is single
+                // use whatever the outcome.
+                const nonce = socket.data.authNonce;
+                const nonceIssuedAt = socket.data.authNonceIssuedAt;
+                socket.data.authNonce = undefined;
+                socket.data.authNonceIssuedAt = undefined;
+
+                const parsedProof = parseIdentityProof(payload.identity);
+                if (!parsedProof.ok) {
+                    ack({ success: false, error: IDENTITY_MESSAGES.verificationFailed });
+                    return;
+                }
+                const proofIn = parsedProof.value;
+                const existingUser = await app.prisma.user.findUnique({
+                    where: { id: instanceId },
+                    select: { publicKey: true },
+                });
+                const fingerprint = proofIn ? keyFingerprint(proofIn.publicKey) : null;
+                const proof = proofIn
+                    ? {
+                          publicKey: proofIn.publicKey,
+                          fingerprint: fingerprint!,
+                          // The nonce comes from THIS socket, never from the payload.
+                          signatureValid:
+                              !!nonce &&
+                              isNonceFresh(nonceIssuedAt, Date.now()) &&
+                              verifyAuthSignature(proofIn.publicKey, proofIn.signature, authMessage(nonce, proofIn.host)),
+                          hostAllowed: isHostAllowed(proofIn.host, authAllowedHosts()),
+                      }
+                    : null;
+                const isAdminId = !!process.env.ADMIN_INSTANCE_ID && instanceId === process.env.ADMIN_INSTANCE_ID;
+                const decision = decideIdentity({
+                    proof,
+                    boundKey: existingUser?.publicKey ?? null,
+                    requireSigned: requireSignedIdentity(),
+                    isAdminId,
+                    adminFingerprint: adminKeyFingerprint(),
+                });
+                const identityLog = { userId: instanceId, fingerprint, address: clientAddress, host: proofIn?.host };
+                if (decision.action === "refuse") {
+                    app.log.warn({ ...identityLog, reason: decision.reason }, "Join refused (identity)");
+                    ack({ success: false, error: IDENTITY_MESSAGES[decision.reason] });
+                    return;
+                }
+                if (decision.bind && existingUser && proofIn) {
+                    // Atomic compare-and-set: only binds if nothing is bound yet,
+                    // so two racing first joins can't both win.
+                    const bound = await app.prisma.user.updateMany({
+                        where: { id: instanceId, publicKey: null },
+                        data: { publicKey: proofIn.publicKey, publicKeyBoundAt: new Date() },
+                    });
+                    if (bound.count === 0) {
+                        const now = await app.prisma.user.findUnique({ where: { id: instanceId }, select: { publicKey: true } });
+                        if (now?.publicKey !== proofIn.publicKey) {
+                            app.log.warn({ ...identityLog, reason: "otherDevice" }, "Join refused (identity bind race lost)");
+                            ack({ success: false, error: IDENTITY_MESSAGES.otherDevice });
+                            return;
+                        }
+                    }
+                    app.log.info(identityLog, "Identity key bound");
+                }
+
                 // Use the persistent instance ID as userId
                 socket.data.serverId = serverId;
                 socket.data.nickname = nickname;
                 socket.data.userId = instanceId;
                 socket.data.currentChannelId = null;
 
+                // Avatar refresh (PRD 17.1): an absent field (a pre-v2.6.0
+                // client) leaves the stored avatar alone, null clears it, and
+                // an invalid selection is ignored — it never fails the join.
+                let avatarData: { avatarUrl: string | null } | Record<string, never> = {};
+                let avatarChanged = false;
+                if (payload.avatar !== undefined) {
+                    const parsed = parseAvatarSelection(payload.avatar);
+                    if (parsed.ok) {
+                        const avatarUrl = buildAvatarUrl(parsed.value);
+                        avatarData = { avatarUrl };
+                        // A change made while offline must reach clients that
+                        // are already online and cached the old one.
+                        const existing = await app.prisma.user.findUnique({
+                            where: { id: instanceId },
+                            select: { avatarUrl: true },
+                        });
+                        avatarChanged = (existing?.avatarUrl ?? null) !== avatarUrl;
+                    } else {
+                        app.log.warn({ userId: instanceId, error: parsed.error }, "Ignoring invalid avatar on join");
+                    }
+                }
+
                 // Auto-create (upsert) User record for this instance
-                await app.prisma.user.upsert({
+                // A brand-new user binds their key as the row is created (PRD 17.12).
+                const bindOnCreate =
+                    decision.bind && !existingUser && proofIn
+                        ? { publicKey: proofIn.publicKey, publicKeyBoundAt: new Date() }
+                        : {};
+                const userRow = await app.prisma.user.upsert({
                     where: { id: instanceId },
-                    update: { nickname },
+                    update: { nickname, ...avatarData },
                     create: {
                         id: instanceId,
                         username: instanceId,
                         nickname,
-                        password: "instance-auth", // no real auth — instance-based
+                        password: "instance-auth", // identity is the bound key (PRD 17.12), not a password
+                        ...avatarData,
+                        ...bindOnCreate,
                     },
+                    select: { publicKey: true },
                 });
+                if (decision.bind && !existingUser && proofIn) {
+                    if (userRow.publicKey !== proofIn.publicKey) {
+                        // Another first join created the row with its own key in between.
+                        app.log.warn({ ...identityLog, reason: "otherDevice" }, "Join refused (identity create race lost)");
+                        ack({ success: false, error: IDENTITY_MESSAGES.otherDevice });
+                        return;
+                    }
+                    app.log.info(identityLog, "Identity key bound (new user)");
+                }
 
                 // Assign the default Member role
                 const rolesToAssign = ["role-default"];
 
-                // Check if this instance is the designated server admin
-                if (
-                    process.env.ADMIN_INSTANCE_ID &&
-                    instanceId === process.env.ADMIN_INSTANCE_ID
-                ) {
+                // The designated server admin (ADMIN_INSTANCE_ID) — only with the
+                // right key when ADMIN_KEY_FINGERPRINT is set (PRD 17.12).
+                if (decision.grantAdmin) {
                     rolesToAssign.push("role-admin");
                 }
 
@@ -364,7 +512,14 @@ export function registerConnectionHandlers(
                 // Register presence in Redis
                 await presence.joinServer(instanceId, serverId, nickname);
 
-                // Notify all other clients in the server
+                // Notify all other clients in the server (a changed avatar first,
+                // so their cache is current before the join is announced)
+                if (avatarChanged && "avatarUrl" in avatarData) {
+                    socket.to(`server:${serverId}`).emit("USER_AVATAR_UPDATED", {
+                        userId: instanceId,
+                        avatarUrl: avatarData.avatarUrl,
+                    });
+                }
                 socket.to(`server:${serverId}`).emit("USER_JOINED", {
                     userId: instanceId,
                     nickname,
@@ -456,16 +611,41 @@ export function registerConnectionHandlers(
         // (see `SocketData.role`'s doc comment) — a banned/kicked user
         // can't get here anyway, since `WATCH_SCREEN_SHARE` (voice.handler.ts)
         // separately requires the caller to currently be a channel occupant.
-        socket.on("VIEWER_AUTHENTICATE", (payload, ack) => {
+        socket.on("VIEWER_AUTHENTICATE", async (payload, ack) => {
             try {
-                const { instanceId } = payload;
-                socket.data.serverId = app.serverId;
-                socket.data.userId = instanceId;
+                // PRD 17.12: the user id comes from a ticket the user's own
+                // authenticated primary socket requested — never from the
+                // payload. (Before, any id was accepted here, without the
+                // password or ban checks.)
+                let userId: string | null = null;
+                let serverId = app.serverId;
+                if (payload?.ticket !== undefined) {
+                    const owner = await resolveViewerTicket(app.redis, payload.ticket);
+                    if (owner) {
+                        userId = owner.userId;
+                        serverId = owner.serverId;
+                    }
+                } else if (typeof payload?.instanceId === "string" && payload.instanceId.length <= 128) {
+                    // Legacy (pre-2.6.0) viewer: only for an identity with no
+                    // bound key, only while unsigned joins are allowed, and
+                    // only while that user really has a live primary session.
+                    const legacyId = payload.instanceId;
+                    const row = await app.prisma.user.findUnique({ where: { id: legacyId }, select: { publicKey: true } });
+                    if (row && row.publicKey === null && !requireSignedIdentity() && ownership.hasOwner(legacyId)) {
+                        userId = legacyId;
+                    }
+                }
+                if (!userId) {
+                    ack({ success: false, error: "Viewer session expired — close and reopen the viewer." });
+                    return;
+                }
+                socket.data.serverId = serverId;
+                socket.data.userId = userId;
                 socket.data.nickname = "";
                 socket.data.currentChannelId = null;
                 ack({ success: true });
                 app.log.info(
-                    { socketId: socket.id, role: "viewer", userId: instanceId },
+                    { socketId: socket.id, role: "viewer", userId, viaTicket: payload?.ticket !== undefined },
                     "Viewer socket authenticated",
                 );
             } catch (err) {

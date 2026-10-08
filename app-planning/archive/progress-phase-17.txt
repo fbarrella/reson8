@@ -1,0 +1,1411 @@
+================================================================================
+  RESON8 — Development Progress Log
+  Archived: 08/10/2026 (condensed into the phase 17 summary in
+  app-planning/progress.txt)
+================================================================================
+
+PROJECT OVERVIEW
+================
+Reson8 is a high-performance, self-hosted voice and text communication platform
+for desktop (Electron). It replicates the TeamSpeak 3 experience — low-latency
+voice, hierarchical channel trees, and private server ownership — while
+integrating modern persistent text channels.
+
+Tech Stack: Electron + TypeScript, Fastify + Socket.io, mediasoup (SFU),
+PostgreSQL + Prisma, Redis, Docker.
+
+Monorepo structure:
+  apps/client/            — Electron desktop client
+  apps/server/             — Node.js signaling + SFU server
+  packages/shared-types/    — Shared DTOs, enums, and Socket.io event types
+
+For build commands, environment variables, ports, and architecture details,
+see the root CLAUDE.md (and apps/client/CLAUDE.md, apps/server/CLAUDE.md) —
+not duplicated here to avoid drift between docs.
+
+================================================================================
+  FULL UNABRIDGED ENTRIES — PHASE 17 (v2.6.0)
+================================================================================
+
+--- Entry: 08/10/2026 ---
+
+Feature/Fix: PRD 17.1 — Avatars via Libravatar/Gravatar (profile settings + server storage)
+
+  Problem: Reson8 had no avatars at all. Users wanted a picture identity
+  hosted on Libravatar (default) or Gravatar, chosen by email, that other
+  users can see even while its owner is offline.
+
+  Solution: Settings -> Application has a new first section, "Profile":
+  an avatar source switch (Libravatar | Gravatar), an email field, a 96px
+  live preview and Save/Remove buttons, plus a "Load avatars from
+  Libravatar/Gravatar" opt-out toggle (user decision; off = colored
+  initials, no external requests at all). The email is hashed locally
+  (SHA-256 of the trimmed, lower-cased address, the key both providers
+  use) and only { provider, hash } is ever sent to the server. The server
+  NEVER accepts a URL: it validates the selection and builds the URL from
+  one of two fixed templates, so a modified client can't make everyone
+  load an image from a host of its choosing (an IP-logging pixel), the
+  same principle as the PRD 16.8 upload ledger. The stored URL is
+  refreshed on every USER_JOIN_SERVER ("checked once at login") and via a
+  new SET_AVATAR event when changed while connected; changes are broadcast
+  as USER_AVATAR_UPDATED. Users without an avatar get Libravatar's
+  generated "wavatar" keyed by sha256(userId), never the raw id, because
+  the user id IS the instanceId, the identity credential (user decision).
+
+  Shared Types Changes:
+    - AvatarProvider ("libravatar" | "gravatar"), IAvatarSelection
+      { provider, hash }; IUser.avatarUrl?.
+    - USER_JOIN_SERVER payload gains avatar?: IAvatarSelection | null.
+      Absent (a v2.5.0 client) = leave the stored avatar alone; null =
+      clear it; an object = validate and store.
+    - New C2S SET_AVATAR ({ avatar } -> { success, avatarUrl?, error? }).
+    - New S2C USER_AVATAR_UPDATED ({ userId, avatarUrl | null }).
+
+  Database Changes:
+    - Migration 20261010120000_add_user_avatar_url: users."avatarUrl" TEXT,
+      nullable, no backfill (NULL = default avatar). Generated with
+      `prisma migrate diff` against a throwaway shadow DB, never migrate dev.
+
+  Server Changes:
+    - services/avatar.service.ts (NEW, pure): parseAvatarSelection() (exact
+      provider via hasOwnProperty, so "toString"/"__proto__" are refused;
+      hash must match /^[0-9a-f]{64}$/; extra keys dropped) and
+      buildAvatarUrl(). AVATAR_UPDATE_COOLDOWN_MS = 2000.
+    - handlers/profile.handler.ts (NEW): SET_AVATAR. Refused for viewer
+      sockets and sockets that haven't joined; 2s in-memory cooldown per
+      user (nudge pattern); writes and broadcasts only when the URL
+      actually changed.
+    - connection.handler.ts USER_JOIN_SERVER: avatar folded into the
+      existing user upsert. An invalid selection is logged and ignored and
+      never fails the join. A join that changes the avatar (e.g. changed
+      while offline) broadcasts USER_AVATAR_UPDATED before USER_JOINED, so
+      online clients don't keep a stale one.
+
+  Client Changes:
+    - src/avatar.ts (NEW, pure, like markdown.ts): normalizeEmail,
+      isPlausibleEmail, sha256Hex/hashEmail (Node crypto, so it lives in
+      the preload, not the renderer), buildAvatarUrl (mirrors the server,
+      used only for the preview, plus a d=404 variant), defaultAvatarUrl,
+      withAvatarSize (URLSearchParams, clamped to 1-512).
+    - preload.ts: reson8Api.avatar.* helpers; setAvatarSelection() stores
+      the choice and every USER_JOIN_SERVER (reconnects included) sends it;
+      setAvatar() emits SET_AVATAR with a 5s timeout, reported as
+      `unsupported` against a pre-v2.6.0 server; USER_AVATAR_UPDATED is
+      forwarded as "user-avatar-updated".
+    - renderer.ts "Avatars (PRD 17.1)" section: avatarUrlCache (userId ->
+      stored URL), createAvatarElement()/applyAvatar()/refreshAvatars().
+      Every avatar is one `.avatar[data-avatar-user-id]` element: initials
+      on a stable per-user color always underneath, with the image fading
+      in on load and falling back stored -> default -> initials (never a
+      broken-image icon). Fixed size, so no layout shift (17.2/17.8 rely on
+      that). Built here so 17.2/17.3 can reuse it.
+    - Profile section: the edit is a draft until Save and is reset whenever
+      Settings opens. The preview probes the provider with d=404 to tell
+      "Avatar found ✓" from "No picture on <provider> yet — you'll get a
+      generated one", gives up after 10s ("Couldn't reach <provider> right
+      now"), and request tokens discard stale answers. Save works
+      disconnected (stored locally, sent on the next join). Remove clears
+      the avatar. Server refusals and "server too old" surface as toasts
+      (error text escaped, since showToast uses innerHTML).
+    - index.html: Profile markup + scoped CSS. The provider switch is a
+      button radiogroup (aria-checked, arrow keys), not radio inputs,
+      because .modal-content's generic label/input rules would stretch it
+      (the PRD 16.1 lesson). A disabled Save gets a neutral look instead
+      of opacity, since the accent stayed vivid at 45%.
+
+  localStorage Keys:
+    reson8-avatar-provider ("libravatar" default | "gravatar")
+    reson8-avatar-email (only to refill the field; never sent anywhere)
+    reson8-avatars-external ("false" = initials only)
+
+  Found During Testing:
+    - Bug (fixed): saving while disconnected returned before re-rendering
+      the buttons, so Save stayed enabled and Remove disabled.
+    - Libravatar's d=404 probe takes ~4.5s for the first hop (it proxies
+      Gravatar on a miss) and longer for the full redirect chain. Not a
+      bug, but it motivated the 10s give-up.
+
+  Key Files Modified:
+    packages/shared-types/src/models.ts
+    packages/shared-types/src/socket-events.ts
+    apps/server/prisma/schema.prisma
+    apps/server/prisma/migrations/20261010120000_add_user_avatar_url/migration.sql (NEW)
+    apps/server/src/services/avatar.service.ts (NEW)
+    apps/server/src/handlers/profile.handler.ts (NEW)
+    apps/server/src/handlers/connection.handler.ts
+    apps/server/src/index.ts
+    apps/server/src/__tests__/avatar.service.test.ts (NEW)
+    apps/client/src/avatar.ts (NEW)
+    apps/client/scripts/avatar-smoke.mjs (NEW)
+    apps/client/package.json (test:avatar script)
+    apps/client/src/preload.ts
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/renderer/index.html
+
+  Verification:
+    - npx tsc --build (shared-types), npx tsc --noEmit (server, client).
+    - npm run test (server): 10 files, 105 tests pass, including the new
+      avatar.service tests (both providers, null, extra keys dropped,
+      unknown/inherited providers, wrong-length/uppercase/URL hashes).
+    - npm run test:avatar (client, 20 checks: known email hash,
+      normalization, URL builders match the server, default URL never
+      contains the raw id, size param) and npm run test:markdown
+      (regression) both pass.
+    - Migration: `prisma migrate deploy` on a fresh scratch DB, column
+      confirmed nullable; scratch DB dropped afterwards.
+    - Real built server on the scratch DB (explicit DATABASE_URL, Redis
+      db 7, port 9871, empty password), seeded after boot, with a scripted
+      two-socket run: 18/18 pass (join stores URL + broadcasts; invalid
+      avatar ignored, join still OK; SET_AVATAR refuses bad provider/
+      uppercase hash/before-join; valid one persists + broadcasts; 2s
+      cooldown; unchanged = no broadcast; null clears; legacy join keeps
+      the avatar; join-time change/clear broadcast). The first run failed
+      because the scratch DB had no roles (not seeded), a test-setup
+      mistake, not an app bug.
+    - Real built client under Xvfb over CDP: 17/17 pass (default state and
+      sha256 default URL, invalid email error, "No picture" hint, provider
+      switch, save while disconnected, join stores the URL in the DB,
+      Remove/Save while connected update the DB, external-off initials,
+      draft discarded on reopen). Screenshots inspected (default, invalid,
+      no-picture, external off, saved state).
+    - Not yet hand-tested by the user. Avatars aren't shown in chat until
+      17.2.
+
+  Next Step: PRD 17.2 — avatars next to nicknames in text chats (DTOs gain
+  avatarUrl/senderAvatarUrl; buildMessageShell() gets the 40px gutter
+  avatar).
+
+--- Entry: 08/10/2026 ---
+
+Feature/Fix: PRD 17.2 — Avatars next to nicknames in text chats
+
+  Problem: With avatars available (17.1), chat messages still showed only a
+  nickname. The user wanted the Discord-style layout of
+  app-planning/print_chat_avatar.png: a round avatar left of the group's
+  name, with the group's later lines indented under the name and no avatar
+  of their own.
+
+  Solution: Every channel and DM message now carries its author's CURRENT
+  avatar URL. The shared buildMessageShell() puts a 40px avatar into a 56px
+  left gutter, top-aligned with the name. The avatar lives INSIDE
+  .msg-header, so it shows and hides exactly with the header:
+  applyGrouping()/regroupFrom() needed no changes, and the avatar stays
+  level with the name even under a reply snippet.
+
+  Shared Types Changes:
+    - IMessage.avatarUrl?, IDirectMessage.senderAvatarUrl? (additive;
+      absent from a pre-v2.6.0 server = the client keeps its cache /
+      default avatar).
+
+  Server Changes:
+    - message.handler.ts: messageInclude selects user.avatarUrl, mapped in
+      toMessageDto() (fetch latest/before/around). SEND_MESSAGE and
+      EDIT_MESSAGE build their DTOs by hand, so both now include the user's
+      avatarUrl in the create/update query.
+    - dm.handler.ts: SEND_DIRECT_MESSAGE includes the sender's avatarUrl;
+      FETCH_DIRECT_MESSAGES' dmInclude selects it too.
+    - It's the author's current avatar, not a snapshot, so an avatar change
+      also updates history (as in Discord).
+
+  Client Changes:
+    - renderer.ts: ChatMessage/DirectMessage types gain the fields;
+      buildMessageShell() takes avatarUrl, feeds it into avatarUrlCache
+      (rememberAvatarUrl) and prepends createAvatarElement(ownerId, nick,
+      40) to the header; it also sets data-hhmm. Both builders pass it.
+      Live USER_AVATAR_UPDATED already re-applies every
+      [data-avatar-user-id] (17.1).
+    - index.html: .chat-msg padding-left = --msg-gutter (56px: 6 + 40 +
+      10); the header is the avatar's positioning context (left: 6px into
+      the gutter); a group start has min-height 47px so a one-line message
+      never lets the avatar overlap the next row; a hovered continuation
+      shows its HH:MM in the gutter (::before with attr(data-hhmm)).
+      Before this, a continuation's time wasn't visible at all.
+    - Reply snippets (PRD 16.11): the snippet now starts at the text
+      column, and its connector runs out into the gutter and down onto the
+      avatar's centre, as in Discord.
+
+  Found During Testing (all fixed):
+    - LAYOUT BUG caught only by looking at the screenshot: from the reply
+      onward, every taller message was squashed to exactly 47px and
+      overlapped the next. .chat-messages is a scrolling flex column, and
+      the explicit min-height replaced the default `min-height: auto`,
+      which is what had kept flex items from shrinking below their content
+      once the list overflows. Fixed with flex-shrink: 0 on .chat-msg (the
+      behavior the default used to guarantee). The automated checks had
+      passed before the screenshot showed the overlap; overlap/height
+      checks were then added to the test.
+    - Scroll anchoring on "load older": a 5px nudge at the page junction,
+      caused by the new min-height. When the junction repair turns the old
+      first message (a one-line group start) into a continuation, its
+      header and the min-height padding vanish, and loadOlderMessages()
+      corrected scroll by the TOTAL scrollHeight change, so it
+      under-compensated. loadOlderMessages() now anchors on an element:
+      the .msg-body of the first message in view, re-measured after the
+      prepend, with the old height-delta correction as fallback. The text
+      the user is reading now stays exactly in place whatever regrouping
+      does above it.
+    - Pre-existing, NOT fixed here, added to PRD 17.8's scope: when the
+      first page of 20 doesn't fill the viewport, older history never
+      loads. The top sentinel is already visible and IntersectionObserver
+      only fires on a change; the one early callback is ignored because
+      initialLoadDone was still false. Reproduced headlessly.
+
+  Key Files Modified:
+    packages/shared-types/src/models.ts
+    apps/server/src/handlers/message.handler.ts
+    apps/server/src/handlers/dm.handler.ts
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/renderer/index.html
+    app-planning/Reson8_Phase17_PRD.md (17.8 scope note)
+
+  Verification:
+    - npx tsc --build (shared-types), npx tsc --noEmit (server, client);
+      npm run test (server, 105 pass); npm run test:markdown and npm run
+      test:avatar pass.
+    - Real built server on a fresh scratch DB (migrated, seeded after
+      boot), with a channel populated by script: a 3-message group (the
+      reference image's text), a second author, a reply, a solo emoji, a
+      Markdown block, a link preview and an image upload claimed by
+      uploadId.
+    - Real built client under Xvfb over CDP, 21/21 pass:
+      - avatar in every header; visible on group starts, hidden on
+        continuations; at 6px; text column at 56px for every message;
+      - group start ≥ 47px; reply/Markdown/solo emoji not squashed; no
+        overlaps;
+      - stored Libravatar URL sized s=80; sha256 default for a user without
+        one; images loaded; data-hhmm on every message;
+      - live avatar change updates all of that user's rendered avatars, and
+        a live message carries the new one;
+      - a DM shows the sender's avatar; external avatars off → no images in
+        chat.
+    - Prepend test (45 extra messages, viewport shrunk to 420px so a page
+      overflows): fresh tab loads 20, scrolling up prepends 20 more, the
+      first visible message's text stays within ±2px, no overlaps, avatars
+      exactly on group starts after the junction repair. The full 21-check
+      run was repeated after the anchoring change: all pass.
+    - Screenshots inspected: channel top/bottom (matches the reference
+      layout), DM tab, initials mode, after the prepend.
+    - Not yet hand-tested by the user.
+
+  Next Step: PRD 17.3 — user profile card when clicking a nickname or avatar.
+
+--- Entry: 08/10/2026 ---
+
+Feature/Fix: PRD 17.3 — User profile card (click a nickname or avatar)
+
+  Problem: The only way to act on another user (DM, Nudge) was the Online
+  Users modal, and nicknames in chat were plain text. Users wanted to click
+  a name or avatar in any chat message and see who that person is: avatar,
+  nickname, first login, roles, online status, plus Message/Nudge shortcuts
+  and a close button.
+
+  Solution: Clicking (or Enter/Space on) a message's avatar or nickname, in
+  a channel or a DM, opens a profile card. It opens immediately with what
+  the message already knows (nickname, avatar) plus skeleton rows, then
+  fills in from a new GET_USER_PROFILE event. A per-open request id drops
+  stale answers.
+
+  "First login" needed no migration: User.createdAt (@default(now())) is
+  written once, when USER_JOIN_SERVER's upsert first CREATES the row (the
+  update branch never touches it), and that has been true for every user
+  since Phase 4. The nextsteps "start storing it if we don't have it"
+  fallback wasn't needed. Labelled "Member since".
+
+  Shared Types Changes:
+    - IUserProfile { userId, nickname, avatarUrl, memberSince, roles[{ id,
+      name, color, powerLevel }], isOnline }.
+    - New C2S GET_USER_PROFILE ({ userId } -> { success, profile?, error? }).
+
+  Server Changes:
+    - services/profile.service.ts (NEW, pure): toUserProfile() keeps only
+      this server's roles, sorted by powerLevel desc then name, and never
+      exposes serverId; isPlausibleUserId() (string, 1-128 chars).
+    - profile.handler.ts: GET_USER_PROFILE. Refused for viewer sockets and
+      sockets that haven't joined. No permission flag: everything on the
+      card is already visible to members. One user query (roles filtered to
+      this server) plus presence from Redis (getOnlineUsers, never
+      Postgres).
+
+  Client Changes:
+    - preload.ts: getUserProfile() with a 5s timeout -> `unsupported`
+      against a pre-v2.6.0 server.
+    - Card (#user-profile-modal, index.html + renderer.ts "User Profile
+      Card"):
+      - banner tinted with the user's avatar color; 96px avatar with an
+        online dot;
+      - nickname; "Member since <date> · <relative>" with a full date
+        tooltip;
+      - role chips, the dot in role.color (only a real hex color reaches
+        CSS);
+      - Online/Offline status.
+    - Actions: Message (closes the card, openDmTab) and Nudge (only when
+      canNudge: online, not you, nudging enabled). Your own card shows
+      "This is you" + "Edit profile" (opens Settings -> Application).
+      Error state with Retry; "Profile details need a newer server" when
+      unsupported. Live: USER_JOINED/USER_LEFT flip the status and
+      show/hide Nudge while it's open; avatar changes arrive via 17.1's
+      refreshAvatars.
+    - Nudge button EXTRACTED from createUserRow() into buildNudgeButton()
+      + canNudge(), shared by the Online Users modal and the card, so the
+      30s cooldown (lastNudgeSentAt) is shared. Its self-cleanup stops the
+      countdown when the button is detached; it now does that only once
+      the button has been attached (wasAttached), since the card builds the
+      button before inserting it.
+    - Triggers: .msg-nick got role="button" tabindex="0" title="View
+      profile"; one delegated click + keydown listener on tabContentArea
+      for ".msg-header > .avatar" and ".msg-nick". Reply-snippet names keep
+      their jump-to-original click.
+    - Accessibility: role=dialog, aria-modal, labelled by the nickname;
+      focus moves to Close on open and back to the nickname on close; Tab
+      is trapped in the card; Escape, backdrop click and the Close button
+      all close it.
+
+  Found During Testing (fixed):
+    - REAL BUG, found by the UI test: after pressing Nudge in the card,
+      Escape no longer closed it. The Nudge button disables itself for its
+      cooldown, a disabled button drops focus to <body>, and the Escape
+      handler was attached to the dialog, so it never fired. The card stayed
+      open, and the next action opened the Online Users modal on top of it.
+      Escape/Tab are now handled on the DOCUMENT (capture phase) whenever
+      the card is visible, and Tab brings focus back into the card if it
+      has left. A regression check reproduces the exact sequence.
+    - Mixed-language text: Intl with the system locale produced "Member
+      since 8 de outubro de 2026 · há 4 minutos" inside an English
+      sentence. The card's date/relative-time now use "en", like the rest
+      of the (English) UI.
+    - Test-only mistakes (not app bugs): the first "avatar click" failure
+      was really the leftover-open card above; one assertion used a plain
+      string instead of a template literal.
+
+  Key Files Modified:
+    packages/shared-types/src/models.ts
+    packages/shared-types/src/socket-events.ts
+    apps/server/src/services/profile.service.ts (NEW)
+    apps/server/src/handlers/profile.handler.ts
+    apps/server/src/__tests__/profile.service.test.ts (NEW)
+    apps/client/src/preload.ts
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/renderer/index.html
+
+  Verification:
+    - npx tsc --build (shared-types), npx tsc --noEmit (server, client);
+      npm run test (server): 11 files, 111 tests pass, including the new
+      profile.service tests; npm run test:markdown and npm run test:avatar
+      pass.
+    - Real built server on a fresh scratch DB, ADMIN_INSTANCE_ID set to a
+      seeded user, scripted sockets: 12/12 pass:
+      - refused before joining and for a viewer socket;
+      - memberSince equals users.createdAt read from Postgres;
+      - roles "Server Admin" before "Member", no serverId;
+      - offline/online status from Redis; unknown, non-string and
+        oversized ids refused.
+    - Real built client under Xvfb over CDP, trusted mouse/keyboard input:
+      22/22 pass on the final run:
+      - opening: click on the nickname and on the avatar, Enter on a
+        focused nickname, opens immediately; focus goes to Close and
+        returns to the nickname;
+      - content: English "Member since", roles, offline = Message only,
+        online = Message + Nudge, avatar at s=192;
+      - Nudge: countdown, shared with the Online Users modal; live Offline
+        (Nudge hidden) and back Online;
+      - the Escape-after-Nudge regression; Message opens the DM and closes
+        the card;
+      - own card with Edit profile -> Settings/Application; unknown user ->
+        error + Retry; backdrop click closes.
+    - Screenshots inspected: offline admin, online member, own card, error
+      state.
+    - Not yet hand-tested by the user.
+
+  Next Step: PRD 17.4 — microphone volume up to 300% (with a soft clipper
+  above 100%).
+
+--- Entry: 08/10/2026 ---
+
+Feature/Fix: PRD 17.4 — Microphone volume up to 300% (with a soft clipper)
+
+  Problem: Settings -> Voice & Shortcuts -> Microphone Volume stopped at 200%;
+  the user wanted 300%. At 3x digital gain a normal voice easily exceeds
+  full scale, and the Opus encoder would receive hard-clipped (harshly
+  distorted) samples.
+
+  Solution: The slider goes to 300%, and a soft clipper was added as the
+  last stage of the shared send-side chain:
+    micSource -> [noiseCancel] -> gateGain -> volumeGain -> softClip ->
+    destination / self-hear.
+  At or below 100% the clipper is BYPASSED (WaveShaper curve = null, a
+  pass-through by spec), so the signal is exactly what it was before.
+  Above 100%, loud peaks bend smoothly toward a 0.99 ceiling instead of
+  clipping.
+
+  Design Notes (why it's built this way):
+    - A WaveShaperNode clamps its INPUT to [-1, 1] before applying the
+      curve, so a x3 signal would already be hard-clipped before the curve
+      saw it. The gain is therefore folded into the curve: above 100% the
+      volume GainNode applies volume/3 (keeping the shaper's input inside
+      [-1, 1]) and the curve maps x -> softClip(3x). In the linear region
+      the effective boost is exactly the chosen volume.
+    - softClip(): identity up to 0.8 of full scale, then a tanh knee
+      approaching the ceiling, continuous with slope 1 at the knee (no
+      audible corner). WaveShaper rather than DynamicsCompressorNode: no
+      look-ahead latency (the compressor adds ~6 ms to voice).
+    - oversample "2x" when engaged (no aliasing from the knee), "none" when
+      bypassed.
+    - Ceiling 0.99, not 1.0: measured in Chromium, the 2x oversampling
+      filter overshot a full-scale input at 300% to 1.0002 with a 1.0
+      ceiling. 0.99 (~-0.09 dBFS) leaves that headroom, as limiters
+      normally do.
+    - The curve (4097 points, odd so x=0 is a point) is built once and
+      shared.
+    - Built inside the shared buildProcessingChain(), so preview mode and a
+      real call stay identical (apps/client/CLAUDE.md). The produce
+      destination and the self-hear monitor now tap softClipNode, so Hear
+      Yourself plays exactly what is sent. The level meter tap is unchanged
+      (post-noise-cancel, pre-gate).
+
+  Client Changes:
+    - services/mic-soft-clip.ts (NEW, pure): MIC_VOLUME_MAX_GAIN = 3,
+      SOFT_CLIP_KNEE = 0.8, SOFT_CLIP_CEILING = 0.99, softClip(),
+      buildSoftClipCurve(), micVolumeStages(volume) -> { gain, clip }
+      (clamped to 0-3; NaN -> 100%).
+    - voice.service.ts: softClipNode (created, connected and torn down with
+      the chain); applyMicVolumeStages() sets the gain/curve/oversample from
+      micVolume, on build and on every setMicVolume() (clamp 0-300, NaN ->
+      100); self-hear and the produce destination tap softClipNode.
+    - index.html: slider max 300; description adds "Above 100%, loud peaks
+      are softly limited instead of distorting."
+    - renderer.ts: the stored reson8-mic-volume is clamped to 0-300 on load
+      (a non-number falls back to 100), so a corrupt value can't become a
+      NaN/huge gain.
+
+  Key Files Modified:
+    apps/client/src/services/mic-soft-clip.ts (NEW)
+    apps/client/scripts/soft-clip-smoke.mjs (NEW)
+    apps/client/package.json (test:soft-clip script)
+    apps/client/src/services/voice.service.ts
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/renderer/index.html
+
+  Verification:
+    - npx tsc --noEmit (client); npm run test:markdown, test:avatar pass.
+    - npm run test:soft-clip (NEW), all pass:
+      - identity below the knee, continuity and slope 1 at the knee,
+        monotonic, symmetric, never above the 0.99 ceiling (float32 curve
+        included);
+      - micVolumeStages for 50/100/200/300/500%/NaN;
+      - end-to-end through a spec-accurate WaveShaper lookup: <=100% is
+        exactly input x volume, and 150-300% multiply by exactly the volume
+        in the linear region.
+      The first run failed 3 checks that asserted the curve stays strictly
+      below 1.0: tanh saturates to exactly 1 in double precision and
+      float32 rounds the end to 1.0. The real requirement is "never exceeds
+      full scale", and the test was corrected. That run is also what
+      surfaced the ceiling question.
+    - In the real built client, Chromium's actual WaveShaperNode offline-
+      rendered (OfflineAudioContext) with the app's exact curve and stages:
+      - bypassed at 100% and 50% is BIT-IDENTICAL to a plain gain;
+      - 200%: 0.2 -> 0.400; 300%: 0.2 -> 0.600;
+      - 300%: a 0.5 peak -> 0.990 and a full-scale peak -> 0.990, below
+        1.0 even with oversampling. Before the ceiling change the full-
+        scale peak was 1.0002.
+    - Same run (Xvfb + --use-fake-device-for-media-stream):
+      - the slider reaches 300 with the new text, and 300% is shown,
+        stored and applied;
+      - preview mode built the rewired chain and Hear Yourself turned on at
+        300% with no runtime errors;
+      - a stored "9999" loads as 300%.
+      The fake mic was effectively silent (-139 dB), so the AUDIBLE result
+      was not checked by machine.
+    - Not yet hand-tested by the user (by ear: Hear Yourself at 300% should
+      be loud but not crackly; 100% unchanged).
+
+  Next Step: PRD 17.5 — preview tabs and "Keep Tab Open" for text channels.
+
+--- Entry: 08/10/2026 ---
+
+Feature/Fix: PRD 17.5 — Preview tabs and "Keep Tab Open" for text channels
+
+  Problem: Every click on a text channel opened a new tab, so on bigger
+  servers tabs piled up and had to be closed one ✕ at a time. The user asked
+  for VS Code-style behavior: one tab that is replaced by the next channel
+  opened, plus a way to keep chosen tabs open (labelled "Keep Tab Open",
+  remembered across restarts, user decisions). DM tabs stay as they were.
+
+  Solution: Channel tabs now have a mode, "preview" or "kept". There is at
+  most one preview tab (previewTabId). Clicking a channel opens it in the
+  preview tab, which the next channel replaces IN PLACE: the new tab is
+  inserted before the old one, which is then disposed of without the usual
+  fall-back to the Server Log, so there is no flicker. "Keep Tab Open" makes
+  a tab permanent; it is offered from a new right-click menu on channel tabs
+  and from the tree's text-channel menu, next to Mute. Double-click has no
+  special meaning (explicitly requested). Kept tabs are remembered per server
+  and restored after every connect.
+
+  Client Changes (renderer.ts "Preview tabs & Keep Tab Open", index.html):
+    - ChatTab gains kind ("channel" | "dm") and mode (channel tabs only).
+    - fillTabElement(): structured tab markup — .tab-icon, .tab-kept-icon
+      (Lucide bookmark, accent; not the pushpin, which already means
+      "pinned message"), .tab-label, .tab-unread-dot (slot for 17.6),
+      .tab-close — for channel AND DM tabs. syncOpenTabNames() now updates
+      only .tab-label, so a rename keeps the icon. renderTabMode() sets the
+      .preview/.kept classes and tooltips. A preview tab's title is italic
+      (VS Code convention).
+    - openChatTab(id, name, { mode, focus, deferLoad }): an already-open tab
+      is just focused, and asking for "kept" keeps it in place; a new
+      preview replaces the old one in its slot; a "kept" open persists.
+    - closeTab(id, { reason }): "user" and "deleted" forget a kept tab;
+      "disconnect" keeps it remembered; "replaced" also skips the Server
+      Log fall-back. Existing cleanup (observer, DOM, reply draft) is
+      unchanged.
+    - setTabKept(id, kept):
+      - keeping a channel with no tab opens it kept and focused;
+      - unkeeping makes it THE preview tab; if another preview is open, the
+        one being viewed survives and the other closes.
+    - showChannelTabContextMenu(): "🔖 Keep Tab Open / Stop Keeping Open" +
+      "✕ Close Tab", same .occupant-ctx-menu styling as the tree menu.
+    - switchTab() lazily runs loadChatHistory() for a tab not loaded yet.
+    - Persistence: reson8-kept-tabs = { serverId: channelId[] } in tab-bar
+      order, written on keep/unkeep/✕/delete (same shape and try/catch
+      discipline as reson8-muted-channels).
+      - restoreKeptTabs(), after the first channel tree of each connection:
+        reopens the saved channels in order, UNFOCUSED, with history
+        DEFERRED until each is first opened, and drops ids that no longer
+        exist as text channels.
+      - A restored NSFW tab doesn't re-prompt (keeping it was a deliberate
+        choice).
+      - Disconnect closes every tab with reason "disconnect" (the store is
+        kept) and resets the restore flag.
+    - pruneClosedChannelTabs() on every tree update closes channel tabs
+      whose channel vanished, and channel-deleted now closes that channel's
+      tab (reason "deleted"). Correction to the PRD's audit: it assumed a
+      deleted channel's tab was already closed; it never was. The line it
+      cited is the disconnect handler. A deleted text channel's tab used to
+      linger.
+
+  localStorage Keys:
+    reson8-kept-tabs ({ [serverId]: channelId[] }, tab-bar order)
+
+  Found During Testing (fixed):
+    - REAL BUG: kept tabs were not restored after a restart. The first
+      CHANNEL_TREE_UPDATE arrives DURING the join, before the "connected"
+      event sets currentServerId, so restoreKeptTabs() saw an empty server
+      id and returned, and nothing re-sent the tree. The kept list is now
+      keyed by keptTabsServerId, taken from the tree payload's own serverId
+      (the same approach the muted-channels store uses for the same reason).
+    - Test mistake: the expected store order assumed opening the NSFW
+      channel appended a tab. It actually replaced the preview tab and took
+      its slot (before foxtrot), so the real tab-bar order was right.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/renderer/index.html
+
+  Verification:
+    - npx tsc --noEmit (client); npm run test:markdown, test:avatar,
+      test:soft-clip pass. (No server/shared-types change.)
+    - Real built server on a fresh scratch DB with 7 text channels (one
+      NSFW) created via an admin socket; real built client under Xvfb over
+      CDP with trusted left/right clicks. 28/28 pass on a clean
+      environment:
+      - opening: 5 tree clicks → one channel tab, same slot every time, no
+        orphan content; the preview is italic;
+      - keeping: tab right-click menu → kept (upright + bookmark, stored);
+        3 more clicks → kept + 1 preview; clicking a kept channel only
+        focuses it;
+      - DM tabs still accumulate and are never preview/kept;
+      - both unkeep cases; tree menu "Keep Tab Open" on an unopened channel
+        → opened kept + focused; store in real tab-bar order;
+      - a rename updates only the label (bookmark stays);
+      - persistence: disconnect keeps the store; after a renderer reload +
+        reconnect the kept tabs return in order, unfocused, history not
+        loaded until activation; the restored NSFW tab loads on activation
+        without a prompt;
+      - deletion: deleting a kept channel closes its tab and drops it from
+        the store; deleting the active preview's channel falls back to the
+        Server Log; ✕ on a kept tab forgets it.
+    - Screenshots inspected (preview tab, tab context menu, kept + DM tabs
+      together).
+    - Not yet hand-tested by the user.
+
+  Next Step: PRD 17.6 — unread indicator on unfocused channel tabs (fills
+  the .tab-unread-dot slot added here).
+
+--- Entry: 08/10/2026 ---
+
+Feature/Fix: PRD 17.6 — Unread indicator on unfocused channel tabs
+
+  Problem: An open channel tab that wasn't focused showed nothing when new
+  messages arrived; only the channel tree did. With kept tabs (17.5) the
+  tab bar became a natural place to watch, so unfocused tabs needed their
+  own unread alert, except for muted channels, whose tab shows only the
+  name.
+
+  Solution: One helper, refreshTabUnread(channelId), derives the tab's state
+  from the SAME source the tree uses: show the dot when the channel is in
+  unreadChannelIds, is not muted, and is not the active tab. It is called
+  from the three functions that already own that state, so tab and tree
+  can't disagree:
+    - markChannelUnread() (before its muted early-return, since the
+      tracking happens either way);
+    - markChannelRead() (switchTab() calls it, so focusing clears it);
+    - applyChannelMuteState() (mute hides an existing dot, unmute reveals
+      what was missed).
+  It also runs when a channel tab is created (a kept tab restored for a
+  channel with unread messages starts with the dot) and for every open tab
+  after each channel-tree render (renderTree() can seed unread state from
+  the tree's hasUnread). Applies to every open channel tab, kept or preview
+  (user decision); DM tabs are out of scope (DMs are marked read on
+  arrival).
+
+  Client Changes:
+    - renderer.ts: refreshTabUnread(); calls in markChannelUnread,
+      markChannelRead, applyChannelMuteState, openChatTab and the
+      channel-tree handler. While unread the tab also gets aria-label
+      "<name> (unread)", removed when read.
+    - index.html: .tab.has-unread lifts the label from muted to the normal
+      text color + semibold and shows .tab-unread-dot (the slot added in
+      17.5), a 6px dot in the same red (--danger) as the tree's
+      .unread-dot. The PRD said "accent"; it was matched to the tree's
+      existing red so the two read as the same signal.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/renderer/index.html
+
+  Verification:
+    - npx tsc --noEmit (client); npm run test:markdown passes.
+    - Real built server (fresh scratch DB, 7 text channels) + a second
+      scripted user sending messages; real built client under Xvfb over CDP.
+      14/14 pass:
+      - kept + unfocused → red dot, bold label, aria-label, tree dot too;
+      - active tab → no dot; switching clears tab and tree;
+      - preview + unfocused → dot;
+      - muted → no dot (normal weight) while unread is still tracked;
+        unmute reveals it; muting hides an existing dot;
+      - after a disconnect + a message sent while away + reconnect, the
+        restored kept tab starts with the dot;
+      - DM tabs never get the class.
+    - Screenshots inspected (unfocused kept tab with dot next to the
+      active preview; restored tab with dot while on the Server Log).
+    - Not yet hand-tested by the user.
+
+  Next Step: PRD 17.7 — collapse only messages longer than ~15 lines (and
+  measure messages rendered in hidden tabs once they're shown).
+
+--- Entry: 08/10/2026 ---
+
+Feature/Fix: PRD 17.7 — Collapse only messages longer than ~15 lines
+
+  Problem: Messages collapsed behind "See more" as soon as they passed 4
+  lines, which hid most of any warning-style message. The collapse
+  threshold was the same number as the collapsed size: the code added the
+  4-line clamp class and kept it if anything overflowed. The user wanted a
+  much larger threshold (~15 lines), while a collapsed message should still
+  show 4 lines.
+
+  Solution: attachMessageTruncation() now measures the message's NATURAL
+  height (clamp classes removed) and collapses only when it is taller than
+  COLLAPSE_THRESHOLD_LINES = 15 rendered lines (computed line-height x 15,
+  +2px tolerance). A collapsed message still uses the existing 4-line clamp
+  CSS, unchanged. "Lines" are rendered lines, so one long wrapped paragraph
+  counts by its real height.
+
+  Details worth knowing:
+    - Measured with getBoundingClientRect().height, not scrollHeight: a
+      plain single-paragraph message is an inline <span>, whose scrollHeight
+      is 0 but whose box covers all of its wrapped lines.
+    - Pre-existing bug fixed here (as planned in the PRD): a message
+      rendered into a HIDDEN tab (.tab-content is display: none) measured 0
+      and was therefore never collapsed. That became common once kept tabs
+      (17.5) sit in the background. attachMessageTruncation() now marks such
+      a message data-truncation-pending, and switchTab() measures all
+      pending messages of a tab right after showing it. The tab is already
+      scrolled to the bottom at that point, and collapsing only shortens
+      content, so it stays at the bottom.
+    - Unchanged callers: the append path, the prepend path, the edit path
+      and applyMessageEdit() all call the same function; See more/See less,
+      collapse-on-minimize, solo-emoji exemption, and DMs never being
+      truncated (documented in buildDmMessageElement) are as before.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts
+
+  Verification:
+    - npx tsc --noEmit (client); npm run test:markdown passes.
+    - Real built server (fresh scratch DB) + a scripted sender; real built
+      client under Xvfb over CDP. 14/14 pass:
+      - 4, 14 and 15 lines shown in full (14 and 15 measured as 14 and 15
+        visible lines); 16 and 40 lines collapsed to exactly 4 visible
+        lines with See more;
+      - a long wrapped paragraph collapsed; a paragraph wrapping to 3 lines
+        not collapsed; a 20-item Markdown list collapsed;
+      - See more → all 40 lines; See less → 4;
+      - a 40-line message arriving while its tab is hidden → pending, not
+        clamped; switching to the tab → collapsed to 4 + See more, no
+        longer pending, still scrolled to the bottom;
+      - editing your own short message into 20 lines → collapsed.
+    - Screenshot inspected (15 lines in full, 16/40/wrapped collapsed).
+    - Not yet hand-tested by the user.
+
+  Next Step: PRD 17.8 — pinned-message jump with paginated history (two-way
+  pagination, including the under-filled first page found in 17.2).
+
+--- Entry: 08/10/2026 ---
+
+Feature/Fix: PRD 17.8 — Pinned-message jump with paginated history (two-way pagination)
+
+  Problem: Clicking the pinned-message bar (and reply snippets) for a
+  message outside the loaded page did not land on it: the chat scrolled
+  and stopped at the edge of the loaded history. After a jump, scrolling
+  down also stopped at the end of the fetched window (history only paged
+  backwards), and a live message arriving meanwhile was appended after the
+  window, leaving an invisible gap. Found while testing 17.2 and added to
+  this item's scope: when the first page didn't fill the viewport, older
+  history never loaded at all.
+
+  Root Cause (reproduced FIRST, against the unfixed build, as Step 0 of the
+  PRD required): 150-message channel, every 12th with an image, #10 pinned,
+  real click on the bar, with loadOlderMessages()/stickToBottom() wrapped
+  and the scroll sampled every 50 ms:
+    - H2 = THE cause. stickToBottom() ran 37 times while the 35-message
+      window rendered. Rendering into the just-emptied list counts as "at
+      the bottom" for every message, and the image-load callbacks re-stuck
+      it again ~100 ms later. The view ended on #20-#35 with #10 above the
+      viewport: exactly the reported "stops at the last message of the
+      loaded page".
+    - H1 (top-sentinel prepend cancelling the smooth scroll) did NOT fire
+      here, since the view had already been dragged to the bottom. It is
+      guarded anyway, because it would for deeper pins.
+    - H3 confirmed: scrolling to the bottom of the window stopped at #35.
+
+  Solution:
+    - Server: FETCH_MESSAGES and FETCH_DIRECT_MESSAGES accept `after`
+      (newer than a createdAt cursor, oldest first) and answer
+      hasMoreBefore/hasMoreAfter. Every query fetches ONE extra row per
+      direction, so "more history exists" is known for sure instead of the
+      client guessing from a full page. Combined cursors are refused.
+    - Client: content that isn't the live bottom (a jump window, a newer
+      page) renders with { stick: false }, so nothing follows the bottom.
+      jumpToMessage() blocks both sentinels while it lands
+      (jumpInProgress), scrolls INSTANTLY to centre the target in a
+      freshly built window (smooth only when the target was already loaded),
+      holds it centred for 1.5 s while images load, and releases on
+      scrollend or after 600 ms. Scrolling down from a window loads newer
+      pages until the present. Live messages while detached are not
+      rendered, so there is no gap.
+
+  Shared Types Changes:
+    - FETCH_MESSAGES / FETCH_DIRECT_MESSAGES payload: after?: string;
+      acks: hasMoreBefore?, hasMoreAfter? (additive; absent = older server).
+
+  Server Changes:
+    - services/pagination.service.ts (NEW, pure): parseHistoryQuery() → one
+      of latest | before | after | around (limit clamped 1-100, non-numeric
+      → 50; bad cursors/ids refused; null treated as absent),
+      windowHalves(), trimExtra().
+    - message.handler.ts / dm.handler.ts: all four kinds via the service,
+      take+1 per direction, flags in the ack. latest also reports
+      hasMoreAfter=false. The pin is still resolved only for "latest". Reply
+      previews/reactor nicknames are still one query per page.
+
+  Client Changes (renderer.ts, preload.ts):
+    - preload fetchMessages/fetchDirectMessages take `after` as a new last
+      parameter, so existing callers are unchanged.
+    - ChatTab: newestLoadedTimestamp (set on every forward append),
+      loadingNewer, jumpInProgress. atTrueLatest keeps its meaning (false =
+      newer history not loaded).
+    - renderChatMessage/renderDmMessage(tab, msg, { stick }): default
+      behavior unchanged; stick: false skips stickToBottom and the image-
+      load/link-preview re-stick.
+    - jumpToMessage(): as above. Window = JUMP_WINDOW_SIZE 41 (20 + target
+      + 20). Flags come from the server; against an older server it assumes
+      more on both sides (the old behavior). holdJumpTarget() re-centres on
+      <img> load (capture listener) and stops at once on wheel, touch, key
+      or pointer input. highlightMessage() extracted.
+    - loadNewerMessages(): triggered by the bottom sentinel; appends with
+      stick: false, de-duplicates by id, sets atTrueLatest from
+      hasMoreAfter. A pre-2.6.0 server ignores `after` and returns the
+      LATEST page, detected by the missing flag; appending that would leave
+      a gap, so it falls back to rebuildTabAtLatest().
+    - ensureHistoryFilled(): after every load (initial, rebuild, older,
+      newer, jump release) it loads again while a sentinel is still inside
+      the viewport. This fixes the under-filled first page: the
+      IntersectionObserver only fires on a CHANGE, and its one early
+      callback was ignored while initialLoadDone was false.
+    - "Jump to Most Recent" stays visible while newer history is unloaded,
+      even at the window's bottom.
+    - Live messages:
+      - while detached, they are not rendered (forward pagination reaches
+        them);
+      - YOUR own message while detached rebuilds the tab at the present and
+        scrolls there, so you see what you sent;
+      - same rules for DMs.
+    - loadOlderMessages(): stands down during a jump; uses hasMoreBefore
+      when present. The 17.2 element-anchored prepend correction is
+      unchanged.
+
+  Observed, Not Changed (pre-existing, out of scope): sending a message
+  while scrolled up in normal (non-detached) history doesn't move the view
+  to it. Rendering only follows the bottom when you're already near it,
+  and the send path never scrolls.
+
+  Key Files Modified:
+    packages/shared-types/src/socket-events.ts
+    apps/server/src/services/pagination.service.ts (NEW)
+    apps/server/src/__tests__/pagination.service.test.ts (NEW)
+    apps/server/src/handlers/message.handler.ts
+    apps/server/src/handlers/dm.handler.ts
+    apps/client/src/preload.ts
+    apps/client/src/renderer/renderer.ts
+
+  Verification:
+    - npx tsc --build (shared-types), npx tsc --noEmit (server, client);
+      npm run test (server): 12 files, 121 tests (new pagination.service
+      tests: defaults/clamping/junk limits, before/after/around parsing,
+      combined and bad cursors refused, null = absent, window halves,
+      trimExtra); npm run test:markdown passes.
+    - The same reproduction re-run on the fix: #10 in view from the first
+      sample on, 0 stickToBottom calls, the window correctly reported
+      nothing older; scrolling down now continues past #35; the first page
+      auto-filled to 40.
+    - Full suite against the real server + client (Xvfb, CDP, trusted
+      clicks), 17/17 pass on freshly seeded data:
+      - under-filled first page fills itself;
+      - pinned bar → #10 highlighted and still in view 2s later (images
+        loaded); the window knows nothing older and newer exists; Jump to
+        Most Recent offered;
+      - a live message while detached is not appended (no gap); scrolling
+        down reaches the present (#151) contiguously, with the live message
+        exactly once; the button hides at the true bottom; live messages
+        render normally after;
+      - a window jump to #30 with images above stays in view; a window jump
+        never calls stickToBottom;
+      - your own message while detached → rebuilt at the present and shown;
+        Jump to Most Recent rebuilds at the present;
+      - DMs: a jump lands on DM #6, and scrolling down reaches DM #90
+        contiguously.
+      Two first-run failures were test mistakes, fixed in the test:
+      checking the button before scrolling to the newly appended bottom,
+      and "jumping" to messages the earlier steps had already loaded (so the
+      tab never detached). A probe of a properly detached tab showed the
+      own-message rebuild at the bottom within 100 ms.
+    - Regression: the 17.2 prepend-anchor suite (5/5) passes again on the
+      new code.
+    - Screenshot inspected (landed on #10 with its pin marker, Jump to Most
+      Recent offered).
+    - Not covered by machine: the pre-2.6.0-server fallback in
+      loadNewerMessages (it needs an older server build).
+    - Not yet hand-tested by the user.
+
+  Next Step: PRD 17.9 — social-media link "fixers" for rich previews.
+
+--- Entry: 08/10/2026 ---
+
+Feature/Fix: PRD 17.9 — Social-media link "fixers" for rich previews
+
+  Problem: Links to video-first social networks only got a thumbnail
+  preview (YouTube showed a play overlay that opened the browser), so the
+  content had to be consumed in another app. Community "fixer" proxies
+  (FxTwitter and its cousins) serve embed-friendly metadata, usually with a
+  DIRECT video URL, for a fixed set of networks.
+
+  Solution: For YouTube, X/Twitter, Instagram, Reddit, Twitch, Bluesky and
+  Imgur links, the main process first asks the matching fixer. If it
+  delivers, the preview uses its metadata (the existing card already plays
+  a direct video/mp4 inline). Otherwise the normal flow runs on the ORIGINAL
+  url exactly as before (fast fetch → hidden-window fallback). That's the
+  "3 tries" from nextsteps. Links outside the list are untouched.
+
+  Client Changes:
+    - src/link-fixers.ts (NEW, pure):
+      - toFixerUrl(): exact-hostname rules, never substring, so look-alikes
+        never match. The hosts:
+        - YouTube: youtube.com/www/m, youtu.be → koutube.com
+        - X/Twitter: twitter.com/x.com + www/mobile → fxtwitter.com
+        - Instagram: instagram.com/www → oginstagram.com
+        - Reddit: reddit.com/www/old/new/m → vxreddit.com
+        - Twitch: twitch.tv/www/m → fxtwitch.seria.moe, plus
+          clips.twitch.tv/<slug> → /clip/<slug>
+        - Bluesky: bsky.app → vxbsky.app
+        - Imgur: imgur.com/www/m → imgurez.com (NOT i.imgur.com, already a
+          direct image)
+        http(s) only, no credentials; the path and query are kept, the
+        fragment is dropped; bare homepages are skipped. Each rule carries
+        the real network's name.
+      - FIXER_USER_AGENT: the fixers only serve embed metadata to recognized
+        crawlers (verified while planning: vxreddit redirected the plain
+        Reson8Bot UA to reddit.com and answered once the UA also carried
+        "Discordbot/2.0"). Used for fixer requests ONLY; every other request
+        keeps the old UA.
+      - decodeHtmlEntities(), displayDomain().
+    - main.ts:
+      - fetchLinkPreviewFast(url, { userAgent, strict }), whose defaults keep
+        the old behavior. In strict mode the final response URL must still
+        be on the fixer host (fixers redirect visitors they won't serve, e.g.
+        imgurez → embedez.com/download), AND the result must carry an image
+        or a video (a title alone is a fixer's error page, e.g. oginstagram's
+        "Temporarily unavailable" with status 200).
+      - fetchLinkPreview(): fixer first; a fixer result gets url = the
+        ORIGINAL link (clicking opens the real post), domain = the original
+        domain, siteName = the network name.
+      - The cache stays keyed by the original URL.
+
+  Found During Testing (fixed):
+    - Fixers stuff og:site_name with branding and stats, e.g. koutube's
+      "Koutube - use s/y/k\nUploaded 16 years ago\n&#x1F441;&#xFE0E; 1,822,…".
+      The card would have shown that raw. A fixer result's siteName is now
+      the real network ("YouTube", "X", "Twitch", …).
+    - Pre-existing, exposed by the above: extractOgTags() never decoded HTML
+      character references, so any site's og: fallback values (titles,
+      descriptions, and image URLs with &amp;) showed them literally. They
+      are now decoded (named + hex/decimal; unknown/invalid ones left as
+      is). Still safe: the card renders text via textContent, and
+      sanitizeText() strips tags after decoding.
+
+  Key Files Modified:
+    apps/client/src/link-fixers.ts (NEW)
+    apps/client/scripts/link-fixers-smoke.mjs (NEW)
+    apps/client/package.json (test:link-fixers script)
+    apps/client/src/main.ts
+
+  Verification:
+    - npx tsc --noEmit (client); npm run test:markdown passes.
+    - npm run test:link-fixers (NEW), all pass:
+      - every network incl. youtu.be, shorts, mobile/old hosts and
+        clips.twitch.tv;
+      - normalization: case, http→https, fragment dropped, :443 dropped;
+      - look-alike hosts, already-fixed hosts, i.imgur.com, non-http
+        schemes, credentials, homepages and junk never matched;
+      - entity decoding: named, hex/decimal, astral, unknown/invalid left
+        alone; the UA token.
+    - Live, through the real main process (renderer → IPC → main) in the
+      built app under Xvfb, 16/16 pass:
+      - YouTube and youtu.be → koutube answered: direct video/mp4 from the
+        Invidious proxy; the card links to the original url/domain; site
+        name "YouTube";
+      - X → fxtwitter (pbs.twimg.com image), named "X", links to x.com;
+      - Twitch clip → fxtwitch direct video/mp4, named "Twitch";
+      - Reddit → a preview linking to the original (vxreddit had no media
+        for that post, so the strict rule fell back to reddit.com);
+      - Instagram → never oginstagram's "Temporarily unavailable" (fell
+        back); Imgur → never the embedez redirect page (fell back to no
+        preview); Bluesky → vxbsky answered this time;
+      - no raw entities in any fixer result; example.com unchanged.
+      - In the real card: a YouTube preview renders an inline <video> (no
+        "open in browser" overlay) whose metadata actually loads from the
+        proxied MP4 (duration 213 s).
+    - Screenshot inspected (YouTube card with the inline player, "YOUTUBE"
+      site name, youtube.com footer).
+    - Note: the fixers are third-party services; their availability varies
+      (oginstagram/imgurez were failing on 07-08/10/2026). The fallback is
+      what keeps those links working.
+    - Not yet hand-tested by the user.
+
+  Next Step: PRD 17.10 — keep whitespace-only lines as blank lines in
+  Markdown.
+
+--- Entry: 08/10/2026 ---
+
+Feature/Fix: PRD 17.10 — Keep whitespace-only lines as blank lines in Markdown
+
+  Problem: There was no way to show a blank line between paragraphs
+  (useful for warning-style messages). A line containing only spaces, typed
+  as Shift+Enter, space, Shift+Enter, was treated by markdown-it exactly
+  like an empty line: a paragraph boundary, and paragraphs render with no
+  visible gap. Confirmed before changing anything: "Line 1\n \nLine 3"
+  and "Line 1\n\nLine 3" produced identical HTML.
+
+  Solution: renderMessageMarkdown() now runs preserveWhitespaceOnlyLines()
+  before parsing. Every line made only of spaces/tabs (at least one) becomes
+  a single U+00A0 no-break space, which markdown-it treats as ordinary
+  paragraph text, so with `breaks: true` it renders as one visible blank
+  line (`<br>\n&nbsp;<br>`), and several in a row stay several. A truly
+  empty line is left alone (still a plain paragraph break, as nextsteps
+  allows).
+  - Fenced code blocks are untouched: their whitespace is content. Fences
+    are tracked per CommonMark (``` or ~~~ with up to 3 leading spaces;
+    closed by the same character at least as long with nothing after it; a
+    backtick fence's info string can't contain a backtick).
+  - Inside a quote or a list item the blank line stays within that block
+    and the quote/list continues.
+  - markdownToPlainText() (pinned bar, reply snippets) needed no change:
+    it collapses all whitespace, NBSP included.
+  - The pipeline already allowed it: the client and server only trim the
+    WHOLE message and normalizeNewlines() leaves inner lines alone (checked
+    end to end below). No server change.
+
+  Key Files Modified:
+    apps/client/src/markdown.ts
+    apps/client/scripts/markdown-smoke.mjs
+
+  Verification:
+    - npx tsc --noEmit (client).
+    - npm run test:markdown: all pass, including 15 new cases:
+      - a space line → 1 blank line; a tab line too; many spaces → still 1;
+        two space lines → 2; a truly empty line unchanged;
+      - code: a ``` block and a ~~~ block keep their whitespace line
+        verbatim; after a fence closes, space lines become blank lines
+        again; a longer closing fence closes and a shorter one doesn't;
+      - quote and list continuity; the plain-text preview; the no-op fast
+        path; XSS still escaped next to a blank line.
+      All existing syntax and XSS vectors still pass.
+    - End to end with the real built server (scratch DB) and client
+      (Xvfb, CDP), sending through the composer exactly as a user would.
+      4/4 pass:
+      - the stored DB content keeps the inner " " lines;
+      - a message with 3 whitespace lines renders exactly 3 line-heights
+        taller than the same text without them (109.1 vs 54.6 px at
+        18.2 px/line);
+      - a truly empty line still adds no blank line;
+      - editing a message to add a space line shows the blank line.
+    - Screenshot inspected (warning-style message with 1 and 2 blank lines
+      next to the control).
+    - Not yet hand-tested by the user.
+
+  Next Step: PRD 17.11 — emoji autocomplete in the message edit box.
+
+--- Entry: 08/10/2026 ---
+
+Feature/Fix: PRD 17.11 — Emoji autocomplete in the message edit box
+
+  Problem: The emoji autocomplete (PRD 16.7) only worked in the composer;
+  editing a sent message meant typing emoji names from memory. The whole
+  autocomplete section was hard-wired to `chatInput`.
+
+  Solution: The autocomplete is generalized, not duplicated: a single card,
+  search and key handling now serve whichever textarea is its current
+  target, and the message edit box is attached to it.
+    - emojiAcTarget (+ acTarget(), defaulting to the composer) replaces
+      every `chatInput` reference inside the autocomplete functions;
+      emojiAcAfterInsert replaces the hard-coded autosizeChatInput() after
+      an insertion (the composer passes it, the edit box passes nothing).
+    - attachEmojiAutocomplete(textarea, { onAfterInsert }) wires
+      focus/input/click/keyup/blur on that textarea, plus scroll on its
+      .chat-messages list, which closes the card since the box moves.
+      Gaining focus makes the textarea the target. It sets the ARIA
+      attributes and returns a detach function. The composer now uses it
+      too (same behavior); its own keydown still calls
+      handleEmojiAutocompleteKeydown() first.
+    - startMessageEdit(): attaches before focusing (so the focus claims the
+      card) and detaches in finish(); detaching resets the target to the
+      composer. Its keydown gives the card first refusal: Enter/Tab pick an
+      emoji instead of saving, and Escape closes the card before it ever
+      cancels the edit (the composer's precedence with reply-cancel).
+      Clicking a suggestion doesn't blur (rows preventDefault on mousedown),
+      so it doesn't save the edit.
+    - positionEmojiAutocomplete(): when there is less than 120 px above the
+      caret, the card opens BELOW the caret's line (an edit box at the top
+      of the list), clamped inside the window. The composer at the bottom
+      never triggers it.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts
+
+  Verification:
+    - npx tsc --noEmit (client); npm run test:markdown passes.
+    - Real built server (scratch DB) + real built client under Xvfb over
+      CDP, with REAL typing (Input.insertText → genuine input events with
+      .data) and real key/mouse events:
+      - composer regression: ':hea' opens the card above the input; Enter
+        inserts and does NOT send; with a reply open, the 1st Escape closes
+        the card and the 2nd cancels the reply;
+      - edit box: it is focused; ':hea' opens the card targeted at the edit
+        box; ArrowDown + Enter picks without saving; the 1st Escape closes
+        the card, the 2nd cancels the edit (text restored); clicking a
+        suggestion inserts and keeps editing; ':red_heart:' converts on the
+        closing colon; Enter then saves with the emoji;
+      - scrolling the list closes the card;
+      - the composer owns the card again after an edit.
+      15/16 on the first run. The failing check was a test setup mistake:
+      the "top of list" box was at 198 px with 186 px above it, so by
+      design the card opened upward and shrank to fit. A follow-up probe put
+      the edit box truly at the top of a scrolled list (box at 100 px): the
+      card opened BELOW the caret line (top 129 px, inside the window).
+      PASS.
+    - Screenshots inspected (card open for an edit box; card below the caret
+      for a top-of-list edit box).
+    - Not yet hand-tested by the user.
+
+  Next Step: PRD 17.12 — cryptographic identity (stop instance-id
+  impersonation).
+
+--- Entry: 08/10/2026 ---
+
+Feature/Fix: PRD 17.12 — Cryptographic identity (stop instance-id impersonation)
+
+  Problem (audit finding, added to Phase 17 at the user's request): a user
+  WAS whatever `instanceId` a socket presented at USER_JOIN_SERVER, and
+  every id is broadcast to every client (USER_JOINED, presence, message
+  DTOs), so anyone could join as anyone, the admin included. One install
+  uses the same id on every server, so any server operator (or anyone
+  sniffing plain ws://) learned an id usable everywhere else. Worse,
+  VIEWER_AUTHENTICATE accepted any id with NO password or ban check, so an
+  outsider could watch a channel's screen shares using an occupant's id.
+
+  Solution: public-key challenge-response (the SSH/WebAuthn model), Ed25519
+  via Node's built-in crypto on both sides (no new dependency).
+  - Each install has a key pair whose private key never leaves the Electron
+    MAIN process.
+  - On every connection (reconnects included) the server issues a fresh
+    single-use nonce (60 s); the client signs
+    "reson8-auth-v1\n<nonce>\n<host>"; the server verifies against the key
+    BOUND to that id.
+  - Trust on first use: the first valid signed join binds the key, via an
+    atomic compare-and-set, so racing first joins can't both win.
+  - User ids stay the same; they are now treated as public handles.
+  - A secret token was rejected: every server would learn it and could
+    replay it elsewhere.
+  User decisions: in this phase as 17.12; gradual rollout (bound
+  identities are protected at once, unbound legacy joins are allowed until
+  REQUIRE_SIGNED_IDENTITY=true); optional ADMIN_KEY_FINGERPRINT; an
+  ADMIN-only "Reset key" in User Management for recovery.
+
+  Database Changes:
+    - Migration 20261011120000_add_user_identity_key: users."publicKey"
+      TEXT and "publicKeyBoundAt" TIMESTAMP(3), both nullable, no backfill.
+
+  Shared Types Changes:
+    - New events: REQUEST_AUTH_CHALLENGE, REQUEST_VIEWER_TICKET,
+      RESET_IDENTITY_KEY.
+    - USER_JOIN_SERVER.identity?: { publicKey, signature, host };
+      VIEWER_AUTHENTICATE payload { ticket?, instanceId? }.
+    - GET_ALL_USERS rows: hasIdentityKey?.
+    - SocketData: authNonce?, authNonceIssuedAt?.
+
+  Server Changes:
+    - services/identity.service.ts (NEW, pure + node:crypto): nonce,
+      authMessage, parseIdentityProof (shape checks), Ed25519-only key
+      import, verifyAuthSignature, SSH-style keyFingerprint, isNonceFresh,
+      isHostAllowed, and decideIdentity(), the PRD's table as one pure
+      function:
+      - signed + same key → accept; signed + other key → refuse "registered
+        to another device"; signed + unbound → accept + BIND; invalid
+        signature or disallowed host → refuse;
+      - unsigned + bound → refuse "protected — update"; unsigned + unbound
+        → accept unless REQUIRE_SIGNED_IDENTITY, or the admin id with a
+        fingerprint set;
+      - the admin role is only granted when no fingerprint is set or the key
+        matches it, and a foreign key can never bind a fingerprint-protected
+        admin id.
+    - config/identity.config.ts (NEW): REQUIRE_SIGNED_IDENTITY,
+      ADMIN_KEY_FINGERPRINT, AUTH_ALLOWED_HOSTS, read at call time.
+    - connection.handler.ts:
+      - REQUEST_AUTH_CHALLENGE.
+      - USER_JOIN_SERVER: validates instanceId; the identity decision runs
+        after the password/ban checks and BEFORE any write; the nonce is
+        taken from the socket (never the payload) and consumed whatever the
+        outcome; binding is a CAS (updateMany ... WHERE "publicKey" IS NULL)
+        for an existing row, or the key is set in the upsert's create for a
+        new user, with race checks; role-admin is granted only on
+        decision.grantAdmin. Every bind/refusal is logged with fingerprint,
+        address and host (never the signature).
+      - REQUEST_VIEWER_TICKET: only the owning primary socket.
+      - VIEWER_AUTHENTICATE now takes the user id FROM THE TICKET. The legacy
+        id path is allowed only for an unbound id, while unsigned joins are
+        allowed, AND while that user has a live owned session.
+      - finalizeDisconnect revokes the user's viewer tickets.
+    - services/viewer-ticket.service.ts (NEW): the upload-token pattern —
+      32 random bytes, only the SHA-256 stored in Redis, 10 min TTL
+      refreshed on use (survives the viewer's own reconnects), a per-user
+      set so all of a user's tickets can be revoked.
+    - admin.handler.ts: RESET_IDENTITY_KEY (requirePermission ADMIN) clears
+      the key, revokes tickets and disconnects that user's sockets, so an
+      impostor loses the session at once. GET_ALL_USERS reports
+      hasIdentityKey and never the key.
+    - .env.example documents the three optional variables.
+
+  Client Changes:
+    - src/identity-proof.ts (NEW, pure): the message format, a nonce/host
+      shape check, SPKI export, fingerprint, and signChallenge(), which
+      refuses anything that isn't a server-shaped nonce plus a plain host,
+      so a compromised renderer can't get arbitrary data signed.
+    - src/identity-key.ts (NEW, main process only):
+      - packaged: Ed25519 PKCS#8 at <userData>/identity-key.pem, mode 0600;
+        an unreadable file is renamed aside, never overwritten;
+      - dev: an ephemeral key per launch, like dev's fresh instance id;
+      - safeStorage rejected on purpose: on Linux without a keyring it
+        silently falls back to plain text, and a later keyring loss locks
+        the identity out forever.
+    - main.ts: IPC identity-get-public and identity-sign-challenge.
+    - DEVIATION FROM THE PRD (security): the viewer ticket is NOT passed in
+      additionalArguments, which land on the process command line, readable
+      by other local users. main.ts keeps it per viewer webContents id
+      (cleared on close); the viewer preload fetches it via
+      viewer-get-ticket.
+    - preload.ts:
+      - on every "connect", buildIdentityProof(): REQUEST_AUTH_CHALLENGE
+        with a 3 s timeout (a pre-2.6.0 server → legacy join), then the
+        main process signs for host[:port] as typed, and the join carries
+        `identity`;
+      - openScreenShareViewer requests a ticket first;
+      - getIdentityFingerprint(), resetIdentityKey().
+    - preload-viewer.ts: authenticates with the ticket (the id only against
+      a server without tickets); the handshake no longer carries the id.
+    - Settings → About: an "Identity" card with the fingerprint, Copy, and
+      the ADMIN_KEY_FINGERPRINT hint.
+    - User Management: 🔒 on bound identities. "Reset key" appears only when
+      I really hold ADMIN (computed from my own row's role permission bits,
+      since isAdminUser only means MANAGE_ROLES), only on bound OTHER
+      users' rows, and as a two-step button ("Reset key" → "Confirm reset",
+      reverting after 4 s) instead of the PRD's confirm modal: the same
+      protection without a new modal for a one-off row action.
+    - New script test:identity.
+
+  Key Files Modified:
+    packages/shared-types/src/socket-events.ts
+    apps/server/prisma/schema.prisma
+    apps/server/prisma/migrations/20261011120000_add_user_identity_key/migration.sql (NEW)
+    apps/server/src/services/identity.service.ts (NEW)
+    apps/server/src/services/viewer-ticket.service.ts (NEW)
+    apps/server/src/config/identity.config.ts (NEW)
+    apps/server/src/__tests__/identity.service.test.ts (NEW)
+    apps/server/src/handlers/connection.handler.ts
+    apps/server/src/handlers/admin.handler.ts
+    apps/server/.env.example
+    apps/client/src/identity-proof.ts (NEW)
+    apps/client/src/identity-key.ts (NEW)
+    apps/client/scripts/identity-smoke.mjs (NEW)
+    apps/client/package.json (test:identity)
+    apps/client/src/main.ts
+    apps/client/src/preload.ts
+    apps/client/src/preload-viewer.ts
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/renderer/index.html
+
+  Verification:
+    - npx tsc --build (shared-types), npx tsc --noEmit (server, client).
+    - npm run test (server): 13 files, 148 tests, including 27 new identity
+      tests covering every row of the table, the admin-fingerprint cases,
+      a tampered message, a signature by another key, a non-Ed25519 key,
+      nonce freshness, host allow-listing and proof shape checks.
+    - npm run test:identity (client): signs with the CLIENT code and
+      verifies with the SERVER's compiled verifier, so the message format
+      and fingerprint are proven identical. The signer refuses arbitrary
+      text, short nonces, newline/space hosts (message injection), empty
+      hosts and non-strings. The PEM round trip is checked. 14/14.
+      test:markdown, avatar, soft-clip and link-fixers all pass.
+    - Migration: applied to a fresh scratch DB via `prisma migrate deploy`
+      (both columns present).
+    - Real built server, scripted sockets with real Ed25519 keys,
+      ADMIN_KEY_FINGERPRINT set, 33/33:
+      - first signed join binds; a reconnect works; another key is refused
+        and the binding is unchanged;
+      - legacy on bound → refused; legacy on unbound → accepted, nothing
+        bound;
+      - a captured signature replayed on another socket, a nonce reused on
+        the same socket, another host, no challenge, and a malformed proof
+        → all refused;
+      - admin: a foreign key can't bind it and an unsigned admin join is
+        refused, with no role granted by either; the right key binds and
+        gets the role;
+      - viewer: a bound id without a ticket is refused; ticket issued and
+        accepted, reused across a viewer reconnect; a viewer socket can't
+        mint tickets; a made-up ticket is refused; the legacy viewer path
+        is allowed only with a live session; the ticket is revoked when the
+        owner's session ends;
+      - reset: refused for a non-admin; the admin reset clears the key and
+        disconnects the live socket; the next device binds;
+      - GET_ALL_USERS has hasIdentityKey and never a key.
+      The first run hung at the viewer step: a test bug (step 4's successful
+      join had superseded the earlier socket), fixed by rejoining, plus an
+      ack timeout so a dead socket can't hang the test.
+    - Restarted with REQUIRE_SIGNED_IDENTITY=true +
+      AUTH_ALLOWED_HOSTS=127.0.0.1:9871, 5/5: an unsigned join is refused
+      even for an unbound id; a signed one works and binds; an unlisted
+      host is refused and a listed one accepted; a legacy viewer is
+      refused; refusals are logged at WARN.
+    - Real built client (Xvfb, CDP), all functional checks pass:
+      - joined the REQUIRE_SIGNED server (so it really signs); its key is
+        bound; About shows exactly the bound key's fingerprint;
+      - the Viewer window authenticated WITH A TICKET (server log
+        viaTicket: true), and no process command line contains a ticket;
+      - after a server restart (now with this client as admin) the client
+        auto-reconnected and re-signed with no refusal;
+      - User Management: 🔒 on bound users, Reset key on others but never
+        on your own row; the first click arms ("Confirm reset") without
+        resetting, the second resets in the DB and the list refreshes.
+      Four check failures across the client runs were test parsing/state
+      mistakes, each confirmed against the real data:
+      - pino's pretty log prints `viaTicket: true`, not JSON;
+      - ps|grep counted the probe itself; listing the viewer's actual args
+        showed only the 4 non-secret params;
+      - the strict phase had legitimately bound the "legacy" user, so its 🔒
+        and Reset key were correct (DB confirmed every badge).
+    - Screenshots inspected (About identity card; User Management with 🔒,
+      Reset key and the armed state).
+    - NOT machine-tested: voice joining after the identity change. The join
+      path is shared and was exercised by every connect, but the voice
+      handshake itself needs a real/fake mic run. Not yet hand-tested by the
+      user.
+
+  Next Step: Phase 17 close-out: /bump-version (2.6.0), release notes,
+  CLAUDE.md files and README, archive the Phase 17 PRD.
+
+--- Entry: 08/10/2026 ---
+
+Feature/Fix: Phase 17 close-out — release 2.6.0
+
+  Problem: With all 12 Phase 17 items implemented and confirmed by the user,
+  the release had to be cut and the docs brought up to date.
+
+  Solution:
+    - Version bumped 2.5.0 → 2.6.0 (/bump-version; SemVer minor: new
+      features, two additive migrations, additive wire format, a security
+      fix whose strict mode is opt-in; backward compatible with 2.5.0) in
+      the root, client and server package.json, the README badge and
+      CLAUDE.md's "Current version"; package-lock.json regenerated with
+      `npm install --package-lock-only` (only the 4 workspace version lines
+      changed). shared-types keeps its own 0.x version. Every other "2.5.0"
+      in the repo is a compatibility note ("pre-v2.5.0 clients") and was
+      left alone.
+    - Release notes: app-planning/releases/v2.6.0.md. Every bullet traces
+      to a Phase 17 entry, plus compatibility and server-admin notes: two
+      migrations, and the recommended identity rollout (update the server,
+      set ADMIN_KEY_FINGERPRINT from Settings → About, then
+      REQUIRE_SIGNED_IDENTITY=true once everyone has updated).
+    - Root CLAUDE.md:
+      - "phases 1–17";
+      - Identity rewritten for the key model (a user id is public, not
+        proof; decideIdentity; viewer tickets; reset; the rule that new
+        user-acting paths derive the id from an authenticated socket or a
+        ticket);
+      - new Avatars and Tabs paragraphs; Chat pagination (two-way paging,
+        stick:false, jumpInProgress, detached live messages,
+        ensureHistoryFilled); Link preview (fixers); Message layout
+        (avatar gutter, flex-shrink, element-anchored prepend); Composer
+        (attachEmojiAutocomplete);
+      - a new Electron gotcha: never pass a secret via additionalArguments
+        (process command line);
+      - the identity env vars; progress.txt state; the Phase 17 PRD in the
+        archive list; a pointer to app-planning/open-risks.md.
+    - apps/client/CLAUDE.md: the new modules (identity-key/identity-proof,
+      avatar, link-fixers, mic-soft-clip in the voice graph), the five
+      test:* scripts, the new localStorage keys.
+    - apps/server/CLAUDE.md: profile.handler and the identity events, the
+      new services and config, the new tests, and conventions for identity,
+      avatars and history paging.
+    - README: new/updated features (avatars, profile card, preview tabs,
+      tab unread dots, mic 300%, the 15-line collapse, inline social videos,
+      blank lines, autocomplete while editing, the pinned jump, Identity
+      Protection); the "Self-Hosted" line corrected (avatars and link
+      fixers contact outside services; avatars can be switched off); the
+      identity env vars; the project structure; and a Phase 17 roadmap row
+      (first inserted before 16, then moved into order).
+    - Reson8_Phase17_PRD.md marked "Completed — shipped in v2.6.0" and moved
+      to app-planning/archive/.
+
+  Key Files Modified:
+    package.json, apps/client/package.json, apps/server/package.json,
+    package-lock.json
+    app-planning/releases/v2.6.0.md (NEW)
+    CLAUDE.md, apps/client/CLAUDE.md, apps/server/CLAUDE.md, README.md
+    app-planning/archive/Reson8_Phase17_PRD.md (moved from app-planning/)
+
+  Verification:
+    - npx tsc --build (shared-types), npx tsc --noEmit (client, server)
+      after the bump; npm run test (server): 148 pass; client test:markdown,
+      avatar, soft-clip, link-fixers and identity all pass.
+
+  Next Step: the user pushes `phase17-go`. Before Phase 18: condense this
+  "ongoing log" into a Phase 17 summary block (archiving the full entries
+  as app-planning/archive/progress-phase-17.txt), clear nextsteps.txt and
+  print_chat_avatar.png, and start from app-planning/open-risks.md.

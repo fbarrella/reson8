@@ -1,8 +1,9 @@
 ================================================================================
   RESON8 — Development Progress Log
-  Summary regenerated: 07/10/2026 (condensed from the original phase 1-8
+  Summary regenerated: 08/10/2026 (condensed from the original phase 1-8
   log; also condenses phases 9-10 as of 12/08/2026, phases 11-13 as of
-  30/08/2026, phases 14-15 as of 04/10/2026, and now phase 16)
+  30/08/2026, phases 14-15 as of 04/10/2026, phase 16 as of 07/10/2026,
+  and now phase 17)
 ================================================================================
 
 PROJECT OVERVIEW
@@ -28,14 +29,16 @@ Full unabridged entry-by-entry history (every bug's root cause, every file
 touched, every verification step) for everything summarized below lives in
 app-planning/archive/progress-phases-1-8.txt (phases 1-8),
 app-planning/archive/progress-phases-9-10.txt (phases 9-10),
-app-planning/archive/progress-phases-11-13.txt (phases 11-13), and
+app-planning/archive/progress-phases-11-13.txt (phases 11-13),
 app-planning/archive/progress-phases-14-15.txt (the v2.2.1 patch work,
-phases 14 and 15), and app-planning/archive/progress-phase-16.txt (phase 16).
+phases 14 and 15), app-planning/archive/progress-phase-16.txt (phase 16),
+and app-planning/archive/progress-phase-17.txt (phase 17).
 The original PRDs that drove this work are in
 app-planning/archive/ (PRD.md, Reson8_Evolutions_PRD.md,
 Reson8_Improvements_PRD.md, Reson8_NextSteps_PRD.md, Reson8_Phase10_PRD.md,
 Reson8_Phase11_PRD.md, Reson8_Phase12_PRD.md, Reson8_Phase13_PRD.md,
-Reson8_Phase14_PRD.md, Reson8_Phase15_PRD.md, Reson8_Phase16_PRD.md). Reach for the archive when
+Reson8_Phase14_PRD.md, Reson8_Phase15_PRD.md, Reson8_Phase16_PRD.md,
+Reson8_Phase17_PRD.md). Reach for the archive when
 you need the "why" behind a specific decision that this summary
 compresses away.
 
@@ -526,6 +529,114 @@ Testing lessons worth keeping (this phase leaned on them heavily):
     REDIS_URL / PORT and an empty SERVER_PRIVATE_PASSWORD); `pkill -f` on a
     pattern that is also in your own command line kills your own shell; tsx
     treats `.ts` as CommonJS (use `.mts` for top-level await).
+
+
+================================================================================
+  PHASE 17 SUMMARY — COMPLETE ✅  (current version: 2.6.0)
+================================================================================
+
+PHASE 17 — Avatars, Smarter Tabs & Identity Protection (PRD 17.x — 12 items:
+11 from app-planning/nextsteps.txt plus one security finding from the PRD's
+own audit; reached v2.6.0. Two DB migrations: users.avatarUrl, and
+users.publicKey + publicKeyBoundAt.)
+  - Avatars (17.1-17.2): Settings → Application → Profile picks Libravatar
+    (default) or Gravatar by email, with a live d=404 preview probe. The email
+    never leaves the client; only { provider, hash } (SHA-256) is sent, and
+    the server NEVER accepts a URL — it builds it from a fixed template
+    (avatar.service.ts), refreshes it on every join and on SET_AVATAR, and
+    broadcasts USER_AVATAR_UPDATED. Users without one get Libravatar's
+    wavatar keyed by sha256(userId), never the raw id (user decision). An
+    opt-out switch shows colored initials with no outside requests. In chat,
+    a 40px avatar sits in a 56px gutter INSIDE .msg-header, so grouping
+    needed no changes. Two bugs found by looking at screenshots: the new
+    group-start min-height replaced the flex default `min-height: auto`, so
+    messages shrank and overlapped (fixed with flex-shrink: 0); and the
+    load-older scroll correction now anchors on the first visible message
+    body instead of the scrollHeight delta.
+  - Profile card (17.3): click an avatar or nickname for avatar, "Member
+    since" (User.createdAt — already written once at first login, so no
+    migration), roles, online status, Message and Nudge (the Nudge button
+    was extracted and shared with the Online Users modal, same cooldown).
+    A real bug the UI test caught: Nudge disables itself and drops focus to
+    <body>, so a dialog-scoped Escape stopped working — Escape/Tab moved to
+    the document (capture). Dates in English (the system locale produced a
+    mixed-language sentence).
+  - Mic volume to 300% (17.4): a WaveShaper soft clipper is the last stage
+    of the shared send chain, bit-identical pass-through at ≤100%. A
+    WaveShaper clamps its INPUT to [-1, 1], so the gain is folded into the
+    curve (volume/3 in, ×3 in the curve). The ceiling is 0.99, not 1.0: the
+    2x oversampler overshot to 1.0002, measured in Chromium.
+  - Preview tabs, "Keep Tab Open" and unread dots (17.5-17.6): VS Code-style
+    single preview tab replaced in place; kept tabs are remembered per server
+    and restored unfocused with lazy history. A real bug: the first channel
+    tree arrives DURING the join, before "connected" sets currentServerId,
+    so the store is keyed by the tree payload's serverId. A deleted channel's
+    tab now closes (the PRD had assumed it already did). Unfocused channel
+    tabs show the tree's red dot via one helper fed by the same unread/mute
+    state.
+  - Collapse threshold (17.7): collapse only past 15 rendered lines (still 4
+    when collapsed), measured with getBoundingClientRect (an inline span's
+    scrollHeight is 0). Messages rendered into a hidden tab are measured when
+    it's shown — before, they were never collapsed.
+  - Pinned jump + two-way pagination (17.8): reproduced FIRST against the
+    unfixed build — stickToBottom fired 37 times while the jump window
+    rendered (an emptied list counts as "at the bottom", and image loads
+    re-stuck), ending on #20-#35 with the pin above. Fix: `after` cursor and
+    exact hasMoreBefore/hasMoreAfter (one extra row per direction,
+    pagination.service.ts); { stick: false } for windows and newer pages;
+    jumpInProgress blocks the sentinels; instant landing held while images
+    load; loadNewerMessages(); live messages not rendered into a detached
+    window (your own rebuilds at the present); ensureHistoryFilled() fixes
+    the under-filled first page found during 17.2.
+  - Social-media link fixers (17.9): koutube/fxtwitter/oginstagram/vxreddit/
+    fxtwitch/vxbsky/imgurez, exact-hostname matching, a crawler UA with a
+    Discordbot/2.0 token (vxreddit ignores others, verified live), strict
+    success rules (stay on the fixer host, deliver media), fallback to the
+    old flow on the original URL. YouTube now plays inline. Cards keep the
+    original url/domain and name the real network; OG fallback values are
+    now entity-decoded (a pre-existing bug the fixers made obvious).
+  - Blank lines (17.10): whitespace-only lines become a no-break space
+    before parsing (outside fenced code), so they render as visible blank
+    lines; truly empty lines are unchanged.
+  - Edit-box emoji autocomplete (17.11): the autocomplete was generalized
+    (attachEmojiAutocomplete(textarea)) rather than duplicated; it opens
+    below the caret when there's no room above.
+  - SECURITY — cryptographic identity (17.12): a user WAS whatever
+    instanceId a socket presented, and ids are broadcast, so anyone could
+    join as anyone (the admin included); VIEWER_AUTHENTICATE even skipped
+    the password and ban checks. Now: an Ed25519 key per install (main
+    process only, 0600 PEM; ephemeral in dev); every connect signs a fresh
+    single-use server challenge bound to the host; the first valid signed
+    join binds the key (atomic CAS); the decision is one pure, exhaustively
+    tested function run before any write. Gradual rollout
+    (REQUIRE_SIGNED_IDENTITY), optional ADMIN_KEY_FINGERPRINT and
+    AUTH_ALLOWED_HOSTS; the Viewer authenticates with a hashed Redis ticket,
+    kept OFF the process command line (a deviation from the PRD — a security
+    improvement); ADMIN "Reset key" in User Management. Open risks left
+    deliberately (no TLS by default, the TOFU window, challenge relay
+    without AUTH_ALLOWED_HOSTS, …) are listed in app-planning/open-risks.md.
+  - Close-out: bumped to 2.6.0, release notes with the identity rollout
+    guidance, the three CLAUDE.md files and README updated, the PRD archived.
+
+Testing lessons worth keeping:
+  - Reproduce before fixing: 17.8's instrumented repro (wrapping renderer
+    functions — top-level function bindings in the classic script are
+    replaceable from Runtime.evaluate — and sampling scroll every 50 ms)
+    named the real cause; the PRD's leading hypothesis didn't fire.
+  - Look at the screenshot even when every assertion passes: the 17.2
+    message overlap passed all checks first.
+  - Real typing over CDP (Input.insertText) gives genuine input events with
+    .data; trusted mouse/key events catch focus bugs synthetic ones hide.
+  - Verify outside facts live (fixer behavior per UA, avatar URLs, the
+    oversampler's overshoot) instead of trusting docs or memory.
+  - Most failures were again test bugs (stale state from earlier steps, a
+    superseded socket, log-format parsing, plain strings instead of template
+    literals). Confirm against the real data before touching app code — and
+    give test emits an ack timeout so a dead socket can't hang a run.
+  - Scratch environments: a reset script (drop/create the scratch DB, flush
+    Redis db 7, migrate) plus seeding only after the server created its
+    Server row; restart the server with different env to test config-driven
+    behavior.
 
 
 ================================================================================
