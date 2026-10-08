@@ -161,8 +161,23 @@ export interface ClientToServerEvents {
      * avoid re-querying it on every "load more" scroll.
      */
     FETCH_MESSAGES: (
-        payload: { channelId: string; before?: string; limit?: number; aroundMessageId?: string },
-        ack: (response: { success: boolean; messages?: IMessage[]; pinnedMessage?: IPinnedMessage | null; error?: string }) => void,
+        payload: {
+            channelId: string;
+            before?: string;
+            /** Newer than this cursor, oldest first (PRD 17.8). Exclusive with `before`/`aroundMessageId`. */
+            after?: string;
+            limit?: number;
+            aroundMessageId?: string;
+        },
+        ack: (response: {
+            success: boolean;
+            messages?: IMessage[];
+            pinnedMessage?: IPinnedMessage | null;
+            /** Whether older/newer history exists beyond this page (PRD 17.8); absent = unknown (older server). */
+            hasMoreBefore?: boolean;
+            hasMoreAfter?: boolean;
+            error?: string;
+        }) => void,
     ) => void;
 
     /** Client marks a text channel as read up to now (clears the unread indicator). */
@@ -212,8 +227,22 @@ export interface ClientToServerEvents {
      * FETCH_MESSAGES' `aroundMessageId`.
      */
     FETCH_DIRECT_MESSAGES: (
-        payload: { partnerId: string; before?: string; limit?: number; aroundMessageId?: string },
-        ack: (response: { success: boolean; messages?: IDirectMessage[]; error?: string }) => void,
+        payload: {
+            partnerId: string;
+            before?: string;
+            /** Newer than this cursor, oldest first (PRD 17.8). Exclusive with `before`/`aroundMessageId`. */
+            after?: string;
+            limit?: number;
+            aroundMessageId?: string;
+        },
+        ack: (response: {
+            success: boolean;
+            messages?: IDirectMessage[];
+            /** Whether older/newer history exists beyond this page (PRD 17.8); absent = unknown (older server). */
+            hasMoreBefore?: boolean;
+            hasMoreAfter?: boolean;
+            error?: string;
+        }) => void,
     ) => void;
 
     /** Client deletes their own direct message (hard delete — including its attachment, if any). */

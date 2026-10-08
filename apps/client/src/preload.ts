@@ -844,7 +844,16 @@ const api = {
         before?: string,
         limit?: number,
         aroundMessageId?: string,
-    ): Promise<{ success: boolean; messages?: IMessage[]; pinnedMessage?: IPinnedMessage | null; error?: string }> {
+        /** Newer than this cursor (PRD 17.8). */
+        after?: string,
+    ): Promise<{
+        success: boolean;
+        messages?: IMessage[];
+        pinnedMessage?: IPinnedMessage | null;
+        hasMoreBefore?: boolean;
+        hasMoreAfter?: boolean;
+        error?: string;
+    }> {
         return new Promise((resolve) => {
             if (!socket?.connected) {
                 resolve({ success: false, error: "Not connected" });
@@ -852,7 +861,7 @@ const api = {
             }
             socket.emit(
                 "FETCH_MESSAGES",
-                { channelId, before, limit, aroundMessageId },
+                { channelId, before, limit, aroundMessageId, after },
                 (res) => {
                     res.messages?.forEach(resolveMessageMedia);
                     resolve(res);
@@ -965,7 +974,15 @@ const api = {
         before?: string,
         limit?: number,
         aroundMessageId?: string,
-    ): Promise<{ success: boolean; messages?: IDirectMessage[]; error?: string }> {
+        /** Newer than this cursor (PRD 17.8). */
+        after?: string,
+    ): Promise<{
+        success: boolean;
+        messages?: IDirectMessage[];
+        hasMoreBefore?: boolean;
+        hasMoreAfter?: boolean;
+        error?: string;
+    }> {
         return new Promise((resolve) => {
             if (!socket?.connected) {
                 resolve({ success: false, error: "Not connected" });
@@ -973,7 +990,7 @@ const api = {
             }
             socket.emit(
                 "FETCH_DIRECT_MESSAGES",
-                { partnerId, before, limit, aroundMessageId },
+                { partnerId, before, limit, aroundMessageId, after },
                 (res) => {
                     res.messages?.forEach(resolveMessageMedia);
                     resolve(res);

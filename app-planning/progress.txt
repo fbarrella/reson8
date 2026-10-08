@@ -1268,3 +1268,152 @@ Feature/Fix: PRD 17.7 — Collapse only messages longer than ~15 lines
 
   Next Step: PRD 17.8 — pinned-message jump with paginated history (two-way
   pagination, including the under-filled first page found in 17.2).
+
+--- Entry: 08/10/2026 ---
+
+Feature/Fix: PRD 17.8 — Pinned-message jump with paginated history (two-way pagination)
+
+  Problem: Clicking the pinned-message bar (and reply snippets) for a
+  message outside the loaded page did not land on it: the chat scrolled
+  and stopped at the edge of the loaded history. After a jump, scrolling
+  down also stopped at the end of the fetched window (history only paged
+  backwards), and a live message arriving meanwhile was appended after the
+  window, leaving an invisible gap. Found while testing 17.2 and added to
+  this item's scope: when the first page didn't fill the viewport, older
+  history never loaded at all.
+
+  Root Cause (reproduced FIRST, against the unfixed build, as Step 0 of the
+  PRD required): 150-message channel, every 12th with an image, #10 pinned,
+  real click on the bar, with loadOlderMessages()/stickToBottom() wrapped
+  and the scroll sampled every 50 ms:
+    - H2 = THE cause. stickToBottom() ran 37 times while the 35-message
+      window rendered. Rendering into the just-emptied list counts as "at
+      the bottom" for every message, and the image-load callbacks re-stuck
+      it again ~100 ms later. The view ended on #20-#35 with #10 above the
+      viewport: exactly the reported "stops at the last message of the
+      loaded page".
+    - H1 (top-sentinel prepend cancelling the smooth scroll) did NOT fire
+      here, since the view had already been dragged to the bottom. It is
+      guarded anyway, because it would for deeper pins.
+    - H3 confirmed: scrolling to the bottom of the window stopped at #35.
+
+  Solution:
+    - Server: FETCH_MESSAGES and FETCH_DIRECT_MESSAGES accept `after`
+      (newer than a createdAt cursor, oldest first) and answer
+      hasMoreBefore/hasMoreAfter. Every query fetches ONE extra row per
+      direction, so "more history exists" is known for sure instead of the
+      client guessing from a full page. Combined cursors are refused.
+    - Client: content that isn't the live bottom (a jump window, a newer
+      page) renders with { stick: false }, so nothing follows the bottom.
+      jumpToMessage() blocks both sentinels while it lands
+      (jumpInProgress), scrolls INSTANTLY to centre the target in a
+      freshly built window (smooth only when the target was already loaded),
+      holds it centred for 1.5 s while images load, and releases on
+      scrollend or after 600 ms. Scrolling down from a window loads newer
+      pages until the present. Live messages while detached are not
+      rendered, so there is no gap.
+
+  Shared Types Changes:
+    - FETCH_MESSAGES / FETCH_DIRECT_MESSAGES payload: after?: string;
+      acks: hasMoreBefore?, hasMoreAfter? (additive; absent = older server).
+
+  Server Changes:
+    - services/pagination.service.ts (NEW, pure): parseHistoryQuery() → one
+      of latest | before | after | around (limit clamped 1-100, non-numeric
+      → 50; bad cursors/ids refused; null treated as absent),
+      windowHalves(), trimExtra().
+    - message.handler.ts / dm.handler.ts: all four kinds via the service,
+      take+1 per direction, flags in the ack. latest also reports
+      hasMoreAfter=false. The pin is still resolved only for "latest". Reply
+      previews/reactor nicknames are still one query per page.
+
+  Client Changes (renderer.ts, preload.ts):
+    - preload fetchMessages/fetchDirectMessages take `after` as a new last
+      parameter, so existing callers are unchanged.
+    - ChatTab: newestLoadedTimestamp (set on every forward append),
+      loadingNewer, jumpInProgress. atTrueLatest keeps its meaning (false =
+      newer history not loaded).
+    - renderChatMessage/renderDmMessage(tab, msg, { stick }): default
+      behavior unchanged; stick: false skips stickToBottom and the image-
+      load/link-preview re-stick.
+    - jumpToMessage(): as above. Window = JUMP_WINDOW_SIZE 41 (20 + target
+      + 20). Flags come from the server; against an older server it assumes
+      more on both sides (the old behavior). holdJumpTarget() re-centres on
+      <img> load (capture listener) and stops at once on wheel, touch, key
+      or pointer input. highlightMessage() extracted.
+    - loadNewerMessages(): triggered by the bottom sentinel; appends with
+      stick: false, de-duplicates by id, sets atTrueLatest from
+      hasMoreAfter. A pre-2.6.0 server ignores `after` and returns the
+      LATEST page, detected by the missing flag; appending that would leave
+      a gap, so it falls back to rebuildTabAtLatest().
+    - ensureHistoryFilled(): after every load (initial, rebuild, older,
+      newer, jump release) it loads again while a sentinel is still inside
+      the viewport. This fixes the under-filled first page: the
+      IntersectionObserver only fires on a CHANGE, and its one early
+      callback was ignored while initialLoadDone was false.
+    - "Jump to Most Recent" stays visible while newer history is unloaded,
+      even at the window's bottom.
+    - Live messages:
+      - while detached, they are not rendered (forward pagination reaches
+        them);
+      - YOUR own message while detached rebuilds the tab at the present and
+        scrolls there, so you see what you sent;
+      - same rules for DMs.
+    - loadOlderMessages(): stands down during a jump; uses hasMoreBefore
+      when present. The 17.2 element-anchored prepend correction is
+      unchanged.
+
+  Observed, Not Changed (pre-existing, out of scope): sending a message
+  while scrolled up in normal (non-detached) history doesn't move the view
+  to it. Rendering only follows the bottom when you're already near it,
+  and the send path never scrolls.
+
+  Key Files Modified:
+    packages/shared-types/src/socket-events.ts
+    apps/server/src/services/pagination.service.ts (NEW)
+    apps/server/src/__tests__/pagination.service.test.ts (NEW)
+    apps/server/src/handlers/message.handler.ts
+    apps/server/src/handlers/dm.handler.ts
+    apps/client/src/preload.ts
+    apps/client/src/renderer/renderer.ts
+
+  Verification:
+    - npx tsc --build (shared-types), npx tsc --noEmit (server, client);
+      npm run test (server): 12 files, 121 tests (new pagination.service
+      tests: defaults/clamping/junk limits, before/after/around parsing,
+      combined and bad cursors refused, null = absent, window halves,
+      trimExtra); npm run test:markdown passes.
+    - The same reproduction re-run on the fix: #10 in view from the first
+      sample on, 0 stickToBottom calls, the window correctly reported
+      nothing older; scrolling down now continues past #35; the first page
+      auto-filled to 40.
+    - Full suite against the real server + client (Xvfb, CDP, trusted
+      clicks), 17/17 pass on freshly seeded data:
+      - under-filled first page fills itself;
+      - pinned bar → #10 highlighted and still in view 2s later (images
+        loaded); the window knows nothing older and newer exists; Jump to
+        Most Recent offered;
+      - a live message while detached is not appended (no gap); scrolling
+        down reaches the present (#151) contiguously, with the live message
+        exactly once; the button hides at the true bottom; live messages
+        render normally after;
+      - a window jump to #30 with images above stays in view; a window jump
+        never calls stickToBottom;
+      - your own message while detached → rebuilt at the present and shown;
+        Jump to Most Recent rebuilds at the present;
+      - DMs: a jump lands on DM #6, and scrolling down reaches DM #90
+        contiguously.
+      Two first-run failures were test mistakes, fixed in the test:
+      checking the button before scrolling to the newly appended bottom,
+      and "jumping" to messages the earlier steps had already loaded (so the
+      tab never detached). A probe of a properly detached tab showed the
+      own-message rebuild at the bottom within 100 ms.
+    - Regression: the 17.2 prepend-anchor suite (5/5) passes again on the
+      new code.
+    - Screenshot inspected (landed on #10 with its pin marker, Jump to Most
+      Recent offered).
+    - Not covered by machine: the pre-2.6.0-server fallback in
+      loadNewerMessages (it needs an older server build).
+    - Not yet hand-tested by the user.
+
+  Next Step: PRD 17.9 — social-media link "fixers" for rich previews.

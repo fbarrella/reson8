@@ -795,7 +795,7 @@ interface Reson8Api {
     sendMessage(channelId: string, content: string, attachments?: UploadResult[], replyToId?: string): Promise<{ success: boolean; messageId?: string; error?: string }>;
     deleteMessage(messageId: string): Promise<{ success: boolean; error?: string }>;
     editMessage(messageId: string, content: string): Promise<{ success: boolean; error?: string }>;
-    fetchMessages(channelId: string, before?: string, limit?: number, aroundMessageId?: string): Promise<{ success: boolean; messages?: ChatMessage[]; pinnedMessage?: PinnedMessage | null; error?: string }>;
+    fetchMessages(channelId: string, before?: string, limit?: number, aroundMessageId?: string, after?: string): Promise<{ success: boolean; messages?: ChatMessage[]; pinnedMessage?: PinnedMessage | null; hasMoreBefore?: boolean; hasMoreAfter?: boolean; error?: string }>;
     pinMessage(channelId: string, messageId: string): Promise<{ success: boolean; error?: string }>;
     unpinMessage(channelId: string): Promise<{ success: boolean; error?: string }>;
     markChannelRead(channelId: string): Promise<{ success: boolean }>;
@@ -806,7 +806,7 @@ interface Reson8Api {
     setAudioInputDevice(deviceId: string | null): void;
     sendDirectMessage(recipientId: string, content: string, attachments?: UploadResult[], replyToId?: string): Promise<{ success: boolean; messageId?: string; error?: string }>;
     deleteDirectMessage(dmId: string): Promise<{ success: boolean; error?: string }>;
-    fetchDirectMessages(partnerId: string, before?: string, limit?: number, aroundMessageId?: string): Promise<{ success: boolean; messages?: DirectMessage[]; error?: string }>;
+    fetchDirectMessages(partnerId: string, before?: string, limit?: number, aroundMessageId?: string, after?: string): Promise<{ success: boolean; messages?: DirectMessage[]; hasMoreBefore?: boolean; hasMoreAfter?: boolean; error?: string }>;
     getOnlineUsers(): Promise<{ success: boolean; users?: { userId: string; nickname: string; isOnline: boolean }[]; error?: string }>;
     markDmsRead(partnerId: string): Promise<{ success: boolean; error?: string }>;
     getUnreadDmPartners(): Promise<{ success: boolean; partners?: { partnerId: string; partnerNickname: string; unreadCount: number }[]; error?: string }>;
@@ -1743,6 +1743,16 @@ interface ChatTab {
      *  rendered message is by definition the true latest, so this stays
      *  true throughout ordinary use. */
     atTrueLatest: boolean;
+    /** `createdAt` of the newest message rendered — the cursor passed as
+     *  `after` when scrolling down from a jump window loads newer pages
+     *  (PRD 17.8). */
+    newestLoadedTimestamp?: string;
+    /** Guards against overlapping "load newer" fetches (PRD 17.8). */
+    loadingNewer: boolean;
+    /** True while jumpToMessage() builds and lands on a window: both
+     *  sentinels' loaders stand down, so a prepend can't cancel the scroll
+     *  to the target (PRD 17.8). */
+    jumpInProgress: boolean;
     /** Text channel vs DM (PRD 17.5). Only channel tabs have a mode. */
     kind: "channel" | "dm";
     /** "preview" = replaced by the next channel opened; "kept" = stays open
@@ -4329,6 +4339,8 @@ function openChatTab(
         bottomSentinelEl,
         jumpToRecentBtn,
         atTrueLatest: true,
+        loadingNewer: false,
+        jumpInProgress: false,
         kind: "channel",
         mode,
     };
@@ -4410,6 +4422,8 @@ function openDmTab(userId: string, nickname: string, unreadCountHint?: number): 
         bottomSentinelEl,
         jumpToRecentBtn,
         atTrueLatest: true,
+        loadingNewer: false,
+        jumpInProgress: false,
         kind: "dm",
     };
     chatTabs.set(tabKey, chatTab);
@@ -4567,6 +4581,8 @@ async function loadChatHistory(tab: ChatTab, unreadCountHint?: number): Promise<
 
     await fetchAndRenderLatestPage(tab, unreadCountHint);
     tab.initialLoadDone = true;
+    tab.atTrueLatest = true;
+    ensureHistoryFilled(tab); // an under-filled first page would never load more (PRD 17.8)
 }
 
 /**
@@ -4604,7 +4620,8 @@ async function fetchAndRenderLatestPage(tab: ChatTab, unreadCountHint?: number):
                 api.markDmsRead(partnerId);
             }
 
-            tab.hasMoreOlder = result.messages.length >= initialLimit;
+            // The server says for sure since 2.6.0 (PRD 17.8); guess for older ones.
+            tab.hasMoreOlder = result.hasMoreBefore ?? result.messages.length >= initialLimit;
         }
     } else {
         // Channel tab — fetch channel messages
@@ -4617,7 +4634,7 @@ async function fetchAndRenderLatestPage(tab: ChatTab, unreadCountHint?: number):
                 renderChatMessage(tab, msg);
             }
             updatePinBarUI(tab, result.pinnedMessage ?? null);
-            tab.hasMoreOlder = result.messages.length >= CHAT_PAGE_SIZE;
+            tab.hasMoreOlder = result.hasMoreBefore ?? result.messages.length >= CHAT_PAGE_SIZE;
         }
     }
 }
@@ -4635,12 +4652,15 @@ async function rebuildTabAtLatest(tab: ChatTab): Promise<void> {
     tab.lastRenderedDateKey = undefined;
     tab.oldestRenderedDateKey = undefined;
     tab.oldestLoadedTimestamp = undefined;
+    tab.newestLoadedTimestamp = undefined;
     tab.messagesEl.appendChild(tab.topSentinelEl);
     tab.messagesEl.appendChild(tab.bottomSentinelEl);
     tab.loadingOlder = false;
+    tab.loadingNewer = false;
 
     await fetchAndRenderLatestPage(tab);
     tab.atTrueLatest = true;
+    ensureHistoryFilled(tab);
 }
 
 /** Click handler for the floating "Jump to Most Recent Message" button
@@ -4689,7 +4709,7 @@ function createJumpToRecentControls(
  * `createdAt` of whatever message is currently the earliest rendered.
  */
 async function loadOlderMessages(tab: ChatTab): Promise<void> {
-    if (!tab.initialLoadDone || tab.loadingOlder || !tab.hasMoreOlder) return;
+    if (!tab.initialLoadDone || tab.loadingOlder || !tab.hasMoreOlder || tab.jumpInProgress) return;
 
     tab.loadingOlder = true;
     tab.topSentinelEl.classList.add("loading");
@@ -4709,7 +4729,7 @@ async function loadOlderMessages(tab: ChatTab): Promise<void> {
         return;
     }
 
-    tab.hasMoreOlder = result.messages.length >= CHAT_PAGE_SIZE;
+    tab.hasMoreOlder = result.hasMoreBefore ?? result.messages.length >= CHAT_PAGE_SIZE;
 
     // Preserve the user's visual anchor across the prepend (Slack/Discord/
     // Teams pattern). Anchored on an ELEMENT — the first message whose text is
@@ -4735,6 +4755,7 @@ async function loadOlderMessages(tab: ChatTab): Promise<void> {
     } else {
         tab.messagesEl.scrollTop = oldScrollTop + (tab.messagesEl.scrollHeight - oldScrollHeight);
     }
+    ensureHistoryFilled(tab); // a short page can still leave the sentinel in view
 }
 
 /** One `IntersectionObserver` per tab, watching both the top sentinel
@@ -4748,7 +4769,10 @@ function setupInfiniteScroll(tab: ChatTab): void {
                 if (entry.target === tab.topSentinelEl) {
                     if (entry.isIntersecting) loadOlderMessages(tab);
                 } else if (entry.target === tab.bottomSentinelEl) {
-                    setJumpToRecentVisible(tab, !entry.isIntersecting);
+                    // While newer history is still unloaded the button stays,
+                    // even at the window's bottom (PRD 17.8).
+                    setJumpToRecentVisible(tab, !entry.isIntersecting || !tab.atTrueLatest);
+                    if (entry.isIntersecting) loadNewerMessages(tab);
                 }
             }
         },
@@ -4757,6 +4781,100 @@ function setupInfiniteScroll(tab: ChatTab): void {
     observer.observe(tab.topSentinelEl);
     observer.observe(tab.bottomSentinelEl);
     tab.scrollObserver = observer;
+}
+
+/** Messages fetched around a jump target (PRD 17.8): 20 + target + 20. */
+const JUMP_WINDOW_SIZE = 41;
+
+/**
+ * Scrolling DOWN from a jump window (PRD 17.8): loads the next newer page
+ * once the bottom sentinel comes into view, until the present is reached —
+ * after which live messages render normally again. Appending below the
+ * viewport doesn't move what the user is reading.
+ */
+async function loadNewerMessages(tab: ChatTab): Promise<void> {
+    if (!tab.initialLoadDone || tab.loadingNewer || tab.atTrueLatest || tab.jumpInProgress || !tab.newestLoadedTimestamp) return;
+
+    tab.loadingNewer = true;
+    tab.bottomSentinelEl.classList.add("loading");
+    tab.bottomSentinelEl.textContent = "Loading newer messages…";
+
+    const isDm = tab.channelId.startsWith("dm:");
+    const result = isDm
+        ? await api.fetchDirectMessages(tab.channelId.slice(3), undefined, CHAT_PAGE_SIZE, undefined, tab.newestLoadedTimestamp)
+        : await api.fetchMessages(tab.channelId, undefined, CHAT_PAGE_SIZE, undefined, tab.newestLoadedTimestamp);
+
+    tab.loadingNewer = false;
+    tab.bottomSentinelEl.classList.remove("loading");
+    tab.bottomSentinelEl.textContent = "";
+    if (!result.success || !result.messages) return;
+
+    if (result.hasMoreAfter === undefined) {
+        // A pre-2.6.0 server ignores `after` and answered with the LATEST
+        // page; appending it would leave a hidden gap. Fall back to the old
+        // behavior: rebuild the tab at the present.
+        await rebuildTabAtLatest(tab);
+        tab.messagesEl.scrollTop = tab.messagesEl.scrollHeight;
+        return;
+    }
+
+    for (const msg of result.messages) {
+        // A live message rendered meanwhile (e.g. your own) isn't added twice.
+        if (tab.messagesEl.querySelector(`.chat-msg[data-msg-id="${CSS.escape(msg.id)}"]`)) continue;
+        if (isDm) renderDmMessage(tab, msg as DirectMessage, { stick: false });
+        else renderChatMessage(tab, msg as ChatMessage, { stick: false });
+    }
+    tab.atTrueLatest = !result.hasMoreAfter;
+    setJumpToRecentVisible(tab, !tab.atTrueLatest || !isNearBottom(tab.messagesEl));
+    ensureHistoryFilled(tab);
+}
+
+/**
+ * Loads more history while a sentinel is still inside the viewport (PRD
+ * 17.8). The IntersectionObserver only fires on a CHANGE, so a page that
+ * doesn't fill the list (short messages, a tall window) used to leave the
+ * top sentinel visible forever with nothing to scroll — and older history
+ * never loaded. Runs after every load; each load calls it again, so it
+ * repeats until the list overflows or history runs out.
+ */
+function ensureHistoryFilled(tab: ChatTab): void {
+    if (!tab.initialLoadDone || tab.jumpInProgress || !tab.messagesEl.isConnected) return;
+    if (tab.messagesEl.offsetParent === null) return; // hidden tab — switching to it re-triggers the observer
+    const view = tab.messagesEl.getBoundingClientRect();
+    const visible = (el: HTMLElement): boolean => {
+        const r = el.getBoundingClientRect();
+        return r.bottom >= view.top && r.top <= view.bottom;
+    };
+    if (tab.hasMoreOlder && !tab.loadingOlder && visible(tab.topSentinelEl)) {
+        loadOlderMessages(tab);
+    } else if (!tab.atTrueLatest && !tab.loadingNewer && visible(tab.bottomSentinelEl)) {
+        loadNewerMessages(tab);
+    }
+}
+
+/**
+ * Keeps a jump target centred for a moment while images above it finish
+ * loading (PRD 17.8). Chromium's CSS scroll anchoring already compensates for
+ * content growing above the viewport; this is belt and braces. Stops at once
+ * when the user takes over (wheel, touch, keys, pointer).
+ */
+function holdJumpTarget(tab: ChatTab, el: HTMLElement, ms = 1500): void {
+    const scroller = tab.messagesEl;
+    const recenter = (): void => {
+        if (el.isConnected) el.scrollIntoView({ behavior: "instant", block: "center" });
+    };
+    const stop = (): void => {
+        scroller.removeEventListener("load", recenter, true);
+        for (const type of ["wheel", "touchstart", "keydown", "pointerdown"]) scroller.removeEventListener(type, stop);
+    };
+    scroller.addEventListener("load", recenter, true); // <img> load doesn't bubble; capture sees it
+    for (const type of ["wheel", "touchstart", "keydown", "pointerdown"]) scroller.addEventListener(type, stop, { passive: true });
+    setTimeout(stop, ms);
+}
+
+function highlightMessage(el: HTMLElement): void {
+    el.classList.add("msg-highlight");
+    setTimeout(() => el.classList.remove("msg-highlight"), 2000);
 }
 
 /** "13th", "1st", "22nd", etc. */
@@ -5198,14 +5316,23 @@ function buildChatMessageElement(tab: ChatTab, msg: ChatMessage): HTMLDivElement
     return el;
 }
 
-function renderChatMessage(tab: ChatTab, msg: ChatMessage): void {
-    const wasNearBottom = isNearBottom(tab.messagesEl);
+/**
+ * Appends a message below everything rendered. `stick: false` (PRD 17.8) is
+ * for content that is NOT the live bottom of the conversation — a jump
+ * window, a page of newer history — where following the bottom (now, or
+ * later when images/previews load) would yank the view off what the user is
+ * looking at. That was the pinned-jump bug: rendering into the just-emptied
+ * list counted as "at the bottom" for every message.
+ */
+function renderChatMessage(tab: ChatTab, msg: ChatMessage, opts: { stick?: boolean } = {}): void {
+    const wasNearBottom = opts.stick === false ? false : isNearBottom(tab.messagesEl);
 
     maybeInsertDateDivider(tab, new Date(msg.createdAt));
     const el = buildChatMessageElement(tab, msg);
     tab.bottomSentinelEl.insertAdjacentElement("beforebegin", el);
     applyGrouping(el); // after insertion: needs the previous sibling (PRD 16.6)
     trackOldestOnFirstAppend(tab, msg.createdAt);
+    tab.newestLoadedTimestamp = msg.createdAt; // appends are always the newest (PRD 17.8)
 
     if (wasNearBottom) stickToBottom(tab);
 
@@ -5850,11 +5977,19 @@ serverLogTab?.addEventListener("click", () => switchTab("server-log"));
 api.on("message", (msg: ChatMessage) => {
     const tab = chatTabs.get(msg.channelId);
     if (tab) {
-        renderChatMessage(tab, msg);
-        // A live message is by definition the channel's true latest right
-        // now — resolves any earlier "might be missing newer messages"
-        // state from a `jumpToMessage` window rebuild (PRD 14.3).
-        tab.atTrueLatest = true;
+        if (tab.atTrueLatest) {
+            renderChatMessage(tab, msg);
+        } else if (msg.userId === api.getInstanceId()) {
+            // You sent it while reading older history: go to the present so
+            // you see it (PRD 17.8), as other chat apps do.
+            rebuildTabAtLatest(tab).then(() => {
+                tab.messagesEl.scrollTop = tab.messagesEl.scrollHeight;
+            });
+        }
+        // Otherwise the tab shows a detached window (after a jump): rendering
+        // it now would leave an invisible gap of unloaded messages before it.
+        // Forward pagination reaches it, and "Jump to Most Recent" stays up
+        // (PRD 17.8). Unread tracking below doesn't depend on rendering.
     }
 
     // Unread indicator (PRD 4.13): MESSAGE_RECEIVED already broadcasts to
@@ -5946,14 +6081,16 @@ function buildDmMessageElement(tab: ChatTab, msg: DirectMessage): HTMLDivElement
     return el;
 }
 
-function renderDmMessage(tab: ChatTab, msg: DirectMessage): void {
-    const wasNearBottom = isNearBottom(tab.messagesEl);
+/** DM counterpart of renderChatMessage() — same `stick` option (PRD 17.8). */
+function renderDmMessage(tab: ChatTab, msg: DirectMessage, opts: { stick?: boolean } = {}): void {
+    const wasNearBottom = opts.stick === false ? false : isNearBottom(tab.messagesEl);
 
     maybeInsertDateDivider(tab, new Date(msg.createdAt));
     const el = buildDmMessageElement(tab, msg);
     tab.bottomSentinelEl.insertAdjacentElement("beforebegin", el);
     applyGrouping(el); // after insertion: needs the previous sibling (PRD 16.6)
     trackOldestOnFirstAppend(tab, msg.createdAt);
+    tab.newestLoadedTimestamp = msg.createdAt; // appends are always the newest (PRD 17.8)
 
     if (wasNearBottom) stickToBottom(tab);
 
@@ -5989,8 +6126,14 @@ api.on("dm-received", async (msg: DirectMessage) => {
 
     const tab = chatTabs.get(tabKey);
     if (tab) {
-        renderDmMessage(tab, msg);
-        tab.atTrueLatest = true;
+        // Same detached-window rules as channel messages (PRD 17.8).
+        if (tab.atTrueLatest) {
+            renderDmMessage(tab, msg);
+        } else if (msg.senderId === myId) {
+            rebuildTabAtLatest(tab).then(() => {
+                tab.messagesEl.scrollTop = tab.messagesEl.scrollHeight;
+            });
+        }
         // Mark as read immediately if the message is from someone else
         if (msg.senderId !== myId) {
             api.markDmsRead(partnerId);
@@ -8162,47 +8305,72 @@ async function jumpToMessage(tabId: string, messageId: string): Promise<void> {
     const selector = `.chat-msg[data-msg-id="${CSS.escape(messageId)}"]`;
 
     let el = tab.messagesEl.querySelector(selector) as HTMLDivElement | null;
-
-    if (!el) {
-        const result = isDm
-            ? await api.fetchDirectMessages(tabId.slice(3), undefined, 50, messageId)
-            : await api.fetchMessages(tabId, undefined, 50, messageId);
-        if (!result.success || !result.messages) {
-            log("Couldn't load that message — it may have been deleted", "error");
-            return;
-        }
-        tab.messagesEl.innerHTML = "";
-        tab.lastRenderedDateKey = undefined;
-
-        // The wipe above also destroyed both pagination sentinels (PRD
-        // 14.2/14.3) — rebuild them in order (top, then bottom) so
-        // messages inserted via `bottomSentinelEl.insertAdjacentElement
-        //("beforebegin", …)` land correctly between them. A window-
-        // centered fetch never guarantees this is truly the start (or
-        // end) of history, so hasMoreOlder stays optimistically true and
-        // atTrueLatest is explicitly false — a real "Jump to Most Recent"
-        // click or a live incoming message will resolve the latter.
-        tab.oldestRenderedDateKey = undefined;
-        tab.oldestLoadedTimestamp = undefined;
-        tab.messagesEl.appendChild(tab.topSentinelEl);
-        tab.messagesEl.appendChild(tab.bottomSentinelEl);
-        tab.hasMoreOlder = true;
-        tab.loadingOlder = false;
-
-        if (isDm) {
-            for (const msg of result.messages as DirectMessage[]) renderDmMessage(tab, msg);
-        } else {
-            for (const msg of result.messages as ChatMessage[]) renderChatMessage(tab, msg);
-        }
-        tab.atTrueLatest = false;
-        el = tab.messagesEl.querySelector(selector) as HTMLDivElement | null;
-    }
-
     if (el) {
+        // Already loaded: a smooth scroll reads well over a short distance.
         el.scrollIntoView({ behavior: "smooth", block: "center" });
-        el.classList.add("msg-highlight");
-        setTimeout(() => el?.classList.remove("msg-highlight"), 2000);
+        highlightMessage(el);
+        return;
     }
+
+    // Not loaded: fetch a window around it and land on it (PRD 17.8). While
+    // this runs, neither sentinel may load pages — a prepend's scroll
+    // correction would cancel the landing (the bug's H1 path).
+    tab.jumpInProgress = true;
+    const result = isDm
+        ? await api.fetchDirectMessages(tabId.slice(3), undefined, JUMP_WINDOW_SIZE, messageId)
+        : await api.fetchMessages(tabId, undefined, JUMP_WINDOW_SIZE, messageId);
+    if (!result.success || !result.messages) {
+        tab.jumpInProgress = false;
+        log("Couldn't load that message — it may have been deleted", "error");
+        return;
+    }
+
+    tab.messagesEl.innerHTML = "";
+    tab.lastRenderedDateKey = undefined;
+    // The wipe above also destroyed both pagination sentinels (PRD 14.2/
+    // 14.3) — rebuild them in order (top, then bottom) so messages inserted
+    // via `bottomSentinelEl.insertAdjacentElement("beforebegin", …)` land
+    // correctly between them.
+    tab.oldestRenderedDateKey = undefined;
+    tab.oldestLoadedTimestamp = undefined;
+    tab.newestLoadedTimestamp = undefined;
+    tab.messagesEl.appendChild(tab.topSentinelEl);
+    tab.messagesEl.appendChild(tab.bottomSentinelEl);
+    tab.loadingOlder = false;
+    tab.loadingNewer = false;
+    // A 2.6.0+ server says exactly what lies beyond the window; for an older
+    // one, assume more on both sides (the pre-17.8 behavior).
+    tab.hasMoreOlder = result.hasMoreBefore ?? true;
+    tab.atTrueLatest = result.hasMoreAfter === undefined ? false : !result.hasMoreAfter;
+
+    // stick: false — the window is NOT the live bottom; following the bottom
+    // here (and again as images load) was the bug's actual cause (H2).
+    if (isDm) {
+        for (const msg of result.messages as DirectMessage[]) renderDmMessage(tab, msg, { stick: false });
+    } else {
+        for (const msg of result.messages as ChatMessage[]) renderChatMessage(tab, msg, { stick: false });
+    }
+
+    el = tab.messagesEl.querySelector(selector) as HTMLDivElement | null;
+    if (el) {
+        // Instant: there's nothing meaningful to animate across in a list
+        // that was just rebuilt.
+        el.scrollIntoView({ behavior: "instant", block: "center" });
+        holdJumpTarget(tab, el);
+        highlightMessage(el);
+    }
+
+    // Let the landing settle, then hand the sentinels back.
+    let released = false;
+    const release = (): void => {
+        if (released) return;
+        released = true;
+        tab.jumpInProgress = false;
+        setJumpToRecentVisible(tab, !tab.atTrueLatest || !isNearBottom(tab.messagesEl));
+        ensureHistoryFilled(tab);
+    };
+    tab.messagesEl.addEventListener("scrollend", release, { once: true });
+    setTimeout(release, 600);
 }
 
 pinReplaceConfirmModal.addEventListener("click", (e) => {

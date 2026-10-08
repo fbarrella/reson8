@@ -36,6 +36,7 @@ import {
 import { DEFAULT_MAX_MESSAGE_LENGTH } from "../config/message.config.js";
 import { normalizeNewlines } from "../services/message-text.js";
 import { aggregateReactionRows, loadReactorNicknames } from "../services/reaction.service.js";
+import { parseHistoryQuery, trimExtra, windowHalves } from "../services/pagination.service.js";
 
 type TypedIO = SocketIOServer<
     ClientToServerEvents,
@@ -195,9 +196,17 @@ export function registerDMHandlers(
         // ── FETCH_DIRECT_MESSAGES ──────────────────────────────────────────
         socket.on("FETCH_DIRECT_MESSAGES", async (payload, ack) => {
             try {
-                const { partnerId, before, limit = 50, aroundMessageId } = payload;
-                const take = Math.min(limit, 100); // cap at 100
+                const { partnerId } = payload;
+                const parsed = parseHistoryQuery(payload);
+                if (!parsed.ok) {
+                    ack({ success: false, error: parsed.error });
+                    return;
+                }
+                const q = parsed.query;
                 const userId = socket.data.userId;
+                // Whether more history lies beyond this page (PRD 17.8).
+                let hasMoreBefore: boolean | undefined;
+                let hasMoreAfter: boolean | undefined;
 
                 const pairWhere = {
                     OR: [
@@ -214,45 +223,61 @@ export function registerDMHandlers(
 
                 let ordered: DmRow[];
 
-                if (aroundMessageId) {
+                if (q.kind === "around") {
                     // Jump-to-message (PRD 16.11): a window centred on one DM
                     // instead of the latest page — used when a reply's snippet
                     // points at a DM outside the loaded history. Mirrors
                     // FETCH_MESSAGES' window, and refuses anything outside THIS
                     // conversation.
-                    const target = await app.prisma.directMessage.findUnique({ where: { id: aroundMessageId } });
+                    const target = await app.prisma.directMessage.findUnique({ where: { id: q.messageId } });
                     if (!target || !dmInPair(target, userId, partnerId)) {
                         ack({ success: false, error: "Message not found" });
                         return;
                     }
 
-                    const halfBefore = Math.floor((take - 1) / 2);
-                    const halfAfter = take - 1 - halfBefore;
-
-                    const [beforeMsgs, targetMsg, afterMsgs] = await Promise.all([
+                    const halves = windowHalves(q.take);
+                    const [beforeRows, targetMsg, afterRows] = await Promise.all([
                         app.prisma.directMessage.findMany({
                             where: { ...pairWhere, createdAt: { lt: target.createdAt } },
                             orderBy: { createdAt: "desc" },
-                            take: halfBefore,
+                            take: halves.before + 1,
                             include: dmInclude,
                         }),
-                        app.prisma.directMessage.findUniqueOrThrow({ where: { id: aroundMessageId }, include: dmInclude }),
+                        app.prisma.directMessage.findUniqueOrThrow({ where: { id: q.messageId }, include: dmInclude }),
                         app.prisma.directMessage.findMany({
                             where: { ...pairWhere, createdAt: { gt: target.createdAt } },
                             orderBy: { createdAt: "asc" },
-                            take: halfAfter,
+                            take: halves.after + 1,
                             include: dmInclude,
                         }),
                     ]);
-                    ordered = [...beforeMsgs.reverse(), targetMsg, ...afterMsgs];
-                } else {
-                    const messages = await app.prisma.directMessage.findMany({
-                        where: { ...pairWhere, ...(before ? { createdAt: { lt: new Date(before) } } : {}) },
-                        orderBy: { createdAt: "desc" },
-                        take,
+                    const older = trimExtra(beforeRows, halves.before);
+                    const newer = trimExtra(afterRows, halves.after);
+                    hasMoreBefore = older.hasMore;
+                    hasMoreAfter = newer.hasMore;
+                    ordered = [...older.rows.reverse(), targetMsg, ...newer.rows];
+                } else if (q.kind === "after") {
+                    // Scrolling DOWN from a jump window (PRD 17.8): oldest first.
+                    const rows = await app.prisma.directMessage.findMany({
+                        where: { ...pairWhere, createdAt: { gt: q.cursor } },
+                        orderBy: { createdAt: "asc" },
+                        take: q.take + 1,
                         include: dmInclude,
                     });
-                    ordered = messages.reverse();
+                    const page = trimExtra(rows, q.take);
+                    hasMoreAfter = page.hasMore;
+                    ordered = page.rows;
+                } else {
+                    const rows = await app.prisma.directMessage.findMany({
+                        where: { ...pairWhere, ...(q.kind === "before" ? { createdAt: { lt: q.cursor } } : {}) },
+                        orderBy: { createdAt: "desc" },
+                        take: q.take + 1,
+                        include: dmInclude,
+                    });
+                    const page = trimExtra(rows, q.take);
+                    hasMoreBefore = page.hasMore;
+                    if (q.kind === "latest") hasMoreAfter = false;
+                    ordered = page.rows.reverse();
                 }
 
                 // Convert to DTOs in chronological order — every reactor's
@@ -279,7 +304,7 @@ export function registerDMHandlers(
                     reactions: aggregateReactionRows(m.reactions, reactorNicknames),
                 }));
 
-                ack({ success: true, messages: dtos });
+                ack({ success: true, messages: dtos, hasMoreBefore, hasMoreAfter });
             } catch (err) {
                 app.log.error({ err }, "Error in FETCH_DIRECT_MESSAGES");
                 ack({ success: false, error: "Failed to fetch direct messages" });
