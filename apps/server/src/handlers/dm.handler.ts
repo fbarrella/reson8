@@ -148,7 +148,7 @@ export function registerDMHandlers(
                                 create: files.map((f, position) => ({ url: f.url, publicId: f.publicId, position })),
                             },
                         },
-                        include: { attachments: attachmentInclude },
+                        include: { attachments: attachmentInclude, sender: { select: { avatarUrl: true } } },
                     });
                 });
 
@@ -157,6 +157,7 @@ export function registerDMHandlers(
                     id: dm.id,
                     senderId: dm.senderId,
                     senderNickname: socket.data.nickname,
+                    senderAvatarUrl: dm.sender.avatarUrl,
                     receiverId: dm.receiverId,
                     content: dm.content,
                     replyTo: replyPreviewFor(replyToId, replyPreviews),
@@ -205,7 +206,7 @@ export function registerDMHandlers(
                     ],
                 };
                 const dmInclude = {
-                    sender: { select: { nickname: true } },
+                    sender: { select: { nickname: true, avatarUrl: true } },
                     reactions: { select: { emoji: true, userId: true }, orderBy: { createdAt: "asc" as const } },
                     attachments: attachmentInclude,
                 };
@@ -268,6 +269,7 @@ export function registerDMHandlers(
                     id: m.id,
                     senderId: m.senderId,
                     senderNickname: m.sender.nickname,
+                    senderAvatarUrl: m.sender.avatarUrl,
                     receiverId: m.receiverId,
                     content: m.content,
                     replyTo: replyPreviewFor(m.replyToId, replyPreviews),

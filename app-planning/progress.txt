@@ -694,3 +694,117 @@ Feature/Fix: PRD 17.1 — Avatars via Libravatar/Gravatar (profile settings + se
   Next Step: PRD 17.2 — avatars next to nicknames in text chats (DTOs gain
   avatarUrl/senderAvatarUrl; buildMessageShell() gets the 40px gutter
   avatar).
+
+--- Entry: 08/10/2026 ---
+
+Feature/Fix: PRD 17.2 — Avatars next to nicknames in text chats
+
+  Problem: With avatars available (17.1), chat messages still showed only a
+  nickname. The user wanted the Discord-style layout of
+  app-planning/print_chat_avatar.png: a round avatar left of the group's
+  name, with the group's later lines indented under the name and no avatar
+  of their own.
+
+  Solution: Every channel and DM message now carries its author's CURRENT
+  avatar URL. The shared buildMessageShell() puts a 40px avatar into a 56px
+  left gutter, top-aligned with the name. The avatar lives INSIDE
+  .msg-header, so it shows and hides exactly with the header:
+  applyGrouping()/regroupFrom() needed no changes, and the avatar stays
+  level with the name even under a reply snippet.
+
+  Shared Types Changes:
+    - IMessage.avatarUrl?, IDirectMessage.senderAvatarUrl? (additive;
+      absent from a pre-v2.6.0 server = the client keeps its cache /
+      default avatar).
+
+  Server Changes:
+    - message.handler.ts: messageInclude selects user.avatarUrl, mapped in
+      toMessageDto() (fetch latest/before/around). SEND_MESSAGE and
+      EDIT_MESSAGE build their DTOs by hand, so both now include the user's
+      avatarUrl in the create/update query.
+    - dm.handler.ts: SEND_DIRECT_MESSAGE includes the sender's avatarUrl;
+      FETCH_DIRECT_MESSAGES' dmInclude selects it too.
+    - It's the author's current avatar, not a snapshot, so an avatar change
+      also updates history (as in Discord).
+
+  Client Changes:
+    - renderer.ts: ChatMessage/DirectMessage types gain the fields;
+      buildMessageShell() takes avatarUrl, feeds it into avatarUrlCache
+      (rememberAvatarUrl) and prepends createAvatarElement(ownerId, nick,
+      40) to the header; it also sets data-hhmm. Both builders pass it.
+      Live USER_AVATAR_UPDATED already re-applies every
+      [data-avatar-user-id] (17.1).
+    - index.html: .chat-msg padding-left = --msg-gutter (56px: 6 + 40 +
+      10); the header is the avatar's positioning context (left: 6px into
+      the gutter); a group start has min-height 47px so a one-line message
+      never lets the avatar overlap the next row; a hovered continuation
+      shows its HH:MM in the gutter (::before with attr(data-hhmm)).
+      Before this, a continuation's time wasn't visible at all.
+    - Reply snippets (PRD 16.11): the snippet now starts at the text
+      column, and its connector runs out into the gutter and down onto the
+      avatar's centre, as in Discord.
+
+  Found During Testing (all fixed):
+    - LAYOUT BUG caught only by looking at the screenshot: from the reply
+      onward, every taller message was squashed to exactly 47px and
+      overlapped the next. .chat-messages is a scrolling flex column, and
+      the explicit min-height replaced the default `min-height: auto`,
+      which is what had kept flex items from shrinking below their content
+      once the list overflows. Fixed with flex-shrink: 0 on .chat-msg (the
+      behavior the default used to guarantee). The automated checks had
+      passed before the screenshot showed the overlap; overlap/height
+      checks were then added to the test.
+    - Scroll anchoring on "load older": a 5px nudge at the page junction,
+      caused by the new min-height. When the junction repair turns the old
+      first message (a one-line group start) into a continuation, its
+      header and the min-height padding vanish, and loadOlderMessages()
+      corrected scroll by the TOTAL scrollHeight change, so it
+      under-compensated. loadOlderMessages() now anchors on an element:
+      the .msg-body of the first message in view, re-measured after the
+      prepend, with the old height-delta correction as fallback. The text
+      the user is reading now stays exactly in place whatever regrouping
+      does above it.
+    - Pre-existing, NOT fixed here, added to PRD 17.8's scope: when the
+      first page of 20 doesn't fill the viewport, older history never
+      loads. The top sentinel is already visible and IntersectionObserver
+      only fires on a change; the one early callback is ignored because
+      initialLoadDone was still false. Reproduced headlessly.
+
+  Key Files Modified:
+    packages/shared-types/src/models.ts
+    apps/server/src/handlers/message.handler.ts
+    apps/server/src/handlers/dm.handler.ts
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/renderer/index.html
+    app-planning/Reson8_Phase17_PRD.md (17.8 scope note)
+
+  Verification:
+    - npx tsc --build (shared-types), npx tsc --noEmit (server, client);
+      npm run test (server, 105 pass); npm run test:markdown and npm run
+      test:avatar pass.
+    - Real built server on a fresh scratch DB (migrated, seeded after
+      boot), with a channel populated by script: a 3-message group (the
+      reference image's text), a second author, a reply, a solo emoji, a
+      Markdown block, a link preview and an image upload claimed by
+      uploadId.
+    - Real built client under Xvfb over CDP, 21/21 pass:
+      - avatar in every header; visible on group starts, hidden on
+        continuations; at 6px; text column at 56px for every message;
+      - group start ≥ 47px; reply/Markdown/solo emoji not squashed; no
+        overlaps;
+      - stored Libravatar URL sized s=80; sha256 default for a user without
+        one; images loaded; data-hhmm on every message;
+      - live avatar change updates all of that user's rendered avatars, and
+        a live message carries the new one;
+      - a DM shows the sender's avatar; external avatars off → no images in
+        chat.
+    - Prepend test (45 extra messages, viewport shrunk to 420px so a page
+      overflows): fresh tab loads 20, scrolling up prepends 20 more, the
+      first visible message's text stays within ±2px, no overlaps, avatars
+      exactly on group starts after the junction repair. The full 21-check
+      run was repeated after the anchoring change: all pass.
+    - Screenshots inspected: channel top/bottom (matches the reference
+      layout), DM tab, initials mode, after the prepend.
+    - Not yet hand-tested by the user.
+
+  Next Step: PRD 17.3 — user profile card when clicking a nickname or avatar.

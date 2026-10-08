@@ -791,7 +791,9 @@
 
     .chat-msg {
       position: relative; /* anchors the floating action toolbar (PRD 16.5) */
-      padding: 3px 6px;
+      /* Left gutter for the avatar (PRD 17.2): 6px + 40px avatar + 10px gap. */
+      --msg-gutter: 56px;
+      padding: 3px 6px 3px var(--msg-gutter);
       margin: 0 -6px; /* the padding above gives the hover tint breathing room without shifting content */
       border-radius: 4px;
       font-size: 13px;
@@ -806,9 +808,45 @@
        own line(s) in .msg-body below it. A continuation message (same author
        within the grouping window, see applyGrouping()) hides the header. */
     .chat-msg .msg-header {
+      position: relative; /* anchors the gutter avatar (PRD 17.2) */
       display: flex;
       align-items: baseline;
       gap: 6px;
+    }
+
+    /* The group's avatar, out in the gutter, top-aligned with the name. */
+    .chat-msg .msg-header > .avatar {
+      position: absolute;
+      left: calc(6px - var(--msg-gutter));
+      top: 1px;
+    }
+
+    /* A group start is never shorter than its avatar, so a one-line message
+       can't let the avatar overlap the next row. flex-shrink: 0 is required
+       with it: .chat-messages is a scrolling flex column, and an explicit
+       min-height replaces the default `min-height: auto` that was what kept
+       flex items from shrinking below their content once the list overflows
+       (without it, every taller message got squashed to 47px and overlapped). */
+    .chat-msg {
+      flex-shrink: 0;
+    }
+
+    .chat-msg.msg-group-start {
+      min-height: 47px;
+    }
+
+    /* A continuation's time, shown in the gutter while hovered. */
+    .chat-msg.msg-continuation:hover::before {
+      content: attr(data-hhmm);
+      position: absolute;
+      left: 0;
+      width: var(--msg-gutter);
+      top: 5px;
+      text-align: center;
+      font-size: 10px;
+      line-height: 1.4;
+      color: var(--text-muted);
+      pointer-events: none;
     }
 
     .chat-msg .msg-time {
@@ -1617,7 +1655,7 @@
       min-width: 0;
       /* Lifted slightly (-1px) and given 5px of air below, so it can't be
          mistaken for part of the message under it. */
-      margin: -1px 0 5px 18px;
+      margin: -1px 0 5px 0;
       font-size: 12px;
       line-height: 1.4;
       color: var(--text-secondary);
@@ -1633,14 +1671,15 @@
       opacity: 0.95;
     }
 
+    /* From the snippet's middle, out into the gutter and down to the top of
+       the avatar below (PRD 17.2): it starts right above the avatar's centre
+       (26px into the gutter, i.e. 30px left of the text column), as in Discord. */
     .msg-reply-spine {
       position: absolute;
-      left: -14px;
+      left: calc(26px - var(--msg-gutter));
       top: 50%;
-      width: 10px;
-      /* From the snippet's middle down to the TOP edge of the header below
-         (half a line + the 5px margin) — it points at the message, not into it. */
-      height: calc(50% + 5px);
+      width: calc(var(--msg-gutter) - 30px);
+      height: calc(50% + 6px);
       border-left: 2px solid var(--border);
       border-top: 2px solid var(--border);
       border-top-left-radius: 6px;

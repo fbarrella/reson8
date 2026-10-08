@@ -53,7 +53,7 @@ type TypedSocket = Socket<
 >;
 
 const messageInclude = {
-    user: { select: { nickname: true } },
+    user: { select: { nickname: true, avatarUrl: true } },
     reactions: { select: { emoji: true, userId: true }, orderBy: { createdAt: "asc" as const } },
     attachments: attachmentInclude,
 };
@@ -69,7 +69,7 @@ type MessageWithRelations = {
     attachments: AttachmentRow[];
     createdAt: Date;
     editedAt: Date | null;
-    user: { nickname: string };
+    user: { nickname: string; avatarUrl: string | null };
     reactions: { emoji: string; userId: string }[];
 };
 
@@ -86,6 +86,7 @@ function toMessageDto(
         channelId: m.channelId,
         userId: m.userId,
         nickname: m.user.nickname,
+        avatarUrl: m.user.avatarUrl,
         content: m.content,
         replyTo: replyPreviewFor(m.replyToId, replyPreviews),
         ...attachmentFields(m.attachments, m.attachmentUrl),
@@ -218,7 +219,7 @@ export function registerMessageHandlers(
                                 create: files.map((f, position) => ({ url: f.url, publicId: f.publicId, position })),
                             },
                         },
-                        include: { attachments: attachmentInclude },
+                        include: { attachments: attachmentInclude, user: { select: { avatarUrl: true } } },
                     });
                 });
 
@@ -228,6 +229,7 @@ export function registerMessageHandlers(
                     channelId: message.channelId,
                     userId: message.userId,
                     nickname: socket.data.nickname,
+                    avatarUrl: message.user.avatarUrl,
                     content: message.content,
                     replyTo: replyPreviewFor(replyToId, replyPreviews),
                     ...attachmentFields(message.attachments),
@@ -497,6 +499,7 @@ export function registerMessageHandlers(
                 const updated = await app.prisma.message.update({
                     where: { id: messageId },
                     data: { content: trimmed, editedAt: new Date() },
+                    include: { user: { select: { avatarUrl: true } } },
                 });
 
                 // An edited reply is still a reply — keep its snippet in the broadcast.
@@ -506,6 +509,7 @@ export function registerMessageHandlers(
                     channelId: updated.channelId,
                     userId: updated.userId,
                     nickname: socket.data.nickname,
+                    avatarUrl: updated.user.avatarUrl,
                     content: updated.content,
                     replyTo: replyPreviewFor(updated.replyToId, replyPreviews),
                     // Image messages can't be edited (checked above), so an edited message has none.

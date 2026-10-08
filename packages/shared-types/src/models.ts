@@ -205,6 +205,8 @@ export interface IMessage {
     channelId: string;
     userId: string;
     nickname: string;
+    /** The author's CURRENT avatar URL (PRD 17.2); null = default avatar, absent = pre-v2.6.0 server. */
+    avatarUrl?: string | null;
     content: string;
     /** Set when this message is a reply (PRD 16.11). Only the message directly answered — snippets never nest. */
     replyTo?: IReplyPreview | null;
@@ -225,6 +227,8 @@ export interface IDirectMessage {
     id: string;
     senderId: string;
     senderNickname: string;
+    /** The sender's CURRENT avatar URL (PRD 17.2); null = default avatar, absent = pre-v2.6.0 server. */
+    senderAvatarUrl?: string | null;
     receiverId: string;
     content: string;
     /** Set when this DM is a reply (PRD 16.11). Only the message directly answered. */

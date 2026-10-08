@@ -49,6 +49,8 @@ interface ChatMessage {
     channelId: string;
     userId: string;
     nickname: string;
+    /** Author's current avatar URL (PRD 17.2); undefined from a pre-v2.6.0 server. */
+    avatarUrl?: string | null;
     content: string;
     /** Set when this message is a reply (PRD 16.11). */
     replyTo?: ReplyPreview | null;
@@ -72,6 +74,8 @@ interface DirectMessage {
     id: string;
     senderId: string;
     senderNickname: string;
+    /** Sender's current avatar URL (PRD 17.2); undefined from a pre-v2.6.0 server. */
+    senderAvatarUrl?: string | null;
     receiverId: string;
     content: string;
     /** Set when this DM is a reply (PRD 16.11). */
@@ -4409,8 +4413,15 @@ async function loadOlderMessages(tab: ChatTab): Promise<void> {
     tab.hasMoreOlder = result.messages.length >= CHAT_PAGE_SIZE;
 
     // Preserve the user's visual anchor across the prepend (Slack/Discord/
-    // Teams pattern) — record height before insert, then correct scrollTop
-    // by exactly the height the prepended content added.
+    // Teams pattern). Anchored on an ELEMENT — the first message whose text is
+    // in view — rather than on the scrollHeight difference: the junction
+    // repair can turn the old first message into a continuation, which drops
+    // its header/avatar and min-height (PRD 17.2), so the height difference
+    // alone no longer says where the text the user is reading went.
+    const viewTop = tab.messagesEl.getBoundingClientRect().top;
+    const anchorBody = Array.from(tab.messagesEl.querySelectorAll<HTMLElement>(".chat-msg .msg-body"))
+        .find((b) => b.getBoundingClientRect().bottom > viewTop);
+    const anchorTopBefore = anchorBody?.getBoundingClientRect().top ?? 0;
     const oldScrollHeight = tab.messagesEl.scrollHeight;
     const oldScrollTop = tab.messagesEl.scrollTop;
 
@@ -4420,8 +4431,11 @@ async function loadOlderMessages(tab: ChatTab): Promise<void> {
         prependOlderMessages(tab, result.messages as ChatMessage[], false);
     }
 
-    const newScrollHeight = tab.messagesEl.scrollHeight;
-    tab.messagesEl.scrollTop = oldScrollTop + (newScrollHeight - oldScrollHeight);
+    if (anchorBody?.isConnected) {
+        tab.messagesEl.scrollTop += anchorBody.getBoundingClientRect().top - anchorTopBefore;
+    } else {
+        tab.messagesEl.scrollTop = oldScrollTop + (tab.messagesEl.scrollHeight - oldScrollHeight);
+    }
 }
 
 /** One `IntersectionObserver` per tab, watching both the top sentinel
@@ -4732,6 +4746,8 @@ function buildMessageShell(opts: {
     id: string;
     ownerId: string;
     nickname: string;
+    /** The author's avatar URL from the DTO (PRD 17.2); undefined = keep what the cache knows. */
+    avatarUrl?: string | null;
     createdAt: string;
     content: string;
     edited?: boolean;
@@ -4746,6 +4762,8 @@ function buildMessageShell(opts: {
     el.setAttribute("data-msg-type", opts.kind);
     el.setAttribute("data-msg-owner", opts.ownerId);
     el.setAttribute("data-created-at", opts.createdAt);
+    // Shown in the gutter while a continuation (no header) is hovered (PRD 17.2).
+    el.dataset.hhmm = formatMessageTime(opts.createdAt);
 
     const editedLabel = opts.edited ? `<span class="msg-edited">(edited)</span>` : "";
     const text = opts.content ? `<span class="msg-text"></span>` : "";
@@ -4755,6 +4773,12 @@ function buildMessageShell(opts: {
     if (opts.content) {
         setMessageBody(el.querySelector(".msg-text") as HTMLElement, opts.content);
     }
+
+    // Avatar in the left gutter (PRD 17.2), inside the header so it shows and
+    // hides with it — grouping (applyGrouping) needs no changes — and stays
+    // level with the name even when a reply snippet sits above the header.
+    rememberAvatarUrl(opts.ownerId, opts.avatarUrl);
+    el.querySelector(".msg-header")?.prepend(createAvatarElement(opts.ownerId, opts.nickname, 40));
 
     // A reply always opens its own group with its header showing, under the
     // snippet (PRD 16.6 rule 5 / 16.11) — applyGrouping() reads this flag.
@@ -4834,6 +4858,7 @@ function buildChatMessageElement(tab: ChatTab, msg: ChatMessage): HTMLDivElement
         id: msg.id,
         ownerId: msg.userId,
         nickname: msg.nickname,
+        avatarUrl: msg.avatarUrl,
         createdAt: msg.createdAt,
         content: msg.content,
         edited: !!msg.editedAt,
@@ -5580,6 +5605,7 @@ function buildDmMessageElement(tab: ChatTab, msg: DirectMessage): HTMLDivElement
         id: msg.id,
         ownerId: msg.senderId,
         nickname: msg.senderNickname,
+        avatarUrl: msg.senderAvatarUrl,
         createdAt: msg.createdAt,
         content: msg.content,
         replyTo: msg.replyTo,

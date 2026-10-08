@@ -534,6 +534,8 @@ The user reports: clicking the banner scrolls up and stops at the edge of the lo
 
 Also related: a **live message** arriving while the tab shows a detached window is appended after the window's last message, leaving an invisible **gap** of unloaded messages, and sets `atTrueLatest = true` (wrong).
 
+Also related (**found while testing 17.2, 08/10/2026, reproduced headlessly**): when the first page of 20 messages **doesn't fill the viewport** (short grouped lines, a tall window), older history **never loads**. The top sentinel is already visible when the page arrives, and the `IntersectionObserver` only fires on a *change*; its one early callback came while `initialLoadDone` was still false and was ignored. So the user can't scroll up because there's nothing to scroll. Fix in this item: after the initial load (and after any window rebuild), if `hasMoreOlder` and the top sentinel is still within the viewport, call `loadOlderMessages()` directly, repeating until the list overflows or history runs out. Apply the same check at the bottom for `loadNewerMessages()`.
+
 ### Step 0 — Reproduce before fixing
 
 Reproduce headlessly (seed a channel with ~150 messages, some with images, pin message #10, open the tab, click the bar) and record which of H1–H3 actually fire, with the trace in the progress log. The fix below covers all three regardless, but the log must state the observed root cause, not only the hypotheses (project practice since PRD 13.1).
