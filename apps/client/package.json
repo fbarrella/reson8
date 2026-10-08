@@ -22,6 +22,7 @@
         "test-build:mac": "node scripts/test-build.mjs mac",
         "test:markdown": "tsc --build && node scripts/markdown-smoke.mjs",
         "test:avatar": "tsc --build && node scripts/avatar-smoke.mjs",
+        "test:soft-clip": "tsc --build && node scripts/soft-clip-smoke.mjs",
         "typecheck": "tsc --noEmit"
     },
     "build": {

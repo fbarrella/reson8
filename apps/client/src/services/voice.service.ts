@@ -13,6 +13,10 @@
 import { Device, types as msTypes } from "mediasoup-client";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { MIC_VOLUME_MAX_GAIN, buildSoftClipCurve, micVolumeStages } from "./mic-soft-clip";
+
+/** Built once on first use and shared (it never changes) — PRD 17.4. */
+let softClipCurve: Float32Array<ArrayBuffer> | null = null;
 
 // Type-only — a genuine `import("...")` type query, erased entirely at
 // compile time (no require()/import() emitted). See the dynamicImport
@@ -245,7 +249,8 @@ export class VoiceService {
     // never produced directly. Every effect that needs to touch the outgoing
     // mic signal taps or extends this same chain instead of building its own
     // AudioContext:
-    //   micSourceNode → [noiseCancelNode] → gateGainNode → volumeGainNode → micDestinationNode → produce()
+    //   micSourceNode → [noiseCancelNode] → gateGainNode → volumeGainNode → softClipNode → micDestinationNode → produce()
+    // (`softClipNode` is a pass-through at ≤100% mic volume — PRD 17.4.)
     // `analyser` taps strictly *after* `noiseCancelNode` (or after
     // `micSourceNode` directly if noise cancelling isn't wired in) so gate
     // decisions and the settings meter read the denoised signal per PRD
@@ -256,15 +261,19 @@ export class VoiceService {
     private analyser: AnalyserNode | null = null;
     private gateGainNode: GainNode | null = null;
     private volumeGainNode: GainNode | null = null;
+    /** The chain's last stage (PRD 17.4): softly limits peaks above 100% mic
+     *  volume, a pass-through otherwise. Everything that consumes the
+     *  processed mic (the produce destination, self-hear) taps THIS node. */
+    private softClipNode: WaveShaperNode | null = null;
     private micDestinationNode: MediaStreamAudioDestinationNode | null = null;
-    /** Mic input volume as a linear gain multiplier (0.0–2.0, 100% = 1.0) —
+    /** Mic input volume as a linear gain multiplier (0.0–3.0, 100% = 1.0) —
      *  kept even without a live graph so a volume set before joining a
      *  channel is applied the instant the graph is built (PRD 13.3). */
     private micVolume: number = 1.0;
 
     // ── Self-hear mic monitor (PRD 14.10) ────────────────────────────────────
-    // Taps `volumeGainNode` — the fully processed "how you'll actually sound
-    // to others" signal, post noise-cancel/gate/volume — straight to this
+    // Taps `softClipNode` — the fully processed "how you'll actually sound
+    // to others" signal, post noise-cancel/gate/volume/clip — straight to this
     // same send-side `audioContext`'s own destination. Entirely independent
     // of deafen (which only zeroes remote per-user GainNodes on the separate
     // `playbackAudioContext`) and of the mediasoup producer's paused state
@@ -983,10 +992,10 @@ export class VoiceService {
 
         this.audioContext = new AudioContext({ sampleRate: 48000 });
         await this.buildProcessingChain(this.localStream);
-        if (!this.volumeGainNode) throw new Error("Mic processing chain failed to build");
+        if (!this.softClipNode) throw new Error("Mic processing chain failed to build");
 
         this.micDestinationNode = this.audioContext.createMediaStreamDestination();
-        this.volumeGainNode.connect(this.micDestinationNode);
+        this.softClipNode.connect(this.micDestinationNode);
 
         return this.micDestinationNode.stream.getAudioTracks()[0];
     }
@@ -1032,8 +1041,11 @@ export class VoiceService {
         tapSource.connect(this.gateGainNode);
 
         this.volumeGainNode = this.audioContext.createGain();
-        this.volumeGainNode.gain.value = this.micVolume;
         this.gateGainNode.connect(this.volumeGainNode);
+
+        this.softClipNode = this.audioContext.createWaveShaper();
+        this.volumeGainNode.connect(this.softClipNode);
+        this.applyMicVolumeStages();
 
         // Mirrors `enableSensitivity()`'s own "graph already exists, start
         // the loop immediately" check — a noise-gate setting persisted from
@@ -1062,6 +1074,10 @@ export class VoiceService {
         if (this.volumeGainNode) {
             this.volumeGainNode.disconnect();
             this.volumeGainNode = null;
+        }
+        if (this.softClipNode) {
+            this.softClipNode.disconnect();
+            this.softClipNode = null;
         }
         if (this.micDestinationNode) {
             this.micDestinationNode.disconnect();
@@ -1182,14 +1198,33 @@ export class VoiceService {
 
     // ── Mic Volume (PRD 13.3) ────────────────────────────────────────────────
 
-    /** Set mic input volume (0–200%, 100% = unprocessed input level). Applies
+    /** Set mic input volume (0–300%, 100% = unprocessed input level). Applies
      *  live to the send-side graph; safe to call before joining a channel —
      *  the value is applied the moment the graph is built. */
     setMicVolume(percent: number): void {
-        const clamped = Math.max(0, Math.min(200, percent));
+        const clamped = Math.max(0, Math.min(MIC_VOLUME_MAX_GAIN * 100, Number.isFinite(percent) ? percent : 100));
         this.micVolume = clamped / 100;
-        if (this.volumeGainNode) {
-            this.volumeGainNode.gain.value = this.micVolume;
+        this.applyMicVolumeStages();
+    }
+
+    /**
+     * Configures the volume gain + soft clipper for `micVolume` (PRD 17.4):
+     * ≤100% → plain gain, clipper bypassed (curve = null is a pass-through,
+     * so this is exactly the pre-17.4 signal); >100% → gain / 3 into a curve
+     * that multiplies by 3 and bends peaks smoothly (see mic-soft-clip.ts for
+     * why the gain has to be folded into the curve).
+     */
+    private applyMicVolumeStages(): void {
+        if (!this.volumeGainNode || !this.softClipNode) return;
+        const { gain, clip } = micVolumeStages(this.micVolume);
+        this.volumeGainNode.gain.value = gain;
+        if (clip) {
+            softClipCurve ??= buildSoftClipCurve();
+            this.softClipNode.curve = softClipCurve;
+            this.softClipNode.oversample = "2x"; // keeps the knee from aliasing
+        } else {
+            this.softClipNode.curve = null;
+            this.softClipNode.oversample = "none";
         }
     }
 
@@ -1206,11 +1241,11 @@ export class VoiceService {
      */
     setSelfHearEnabled(enabled: boolean): void {
         if (enabled) {
-            if (!this.audioContext || !this.volumeGainNode) return;
+            if (!this.audioContext || !this.softClipNode) return;
             if (this.selfHearMonitorGainNode) return; // already routed
             this.selfHearMonitorGainNode = this.audioContext.createGain();
             this.selfHearMonitorGainNode.gain.value = this.selfHearVolume;
-            this.volumeGainNode.connect(this.selfHearMonitorGainNode);
+            this.softClipNode.connect(this.selfHearMonitorGainNode);
             this.selfHearMonitorGainNode.connect(this.audioContext.destination);
         } else if (this.selfHearMonitorGainNode) {
             this.selfHearMonitorGainNode.disconnect();

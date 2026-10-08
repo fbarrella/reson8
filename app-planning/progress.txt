@@ -938,3 +938,104 @@ Feature/Fix: PRD 17.3 — User profile card (click a nickname or avatar)
 
   Next Step: PRD 17.4 — microphone volume up to 300% (with a soft clipper
   above 100%).
+
+--- Entry: 08/10/2026 ---
+
+Feature/Fix: PRD 17.4 — Microphone volume up to 300% (with a soft clipper)
+
+  Problem: Settings -> Voice & Shortcuts -> Microphone Volume stopped at 200%;
+  the user wanted 300%. At 3x digital gain a normal voice easily exceeds
+  full scale, and the Opus encoder would receive hard-clipped (harshly
+  distorted) samples.
+
+  Solution: The slider goes to 300%, and a soft clipper was added as the
+  last stage of the shared send-side chain:
+    micSource -> [noiseCancel] -> gateGain -> volumeGain -> softClip ->
+    destination / self-hear.
+  At or below 100% the clipper is BYPASSED (WaveShaper curve = null, a
+  pass-through by spec), so the signal is exactly what it was before.
+  Above 100%, loud peaks bend smoothly toward a 0.99 ceiling instead of
+  clipping.
+
+  Design Notes (why it's built this way):
+    - A WaveShaperNode clamps its INPUT to [-1, 1] before applying the
+      curve, so a x3 signal would already be hard-clipped before the curve
+      saw it. The gain is therefore folded into the curve: above 100% the
+      volume GainNode applies volume/3 (keeping the shaper's input inside
+      [-1, 1]) and the curve maps x -> softClip(3x). In the linear region
+      the effective boost is exactly the chosen volume.
+    - softClip(): identity up to 0.8 of full scale, then a tanh knee
+      approaching the ceiling, continuous with slope 1 at the knee (no
+      audible corner). WaveShaper rather than DynamicsCompressorNode: no
+      look-ahead latency (the compressor adds ~6 ms to voice).
+    - oversample "2x" when engaged (no aliasing from the knee), "none" when
+      bypassed.
+    - Ceiling 0.99, not 1.0: measured in Chromium, the 2x oversampling
+      filter overshot a full-scale input at 300% to 1.0002 with a 1.0
+      ceiling. 0.99 (~-0.09 dBFS) leaves that headroom, as limiters
+      normally do.
+    - The curve (4097 points, odd so x=0 is a point) is built once and
+      shared.
+    - Built inside the shared buildProcessingChain(), so preview mode and a
+      real call stay identical (apps/client/CLAUDE.md). The produce
+      destination and the self-hear monitor now tap softClipNode, so Hear
+      Yourself plays exactly what is sent. The level meter tap is unchanged
+      (post-noise-cancel, pre-gate).
+
+  Client Changes:
+    - services/mic-soft-clip.ts (NEW, pure): MIC_VOLUME_MAX_GAIN = 3,
+      SOFT_CLIP_KNEE = 0.8, SOFT_CLIP_CEILING = 0.99, softClip(),
+      buildSoftClipCurve(), micVolumeStages(volume) -> { gain, clip }
+      (clamped to 0-3; NaN -> 100%).
+    - voice.service.ts: softClipNode (created, connected and torn down with
+      the chain); applyMicVolumeStages() sets the gain/curve/oversample from
+      micVolume, on build and on every setMicVolume() (clamp 0-300, NaN ->
+      100); self-hear and the produce destination tap softClipNode.
+    - index.html: slider max 300; description adds "Above 100%, loud peaks
+      are softly limited instead of distorting."
+    - renderer.ts: the stored reson8-mic-volume is clamped to 0-300 on load
+      (a non-number falls back to 100), so a corrupt value can't become a
+      NaN/huge gain.
+
+  Key Files Modified:
+    apps/client/src/services/mic-soft-clip.ts (NEW)
+    apps/client/scripts/soft-clip-smoke.mjs (NEW)
+    apps/client/package.json (test:soft-clip script)
+    apps/client/src/services/voice.service.ts
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/renderer/index.html
+
+  Verification:
+    - npx tsc --noEmit (client); npm run test:markdown, test:avatar pass.
+    - npm run test:soft-clip (NEW), all pass:
+      - identity below the knee, continuity and slope 1 at the knee,
+        monotonic, symmetric, never above the 0.99 ceiling (float32 curve
+        included);
+      - micVolumeStages for 50/100/200/300/500%/NaN;
+      - end-to-end through a spec-accurate WaveShaper lookup: <=100% is
+        exactly input x volume, and 150-300% multiply by exactly the volume
+        in the linear region.
+      The first run failed 3 checks that asserted the curve stays strictly
+      below 1.0: tanh saturates to exactly 1 in double precision and
+      float32 rounds the end to 1.0. The real requirement is "never exceeds
+      full scale", and the test was corrected. That run is also what
+      surfaced the ceiling question.
+    - In the real built client, Chromium's actual WaveShaperNode offline-
+      rendered (OfflineAudioContext) with the app's exact curve and stages:
+      - bypassed at 100% and 50% is BIT-IDENTICAL to a plain gain;
+      - 200%: 0.2 -> 0.400; 300%: 0.2 -> 0.600;
+      - 300%: a 0.5 peak -> 0.990 and a full-scale peak -> 0.990, below
+        1.0 even with oversampling. Before the ceiling change the full-
+        scale peak was 1.0002.
+    - Same run (Xvfb + --use-fake-device-for-media-stream):
+      - the slider reaches 300 with the new text, and 300% is shown,
+        stored and applied;
+      - preview mode built the rewired chain and Hear Yourself turned on at
+        300% with no runtime errors;
+      - a stored "9999" loads as 300%.
+      The fake mic was effectively silent (-139 dB), so the AUDIBLE result
+      was not checked by machine.
+    - Not yet hand-tested by the user (by ear: Hear Yourself at 300% should
+      be loud but not crackly; 100% unchanged).
+
+  Next Step: PRD 17.5 — preview tabs and "Keep Tab Open" for text channels.

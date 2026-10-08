@@ -1275,10 +1275,15 @@ let soundAlertsMuted = localStorage.getItem("reson8-mute-alerts") === "true";
 let nudgeVolume = Number(localStorage.getItem("reson8-nudge-volume") ?? "100");
 let alertVolume = Number(localStorage.getItem("reson8-alert-volume") ?? "100");
 let voiceVolume = Number(localStorage.getItem("reson8-voice-volume") ?? "100");
-// Mic input volume (PRD 13.3) — 0-200%, scales the outgoing mic signal itself
-// (not local playback), lives in the Voice & Shortcuts tab alongside the
-// noise gate rather than the Audio tab's other volume sliders.
-let micVolume = Number(localStorage.getItem("reson8-mic-volume") ?? "100");
+// Mic input volume (PRD 13.3; 0-300% since PRD 17.4) — scales the outgoing
+// mic signal itself (not local playback), lives in the Voice & Shortcuts tab
+// alongside the noise gate rather than the Audio tab's other volume sliders.
+// Clamped on load so a corrupt stored value can't become a NaN gain.
+const MIC_VOLUME_MAX_PERCENT = 300;
+let micVolume = (() => {
+    const stored = Number(localStorage.getItem("reson8-mic-volume") ?? "100");
+    return Number.isFinite(stored) ? Math.max(0, Math.min(MIC_VOLUME_MAX_PERCENT, stored)) : 100;
+})();
 // AI noise cancelling (PRD 13.1) — off by default (a real CPU/latency cost),
 // persisted like the noise gate's own enabled flag.
 let noiseCancelEnabled = localStorage.getItem("reson8-noise-cancel-enabled") === "true";
