@@ -36,3 +36,6 @@ apps/client/certs/
 # Logs
 *.log
 npm-debug.log*
+
+# Personal, machine-local AI agent instructions
+CLAUDE.local.md

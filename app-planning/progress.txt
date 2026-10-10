@@ -22,8 +22,9 @@ Monorepo structure:
   packages/shared-types/    — Shared DTOs, enums, and Socket.io event types
 
 For build commands, environment variables, ports, and architecture details,
-see the root CLAUDE.md (and apps/client/CLAUDE.md, apps/server/CLAUDE.md) —
-not duplicated here to avoid drift between docs.
+see the root AGENTS.md (and apps/client/AGENTS.md, apps/server/AGENTS.md; the
+CLAUDE.md files next to them just import these) — not duplicated here to
+avoid drift between docs.
 
 Full unabridged entry-by-entry history (every bug's root cause, every file
 touched, every verification step) for everything summarized below lives in
@@ -643,7 +644,8 @@ Testing lessons worth keeping:
   ONGOING LOG — new entries go below this line
 ================================================================================
 
-Use `/log-progress` (see .claude/commands/log-progress.md) to append entries
+Use `/log-progress` in Claude Code, or follow .claude/commands/log-progress.md
+by hand in any other agent, to append entries
 here in the established format:
 
 --- Entry: DD/MM/YYYY ---

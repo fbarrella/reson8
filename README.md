@@ -404,6 +404,8 @@ reson8/
 
 This is currently a private project. If you'd like to contribute, please reach out to the author directly.
 
+**Working with an AI coding agent?** Project context, architecture, conventions and hard-won gotchas live in [`AGENTS.md`](AGENTS.md) (plus `apps/client/AGENTS.md` and `apps/server/AGENTS.md`), which agents such as Codex, Cursor and Copilot read automatically. The `CLAUDE.md` files next to them only import `AGENTS.md`, so Claude Code gets the same content. Edit `AGENTS.md`, never the `CLAUDE.md` stubs.
+
 ---
 
 <div align="center">

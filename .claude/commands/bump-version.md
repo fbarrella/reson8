@@ -23,7 +23,7 @@ Steps:
    - `apps/client/package.json` — `"version"` field
    - `apps/server/package.json` — `"version"` field
    - `README.md` — the `![Version](...shields.io/badge/version-...)` badge
-   - `CLAUDE.md` — the "Current version: X" sentence near the top, in the
+   - `AGENTS.md` (root) — the "Current version: X" sentence near the top, in the
      `## Project` section. **Do not** touch other version mentions
      elsewhere in that file (e.g. "Project history" text describing what
      version a past phase shipped at) — those are frozen historical facts,

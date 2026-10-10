@@ -3,7 +3,7 @@
  * position and maximized state between sessions.
  *
  * Hand-rolled instead of `electron-window-state` (unmaintained, and this
- * project has been burned by dependency surprises before — see CLAUDE.md's
+ * project has been burned by dependency surprises before — see AGENTS.md's
  * ESM/CJS notes). Every failure path falls back to the defaults, so a
  * missing or corrupt state file can never prevent the app from launching.
  *

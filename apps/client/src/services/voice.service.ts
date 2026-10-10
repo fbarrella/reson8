@@ -761,7 +761,7 @@ export class VoiceService {
         this.consumerIdToUserId.set(consumer.id, userId);
 
         // Create an <audio> element, append to DOM, and play. This keeps the
-        // MediaStreamTrack actively flowing/decoded (see root CLAUDE.md's
+        // MediaStreamTrack actively flowing/decoded (see root AGENTS.md's
         // "detached audio element" gotcha) but is muted — actual audible
         // output is routed exclusively through the GainNode graph below, via
         // an independent createMediaStreamSource() tap on the same stream.

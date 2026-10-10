@@ -56,5 +56,5 @@
 ## Tooling
 
 ### 9. `npm run lint` is broken
-- **What:** the root script references eslint, which isn't installed anywhere in the repo (documented in the root `CLAUDE.md`).
+- **What:** the root script references eslint, which isn't installed anywhere in the repo (documented in the root `AGENTS.md`).
 - **Direction:** install and configure eslint (flat config, typescript-eslint) or remove the script.

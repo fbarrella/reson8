@@ -61,7 +61,7 @@ function setStatus(status: ViewerStatus, message?: string): void {
 }
 
 // The video element lives here (preload shares the renderer's DOM — see root
-// CLAUDE.md's Electron gotchas) rather than being passed across
+// AGENTS.md's Electron gotchas) rather than being passed across
 // contextBridge, which cannot carry MediaStream/track objects.
 const videoEl = document.createElement("video");
 videoEl.autoplay = true;
