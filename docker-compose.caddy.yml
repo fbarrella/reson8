@@ -1,0 +1,43 @@
+# Docker Compose override — automatic HTTPS with Caddy (PRD 18.2)
+#
+# Usage:
+#   RESON8_DOMAIN=chat.example.com \
+#     docker compose -f docker-compose.yml -f docker-compose.caddy.yml up -d
+#
+# Requirements: RESON8_DOMAIN's DNS record points at this machine, and ports
+# 80 and 443 (TCP) are reachable from the internet. Caddy then obtains and
+# renews a Let's Encrypt certificate by itself. Clients connect to
+# https://chat.example.com (no port).
+#
+# Port 9800 stays published by docker-compose.yml so Reson8 clients older than
+# 2.7.0 (which can only speak plain http://host:9800) keep working during the
+# transition. Once everyone has updated, remove the "9800:9800" mapping (e.g.
+# with a docker-compose.override.yml `ports: !override [...]`) so the only way
+# in is the encrypted one.
+services:
+  caddy:
+    image: caddy:2.11-alpine
+    container_name: reson8-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp" # HTTP/3
+    environment:
+      RESON8_DOMAIN: "${RESON8_DOMAIN:?set RESON8_DOMAIN to the server's public domain name}"
+    volumes:
+      - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data # issued certificates: keep this volume
+      - caddy_config:/config
+    depends_on:
+      - reson8-server
+
+  reson8-server:
+    environment:
+      # Caddy runs on the compose network (a private address range): believe the
+      # address it forwards. Override TRUST_PROXY to narrow it.
+      TRUST_PROXY: "${TRUST_PROXY:-uniquelocal}"
+
+volumes:
+  caddy_data:
+  caddy_config:

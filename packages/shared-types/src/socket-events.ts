@@ -873,4 +873,11 @@ export interface SocketData {
     authNonce?: string;
     /** When `authNonce` was issued (ms epoch); it expires after 60 s. */
     authNonceIssuedAt?: number;
+    /**
+     * The client's network address, resolved ONCE in `index.ts`'s `io.use()`
+     * middleware (PRD 18.2): forwarded-address headers count only when the
+     * peer is a proxy listed in `TRUST_PROXY`. Server-side only; every later
+     * feature that needs "where is this socket from" reads this field.
+     */
+    clientAddress?: string;
 }

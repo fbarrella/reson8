@@ -189,6 +189,11 @@ MEDIASOUP_PRIVATE_ANNOUNCED_IP=<lan-ip>          # For LAN/WAN dual-announce
 ADMIN_KEY_FINGERPRINT=SHA256:...                 # Only this key can be the admin (Settings → About)
 REQUIRE_SIGNED_IDENTITY=true                     # Refuse pre-2.6.0 clients (once everyone updated)
 AUTH_ALLOWED_HOSTS=chat.example.com              # Accept proofs only for these host[:port] names
+
+# Encryption and proxies (optional, 2.7.0+ — see "Encryption" below)
+TLS_CERT_FILE=/etc/reson8/certs/fullchain.pem    # Serve HTTPS/WSS directly (needs TLS_KEY_FILE too)
+TLS_KEY_FILE=/etc/reson8/certs/privkey.pem
+TRUST_PROXY=loopback, uniquelocal                # Believe forwarded addresses from these proxies only
 ```
 
 </details>
@@ -226,6 +231,60 @@ Because Cloudflare Tunnels only proxy TCP, WebRTC voice (UDP) requires a **TURN 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.turn.yml up --build
 ```
+
+---
+
+## 🔒 Encryption (HTTPS)
+
+Voice and screen-share media is always encrypted (WebRTC). **Chat, DMs, uploads and the session itself are only encrypted when the connection to the server is** — over plain `http://` anyone on the network path can read them. Use one of these:
+
+### Caddy (recommended for servers on the internet)
+
+Caddy gets and renews a free Let's Encrypt certificate by itself.
+
+1. Point a DNS record (e.g. `chat.example.com`) at your server and open ports **80** and **443** (TCP; UDP 443 for HTTP/3 is optional).
+2. Start Reson8 with the Caddy override:
+
+```bash
+RESON8_DOMAIN=chat.example.com docker compose -f docker-compose.yml -f docker-compose.caddy.yml up -d
+```
+
+3. Connect from the client as `chat.example.com` (no port).
+
+Port `9800` stays published so clients older than 2.7.0 (which only speak plain HTTP) keep working. Once everyone has updated, stop publishing it so the only way in is the encrypted one.
+
+### TLS in the server itself (LAN, self-signed, or your own certificates)
+
+Set `TLS_CERT_FILE` and `TLS_KEY_FILE` (PEM). The server then speaks HTTPS/WSS on its port, and picks up renewed certificate files without a restart. With Docker, mount the files and point the variables at the mounted paths (see the commented `./certs` volume in `docker-compose.yml`).
+
+A self-signed certificate for a LAN server (list every name or IP clients will type):
+
+```bash
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -days 825 -nodes \
+  -subj "/CN=reson8" -addext "subjectAltName=DNS:reson8.lan,IP:192.168.0.10" \
+  -keyout privkey.pem -out fullchain.pem
+```
+
+### nginx, or Cloudflare Tunnel
+
+Any reverse proxy works as long as it proxies WebSockets and forwards the client address. For nginx:
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:9800;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+}
+```
+
+Cloudflare Tunnel already provides HTTPS at its edge.
+
+### Trusting your proxy (`TRUST_PROXY`)
+
+Behind a proxy, every connection comes from the proxy's address. The server only believes `X-Forwarded-For` / `CF-Connecting-IP` from proxies you list in `TRUST_PROXY` (a comma list of addresses, CIDRs or `loopback`, `linklocal`, `uniquelocal`); by default it ignores them, so a client can never choose the address it is logged under. The Caddy override sets it for you. `TRUST_PROXY=true` is refused on purpose.
 
 ---
 

@@ -265,10 +265,9 @@ export function registerConnectionHandlers(
         // guesswork — connection lifetime, transport, and the client's
         // address (an IP change between sockets = roaming network).
         const connectedAt = Date.now();
-        const clientAddress =
-            (socket.handshake.headers["cf-connecting-ip"] as string | undefined) ??
-            (socket.handshake.headers["x-forwarded-for"] as string | undefined) ??
-            socket.handshake.address;
+        // Resolved once in index.ts's io.use() with TRUST_PROXY rules (PRD 18.2):
+        // forwarded headers from an untrusted peer are ignored.
+        const clientAddress = socket.data.clientAddress ?? socket.handshake.address;
         app.log.info({ socketId: socket.id, address: clientAddress }, "Client connected");
 
         // ── PING_LATENCY — instant ack for client-side RTT + clock-offset

@@ -789,3 +789,98 @@ Feature/Fix: Working ESLint setup — `npm run lint` (PRD 18.1)
       apps/client/AGENTS.md ("Driving the real app headlessly").
 
   Next Step: PRD 18.2 — server-side TLS, the Caddy setup and TRUST_PROXY.
+
+
+--- Entry: 10/10/2026 ---
+
+Feature/Fix: Server-side TLS, Caddy setup and trusted client addresses (PRD 18.2)
+
+  Problem: The server only spoke plain HTTP/WS, so chat, DMs, upload tokens
+  and the whole Socket.io session were readable on the network path unless a
+  self-hoster happened to put a proxy in front. Separately, the address used
+  in logs came from `cf-connecting-ip`/`x-forwarded-for` taken from ANY
+  client, so it was whatever the client claimed — harmless while it only fed
+  logs, but address bans (18.7), the identity log (18.4) and the approval
+  limits (18.8) all key on it.
+
+  Solution:
+    Trusted client address
+      - services/client-address.ts (pure): `parseTrustProxy()`,
+        `normalizeAddress()` (::ffff:a.b.c.d -> IPv4, zone ids dropped),
+        `resolveClientAddress()` built on @fastify/proxy-addr (now a direct
+        dependency, same major Fastify 5 uses). Unset/false trusts nothing;
+        "true" is REFUSED with a warning (trusting every hop makes the address
+        client-controlled again); an invalid list also trusts nothing. A
+        non-IP header value can never become the address.
+      - index.ts's `io.use()` middleware sets `socket.data.clientAddress`
+        for primary and viewer sockets before any handler runs (deviation
+        from the PRD, which put it in the connection handler: 18.7 needs it
+        at handshake time). `connection.handler.ts` just reads it. Fastify
+        gets the same list via its `trustProxy` option.
+    Native TLS
+      - config/tls.config.ts: `readTlsEnv()` (both or neither; only one is a
+        startup error), `loadTlsMaterial()` (a mismatched key/cert pair is
+        rejected by `createSecureContext`), `watchTlsFiles()` (watches the
+        DIRECTORIES because renewals swap files/symlinks, debounced 1 s,
+        12 h safety reload, a failed reload keeps the previous certificate).
+      - index.ts: `Fastify({ https })` when configured, minVersion TLSv1.2,
+        startup log line states the mode; an unreadable certificate stops
+        the boot — it never falls back to plain HTTP.
+    Deployment
+      - docker-compose.caddy.yml + deploy/caddy/Caddyfile (caddy:2.11-alpine,
+        looked up on Docker Hub, never `latest`): automatic Let's Encrypt,
+        RESON8_DOMAIN required (clear error without it), sets TRUST_PROXY to
+        uniquelocal by default. Port 9800 stays published for pre-2.7.0
+        clients.
+      - docker-compose.yml: passes TLS_CERT_FILE/TLS_KEY_FILE/TRUST_PROXY, a
+        commented ./certs volume. It also passes REQUIRE_SIGNED_IDENTITY,
+        ADMIN_KEY_FINGERPRINT and AUTH_ALLOWED_HOSTS, which 2.6.0 documented
+        but docker-compose.yml never forwarded (so they could not be set in
+        a compose deployment) — empty defaults, same as unset.
+      - README "Encryption (HTTPS)" section (Caddy, native TLS with the
+        openssl recipe, nginx block, TRUST_PROXY), .env.example block.
+
+  Behavior change to call out in the release notes: behind a proxy WITHOUT
+  TRUST_PROXY, logs now show the proxy's address instead of the forwarded one.
+
+  Key Files Modified:
+    apps/server/src/services/client-address.ts (NEW)
+    apps/server/src/config/tls.config.ts (NEW)
+    apps/server/src/__tests__/client-address.test.ts (NEW, 16 tests)
+    apps/server/src/__tests__/tls.config.test.ts (NEW, 7 tests; generates its
+      certificates with openssl at run time, skips if openssl is missing —
+      no private key is committed)
+    apps/server/src/index.ts
+    apps/server/src/handlers/connection.handler.ts
+    packages/shared-types/src/socket-events.ts (SocketData.clientAddress)
+    docker-compose.caddy.yml (NEW), deploy/caddy/Caddyfile (NEW)
+    docker-compose.yml, apps/server/.env.example, README.md
+    AGENTS.md, apps/server/AGENTS.md
+    apps/server/package.json, package-lock.json
+
+  Verification:
+    - tsc --build in shared-types, server, client: exit 0. `npm run lint`:
+      exit 0 (0 errors, 72 warnings, unchanged). Server vitest: 15 files,
+      171 tests passed.
+    - Live against the real server on a scratch DB (join, REQUEST_UPLOAD_TOKEN,
+      POST /api/upload, GET the file back, all over the scheme):
+        A  native TLS, TRUST_PROXY unset, client forges X-Forwarded-For
+           198.51.100.77 -> logged address 127.0.0.1 (forgery ignored)
+        B  native TLS, TRUST_PROXY=loopback -> 198.51.100.77 honored; then
+           the cert files were replaced on disk: openssl s_client showed
+           CN=reson8-test-b with no restart and the reload was logged
+        C  plain HTTP with defaults: identical to before (6/6)
+        D  only TLS_CERT_FILE set -> "must be set together", exit 1
+        E  TLS_KEY_FILE missing on disk -> ENOENT, exit 1 (no HTTP fallback)
+        F  TRUST_PROXY=true -> warned and ignored, server still starts
+    - Real Caddy 2.11 (docker, internal CA, host network) proxying a WSS
+      session + upload to the server with TRUST_PROXY=loopback: 6/6.
+    - `docker compose config` validates the base file and the Caddy override.
+    - NOT run: a real Let's Encrypt issuance (needs a public domain); a
+      packaged server image.
+
+  Notes: engine.io-client sets `rejectUnauthorized: true` explicitly, so
+  NODE_TLS_REJECT_UNAUTHORIZED=0 does NOT disable verification for the
+  Socket.io client — trust a CA with NODE_EXTRA_CA_CERTS (relevant to 18.3).
+
+  Next Step: PRD 18.3 — client HTTPS-first connection, TOFU pins, lock icon.

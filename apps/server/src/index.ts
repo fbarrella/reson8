@@ -8,7 +8,8 @@
 import "dotenv/config";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import Fastify from "fastify";
+import Fastify, { type FastifyInstance } from "fastify";
+import type { Server as HttpsServer } from "node:https";
 import cors from "@fastify/cors";
 import multipart from "@fastify/multipart";
 import fastifyStatic from "@fastify/static";
@@ -36,6 +37,8 @@ import { registerProfileHandlers } from "./handlers/profile.handler.js";
 import { registerUploadRoute } from "./routes/upload.route.js";
 import { MediasoupService } from "./services/mediasoup.service.js";
 import { startUploadSweeper } from "./services/upload-sweeper.js";
+import { getTrustProxy, resolveClientAddress } from "./services/client-address.js";
+import { loadTlsMaterial, readTlsEnv, watchTlsFiles } from "./config/tls.config.js";
 
 // Augment Fastify with the resolved server ID
 declare module "fastify" {
@@ -49,15 +52,39 @@ const HOST = process.env.HOST ?? "0.0.0.0";
 
 async function main(): Promise<void> {
     // ── Fastify ────────────────────────────────────────────────────────────
-    const app = Fastify({
+    // Which proxies' forwarded-address headers we believe (PRD 18.2) and
+    // whether we terminate TLS ourselves. Both are decided before anything
+    // listens; a half-configured TLS pair stops the boot instead of silently
+    // serving plain HTTP.
+    const trustProxy = getTrustProxy();
+    const tlsFiles = readTlsEnv();
+    const tlsMaterial = tlsFiles ? loadTlsMaterial(tlsFiles) : null;
+
+    const fastifyOptions = {
         logger: {
-            level: "info",
+            level: "info" as const,
             transport: {
                 target: "pino-pretty",
                 options: { colorize: true },
             },
         },
-    });
+        trustProxy: trustProxy.list.length > 0 ? trustProxy.list : false,
+    };
+    // Fastify's generics change with `https`; the rest of the code only uses
+    // the base FastifyInstance interface.
+    const app = (
+        tlsMaterial
+            ? Fastify({ ...fastifyOptions, https: { key: tlsMaterial.key, cert: tlsMaterial.cert, minVersion: "TLSv1.2" } })
+            : Fastify(fastifyOptions)
+    ) as unknown as FastifyInstance;
+
+    app.log.info(
+        tlsMaterial
+            ? `🔒 TLS: native (${tlsMaterial.summary})`
+            : "🔓 TLS: off — put a reverse proxy in front (see the README) or set TLS_CERT_FILE/TLS_KEY_FILE",
+    );
+    app.log.info(`Trust proxy: ${trustProxy.description}`);
+    if (trustProxy.warning) app.log.warn(trustProxy.warning);
 
     // CORS — allow any origin in dev; lock down in production
     await app.register(cors, { origin: true });
@@ -133,6 +160,12 @@ async function main(): Promise<void> {
     // listeners (registered below) branch on `socket.data.role`.
     io.use((socket, next) => {
         socket.data.role = socket.handshake.query.role === "viewer" ? "viewer" : "primary";
+        // The one place the client address is decided (PRD 18.2).
+        socket.data.clientAddress = resolveClientAddress(
+            socket.handshake.address,
+            socket.handshake.headers,
+            trustProxy.trust,
+        );
         next();
     });
 
@@ -160,9 +193,22 @@ async function main(): Promise<void> {
         process.exit(1);
     }
 
+    // Pick up renewed certificates without a restart (certbot/acme.sh).
+    const stopTlsWatch = tlsFiles
+        ? watchTlsFiles(
+              tlsFiles,
+              (material) => {
+                  (app.server as unknown as HttpsServer).setSecureContext({ key: material.key, cert: material.cert });
+                  app.log.info(`🔒 TLS certificate reloaded (${material.summary})`);
+              },
+              (err) => app.log.error({ err }, "TLS certificate reload failed — keeping the previous certificate"),
+          )
+        : null;
+
     // Graceful shutdown
     const shutdown = async (): Promise<void> => {
         app.log.info("Shutting down...");
+        stopTlsWatch?.();
         mediasoupService.close();
         io.close();
         await app.close();
@@ -173,4 +219,8 @@ async function main(): Promise<void> {
     process.on("SIGTERM", shutdown);
 }
 
-main();
+main().catch((err) => {
+    // Pino isn't up yet for configuration errors (e.g. a half-set TLS pair).
+    console.error("Reson8 server failed to start:", err instanceof Error ? err.message : err);
+    process.exit(1);
+});

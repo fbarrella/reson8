@@ -113,7 +113,7 @@ Shared-types must be built (`npx tsc --build`) before server/client typecheck ag
 
 ## Environment
 
-Server needs `apps/server/.env` (copy from `.env.example`): `DATABASE_URL`, `REDIS_URL`, `PORT` (9800), `MEDIASOUP_ANNOUNCED_IP`; optional `ADMIN_INSTANCE_ID`, `SERVER_PRIVATE_PASSWORD`, `MEDIASOUP_PRIVATE_ANNOUNCED_IP` (LAN/WAN dual-announce for hairpin NAT), `CLOUDINARY_*` (image uploads fall back to local disk storage if unset), and the identity settings `REQUIRE_SIGNED_IDENTITY`, `ADMIN_KEY_FINGERPRINT`, `AUTH_ALLOWED_HOSTS` (see "Identity" above and `.env.example`).
+Server needs `apps/server/.env` (copy from `.env.example`): `DATABASE_URL`, `REDIS_URL`, `PORT` (9800), `MEDIASOUP_ANNOUNCED_IP`; optional `ADMIN_INSTANCE_ID`, `SERVER_PRIVATE_PASSWORD`, `TLS_CERT_FILE`/`TLS_KEY_FILE` (native HTTPS/WSS, hot-reloaded; only one of the two stops the boot) and `TRUST_PROXY` (which proxies' forwarded-address headers to believe; unset = none, `true` is refused), `MEDIASOUP_PRIVATE_ANNOUNCED_IP` (LAN/WAN dual-announce for hairpin NAT), `CLOUDINARY_*` (image uploads fall back to local disk storage if unset), and the identity settings `REQUIRE_SIGNED_IDENTITY`, `ADMIN_KEY_FINGERPRINT`, `AUTH_ALLOWED_HOSTS` (see "Identity" above and `.env.example`).
 
 Ports: 9800 (Fastify + Socket.io signaling), 10000–10100 UDP/TCP (mediasoup media), 5432 (Postgres), 6379 (Redis).
 
