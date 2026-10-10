@@ -27,6 +27,7 @@ import type {
     IIdentityEvent,
     IObservedAuthHost,
     IBannedAddress,
+    IPendingApproval,
 } from "./models.js";
 
 // ---------------------------------------------------------------------------
@@ -57,7 +58,17 @@ export interface ClientToServerEvents {
              */
             identity?: { publicKey: string; signature: string; host: string };
         },
-        ack: (response: { success: boolean; serverId?: string; error?: string }) => void,
+        ack: (response: {
+            success: boolean;
+            serverId?: string;
+            error?: string;
+            /**
+             * PRD 18.8: the join was NOT completed — this identity is new and the
+             * server approves new users first. The socket stays connected and is
+             * sent APPROVAL_GRANTED / APPROVAL_REJECTED; it can do nothing else.
+             */
+            pending?: true;
+        }) => void,
     ) => void;
 
     /**
@@ -362,6 +373,29 @@ export interface ClientToServerEvents {
             /** The network that was banned along with the user. */
             addressBanned?: string;
         }) => void,
+    ) => void;
+
+    /** The queue of new identities waiting for approval (BAN_USER or ADMIN) (PRD 18.8). */
+    GET_PENDING_APPROVALS: (
+        ack: (response: { success: boolean; requests?: IPendingApproval[]; error?: string }) => void,
+    ) => void;
+
+    /**
+     * Lets a waiting identity in (BAN_USER or ADMIN) (PRD 18.8). The user is created
+     * with the key from the request already bound.
+     */
+    APPROVE_USER: (
+        payload: { userId: string },
+        ack: (response: { success: boolean; error?: string }) => void,
+    ) => void;
+
+    /**
+     * Declines a waiting identity (PRD 18.8), optionally banning it — and its
+     * address — as well (same options as BAN_USER).
+     */
+    REJECT_USER: (
+        payload: { userId: string; ban?: boolean; addressBan?: "none" | "exact" | "range" },
+        ack: (response: { success: boolean; error?: string; warning?: string }) => void,
     ) => void;
 
     /** Lists banned addresses/ranges (BAN_USER). Masked for everyone but an ADMIN (PRD 18.7). */
@@ -697,6 +731,8 @@ export interface ClientToServerEvents {
             requireSignedIdentity?: boolean;
             requireSignedIdentityLockedByEnv?: boolean;
             unprotectedActiveUsers?: number;
+            /** ADMIN callers only (PRD 18.8): new identities need a moderator's approval. */
+            requireApproval?: boolean;
             /**
              * ADMIN callers only (PRD 18.5): the names a signed join may be
              * addressed to (empty = any), whether AUTH_ALLOWED_HOSTS decides
@@ -728,6 +764,8 @@ export interface ClientToServerEvents {
              * set, and when it would lock the requesting admin's own session out.
              */
             authAllowedHosts?: string[];
+            /** PRD 18.8. */
+            requireApproval?: boolean;
         },
         ack: (response: { success: boolean; error?: string }) => void,
     ) => void;
@@ -853,6 +891,17 @@ export interface ServerToClientEvents {
     // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- the event carries no data; `{}` is the wire type
     USER_BANNED: (payload: {}) => void;
 
+    /** A moderator let this waiting identity in (PRD 18.8): the client joins again, which now succeeds. */
+    // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- the event carries no data
+    APPROVAL_GRANTED: (payload: {}) => void;
+
+    /** A moderator declined this waiting identity (PRD 18.8); the server then disconnects it. */
+    // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- the event carries no data
+    APPROVAL_REJECTED: (payload: {}) => void;
+
+    /** To moderators (BAN_USER/ADMIN): the approval queue changed (PRD 18.8). */
+    PENDING_APPROVALS_CHANGED: (payload: { count: number; added?: boolean }) => void;
+
     /** Broadcasts updated reactions on a message. */
     REACTION_UPDATED: (payload: {
         messageId: string;
@@ -952,4 +1001,10 @@ export interface SocketData {
     authHost?: string;
     /** This socket's address is inside a banned range (PRD 18.7); decided at the handshake, enforced at join. */
     addressBanned?: boolean;
+    /**
+     * Set INSTEAD of `userId` on a socket whose identity is new and waiting for
+     * approval (PRD 18.8). It deliberately leaves `userId`/`serverId` unset: every
+     * handler is gated on those, so a pending socket can do nothing.
+     */
+    pendingUserId?: string;
 }

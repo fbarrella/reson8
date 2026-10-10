@@ -171,6 +171,20 @@ export interface IIdentityEvent {
     privileged?: boolean;
 }
 
+/** A new identity waiting for a moderator's approval (PRD 18.8). `address` is masked for non-ADMIN moderators. */
+export interface IPendingApproval {
+    userId: string;
+    nickname: string;
+    /** `SHA256:…` of the key the request was signed with — what the person can read out to a moderator. */
+    fingerprint: string;
+    address: string | null;
+    host: string | null;
+    requestedAt: string;
+    lastSeenAt: string;
+    /** Whether they are connected and waiting right now. */
+    online: boolean;
+}
+
 /**
  * A banned address or range (PRD 18.7). `cidr` is the canonical network
  * (`203.0.113.0/24`) for an ADMIN and a masked form (`203.0.113.x`) for any

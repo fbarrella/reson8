@@ -30,6 +30,7 @@ import {
     setDbAllowedHosts,
     setDbRequireSigned,
 } from "../config/identity.config.js";
+import { requireApproval, setDbRequireApproval } from "../config/approval.config.js";
 import {
     checkAllowedHostsUpdate,
     listObservedAuthHosts,
@@ -92,6 +93,7 @@ export function registerNudgeHandlers(
                     authAllowedHosts?: string[];
                     authAllowedHostsLockedByEnv?: boolean;
                     observedAuthHosts?: Awaited<ReturnType<typeof listObservedAuthHosts>>;
+                    requireApproval?: boolean;
                 } = {};
                 const { userId, serverId } = socket.data;
                 if (userId && serverId) {
@@ -101,6 +103,7 @@ export function registerNudgeHandlers(
                             requireSignedIdentity: isSignedIdentityRequired(),
                             requireSignedIdentityLockedByEnv: requireSignedLockedByEnv(),
                             unprotectedActiveUsers: await countUnprotectedActiveUsers(app.prisma),
+                            requireApproval: requireApproval(),
                             authAllowedHosts: authAllowedHosts(),
                             authAllowedHostsLockedByEnv: authAllowedHostsLockedByEnv(),
                             observedAuthHosts: await listObservedAuthHosts(app.redis, serverId),
@@ -145,6 +148,7 @@ export function registerNudgeHandlers(
                     maxMessageLength,
                     requireSignedIdentity,
                     authAllowedHosts: allowedHostsInput,
+                    requireApproval: requireApprovalInput,
                 } = payload;
                 const data: {
                     nudgeEnabled?: boolean;
@@ -152,7 +156,15 @@ export function registerNudgeHandlers(
                     maxMessageLength?: number;
                     requireSignedIdentity?: boolean;
                     authAllowedHosts?: string[];
+                    requireApproval?: boolean;
                 } = {};
+                if (requireApprovalInput !== undefined) {
+                    if (typeof requireApprovalInput !== "boolean") {
+                        ack({ success: false, error: "Invalid value" });
+                        return;
+                    }
+                    data.requireApproval = requireApprovalInput;
+                }
                 if (allowedHostsInput !== undefined) {
                     if (authAllowedHostsLockedByEnv()) {
                         ack({
@@ -219,8 +231,10 @@ export function registerNudgeHandlers(
                         maxMessageLength: true,
                         requireSignedIdentity: true,
                         authAllowedHosts: true,
+                        requireApproval: true,
                     },
                 });
+                setDbRequireApproval(updated.requireApproval); // PRD 18.8: applies to the next join
                 // Both take effect on the very next join, no restart (PRD 18.4/18.5).
                 setDbRequireSigned(updated.requireSignedIdentity);
                 setDbAllowedHosts(updated.authAllowedHosts);

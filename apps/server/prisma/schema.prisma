@@ -36,6 +36,9 @@ model Server {
   /// (PRD 18.5). Empty = any. The AUTH_ALLOWED_HOSTS environment variable,
   /// when set, takes precedence over this column.
   authAllowedHosts   String[]  @default([])
+  /// New identities must be approved by a moderator before they can use the
+  /// server (PRD 18.8). People who have joined before are never affected.
+  requireApproval    Boolean   @default(false)
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
@@ -421,4 +424,29 @@ model BannedAddress {
 
   @@unique([serverId, cidr])
   @@map("banned_addresses")
+}
+
+// ---------------------------------------------------------------------------
+// PendingApproval — a brand-new identity waiting for a moderator (PRD 18.8).
+// Deliberately NOT a User row: a pending person has no presence, no roles and
+// no access to anything; approving creates the user (with the requested key
+// bound) in one transaction. Requests unseen for 7 days are deleted.
+// ---------------------------------------------------------------------------
+
+model PendingApproval {
+  id          String   @id @default(uuid())
+  serverId    String
+  userId      String
+  nickname    String
+  /// The key the request was signed with (an approval binds exactly this one).
+  publicKey   String
+  fingerprint String
+  address     String?
+  host        String?
+  requestedAt DateTime @default(now())
+  lastSeenAt  DateTime @default(now())
+
+  @@unique([serverId, userId])
+  @@index([serverId, requestedAt])
+  @@map("pending_approvals")
 }

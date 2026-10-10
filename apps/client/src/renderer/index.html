@@ -3845,6 +3845,93 @@
       flex-shrink: 0;
     }
 
+    /* ── Approve new users (PRD 18.8) ───────────────────────────────────── */
+    #main { position: relative; }
+
+    #approval-screen {
+      display: none;
+      position: absolute;
+      inset: 0;
+      z-index: 50;
+      align-items: center;
+      justify-content: center;
+      background: var(--bg-primary);
+      padding: 24px;
+    }
+
+    #approval-screen.visible { display: flex; }
+
+    #approval-screen .approval-card {
+      max-width: 460px;
+      width: 100%;
+      padding: 28px 28px 24px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--bg-secondary);
+      text-align: center;
+    }
+
+    #approval-screen .approval-icon { font-size: 34px; margin-bottom: 8px; }
+    #approval-screen h2 { margin: 0 0 8px; font-size: 18px; color: var(--text-primary); }
+    #approval-screen p { margin: 0 0 14px; font-size: 13px; line-height: 1.5; color: var(--text-secondary); }
+
+    #approval-screen .approval-ident {
+      margin: 0 0 18px;
+      padding: 10px 12px;
+      border-radius: var(--radius);
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      text-align: left;
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+
+    #approval-screen .approval-ident code { display: block; margin-top: 4px; word-break: break-all; color: var(--text-primary); }
+
+    .pending-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 16px;
+      height: 16px;
+      padding: 0 4px;
+      margin-left: 6px;
+      border-radius: 8px;
+      background: var(--danger);
+      color: #fff;
+      font-size: 10px;
+      font-weight: 700;
+      line-height: 1;
+      vertical-align: middle;
+    }
+
+    #btn-server-settings .pending-badge {
+      position: absolute;
+      top: -5px;
+      right: -5px;
+      margin: 0;
+    }
+
+    #btn-server-settings { position: relative; }
+
+    .pending-approval-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 10px;
+      margin-bottom: 6px;
+      border: 1px solid var(--warning);
+      border-radius: var(--radius);
+      background: rgba(255, 167, 38, 0.07);
+      font-size: 12px;
+    }
+
+    .pending-approval-row .pending-approval-info { flex: 1; min-width: 0; }
+    .pending-approval-row .pending-approval-name { font-weight: 600; color: var(--text-primary); word-break: break-word; }
+    .pending-approval-row .pending-approval-meta { margin-top: 2px; font-size: 11px; color: var(--text-muted); word-break: break-all; }
+    .pending-approval-row .pending-approval-actions { display: flex; gap: 6px; flex-shrink: 0; }
+    .pending-approval-row button { padding: 4px 8px; font-size: 11px; }
+
     .banned-addresses-title {
       margin: 14px 0 6px;
       font-size: 11px;
@@ -5013,6 +5100,21 @@
 
   <!-- ── Main Three-Pane Layout ──────────────────────────────────────── -->
   <div id="main">
+    <!-- Waiting for a moderator to approve this (new) identity (PRD 18.8) -->
+    <div id="approval-screen" role="status" aria-live="polite">
+      <div class="approval-card">
+        <div class="approval-icon" aria-hidden="true">⏳</div>
+        <h2 id="approval-title">Waiting for approval</h2>
+        <p id="approval-text">This server asks a moderator to let new people in. You can leave this window open — you'll join automatically as soon as they do.</p>
+        <div class="approval-ident">
+          Requesting as <strong id="approval-nickname"></strong>
+          <code id="approval-fingerprint"></code>
+          <span style="display:block; margin-top:6px; font-size:11px; color:var(--text-muted);">A moderator can match this fingerprint with your request.</span>
+        </div>
+        <button class="btn btn-cancel" id="btn-approval-cancel">Cancel request</button>
+      </div>
+    </div>
+
     <!-- Left Pane: Channel Tree -->
     <div id="left-pane">
       <div id="tree-header">
@@ -5026,7 +5128,7 @@
               <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
               <path d="M16 3.13a4 4 0 0 1 0 7.75" />
             </svg><span class="online-indicator" id="online-dot"></span></button>
-          <button id="btn-server-settings" title="Server Settings"><svg width="14" height="14"
+          <button id="btn-server-settings" title="Server Settings"><span class="pending-badge" id="pending-badge-gear" style="display:none;"></span><svg width="14" height="14"
               viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
               stroke-linejoin="round">
               <circle cx="12" cy="12" r="3" />
@@ -5581,7 +5683,7 @@
     <div class="modal-content wide">
       <h3>⚙ Settings</h3>
       <div class="settings-tab-bar">
-        <button class="settings-tab-btn active" data-settings-tab="roles" id="settings-tab-roles">🛡️ User Management</button>
+        <button class="settings-tab-btn active" data-settings-tab="roles" id="settings-tab-roles">🛡️ User Management<span class="pending-badge" id="pending-badge-tab" style="display:none;"></span></button>
         <button class="settings-tab-btn" data-settings-tab="emojis" id="settings-tab-emojis">😀 Emojis</button>
         <button class="settings-tab-btn" data-settings-tab="server" id="settings-tab-server">🔔 Server</button>
         <button class="settings-tab-btn" data-settings-tab="voice">🎤 Voice & Shortcuts</button>
@@ -5605,6 +5707,11 @@
           </div>
           <div id="identity-log-list" class="admin-user-list"></div>
           <button type="button" class="btn btn-cancel" id="btn-identity-log-more" style="display:none; width:100%; margin-top:6px;">Load older</button>
+        </div>
+        <!-- People waiting to be let in (PRD 18.8) -->
+        <div id="pending-approvals-section" style="display:none;">
+          <div class="banned-addresses-title" style="margin-top:0;">Waiting for approval</div>
+          <div id="pending-approvals-list"></div>
         </div>
         <div id="admin-user-list" class="admin-user-list">
           <div class="admin-empty">Loading users...</div>
@@ -5665,6 +5772,19 @@
           </div>
           <label class="toggle-switch">
             <input type="checkbox" id="chk-require-signed">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+        <!-- Approve new users (PRD 18.8) -->
+        <div class="toggle-row">
+          <div class="toggle-row-info">
+            <div class="toggle-row-text">
+              <span class="toggle-row-title">🚪 Approve new users</span>
+              <span class="toggle-row-desc">People who have joined before aren't affected. New people wait until a moderator approves them in User Management.</span>
+            </div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="chk-require-approval">
             <span class="toggle-slider"></span>
           </label>
         </div>

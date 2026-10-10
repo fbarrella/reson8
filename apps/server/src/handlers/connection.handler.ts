@@ -35,6 +35,9 @@ import { adminKeyFingerprint, authAllowedHosts, requireSignedIdentity } from "..
 import { recordIdentityEvent } from "../services/identity-events.service.js";
 import { normalizeAuthHost, observeAuthHost } from "../services/auth-hosts.service.js";
 import { normalizeIp } from "../services/address-ban.service.js";
+import { requireApproval } from "../config/approval.config.js";
+import { APPROVAL_MESSAGES, decideApprovalGate, pendingRoom } from "../services/approval.service.js";
+import { notifyPendingChanged, syncModeratorRoom } from "./approval.handler.js";
 import { issueViewerTicket, resolveViewerTicket, revokeViewerTickets } from "../services/viewer-ticket.service.js";
 
 type TypedIO = SocketIOServer<
@@ -424,6 +427,80 @@ export function registerConnectionHandlers(
                     return;
                 }
 
+                // ── Approval gate (PRD 18.8) ───────────────────────────────────
+                // When the server approves new users, a brand-new identity waits for
+                // a moderator. Decided here — after every other check passed and
+                // BEFORE anything is written — because the person is NOT a half-joined
+                // user: no `users` row, no presence, no roles. Their socket stays
+                // connected with `pendingUserId` set and `userId`/`serverId` unset, and
+                // every other handler is gated on those, so it can do nothing.
+                if (
+                    requireApproval() &&
+                    !existingUser &&
+                    !(isAdminId && decision.action === "accept" && decision.grantAdmin)
+                ) {
+                    const requestKey = { serverId_userId: { serverId, userId: instanceId } };
+                    const existingRequest = await app.prisma.pendingApproval.findUnique({
+                        where: requestKey,
+                        select: { publicKey: true },
+                    });
+                    const [pendingTotal, pendingFromAddress] = await Promise.all([
+                        app.prisma.pendingApproval.count({ where: { serverId } }),
+                        app.prisma.pendingApproval.count({
+                            where: { serverId, address: clientAddress, NOT: { userId: instanceId } },
+                        }),
+                    ]);
+                    const gate = decideApprovalGate({
+                        requireApproval: true,
+                        isNewUser: true,
+                        isDesignatedAdmin: false,
+                        hasSignedProof: !!proofIn,
+                        alreadyPending: !!existingRequest,
+                        pendingTotal,
+                        pendingFromAddress,
+                    });
+                    if (gate.action === "refuse") {
+                        app.log.warn({ userId: instanceId, address: clientAddress, reason: gate.reason }, "Join refused (approval)");
+                        ack({ success: false, error: APPROVAL_MESSAGES[gate.reason] });
+                        return;
+                    }
+                    if (gate.action === "queue" && proofIn) {
+                        // Someone else already asked as this id, with another key: the
+                        // approval would bind the first key, so a second one is refused.
+                        if (existingRequest && existingRequest.publicKey !== proofIn.publicKey) {
+                            logIdentityEvent("REFUSED", "otherDevice");
+                            ack({ success: false, error: IDENTITY_MESSAGES.otherDevice });
+                            return;
+                        }
+                        await app.prisma.pendingApproval.upsert({
+                            where: requestKey,
+                            update: {
+                                nickname: String(nickname ?? "").slice(0, 64),
+                                address: clientAddress,
+                                host: proofIn.host,
+                                lastSeenAt: new Date(),
+                            },
+                            create: {
+                                serverId,
+                                userId: instanceId,
+                                nickname: String(nickname ?? "").slice(0, 64),
+                                publicKey: proofIn.publicKey,
+                                fingerprint: fingerprint ?? keyFingerprint(proofIn.publicKey),
+                                address: clientAddress,
+                                host: proofIn.host,
+                            },
+                        });
+                        await socket.join(pendingRoom(instanceId));
+                        socket.data.pendingUserId = instanceId;
+                        if (!existingRequest) {
+                            app.log.info({ userId: instanceId, address: clientAddress }, "New user is waiting for approval");
+                            void notifyPendingChanged(app, io, serverId, true);
+                        }
+                        ack({ success: false, pending: true, error: "Waiting for approval" });
+                        return;
+                    }
+                }
+
                 // Which name this signed join was addressed to (PRD 18.5): remembered so
                 // an admin can pick the names people really use, and so the allowed-names
                 // guard knows what THIS admin's own session was signed for.
@@ -449,6 +526,12 @@ export function registerConnectionHandlers(
                     }
                     logIdentityEvent("BOUND");
                     app.log.info(identityLog, "Identity key bound");
+                }
+
+                // No longer waiting (PRD 18.8): this socket may have been pending until just now.
+                if (socket.data.pendingUserId) {
+                    void socket.leave(pendingRoom(socket.data.pendingUserId));
+                    socket.data.pendingUserId = undefined;
                 }
 
                 // Use the persistent instance ID as userId
@@ -559,6 +642,8 @@ export function registerConnectionHandlers(
 
                 // Join the Socket.io room for this server
                 await socket.join(`server:${serverId}`);
+                // Moderators (BAN_USER/ADMIN) are told when the approval queue changes (PRD 18.8).
+                await syncModeratorRoom(app, io, instanceId, serverId).catch(() => {});
 
                 // Register presence in Redis
                 await presence.joinServer(instanceId, serverId, nickname);

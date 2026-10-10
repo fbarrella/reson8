@@ -897,6 +897,25 @@ interface Reson8Api {
         error?: string;
     }>;
     unbanAddress(id: string): Promise<{ success: boolean; error?: string }>;
+    getPendingApprovals(): Promise<{
+        success: boolean;
+        requests?: {
+            userId: string;
+            nickname: string;
+            fingerprint: string;
+            address: string | null;
+            host: string | null;
+            requestedAt: string;
+            lastSeenAt: string;
+            online: boolean;
+        }[];
+        error?: string;
+    }>;
+    approveUser(userId: string): Promise<{ success: boolean; error?: string }>;
+    rejectUser(
+        userId: string,
+        opts?: { ban?: boolean; addressBan?: "none" | "exact" | "range" },
+    ): Promise<{ success: boolean; error?: string; warning?: string }>;
     unbanUser(userId: string): Promise<{ success: boolean; error?: string }>;
     getBannedUsers(): Promise<{ success: boolean; users?: { userId: string; nickname: string; bannedAt: string }[]; error?: string }>;
     uploadFile(fileBuffer: ArrayBuffer, fileName: string, mimeType: string): Promise<UploadResult>;
@@ -986,6 +1005,8 @@ interface Reson8Api {
         requireSignedIdentity?: boolean;
         requireSignedIdentityLockedByEnv?: boolean;
         unprotectedActiveUsers?: number;
+        /** ADMIN callers only (PRD 18.8). */
+        requireApproval?: boolean;
         /** ADMIN callers only (PRD 18.5). */
         authAllowedHosts?: string[];
         authAllowedHostsLockedByEnv?: boolean;
@@ -999,6 +1020,7 @@ interface Reson8Api {
             maxMessageLength?: number;
             requireSignedIdentity?: boolean;
             authAllowedHosts?: string[];
+            requireApproval?: boolean;
         },
     ): Promise<{ success: boolean; error?: string }>;
     getIdentityEvents(payload: {
@@ -3698,6 +3720,7 @@ api.on("connected", (data: { serverId: string; instanceId: string; secure?: bool
     statusText.classList.add("connected");
     statusInstance.textContent = `ID: ${data.instanceId}`;
     renderConnectionSecurity(); // PRD 18.3: lock icon / "not encrypted" warning
+    hideApprovalScreen(); // PRD 18.8: a waiting identity that was just let in
     if (lastDisconnectAt !== null) {
         const secs = ((Date.now() - lastDisconnectAt) / 1000).toFixed(1);
         log(`Connected to server (reconnected after ${secs}s)`, "success");
@@ -3724,6 +3747,7 @@ api.on("connected", (data: { serverId: string; instanceId: string; secure?: bool
         canBanUsers = bannedRes.success;
         canManageEmojis = pendingEmojisRes.success;
         settingsTabRoles.disabled = !(isAdminUser || canBanUsers);
+        if (canBanUsers) void refreshPendingApprovals(); // PRD 18.8: the badge is right from the first paint
     });
 
     // Auto-open DM tabs for partners with unread messages
@@ -3803,6 +3827,9 @@ api.on("disconnected", (data?: { reason?: string }) => {
     nicknameInput.disabled = false;
     serverPasswordInput.disabled = false;
     renderConnectionSecurity(); // isConnected is false → hides the lock and the warning (PRD 18.3)
+    hideApprovalScreen(); // PRD 18.8
+    pendingApprovals = [];
+    setPendingBadges(0);
     statusDot.classList.remove("connected");
     statusText.textContent = "Disconnected";
     statusText.classList.remove("connected");
@@ -7211,6 +7238,7 @@ async function openSettingsPanel(): Promise<void> {
     void renderTrustedCertificates(); // PRD 18.3
     hideIdentityLog(); // always reopen on the user list (PRD 18.4)
     void renderBannedAddresses(); // PRD 18.7 (no-op for anyone without BAN_USER)
+    void refreshPendingApprovals(); // PRD 18.8
     adminModal.classList.add("visible");
 
     // Populate audio devices
@@ -7267,6 +7295,9 @@ async function openSettingsPanel(): Promise<void> {
                 inputMaxMessageLength.value = String(settingsRes.maxMessageLength ?? serverMaxMessageLength);
                 renderRequireSignedSetting(settingsRes);
                 renderRelayHosts(settingsRes);
+                chkRequireApproval.checked = settingsRes.requireApproval ?? false;
+                (chkRequireApproval.closest(".toggle-row") as HTMLElement).style.display =
+                    settingsRes.requireApproval === undefined ? "none" : "";
             }
         }
     } else {
@@ -7331,15 +7362,184 @@ btnServerSettings.addEventListener("click", () => {
     openSettingsPanel();
 });
 
+// ── Approve new users (PRD 18.8) ─────────────────────────────────────────
+const approvalScreen = document.getElementById("approval-screen") as HTMLDivElement;
+const pendingApprovalsSection = document.getElementById("pending-approvals-section") as HTMLDivElement;
+const pendingApprovalsList = document.getElementById("pending-approvals-list") as HTMLDivElement;
+const pendingBadgeGear = document.getElementById("pending-badge-gear") as HTMLSpanElement;
+const pendingBadgeTab = document.getElementById("pending-badge-tab") as HTMLSpanElement;
+const chkRequireApproval = document.getElementById("chk-require-approval") as HTMLInputElement;
+
+type PendingApprovalRow = NonNullable<Awaited<ReturnType<Reson8Api["getPendingApprovals"]>>["requests"]>[number];
+let pendingApprovals: PendingApprovalRow[] = [];
+
+function setPendingBadges(count: number): void {
+    for (const el of [pendingBadgeGear, pendingBadgeTab]) {
+        el.textContent = String(count);
+        el.style.display = count > 0 ? "" : "none";
+    }
+    const tip = count > 0 ? `${count} ${count === 1 ? "person is" : "people are"} waiting for approval` : "Server Settings";
+    (document.getElementById("btn-server-settings") as HTMLElement).title = tip;
+}
+
+/** Loads the queue (BAN_USER/ADMIN only — anyone else just gets a refusal and nothing shows). */
+async function refreshPendingApprovals(): Promise<void> {
+    if (!isConnected) {
+        pendingApprovals = [];
+        setPendingBadges(0);
+        pendingApprovalsSection.style.display = "none";
+        return;
+    }
+    const res = await api.getPendingApprovals();
+    if (!res.success || !res.requests) {
+        pendingApprovals = [];
+        setPendingBadges(0);
+        pendingApprovalsSection.style.display = "none";
+        return;
+    }
+    pendingApprovals = res.requests;
+    setPendingBadges(pendingApprovals.length);
+    renderPendingApprovals();
+}
+
+function renderPendingApprovals(): void {
+    pendingApprovalsList.textContent = "";
+    pendingApprovalsSection.style.display = pendingApprovals.length > 0 ? "" : "none";
+    for (const req of pendingApprovals) {
+        const row = document.createElement("div");
+        row.className = "pending-approval-row";
+
+        const info = document.createElement("div");
+        info.className = "pending-approval-info";
+        const name = document.createElement("div");
+        name.className = "pending-approval-name";
+        name.textContent = req.nickname || "(no nickname)";
+        const meta = document.createElement("div");
+        meta.className = "pending-approval-meta";
+        const when = new Date(req.requestedAt);
+        const whenText = Number.isNaN(when.getTime())
+            ? ""
+            : when.toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+        meta.textContent =
+            `${req.online ? "Waiting now" : "Not connected right now"}${whenText ? ` · asked ${whenText}` : ""}` +
+            `${req.address ? ` · ${req.address}` : ""} · ${req.fingerprint}`;
+        info.append(name, meta);
+
+        const actions = document.createElement("div");
+        actions.className = "pending-approval-actions";
+        const mk = (label: string, cls: string, onClick: () => Promise<void>): HTMLButtonElement => {
+            const b = document.createElement("button");
+            b.className = cls;
+            b.textContent = label;
+            b.addEventListener("click", async () => {
+                for (const x of actions.querySelectorAll("button")) (x as HTMLButtonElement).disabled = true;
+                await onClick();
+            });
+            return b;
+        };
+        actions.append(
+            mk("Approve", "btn btn-create", async () => {
+                const r = await api.approveUser(req.userId);
+                log(
+                    r.success
+                        ? `Approved ${escapeHtml(req.nickname)}`
+                        : `Couldn't approve ${escapeHtml(req.nickname)}: ${escapeHtml(r.error ?? "unknown error")}`,
+                    r.success ? "success" : "error",
+                );
+                void refreshPendingApprovals();
+            }),
+            mk("Reject", "btn btn-cancel", async () => {
+                const r = await api.rejectUser(req.userId);
+                log(
+                    r.success
+                        ? `Declined ${escapeHtml(req.nickname)}`
+                        : `Couldn't decline ${escapeHtml(req.nickname)}: ${escapeHtml(r.error ?? "unknown error")}`,
+                    r.success ? "success" : "error",
+                );
+                void refreshPendingApprovals();
+            }),
+            mk("Reject and ban", "btn btn-disconnect", async () => {
+                openBanDialog({ id: req.userId, nickname: req.nickname, pending: true });
+                for (const x of actions.querySelectorAll("button")) (x as HTMLButtonElement).disabled = false;
+            }),
+        );
+        row.append(info, actions);
+        pendingApprovalsList.appendChild(row);
+    }
+}
+
+// The queue changed (a new request, or another moderator decided).
+api.on("pending-approvals-changed", (payload: { count: number; added?: boolean }) => {
+    setPendingBadges(payload.count);
+    if (payload.added) {
+        SoundAlert.play("user_joined_channel.mp3");
+        log("Someone is waiting for approval — see Settings → User Management", "info");
+    }
+    void refreshPendingApprovals();
+});
+
+// ── The waiting side: a NEW identity on a server that approves newcomers ──
+function showApprovalScreen(fingerprint: string): void {
+    closeSettingsPanel(); // an open dialog would hide the waiting screen
+    (document.getElementById("approval-nickname") as HTMLElement).textContent = nicknameInput.value.trim() || "User";
+    (document.getElementById("approval-fingerprint") as HTMLElement).textContent = fingerprint || "(unavailable)";
+    (document.getElementById("approval-title") as HTMLElement).textContent = "Waiting for approval";
+    (document.getElementById("approval-text") as HTMLElement).textContent =
+        "This server asks a moderator to let new people in. You can leave this window open — you'll join automatically as soon as they do.";
+    approvalScreen.classList.add("visible");
+    btnConnect.disabled = true;
+    btnDisconnect.disabled = false;
+}
+
+function hideApprovalScreen(): void {
+    approvalScreen.classList.remove("visible");
+}
+
+api.on("approval-pending", (payload: { fingerprint?: string }) => {
+    showApprovalScreen(payload?.fingerprint ?? "");
+    log("Waiting for a moderator to approve you…", "info");
+});
+api.on("approval-granted", () => {
+    (document.getElementById("approval-title") as HTMLElement).textContent = "Approved!";
+    (document.getElementById("approval-text") as HTMLElement).textContent = "Joining the server…";
+    log("A moderator approved you — joining…", "success");
+    SoundAlert.play("connected.mp3");
+});
+api.on("approval-rejected", () => {
+    hideApprovalScreen();
+    btnConnect.disabled = false;
+    btnDisconnect.disabled = true;
+    log("A moderator declined your request to join", "error");
+    showToast("A moderator declined your request to join this server.", 7000);
+});
+document.getElementById("btn-approval-cancel")!.addEventListener("click", () => {
+    hideApprovalScreen();
+    api.disconnect();
+    log("Cancelled the request to join", "info");
+});
+
+chkRequireApproval.addEventListener("change", async () => {
+    const desired = chkRequireApproval.checked;
+    const result = await api.updateServerSettings({ requireApproval: desired });
+    if (result.success) {
+        log(`New people ${desired ? "now need a moderator's approval" : "no longer need approval"} to join`, "success");
+    } else {
+        chkRequireApproval.checked = !desired; // revert on failure
+        log(`Failed to update server settings: ${result.error}`, "error");
+        if (result.error && /permission|denied/i.test(result.error)) SoundAlert.play("insufficient_perms.mp3");
+    }
+});
+
 // ── Ban dialog + banned addresses (PRD 18.7) ─────────────────────────────
 const banUserModal = document.getElementById("ban-user-modal") as HTMLDivElement;
 const bannedAddressesSection = document.getElementById("banned-addresses-section") as HTMLDivElement;
 const bannedAddressesList = document.getElementById("banned-addresses-list") as HTMLDivElement;
-let banDialogUser: { id: string; nickname: string } | null = null;
+let banDialogUser: { id: string; nickname: string; pending?: boolean } | null = null;
 
-function openBanDialog(user: { id: string; nickname: string }): void {
+function openBanDialog(user: { id: string; nickname: string; pending?: boolean }): void {
     banDialogUser = user;
     (document.getElementById("ban-user-name") as HTMLElement).textContent = user.nickname;
+    (document.getElementById("btn-ban-user-confirm") as HTMLButtonElement).textContent = user.pending ? "Reject and ban" : "Ban";
     const none = banUserModal.querySelector<HTMLInputElement>('input[name="ban-address-scope"][value="none"]');
     if (none) none.checked = true;
     (document.getElementById("ban-scope-warning") as HTMLElement).style.display = "none";
@@ -7371,6 +7571,23 @@ document.getElementById("btn-ban-user-confirm")!.addEventListener("click", async
     const checked = banUserModal.querySelector<HTMLInputElement>('input[name="ban-address-scope"]:checked');
     const scope = (checked?.value ?? "none") as "none" | "exact" | "range";
     closeBanDialog();
+
+    // "Reject and ban" on someone waiting in the approval queue (PRD 18.8).
+    if (user.pending) {
+        const r = await api.rejectUser(user.id, { ban: true, addressBan: scope });
+        if (r.success) {
+            log(`Rejected and banned ${escapeHtml(user.nickname)}`, "success");
+            if (r.warning) {
+                log(escapeHtml(r.warning), "error");
+                showToast(escapeHtml(r.warning), 8000);
+            }
+            SoundAlert.play("user_banned_from_server.mp3");
+        } else {
+            log(`Failed to reject: ${escapeHtml(r.error ?? "unknown error")}`, "error");
+        }
+        void refreshPendingApprovals();
+        return;
+    }
 
     const res = await api.banUser(user.id, scope);
     if (res.success) {

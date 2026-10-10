@@ -34,11 +34,15 @@ import { registerEmojiHandlers } from "./handlers/emoji.handler.js";
 import { registerNudgeHandlers } from "./handlers/nudge.handler.js";
 import { registerUploadHandlers } from "./handlers/upload.handler.js";
 import { registerProfileHandlers } from "./handlers/profile.handler.js";
+import { registerApprovalHandlers } from "./handlers/approval.handler.js";
+import { describeHandler, normalizePacket, requiresSignIn } from "./services/packet-guard.js";
 import { registerUploadRoute } from "./routes/upload.route.js";
 import { MediasoupService } from "./services/mediasoup.service.js";
 import { startUploadSweeper } from "./services/upload-sweeper.js";
 import { startIdentityEventPruner } from "./services/identity-events.service.js";
 import { setDbAllowedHosts, setDbRequireSigned } from "./config/identity.config.js";
+import { setDbRequireApproval } from "./config/approval.config.js";
+import { startApprovalPruner } from "./services/approval.service.js";
 import { getTrustProxy, resolveClientAddress } from "./services/client-address.js";
 import { addressBans, reloadAddressBans } from "./services/address-ban.service.js";
 import { loadTlsMaterial, readTlsEnv, watchTlsFiles } from "./config/tls.config.js";
@@ -128,6 +132,7 @@ async function main(): Promise<void> {
     setDbRequireSigned(server.requireSignedIdentity);
     setDbAllowedHosts(server.authAllowedHosts);
     await reloadAddressBans(app.prisma, server.id);
+    setDbRequireApproval(server.requireApproval);
 
     // ── mediasoup SFU ──────────────────────────────────────────────────────
     const mediasoupService = new MediasoupService();
@@ -186,6 +191,34 @@ async function main(): Promise<void> {
         next();
     });
 
+    // The gate every incoming event passes (PRD 18.8, services/packet-guard.ts):
+    //   1. default-deny — a socket that has not signed in (this includes one
+    //      waiting for approval) reaches nothing but the sign-in itself;
+    //   2. every handler gets a payload (when it takes one) and an ack
+    //      function whatever the sender emitted — a packet without a
+    //      callback used to crash the whole process.
+    io.on("connection", (socket) => {
+        socket.use((packet, next) => {
+            const event = packet[0];
+            if (typeof event !== "string") return; // not an event of ours: drop it
+            const listeners = (
+                socket as unknown as { listeners(e: string): ((...a: never[]) => unknown)[] }
+            ).listeners(event);
+            const shapes = listeners.map(describeHandler);
+            const shape = shapes.reduce(
+                (best, s) => (s.arity > best.arity ? s : best),
+                { arity: 0, ackFirst: false },
+            );
+            normalizePacket(packet, shape);
+            if (requiresSignIn(event) && !(socket.data.userId && socket.data.serverId)) {
+                const ack = packet[packet.length - 1];
+                if (typeof ack === "function") (ack as (r: unknown) => void)({ success: false, error: "Not signed in" });
+                return; // dropped: never reaches a handler
+            }
+            next();
+        });
+    });
+
     // Register socket event handlers
     registerConnectionHandlers(io, app, mediasoupService);
     registerVoiceHandlers(io, app, mediasoupService);
@@ -199,8 +232,10 @@ async function main(): Promise<void> {
     registerNudgeHandlers(io, app);
     registerUploadHandlers(io, app);
     registerProfileHandlers(io, app);
+    registerApprovalHandlers(io, app);
     startUploadSweeper(app);
     startIdentityEventPruner(app);
+    startApprovalPruner(app);
 
     // ── Start ──────────────────────────────────────────────────────────────
     try {

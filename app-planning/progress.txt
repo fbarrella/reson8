@@ -1365,3 +1365,88 @@ Feature/Fix: Address (IP / range) bans (PRD 18.7)
       IPv6 clients end-to-end (unit tests only).
 
   Next Step: PRD 18.8 — "Approve new users" mode.
+
+--- Entry: 10/10/2026 ---
+
+Feature/Fix: "Approve new users" mode, plus a default-deny gate for every event (PRD 18.8)
+
+  Problem: Anyone who could reach the server and had a fresh install could
+  join at once. There was no way to say "I want to see who comes in first".
+
+  Solution (opt-in; a server-wide ADMIN switch, off by default):
+    - Settings -> Server: "Approve new users" (`servers.requireApproval`,
+      mirrored in memory like requireSignedIdentity; no env override).
+    - A NEW identity (no `users` row) that passes every other check gets
+      `{ success: false, pending: true }` and a `pending_approvals` row. It is
+      not a half-joined user: no users row, roles or presence; the socket has
+      `pendingUserId` with userId/serverId unset. Unsigned new identities are
+      refused (approval has to bind a key); another key asking as the same id
+      is refused; 50 requests per server, 3 per address (both answered "not
+      accepting new users"); requests untouched for 7 days are pruned.
+    - Moderators (BAN_USER or ADMIN) see a badge on the gear and on the User
+      Management tab, a "Waiting for approval" list (addresses masked unless
+      ADMIN) and Approve / Reject / Reject and ban (the existing ban dialog in
+      a "pending" mode, address options included). A sound plays when a new
+      request arrives. Approve = one transaction creating the user with the
+      requested key bound + default role; the waiting client joins by itself.
+    - The waiting client shows a screen with the fingerprint and a Cancel.
+    - The designated ADMIN_INSTANCE_ID is never queued. Existing members join
+      as before.
+    - `ban.service.ts` extracted from BAN_USER so reject-and-ban and a plain
+      ban behave identically (same address-ban guards and warnings).
+
+  Found by the live event fuzz (pre-existing, fixed here):
+    - Any connected socket could CRASH THE SERVER: a handler called
+      `ack(...)` on `undefined` inside an async function when an event was
+      emitted without a callback (e.g. `socket.emit("GET_ONLINE_USERS", {})`),
+      an unhandled rejection that terminated Node. No sign-in was needed.
+    - FETCH_MESSAGES, FETCH_DIRECT_MESSAGES and USER_JOIN_CHANNEL answered
+      sockets that never signed in (history by channel id; joining a
+      channel's room). Several others (GET_APPROVED_EMOJIS,
+      GET_ROUTER_CAPABILITIES ...) relied on later failures rather than a
+      check.
+    - Fix in one place, not forty: `services/packet-guard.ts`, a `socket.use`
+      middleware on every event — default-deny until userId+serverId exist
+      (allowlist: USER_JOIN_SERVER, VIEWER_AUTHENTICATE,
+      REQUEST_AUTH_CHALLENGE, PING_LATENCY) and a normalized packet so
+      `(payload, ack)` / `(ack)` handlers always get a payload and an ack.
+
+  Key Files Modified:
+    apps/server/prisma/schema.prisma, migrations/20261015120000_add_pending_approvals (NEW)
+    apps/server/src/services/approval.service.ts, ban.service.ts, packet-guard.ts (NEW)
+    apps/server/src/handlers/approval.handler.ts (NEW), connection.handler.ts,
+      moderation.handler.ts, admin.handler.ts, nudge.handler.ts, index.ts
+    apps/server/src/config/approval.config.ts (NEW)
+    apps/server/src/__tests__/approval.service.test.ts, packet-guard.test.ts (NEW)
+    packages/shared-types/src/models.ts, socket-events.ts
+    apps/client/src/preload.ts, renderer/renderer.ts, renderer/index.html
+    AGENTS.md, apps/server/AGENTS.md, README.md
+
+  Verification:
+    - tsc x3 exit 0; lint exit 0 (0 errors); server vitest 20 files / 325
+      tests; client suites unchanged and green.
+    - Live, real server + the real client + Postgres/Redis, 65/65: switch
+      persists; a new signed identity is answered pending with a request row
+      and no user/role; the admin's badge and list show nickname, address and
+      fingerprint; a waiting socket fired 62 events x 3 payload shapes and NONE
+      succeeded, nothing was written, the server stayed up; an existing
+      member still joins; an unsigned new identity, and a second key for a
+      queued id, are refused; asking twice keeps one place; Approve from the
+      UI grants, binds the key, assigns Member, clears the badge, logs who
+      approved; Reject disconnects without a ban and the person may ask again;
+      Reject and ban with "range" bans user + /24 and a new identity from that
+      range is refused outright; 3 per address / 50 per server limits (and the
+      UI listing 50); a plain member can't list/approve/reject/flip; a BAN_USER
+      holder gets notified, sees masked addresses, can approve, a second
+      decision fails cleanly, can't flip the switch; the designated admin
+      joins with approval on; switch off -> direct joins; the real client
+      shows the waiting screen, is approved by a scripted moderator and joins
+      by itself; Cancel hides it and leaves the request queued.
+    - Real bugs found by running it: the server crash and the unauthenticated
+      reads above (fixed); my own harness left a stale server bound to the
+      port (test bug) and a range ban made my "queued" user unreachable (test
+      bug); the Settings dialog hid the waiting screen (fixed: it closes).
+    - NOT run: multiple real clients waiting at once (scripted sockets cover
+      the server logic); a reverse proxy in front.
+
+  Next Step: PRD 18.9 — invite links / codes (same opt-in pattern).

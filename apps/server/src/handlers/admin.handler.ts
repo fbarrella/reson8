@@ -21,6 +21,7 @@ import { requirePermission, requireAnyPermission } from "../middleware/permissio
 import { PermissionFlags } from "@reson8/shared-types";
 import { revokeViewerTickets } from "../services/viewer-ticket.service.js";
 import { keyFingerprint } from "../services/identity.service.js";
+import { syncModeratorRoom } from "./approval.handler.js";
 import {
     fetchIdentityEventsPage,
     parseIdentityEventsQuery,
@@ -271,6 +272,9 @@ export function registerAdminHandlers(
                         "Role removed from user",
                     );
                 }
+
+                // Gaining or losing BAN_USER changes who hears about the approval queue (PRD 18.8).
+                await syncModeratorRoom(app, io, userId, socket.data.serverId).catch(() => {});
 
                 ack({ success: true });
             } catch (err) {

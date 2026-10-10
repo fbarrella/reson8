@@ -20,16 +20,8 @@ import { requirePermission } from "../middleware/permissions.middleware.js";
 import type { MediasoupService } from "../services/mediasoup.service.js";
 import { buildOccupant } from "./connection.handler.js";
 import { getUserPermissions, isAdmin } from "../services/permissions.service.js";
-import { getTrustProxy, trustProxyExplicitlyOff } from "../services/client-address.js";
-import {
-    addressBans,
-    cidrContains,
-    isPrivateOrLoopback,
-    maskCidr,
-    normalizeIp,
-    reloadAddressBans,
-    toCidr,
-} from "../services/address-ban.service.js";
+import { executeBan } from "../services/ban.service.js";
+import { maskCidr, reloadAddressBans } from "../services/address-ban.service.js";
 
 type TypedIO = SocketIOServer<
     ClientToServerEvents,
@@ -168,90 +160,22 @@ export function registerModerationHandlers(
                     select: { nickname: true, lastAddress: true },
                 });
 
-                // The address to ban, read BEFORE the sockets are disconnected:
-                // the live connection's address if they're online, else the one
-                // they last joined from (so an offline user can be address-banned).
-                let targetAddress: string | undefined;
-                for (const [, s] of io.sockets.sockets) {
-                    if (s.data.userId === userId && s.data.serverId === serverId && s.data.clientAddress) {
-                        targetAddress = s.data.clientAddress;
-                        break;
-                    }
-                }
-                targetAddress ??= userRecord?.lastAddress ?? undefined;
-
-                // Create ban record
-                await app.prisma.bannedUser.upsert({
-                    where: {
-                        serverId_userId: { serverId, userId },
+                // The ban, the disconnect and the optional address part live in
+                // ban.service.ts (shared with "Reject and ban", PRD 18.8).
+                const { warning, addressBanned } = await executeBan({
+                    app,
+                    io,
+                    serverId,
+                    actor: {
+                        userId: socket.data.userId,
+                        socketId: socket.id,
+                        address: socket.data.clientAddress,
                     },
-                    update: {},
-                    create: {
-                        serverId,
-                        userId,
-                        nickname: userRecord?.nickname ?? "Unknown",
-                    },
+                    userId,
+                    nickname: userRecord?.nickname ?? null,
+                    fallbackAddress: userRecord?.lastAddress,
+                    scope,
                 });
-
-                // Find and disconnect the banned user's socket(s)
-                for (const [, s] of io.sockets.sockets) {
-                    if (s.data.userId === userId && s.data.serverId === serverId) {
-                        s.emit("USER_BANNED", {});
-                        s.disconnect(true);
-                    }
-                }
-
-                // The optional address/range part (PRD 18.7). The user ban above
-                // already succeeded; anything that stops the address part is a
-                // warning, never a failed ban.
-                let warning: string | undefined;
-                let addressBanned: string | undefined;
-                if (scope !== "none") {
-                    const ip = normalizeIp(targetAddress);
-                    const cidr = ip ? toCidr(ip, scope) : null;
-                    if (!ip || !cidr) {
-                        warning = "No address is known for this user — only the user was banned.";
-                    } else if (isPrivateOrLoopback(ip) && scope === "range") {
-                        warning = "A range of private-network addresses can't be banned — only the user was banned.";
-                    } else if (isPrivateOrLoopback(ip) && !getTrustProxy().list.length && !trustProxyExplicitlyOff()) {
-                        // Behind a proxy that isn't trusted, EVERY client has the proxy's
-                        // address: banning it would ban everyone.
-                        warning =
-                            "This user's address is a private/loopback one, which usually means a reverse proxy sits in " +
-                            "front of the server. Set TRUST_PROXY (or TRUST_PROXY=false if there is none) first — only " +
-                            "the user was banned.";
-                    } else if (socket.data.clientAddress && cidrContains(cidr, socket.data.clientAddress)) {
-                        warning = "That network includes your own address — only the user was banned.";
-                    } else {
-                        await app.prisma.bannedAddress.upsert({
-                            where: { serverId_cidr: { serverId, cidr } },
-                            update: { linkedUserId: userId, nickname: userRecord?.nickname ?? null },
-                            create: {
-                                serverId,
-                                cidr,
-                                linkedUserId: userId,
-                                nickname: userRecord?.nickname ?? null,
-                                createdBy: socket.data.userId,
-                            },
-                        });
-                        await reloadAddressBans(app.prisma, serverId);
-                        addressBanned = cidr;
-
-                        // Everyone else already connected from that network goes too,
-                        // except the moderator and the designated admin.
-                        for (const [, s] of io.sockets.sockets) {
-                            if (
-                                s.id !== socket.id &&
-                                s.data.userId &&
-                                s.data.userId !== process.env.ADMIN_INSTANCE_ID &&
-                                addressBans.isBanned(s.data.clientAddress)
-                            ) {
-                                s.emit("USER_BANNED", {});
-                                s.disconnect(true);
-                            }
-                        }
-                    }
-                }
 
                 ack({ success: true, ...(warning ? { warning } : {}), ...(addressBanned ? { addressBanned } : {}) });
                 app.log.info(

@@ -554,7 +554,9 @@ const api = {
         // and AUTH_ALLOWED_HOSTS keep matching).
         const identityHost = identityHostOf({ host, port });
 
-        socket.on("connect", async () => {
+        // The join routine is a named function so it can run again when a moderator
+        // approves this (new) identity (PRD 18.8) on the SAME socket.
+        const joinServer = async (): Promise<void> => {
             // Guard against duplicate emissions from Socket.io auto-reconnect
             if (joinServerInFlight) return;
             joinServerInFlight = true;
@@ -577,6 +579,11 @@ const api = {
             // there's no challenge: join the old way.
             const joiningSocket = socket!;
             const identity = await buildIdentityProof(joiningSocket, identityHost);
+            // For the "waiting for approval" screen: what a moderator will see this request as.
+            const identityFingerprintForUi: string = await ipcRenderer
+                .invoke("identity-get-public")
+                .then((r: { fingerprint: string } | null) => r?.fingerprint ?? "")
+                .catch(() => "");
             if (socket !== joiningSocket || !joiningSocket.connected) {
                 joinServerInFlight = false; // replaced or dropped meanwhile
                 return;
@@ -588,6 +595,13 @@ const api = {
                 { nickname, instanceId, password, avatar: avatarSelection, identity },
                 (res) => {
                     joinServerInFlight = false;
+                    if (res.pending) {
+                        // A new identity on a server that approves newcomers (PRD 18.8): the
+                        // socket stays connected and is told when a moderator decides. A
+                        // reconnect while waiting simply lands here again.
+                        emit("approval-pending", { fingerprint: identityFingerprintForUi });
+                        return;
+                    }
                     if (res.success && res.serverId) {
                         // From now on this server must not be silently downgraded to HTTP (PRD 18.3).
                         if (address.scheme === "https") {
@@ -633,7 +647,20 @@ const api = {
                     }
                 },
             );
+        };
+        socket.on("connect", () => void joinServer());
+
+        socket.on("APPROVAL_GRANTED", () => {
+            emit("approval-granted", null);
+            void joinServer(); // now a normal join, which succeeds
         });
+        socket.on("APPROVAL_REJECTED", () => {
+            emit("approval-rejected", null);
+            socket?.removeAllListeners();
+            socket?.disconnect();
+            socket = null;
+        });
+        socket.on("PENDING_APPROVALS_CHANGED", (payload) => emit("pending-approvals-changed", payload));
 
         socket.on("disconnect", (reason) => {
             latencyMs = -1;
@@ -1223,6 +1250,53 @@ const api = {
                 return;
             }
             socket.emit("GET_BANNED_ADDRESSES", resolve);
+        });
+    },
+
+    /** The approval queue (PRD 18.8; BAN_USER or ADMIN). */
+    getPendingApprovals(): Promise<{
+        success: boolean;
+        requests?: {
+            userId: string;
+            nickname: string;
+            fingerprint: string;
+            address: string | null;
+            host: string | null;
+            requestedAt: string;
+            lastSeenAt: string;
+            online: boolean;
+        }[];
+        error?: string;
+    }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.emit("GET_PENDING_APPROVALS", resolve);
+        });
+    },
+
+    approveUser(userId: string): Promise<{ success: boolean; error?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.emit("APPROVE_USER", { userId }, resolve);
+        });
+    },
+
+    rejectUser(
+        userId: string,
+        opts: { ban?: boolean; addressBan?: "none" | "exact" | "range" } = {},
+    ): Promise<{ success: boolean; error?: string; warning?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.emit("REJECT_USER", { userId, ...opts }, resolve);
         });
     },
 
