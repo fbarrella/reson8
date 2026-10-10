@@ -33,6 +33,7 @@ import {
 } from "../services/identity.service.js";
 import { adminKeyFingerprint, authAllowedHosts, requireSignedIdentity } from "../config/identity.config.js";
 import { recordIdentityEvent } from "../services/identity-events.service.js";
+import { normalizeAuthHost, observeAuthHost } from "../services/auth-hosts.service.js";
 import { issueViewerTicket, resolveViewerTicket, revokeViewerTickets } from "../services/viewer-ticket.service.js";
 
 type TypedIO = SocketIOServer<
@@ -410,6 +411,13 @@ export function registerConnectionHandlers(
                     app.log.warn({ ...identityLog, reason: decision.reason }, "Join refused (identity)");
                     ack({ success: false, error: IDENTITY_MESSAGES[decision.reason] });
                     return;
+                }
+                // Which name this signed join was addressed to (PRD 18.5): remembered so
+                // an admin can pick the names people really use, and so the allowed-names
+                // guard knows what THIS admin's own session was signed for.
+                if (proofIn) {
+                    socket.data.authHost = normalizeAuthHost(proofIn.host);
+                    void observeAuthHost(app.redis, serverId, proofIn.host);
                 }
                 if (decision.bind && existingUser && proofIn) {
                     // Atomic compare-and-set: only binds if nothing is bound yet,

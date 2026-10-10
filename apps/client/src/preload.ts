@@ -1797,6 +1797,10 @@ const api = {
         requireSignedIdentity?: boolean;
         requireSignedIdentityLockedByEnv?: boolean;
         unprotectedActiveUsers?: number;
+        /** ADMIN callers only (PRD 18.5). */
+        authAllowedHosts?: string[];
+        authAllowedHostsLockedByEnv?: boolean;
+        observedAuthHosts?: { host: string; joins: number; lastSeen: string | null }[];
         error?: string;
     }> {
         return new Promise((resolve) => {
@@ -1814,6 +1818,7 @@ const api = {
             screenShareEnabled?: boolean;
             maxMessageLength?: number;
             requireSignedIdentity?: boolean;
+            authAllowedHosts?: string[];
         },
     ): Promise<{ success: boolean; error?: string }> {
         return new Promise((resolve) => {

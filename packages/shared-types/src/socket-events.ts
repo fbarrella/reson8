@@ -25,6 +25,7 @@ import type {
     IAvatarSelection,
     IUserProfile,
     IIdentityEvent,
+    IObservedAuthHost,
 } from "./models.js";
 
 // ---------------------------------------------------------------------------
@@ -669,6 +670,14 @@ export interface ClientToServerEvents {
             requireSignedIdentity?: boolean;
             requireSignedIdentityLockedByEnv?: boolean;
             unprotectedActiveUsers?: number;
+            /**
+             * ADMIN callers only (PRD 18.5): the names a signed join may be
+             * addressed to (empty = any), whether AUTH_ALLOWED_HOSTS decides
+             * it, and the names actually seen so the admin can pick them.
+             */
+            authAllowedHosts?: string[];
+            authAllowedHostsLockedByEnv?: boolean;
+            observedAuthHosts?: IObservedAuthHost[];
             error?: string;
         }) => void,
     ) => void;
@@ -686,6 +695,12 @@ export interface ClientToServerEvents {
             maxMessageLength?: number;
             /** PRD 18.4. Refused while REQUIRE_SIGNED_IDENTITY is set in the server's environment. */
             requireSignedIdentity?: boolean;
+            /**
+             * PRD 18.5: host[:port] names a signed join may be addressed to; an
+             * empty list turns the check off. Refused while AUTH_ALLOWED_HOSTS is
+             * set, and when it would lock the requesting admin's own session out.
+             */
+            authAllowedHosts?: string[];
         },
         ack: (response: { success: boolean; error?: string }) => void,
     ) => void;
@@ -906,4 +921,6 @@ export interface SocketData {
      * feature that needs "where is this socket from" reads this field.
      */
     clientAddress?: string;
+    /** The (lower-cased) host this socket's accepted identity proof was signed for (PRD 18.5). */
+    authHost?: string;
 }

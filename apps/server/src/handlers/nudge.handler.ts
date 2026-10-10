@@ -23,10 +23,18 @@ import { PermissionFlags } from "@reson8/shared-types";
 import { requirePermission } from "../middleware/permissions.middleware.js";
 import { getUserPermissions, isAdmin } from "../services/permissions.service.js";
 import {
+    authAllowedHosts,
+    authAllowedHostsLockedByEnv,
     requireSignedIdentity as isSignedIdentityRequired,
     requireSignedLockedByEnv,
+    setDbAllowedHosts,
     setDbRequireSigned,
 } from "../config/identity.config.js";
+import {
+    checkAllowedHostsUpdate,
+    listObservedAuthHosts,
+    parseAllowedHostsInput,
+} from "../services/auth-hosts.service.js";
 import { countUnprotectedActiveUsers } from "../services/identity-events.service.js";
 import { PresenceService } from "../services/presence.service.js";
 import {
@@ -81,6 +89,9 @@ export function registerNudgeHandlers(
                     requireSignedIdentity?: boolean;
                     requireSignedIdentityLockedByEnv?: boolean;
                     unprotectedActiveUsers?: number;
+                    authAllowedHosts?: string[];
+                    authAllowedHostsLockedByEnv?: boolean;
+                    observedAuthHosts?: Awaited<ReturnType<typeof listObservedAuthHosts>>;
                 } = {};
                 const { userId, serverId } = socket.data;
                 if (userId && serverId) {
@@ -90,6 +101,9 @@ export function registerNudgeHandlers(
                             requireSignedIdentity: isSignedIdentityRequired(),
                             requireSignedIdentityLockedByEnv: requireSignedLockedByEnv(),
                             unprotectedActiveUsers: await countUnprotectedActiveUsers(app.prisma),
+                            authAllowedHosts: authAllowedHosts(),
+                            authAllowedHostsLockedByEnv: authAllowedHostsLockedByEnv(),
+                            observedAuthHosts: await listObservedAuthHosts(app.redis, serverId),
                         };
                     }
                 }
@@ -125,13 +139,42 @@ export function registerNudgeHandlers(
                     return;
                 }
 
-                const { nudgeEnabled, screenShareEnabled, maxMessageLength, requireSignedIdentity } = payload;
+                const {
+                    nudgeEnabled,
+                    screenShareEnabled,
+                    maxMessageLength,
+                    requireSignedIdentity,
+                    authAllowedHosts: allowedHostsInput,
+                } = payload;
                 const data: {
                     nudgeEnabled?: boolean;
                     screenShareEnabled?: boolean;
                     maxMessageLength?: number;
                     requireSignedIdentity?: boolean;
+                    authAllowedHosts?: string[];
                 } = {};
+                if (allowedHostsInput !== undefined) {
+                    if (authAllowedHostsLockedByEnv()) {
+                        ack({
+                            success: false,
+                            error: "Set by the server's AUTH_ALLOWED_HOSTS environment variable",
+                        });
+                        return;
+                    }
+                    const parsed = parseAllowedHostsInput(allowedHostsInput);
+                    if (!parsed.ok) {
+                        ack({ success: false, error: parsed.error });
+                        return;
+                    }
+                    // Never let an admin save a list that excludes the name their own
+                    // session was signed for — they'd be refused on the next reconnect.
+                    const guard = checkAllowedHostsUpdate(parsed.hosts, socket.data.authHost);
+                    if (!guard.ok) {
+                        ack({ success: false, error: guard.error });
+                        return;
+                    }
+                    data.authAllowedHosts = parsed.hosts;
+                }
                 if (nudgeEnabled !== undefined) data.nudgeEnabled = nudgeEnabled;
                 if (screenShareEnabled !== undefined) data.screenShareEnabled = screenShareEnabled;
                 if (requireSignedIdentity !== undefined) {
@@ -175,10 +218,12 @@ export function registerNudgeHandlers(
                         screenShareEnabled: true,
                         maxMessageLength: true,
                         requireSignedIdentity: true,
+                        authAllowedHosts: true,
                     },
                 });
-                // Takes effect on the very next join, no restart (PRD 18.4).
+                // Both take effect on the very next join, no restart (PRD 18.4/18.5).
                 setDbRequireSigned(updated.requireSignedIdentity);
+                setDbAllowedHosts(updated.authAllowedHosts);
 
                 ack({ success: true });
 

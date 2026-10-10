@@ -32,6 +32,10 @@ model Server {
   /// Refuse unsigned (pre-2.6.0) joins (PRD 18.4). The REQUIRE_SIGNED_IDENTITY
   /// environment variable, when set, takes precedence over this column.
   requireSignedIdentity Boolean @default(false)
+  /// Host names (host[:port], lower-case) a signed join may be addressed to
+  /// (PRD 18.5). Empty = any. The AUTH_ALLOWED_HOSTS environment variable,
+  /// when set, takes precedence over this column.
+  authAllowedHosts   String[]  @default([])
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 

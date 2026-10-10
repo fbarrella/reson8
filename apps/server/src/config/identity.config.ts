@@ -50,18 +50,36 @@ export function adminKeyFingerprint(): string | null {
     return value ? value : null;
 }
 
-/**
- * `AUTH_ALLOWED_HOSTS` (comma-separated `host[:port]`, as clients type them):
- * when set, a signature is only accepted if it was made for one of these
- * hosts. That stops a malicious server from relaying this server's challenge
- * to its own users. Leave unset if the server is reached under names you can't
- * list (every name it's reached by must be listed).
- */
-export function authAllowedHosts(): string[] {
+/** The list an admin saved in Settings → Server (PRD 18.5), mirrored in memory. */
+let dbAllowedHosts: string[] = [];
+
+export function setDbAllowedHosts(list: readonly string[] | null | undefined): void {
+    dbAllowedHosts = (list ?? []).map((h) => h.trim().toLowerCase()).filter(Boolean);
+}
+
+function envAllowedHosts(): string[] {
     return (process.env.AUTH_ALLOWED_HOSTS ?? "")
         .split(",")
         .map((h) => h.trim().toLowerCase())
         .filter(Boolean);
+}
+
+/** Whether the environment decides the list (a non-empty AUTH_ALLOWED_HOSTS). */
+export function authAllowedHostsLockedByEnv(): boolean {
+    return envAllowedHosts().length > 0;
+}
+
+/**
+ * `AUTH_ALLOWED_HOSTS` (comma-separated `host[:port]`, as clients type them),
+ * or the list saved in Settings → Server: when non-empty, a signature is only
+ * accepted if it was made for one of these hosts. That stops a malicious
+ * server from relaying this server's challenge to its own users. Leave empty
+ * if the server is reached under names you can't list (every name it's
+ * reached by must be listed). The environment variable wins when set.
+ */
+export function authAllowedHosts(): string[] {
+    const env = envAllowedHosts();
+    return env.length > 0 ? env : dbAllowedHosts;
 }
 
 /** How long a viewer ticket lives (refreshed on every use). */

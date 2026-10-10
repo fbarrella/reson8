@@ -3752,6 +3752,62 @@
       color: var(--warning);
     }
 
+    .toggle-row-note.safe { color: var(--success); }
+
+    /* ── Connection names / relay protection (PRD 18.5) ─────────────────── */
+    .relay-hosts {
+      padding: 10px 12px;
+      border-radius: var(--radius);
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      margin-bottom: 10px;
+    }
+
+    .relay-hosts-title { font-size: 12px; font-weight: 500; color: var(--text-primary); }
+    /* `.modal-content p` would otherwise win on specificity. */
+    .relay-hosts .relay-hosts-desc { font-size: 10px; color: var(--text-muted); line-height: 1.4; margin: 4px 0 8px; }
+    .relay-hosts .relay-hosts-desc strong { color: var(--text-secondary); }
+
+    .relay-hosts-status {
+      font-size: 11px;
+      font-weight: 600;
+      margin-bottom: 8px;
+      color: var(--text-secondary);
+    }
+
+    .relay-hosts-status.on { color: var(--success); }
+
+    /* The settings modal styles every `label` and `input` generically
+       (display:block, width:100%, margins), so the row needs the extra
+       specificity of `.modal-content .relay-hosts …` to stay a flex row. */
+    .modal-content .relay-hosts label.relay-hosts-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 0;
+      padding: 5px 0;
+      font-size: 12px;
+      color: var(--text-primary);
+      cursor: pointer;
+    }
+
+    .modal-content .relay-hosts label.relay-hosts-row input[type="checkbox"] {
+      width: auto;
+      margin: 0;
+      padding: 0;
+      flex-shrink: 0;
+    }
+
+    .relay-hosts-row .relay-hosts-name { flex: 1; min-width: 0; word-break: break-all; }
+    .relay-hosts-row .relay-hosts-meta { color: var(--text-muted); font-size: 10px; white-space: nowrap; }
+    .relay-hosts-empty { color: var(--text-muted); font-size: 11px; padding: 4px 0; }
+
+    .relay-hosts-add { display: flex; gap: 6px; margin-top: 8px; }
+    .relay-hosts-add input { flex: 1; min-width: 0; margin-bottom: 0; }
+
+    .relay-hosts-error { min-height: 14px; margin-top: 4px; font-size: 11px; color: var(--danger); }
+    .relay-hosts-actions { display: flex; justify-content: flex-end; margin-top: 6px; }
+
     /* Message avatars and nicknames open the card (PRD 17.3). */
     .chat-msg .msg-header > .avatar,
     .chat-msg .msg-nick {
@@ -5402,6 +5458,22 @@
             <input type="checkbox" id="chk-require-signed">
             <span class="toggle-slider"></span>
           </label>
+        </div>
+        <!-- Connection names / relay protection (PRD 18.5) -->
+        <div class="relay-hosts" id="relay-hosts-section" style="display:none;">
+          <div class="relay-hosts-title">🛡️ Connection names (relay protection)</div>
+          <p class="relay-hosts-desc">Only accept sign-ins made for these addresses. This protects your users if they ever connect to a malicious server that tries to pass this server's sign-in challenge on. List <strong>every</strong> address people use to reach this server.</p>
+          <div class="relay-hosts-status" id="relay-hosts-status"></div>
+          <div id="relay-hosts-list"></div>
+          <div class="relay-hosts-add">
+            <input type="text" id="relay-hosts-input" placeholder="chat.example.com or 192.168.0.10:9800" maxlength="255" spellcheck="false" autocomplete="off">
+            <button type="button" class="btn btn-cancel" id="btn-relay-hosts-add">Add</button>
+          </div>
+          <div class="relay-hosts-error" id="relay-hosts-error" role="alert"></div>
+          <span class="toggle-row-note" id="relay-hosts-lock-note" style="display:none;"></span>
+          <div class="relay-hosts-actions">
+            <button type="button" class="btn btn-connect" id="btn-relay-hosts-save">Save</button>
+          </div>
         </div>
       </div>
 

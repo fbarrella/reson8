@@ -954,6 +954,10 @@ interface Reson8Api {
         requireSignedIdentity?: boolean;
         requireSignedIdentityLockedByEnv?: boolean;
         unprotectedActiveUsers?: number;
+        /** ADMIN callers only (PRD 18.5). */
+        authAllowedHosts?: string[];
+        authAllowedHostsLockedByEnv?: boolean;
+        observedAuthHosts?: { host: string; joins: number; lastSeen: string | null }[];
         error?: string;
     }>;
     updateServerSettings(
@@ -962,6 +966,7 @@ interface Reson8Api {
             screenShareEnabled?: boolean;
             maxMessageLength?: number;
             requireSignedIdentity?: boolean;
+            authAllowedHosts?: string[];
         },
     ): Promise<{ success: boolean; error?: string }>;
     getIdentityEvents(payload: {
@@ -7221,6 +7226,7 @@ async function openSettingsPanel(): Promise<void> {
                 chkScreenShareEnabled.checked = settingsRes.screenShareEnabled ?? true;
                 inputMaxMessageLength.value = String(settingsRes.maxMessageLength ?? serverMaxMessageLength);
                 renderRequireSignedSetting(settingsRes);
+                renderRelayHosts(settingsRes);
             }
         }
     } else {
@@ -7471,6 +7477,7 @@ function renderRequireSignedSetting(res: {
         note = "Everyone active in the last 30 days is already protected, so it is safe to turn on.";
     }
     requireSignedNote.textContent = note;
+    requireSignedNote.classList.toggle("safe", !res.requireSignedIdentityLockedByEnv && n === 0);
     requireSignedNote.style.display = "";
 }
 
@@ -7482,6 +7489,157 @@ chkRequireSigned.addEventListener("change", async () => {
     } else {
         chkRequireSigned.checked = !desired; // revert on failure
         log(`Failed to update server settings: ${result.error}`, "error");
+        if (result.error && /permission|denied/i.test(result.error)) SoundAlert.play("insufficient_perms.mp3");
+    }
+});
+
+// ── Connection names / relay protection (PRD 18.5) ───────────────────────
+const relayHostsSection = document.getElementById("relay-hosts-section") as HTMLDivElement;
+const relayHostsList = document.getElementById("relay-hosts-list") as HTMLDivElement;
+const relayHostsStatus = document.getElementById("relay-hosts-status") as HTMLDivElement;
+const relayHostsInput = document.getElementById("relay-hosts-input") as HTMLInputElement;
+const relayHostsError = document.getElementById("relay-hosts-error") as HTMLDivElement;
+const relayHostsLockNote = document.getElementById("relay-hosts-lock-note") as HTMLSpanElement;
+const btnRelayHostsAdd = document.getElementById("btn-relay-hosts-add") as HTMLButtonElement;
+const btnRelayHostsSave = document.getElementById("btn-relay-hosts-save") as HTMLButtonElement;
+
+/** Same shape the server accepts for a listed name (auth-hosts.service.ts). */
+const RELAY_HOST_ENTRY = /^[a-z0-9._\-[\]:]{1,255}$/;
+
+interface RelayHostChoice {
+    host: string;
+    checked: boolean;
+    joins: number | null;
+    lastSeen: string | null;
+}
+let relayHostChoices: RelayHostChoice[] = [];
+let relayHostsLocked = false;
+
+function refreshRelayHostsStatus(): void {
+    const n = relayHostChoices.filter((c) => c.checked).length;
+    relayHostsStatus.classList.toggle("on", n > 0);
+    relayHostsStatus.textContent =
+        n === 0 ? "Off — any name is accepted" : `On — ${n} ${n === 1 ? "name" : "names"} accepted`;
+}
+
+function renderRelayHostRows(): void {
+    relayHostsList.textContent = "";
+    if (relayHostChoices.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "relay-hosts-empty";
+        empty.textContent = "No names seen yet. They appear here as people sign in; you can also add one below.";
+        relayHostsList.appendChild(empty);
+    }
+    for (const choice of relayHostChoices) {
+        const row = document.createElement("label");
+        row.className = "relay-hosts-row";
+        const box = document.createElement("input");
+        box.type = "checkbox";
+        box.checked = choice.checked;
+        box.disabled = relayHostsLocked;
+        box.addEventListener("change", () => {
+            choice.checked = box.checked;
+            refreshRelayHostsStatus();
+        });
+        const name = document.createElement("span");
+        name.className = "relay-hosts-name";
+        name.textContent = choice.host;
+        const meta = document.createElement("span");
+        meta.className = "relay-hosts-meta";
+        if (choice.joins === null) {
+            meta.textContent = "not seen yet";
+        } else {
+            const when = choice.lastSeen ? new Date(choice.lastSeen) : null;
+            const whenText =
+                when && !Number.isNaN(when.getTime())
+                    ? `, last ${when.toLocaleDateString("en-US", { month: "short", day: "numeric" })}`
+                    : "";
+            meta.textContent = `${choice.joins} ${choice.joins === 1 ? "sign-in" : "sign-ins"}${whenText}`;
+        }
+        row.append(box, name, meta);
+        relayHostsList.appendChild(row);
+    }
+    refreshRelayHostsStatus();
+}
+
+/** Fills the section from GET_SERVER_SETTINGS (ADMIN callers get these fields; older servers don't). */
+function renderRelayHosts(res: {
+    authAllowedHosts?: string[];
+    authAllowedHostsLockedByEnv?: boolean;
+    observedAuthHosts?: { host: string; joins: number; lastSeen: string | null }[];
+}): void {
+    if (res.authAllowedHosts === undefined) {
+        relayHostsSection.style.display = "none";
+        return;
+    }
+    relayHostsSection.style.display = "";
+    relayHostsLocked = !!res.authAllowedHostsLockedByEnv;
+    relayHostsError.textContent = "";
+
+    const listed = new Set(res.authAllowedHosts);
+    const choices: RelayHostChoice[] = [];
+    for (const o of res.observedAuthHosts ?? []) {
+        choices.push({ host: o.host, checked: listed.has(o.host), joins: o.joins, lastSeen: o.lastSeen });
+        listed.delete(o.host);
+    }
+    // Listed names nobody has used (yet) must stay visible, or saving would silently drop them.
+    for (const host of listed) choices.push({ host, checked: true, joins: null, lastSeen: null });
+    relayHostChoices = choices;
+
+    relayHostsInput.disabled = relayHostsLocked;
+    btnRelayHostsAdd.disabled = relayHostsLocked;
+    btnRelayHostsSave.disabled = relayHostsLocked;
+    relayHostsLockNote.style.display = relayHostsLocked ? "" : "none";
+    relayHostsLockNote.textContent = relayHostsLocked
+        ? "Set by the server's AUTH_ALLOWED_HOSTS environment variable, so it can't be changed here."
+        : "";
+    renderRelayHostRows();
+}
+
+function addRelayHostFromInput(): void {
+    const host = relayHostsInput.value.trim().toLowerCase();
+    relayHostsError.textContent = "";
+    if (!host) return;
+    if (!RELAY_HOST_ENTRY.test(host)) {
+        relayHostsError.textContent = "Use a host name or address, with a port if people type one (host or host:port).";
+        return;
+    }
+    const existing = relayHostChoices.find((c) => c.host === host);
+    if (existing) existing.checked = true;
+    else relayHostChoices.push({ host, checked: true, joins: null, lastSeen: null });
+    relayHostsInput.value = "";
+    renderRelayHostRows();
+}
+
+btnRelayHostsAdd.addEventListener("click", addRelayHostFromInput);
+relayHostsInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+        e.preventDefault();
+        addRelayHostFromInput();
+    }
+});
+
+btnRelayHostsSave.addEventListener("click", async () => {
+    relayHostsError.textContent = "";
+    // Anything typed but not added yet counts: don't lose it silently.
+    if (relayHostsInput.value.trim()) addRelayHostFromInput();
+    if (relayHostsError.textContent) return;
+
+    const list = relayHostChoices.filter((c) => c.checked).map((c) => c.host);
+    btnRelayHostsSave.disabled = true;
+    const result = await api.updateServerSettings({ authAllowedHosts: list });
+    btnRelayHostsSave.disabled = relayHostsLocked;
+    if (result.success) {
+        log(
+            list.length === 0
+                ? "Connection names: check turned off — any name is accepted"
+                : `Connection names saved (${list.length}): sign-ins must be addressed to ${list.join(", ")}`,
+            "success",
+        );
+        relayHostChoices = relayHostChoices.filter((c) => c.checked || c.joins !== null);
+        renderRelayHostRows();
+    } else {
+        relayHostsError.textContent = result.error ?? "Couldn't save the list";
         if (result.error && /permission|denied/i.test(result.error)) SoundAlert.play("insufficient_perms.mp3");
     }
 });

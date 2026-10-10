@@ -1080,3 +1080,96 @@ Feature/Fix: Identity log and a "Require signed identity" switch (PRD 18.4)
       fake clock only).
 
   Next Step: PRD 18.5 — allowed connection names managed in Settings.
+
+
+--- Entry: 10/10/2026 ---
+
+Feature/Fix: Allowed connection names managed in Settings — relay protection (PRD 18.5)
+
+  Problem: AUTH_ALLOWED_HOSTS (the only defense against a malicious server
+  relaying this server's sign-in challenge to its own visitors) was an
+  environment variable only. It is off by default because a server reachable
+  under several names must list ALL of them, and an admin had no way to learn
+  which names people actually type — so in practice it stayed off.
+
+  Solution:
+    - `servers.authAllowedHosts text[]` (migration
+      20261013120000_add_auth_allowed_hosts, additive, default empty).
+      Effective list = AUTH_ALLOWED_HOSTS when non-empty (locks the setting),
+      else the stored list (mirrored in memory like 18.4's switch, loaded at
+      boot, refreshed on update — takes effect on the next join). Empty = the
+      check is off, as before.
+    - auth-hosts.service.ts: `parseAllowedHostsInput` (array, <= 50, each
+      host or host:port, lower-cased, de-duplicated, bounded error text),
+      `checkAllowedHostsUpdate` (the lock-out guard), observed names in Redis
+      (`HINCRBY` count + last-seen per accepted signed join; distinct names
+      capped at 200 per server because a client picks its own host string;
+      90-day expiry refreshed on use; never throws).
+    - The guard: a non-empty list must contain the host the SAVING admin's own
+      session was signed for (`socket.data.authHost`, set from the accepted
+      proof), else it is refused naming that host, because they'd be refused
+      on their next reconnect and could not undo it from the UI. An empty
+      list is always allowed, and so is an admin on an unsigned session
+      (unsigned joins aren't subject to the host check at all).
+    - GET_SERVER_SETTINGS (ADMIN callers only) adds authAllowedHosts,
+      authAllowedHostsLockedByEnv and observedAuthHosts (top 50 by use);
+      UPDATE_SERVER_SETTINGS accepts authAllowedHosts, refused while the env
+      var is set. Refusals already land in the identity log from 18.4 as
+      `hostNotAllowed`, so an admin who forgot a name sees it immediately.
+    - `npm run identity:clear-hosts [-- --yes]` (plain ESM like uploads:prune,
+      typed by a .d.mts): lists the stored list(s), asks, clears, says to
+      restart the server (the list lives in memory) and notes when the env
+      var still applies. This is the recovery for a list that went stale
+      (domain changed) when nobody can open the Settings tab any more.
+    - Client: Settings -> Server -> "Connection names (relay protection)":
+      the observed names as a checklist with sign-in counts and last-seen, an
+      Add box (same shape as the server accepts; Enter adds), a status line
+      ("Off — any name is accepted" / "On — N names"), Save. A listed name
+      nobody used yet stays visible (saving must not drop it); pending text in
+      the box is added on Save, and invalid pending text blocks the save with
+      the hint instead of being dropped; controls are disabled with an
+      explanation when the env var locks the list.
+
+  Why not something cleverer (recorded in the PRD, re-checked): comparing the
+  signed host to the socket's Host header proves nothing in a relay (the
+  attacker controls their own connection); real channel binding isn't
+  available to the Socket.io stack and breaks behind TLS-terminating proxies;
+  per-server derived keys would invalidate every key bound in 2.6.0.
+
+  Key Files Modified:
+    apps/server/prisma/schema.prisma, migrations/20261013120000_add_auth_allowed_hosts (NEW)
+    apps/server/src/services/auth-hosts.service.ts (NEW)
+    apps/server/src/__tests__/auth-hosts.service.test.ts (NEW, 30 tests)
+    apps/server/scripts/identity-clear-hosts.mjs (NEW) + .d.mts (NEW), package.json
+    apps/server/src/config/identity.config.ts
+    apps/server/src/handlers/connection.handler.ts, nudge.handler.ts
+    apps/server/src/index.ts, apps/server/.env.example
+    packages/shared-types/src/models.ts (IObservedAuthHost), socket-events.ts
+    apps/client/src/preload.ts, renderer/renderer.ts, renderer/index.html
+    AGENTS.md, apps/server/AGENTS.md, README.md
+
+  Verification:
+    - tsc --build x3: exit 0; lint: exit 0 (0 errors, 71 warnings, same as
+      before); server vitest 17 files / 234 tests; client suites unchanged
+      (63/20/22/40/14/73).
+    - Live, real server + real client + a real Postgres/Redis, 28/28:
+      names seen from scripted signed sign-ins (localhost:9811 x2,
+      127.0.0.1:9811) are suggested with counts; saving a list that excludes
+      the admin's own name is refused naming it and stores nothing; saving
+      [127.0.0.1:9811] refuses a sign-in addressed to localhost:9811
+      ("doesn't accept connections addressed to that host") and accepts
+      127.0.0.1:9811, and the refusal appears in the identity log as
+      hostNotAllowed; a typed "Chat.Example.com" is stored lower-cased;
+      invalid entries are rejected with a hint; a listed-but-unseen name
+      survives reopening Settings; an empty list turns the check off; a
+      non-admin sees none of it and can't change it; with AUTH_ALLOWED_HOSTS
+      in the environment the controls are disabled, the effective names are
+      shown, and the server refuses the update; a stale stored list locks
+      everyone out until `identity:clear-hosts --yes` + a restart.
+    - Screenshots looked at; two visual bugs found and fixed that way: the
+      description paragraph was oversized (`.modal-content p` beats a single
+      class) and the host rows collapsed (`.modal-content label`/`input`
+      generic rules) — both need `.modal-content .relay-hosts …` specificity.
+    - NOT run: the script inside the production Docker image.
+
+  Next Step: PRD 18.6 — identity key encrypted at rest + passphrase backup.

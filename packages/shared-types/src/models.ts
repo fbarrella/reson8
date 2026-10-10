@@ -171,6 +171,14 @@ export interface IIdentityEvent {
     privileged?: boolean;
 }
 
+/** A host name seen in an accepted signed join (PRD 18.5) — a suggestion for the allowed-names list. */
+export interface IObservedAuthHost {
+    host: string;
+    joins: number;
+    /** ISO time of the last accepted join under this name. */
+    lastSeen: string | null;
+}
+
 /** Lightweight presence record for channel occupants. */
 export interface IUserPresence {
     userId: string;

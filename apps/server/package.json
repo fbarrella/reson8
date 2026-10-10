@@ -12,7 +12,8 @@
         "db:push": "prisma db push",
         "test": "vitest run",
         "test:watch": "vitest",
-        "uploads:prune": "node scripts/prune-orphan-uploads.mjs"
+        "uploads:prune": "node scripts/prune-orphan-uploads.mjs",
+        "identity:clear-hosts": "node scripts/identity-clear-hosts.mjs"
     },
     "dependencies": {
         "@fastify/cors": "^11.0.0",

@@ -38,7 +38,7 @@ import { registerUploadRoute } from "./routes/upload.route.js";
 import { MediasoupService } from "./services/mediasoup.service.js";
 import { startUploadSweeper } from "./services/upload-sweeper.js";
 import { startIdentityEventPruner } from "./services/identity-events.service.js";
-import { setDbRequireSigned } from "./config/identity.config.js";
+import { setDbAllowedHosts, setDbRequireSigned } from "./config/identity.config.js";
 import { getTrustProxy, resolveClientAddress } from "./services/client-address.js";
 import { loadTlsMaterial, readTlsEnv, watchTlsFiles } from "./config/tls.config.js";
 
@@ -125,6 +125,7 @@ async function main(): Promise<void> {
     app.decorate("serverId", server.id);
     // The admin-set "require signed identity" value (PRD 18.4); the env var still wins.
     setDbRequireSigned(server.requireSignedIdentity);
+    setDbAllowedHosts(server.authAllowedHosts);
 
     // ── mediasoup SFU ──────────────────────────────────────────────────────
     const mediasoupService = new MediasoupService();
