@@ -738,6 +738,23 @@ const EMOJI_DATA: EmojiEntry[] = [
     { emoji: "🇳🇿", name: "flag new zealand", keywords: ["new zealand", "kiwi"], category: "Flags" },
 ];
 
+/** Mirror of IIdentityEvent (shared-types) — the renderer can't import it (PRD 18.4). */
+interface IdentityLogEvent {
+    id: string;
+    userId: string;
+    nickname: string;
+    currentNickname?: string;
+    kind: "BOUND" | "RESET" | "REFUSED";
+    reason: string | null;
+    fingerprint: string | null;
+    address: string | null;
+    host: string | null;
+    actorId: string | null;
+    actorNickname?: string | null;
+    createdAt: string;
+    privileged?: boolean;
+}
+
 // ── Encrypted connections (PRD 18.3) — mirrors of tls-trust.ts (the renderer is a
 // plain script and can't import it; the pure functions arrive through the preload).
 interface TlsCertInfo {
@@ -933,11 +950,25 @@ interface Reson8Api {
         name?: string;
         maxMessageLength?: number;
         version?: string;
+        /** ADMIN callers only (PRD 18.4). */
+        requireSignedIdentity?: boolean;
+        requireSignedIdentityLockedByEnv?: boolean;
+        unprotectedActiveUsers?: number;
         error?: string;
     }>;
     updateServerSettings(
-        settings: { nudgeEnabled?: boolean; screenShareEnabled?: boolean; maxMessageLength?: number },
+        settings: {
+            nudgeEnabled?: boolean;
+            screenShareEnabled?: boolean;
+            maxMessageLength?: number;
+            requireSignedIdentity?: boolean;
+        },
     ): Promise<{ success: boolean; error?: string }>;
+    getIdentityEvents(payload: {
+        userId?: string;
+        before?: string;
+        limit?: number;
+    }): Promise<{ success: boolean; events?: IdentityLogEvent[]; hasMore?: boolean; error?: string }>;
     getDesktopSources(): Promise<{
         success: boolean;
         sources?: Array<{
@@ -4436,6 +4467,7 @@ function renderAdminUsers(users: any[]): void {
 
     if (users.length === 0) {
         adminUserList.innerHTML = '<div class="admin-empty">No users found.</div>';
+        identityLogBar.style.display = "none";
         return;
     }
 
@@ -4451,6 +4483,9 @@ function renderAdminUsers(users: any[]): void {
             return false;
         }
     });
+
+    // The identity log is ADMIN-only on the server too (PRD 18.4).
+    identityLogBar.style.display = iAmAdmin ? "flex" : "none";
 
     for (const user of users) {
         const row = document.createElement("div");
@@ -4590,6 +4625,16 @@ function renderAdminUsers(users: any[]): void {
                 }
             });
             row.appendChild(resetBtn);
+        }
+
+        // This user's slice of the identity log (PRD 18.4).
+        if (iAmAdmin) {
+            const logBtn = document.createElement("button");
+            logBtn.className = "btn-reset-key";
+            logBtn.textContent = "Log";
+            logBtn.title = `Identity log of ${user.nickname}`;
+            logBtn.addEventListener("click", () => showIdentityLog({ id: user.id, nickname: user.nickname }));
+            row.appendChild(logBtn);
         }
 
         adminUserList.appendChild(row);
@@ -7120,6 +7165,7 @@ async function openSettingsPanel(): Promise<void> {
     chkNsfwBlur.checked = isNsfwBlurEnabled();
     syncProfileSection(); // discard an unsaved avatar draft from a previous visit (PRD 17.1)
     void renderTrustedCertificates(); // PRD 18.3
+    hideIdentityLog(); // always reopen on the user list (PRD 18.4)
     adminModal.classList.add("visible");
 
     // Populate audio devices
@@ -7174,6 +7220,7 @@ async function openSettingsPanel(): Promise<void> {
                 chkNudgeEnabled.checked = settingsRes.nudgeEnabled ?? true;
                 chkScreenShareEnabled.checked = settingsRes.screenShareEnabled ?? true;
                 inputMaxMessageLength.value = String(settingsRes.maxMessageLength ?? serverMaxMessageLength);
+                renderRequireSignedSetting(settingsRes);
             }
         }
     } else {
@@ -7236,6 +7283,207 @@ function renderPendingEmojis(emojis: CustomEmoji[]): void {
 
 btnServerSettings.addEventListener("click", () => {
     openSettingsPanel();
+});
+
+// ── Identity log + "Require signed identity" (PRD 18.4) ──────────────────
+const identityLogBar = document.getElementById("identity-log-bar") as HTMLDivElement;
+const btnIdentityLog = document.getElementById("btn-identity-log") as HTMLButtonElement;
+const identityLogPanel = document.getElementById("identity-log-panel") as HTMLDivElement;
+const identityLogList = document.getElementById("identity-log-list") as HTMLDivElement;
+const identityLogFilter = document.getElementById("identity-log-filter") as HTMLSpanElement;
+const btnIdentityLogBack = document.getElementById("btn-identity-log-back") as HTMLButtonElement;
+const btnIdentityLogClearFilter = document.getElementById("btn-identity-log-clear-filter") as HTMLButtonElement;
+const btnIdentityLogMore = document.getElementById("btn-identity-log-more") as HTMLButtonElement;
+const chkRequireSigned = document.getElementById("chk-require-signed") as HTMLInputElement;
+const requireSignedNote = document.getElementById("require-signed-note") as HTMLSpanElement;
+
+let identityLogUser: { id: string; nickname: string } | null = null;
+let identityLogCursor: string | null = null;
+let identityLogLoading = false;
+
+/** Plain words for the refusal keys the server stores (identity.service.ts). */
+const IDENTITY_REFUSAL_WORDS: Record<string, string> = {
+    verificationFailed: "the sign-in proof didn't verify",
+    hostNotAllowed: "it was addressed to a name this server doesn't accept",
+    otherDevice: "the identity belongs to another device",
+    protectedUpdate: "an older Reson8 tried to use a protected identity",
+    requiresSigned: "an older Reson8 while signed identity is required",
+};
+
+function formatLogTime(iso: string): string {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return iso;
+    return (
+        d.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" }) +
+        " " +
+        d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })
+    );
+}
+
+function buildIdentityLogRow(ev: IdentityLogEvent): HTMLDivElement {
+    const row = document.createElement("div");
+    row.className = "identity-log-row";
+
+    const kind = document.createElement("span");
+    kind.className = `identity-log-kind ${ev.kind.toLowerCase()}`;
+    kind.textContent = ev.kind === "BOUND" ? "Key bound" : ev.kind === "RESET" ? "Key reset" : "Refused";
+
+    const who = document.createElement("div");
+    who.className = "identity-log-who";
+    who.textContent = ev.nickname || "(no nickname)";
+    if (ev.currentNickname) {
+        const now = document.createElement("span");
+        now.className = "identity-log-now";
+        now.textContent = ` (now ${ev.currentNickname})`;
+        who.appendChild(now);
+    }
+    if (ev.privileged) {
+        const tag = document.createElement("span");
+        tag.className = "identity-log-privileged";
+        tag.textContent = "privileged";
+        tag.title = "This user holds an admin or role-management role";
+        who.appendChild(tag);
+    }
+
+    const time = document.createElement("span");
+    time.className = "identity-log-time";
+    time.textContent = formatLogTime(ev.createdAt);
+    time.title = ev.createdAt;
+
+    const detail = document.createElement("div");
+    detail.className = "identity-log-detail";
+    const parts: string[] = [];
+    if (ev.kind === "REFUSED") {
+        parts.push(`Sign-in refused: ${IDENTITY_REFUSAL_WORDS[ev.reason ?? ""] ?? ev.reason ?? "unknown reason"}.`);
+    } else if (ev.kind === "RESET") {
+        parts.push(`Key reset by ${ev.actorNickname ?? "an admin who has since left"}.`);
+    } else {
+        parts.push("First sign-in with this key — it is now bound to this identity.");
+    }
+    if (ev.address) parts.push(`From ${ev.address}`);
+    if (ev.host) parts.push(`to ${ev.host}`);
+    detail.appendChild(document.createTextNode(parts.join(" ")));
+    if (ev.fingerprint) {
+        detail.appendChild(document.createElement("br"));
+        const code = document.createElement("code");
+        code.textContent = ev.fingerprint;
+        detail.appendChild(code);
+    }
+
+    row.append(kind, who, time, detail);
+    return row;
+}
+
+async function loadIdentityLog(reset: boolean): Promise<void> {
+    if (identityLogLoading) return;
+    identityLogLoading = true;
+    btnIdentityLogMore.disabled = true;
+    if (reset) {
+        identityLogList.textContent = "";
+        identityLogCursor = null;
+        const loading = document.createElement("div");
+        loading.className = "admin-empty";
+        loading.textContent = "Loading the identity log...";
+        identityLogList.appendChild(loading);
+    }
+    try {
+        const res = await api.getIdentityEvents({
+            ...(identityLogUser ? { userId: identityLogUser.id } : {}),
+            ...(identityLogCursor ? { before: identityLogCursor } : {}),
+            limit: 50,
+        });
+        if (reset) identityLogList.textContent = "";
+        if (!res.success || !res.events) {
+            const err = document.createElement("div");
+            err.className = "admin-empty";
+            err.textContent = res.error ?? "Couldn't load the identity log.";
+            identityLogList.appendChild(err);
+            btnIdentityLogMore.style.display = "none";
+            return;
+        }
+        for (const ev of res.events) identityLogList.appendChild(buildIdentityLogRow(ev));
+        if (res.events.length > 0) identityLogCursor = res.events[res.events.length - 1].createdAt;
+        if (identityLogList.children.length === 0) {
+            const empty = document.createElement("div");
+            empty.className = "admin-empty";
+            empty.textContent = identityLogUser
+                ? "Nothing recorded for this user yet."
+                : "Nothing recorded yet. Key binds, resets and refused sign-ins will show up here.";
+            identityLogList.appendChild(empty);
+        }
+        btnIdentityLogMore.style.display = res.hasMore ? "" : "none";
+    } finally {
+        identityLogLoading = false;
+        btnIdentityLogMore.disabled = false;
+    }
+}
+
+function showIdentityLog(user: { id: string; nickname: string } | null = null): void {
+    identityLogUser = user;
+    identityLogFilter.textContent = user ? `Showing only ${user.nickname}` : "All users";
+    btnIdentityLogClearFilter.style.display = user ? "" : "none";
+    adminUserList.style.display = "none";
+    identityLogBar.style.display = "none";
+    identityLogPanel.style.display = "";
+    void loadIdentityLog(true);
+}
+
+function hideIdentityLog(): void {
+    identityLogPanel.style.display = "none";
+    adminUserList.style.display = "";
+    identityLogUser = null;
+}
+
+btnIdentityLog.addEventListener("click", () => showIdentityLog(null));
+btnIdentityLogBack.addEventListener("click", () => {
+    hideIdentityLog();
+    // Put the bar back (renderAdminUsers hid it when the log opened).
+    identityLogBar.style.display = "flex";
+});
+btnIdentityLogClearFilter.addEventListener("click", () => showIdentityLog(null));
+btnIdentityLogMore.addEventListener("click", () => void loadIdentityLog(false));
+
+/** Fills the Server tab's "Require signed identity" row from GET_SERVER_SETTINGS. */
+function renderRequireSignedSetting(res: {
+    requireSignedIdentity?: boolean;
+    requireSignedIdentityLockedByEnv?: boolean;
+    unprotectedActiveUsers?: number;
+}): void {
+    const row = chkRequireSigned.closest(".toggle-row") as HTMLElement | null;
+    // A server older than 2.7.0 doesn't send the field: hide the row rather than show a dead switch.
+    if (res.requireSignedIdentity === undefined) {
+        if (row) row.style.display = "none";
+        return;
+    }
+    if (row) row.style.display = "";
+    chkRequireSigned.checked = res.requireSignedIdentity;
+    chkRequireSigned.disabled = !!res.requireSignedIdentityLockedByEnv;
+
+    const n = res.unprotectedActiveUsers ?? 0;
+    let note: string;
+    if (res.requireSignedIdentityLockedByEnv) {
+        note = "Set by the server's REQUIRE_SIGNED_IDENTITY environment variable, so it can't be changed here.";
+    } else if (n > 0) {
+        note =
+            `${n} ${n === 1 ? "person" : "people"} active in the last 30 days ${n === 1 ? "hasn't" : "haven't"} ` +
+            `connected with 2.6.0 or newer yet — turning this on locks them out until they update.`;
+    } else {
+        note = "Everyone active in the last 30 days is already protected, so it is safe to turn on.";
+    }
+    requireSignedNote.textContent = note;
+    requireSignedNote.style.display = "";
+}
+
+chkRequireSigned.addEventListener("change", async () => {
+    const desired = chkRequireSigned.checked;
+    const result = await api.updateServerSettings({ requireSignedIdentity: desired });
+    if (result.success) {
+        log(`Signed identity ${desired ? "is now required" : "is no longer required"} on this server`, "success");
+    } else {
+        chkRequireSigned.checked = !desired; // revert on failure
+        log(`Failed to update server settings: ${result.error}`, "error");
+        if (result.error && /permission|denied/i.test(result.error)) SoundAlert.play("insufficient_perms.mp3");
+    }
 });
 
 chkNudgeEnabled.addEventListener("change", async () => {

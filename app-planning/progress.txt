@@ -984,3 +984,99 @@ Feature/Fix: Encrypted connections in the client — HTTPS first, trusted self-s
       and macOS; a packaged build.
 
   Next Step: PRD 18.4 — identity log and the "Require signed identity" switch.
+
+
+--- Entry: 10/10/2026 ---
+
+Feature/Fix: Identity log and a "Require signed identity" switch (PRD 18.4)
+
+  Problem: Key binds and refused joins were only written to the server's
+  console, so an admin could not see from the app who bound a key (the
+  trust-on-first-use window) or who was being refused. REQUIRE_SIGNED_IDENTITY
+  was an environment variable only — changing it needed a restart and shell
+  access, and nothing said when turning it on was safe.
+
+  Solution:
+    Database (migration 20261012120000_add_identity_events, additive)
+      - `identity_events` (kind BOUND/RESET/REFUSED, userId, nickname at the
+        time, reason KEY not message text, fingerprint, address, host,
+        actorId, createdAt; indexes on (serverId, createdAt desc) and
+        (userId, createdAt desc)); no relation to User on purpose, so
+        refusals of ids that never became users are kept and rows outlive
+        users. `servers.requireSignedIdentity` (default false).
+    Server
+      - identity-events.service.ts: `recordIdentityEvent()` is fire-and-forget
+        and never throws; refusals are de-duplicated per (server, user,
+        reason, key, address) for 10 min (Redis SET NX) and capped at 10 per
+        address per hour (a flood of bogus ids from one address); stored
+        fields are length-bounded; `pruneIdentityEvents()` hourly, 90 days.
+      - Recorded at every existing log point of the join path (bind, bind on
+        create, both race-lost refusals, the identity refusal, a malformed
+        proof) and in RESET_IDENTITY_KEY (with the fingerprint that was
+        forgotten and the acting admin).
+      - GET_IDENTITY_EVENTS: ADMIN-checked inside the handler; cursor
+        pagination (`before` + limit 1-100), page decorated with current
+        nicknames, actor nicknames and a `privileged` flag (holds ADMIN or
+        MANAGE_ROLES) using two small lookups per page.
+      - identity.config: the effective value is env-over-database
+        (`resolveRequireSigned`); any non-empty env value locks the switch,
+        including `false`, and an EMPTY value (what docker-compose passes) is
+        treated as unset. The stored value is mirrored in memory
+        (`setDbRequireSigned`, loaded at boot and on every update) so a join
+        costs no database read; a change takes effect on the next join.
+      - GET_SERVER_SETTINGS adds requireSignedIdentity, ...LockedByEnv and
+        `unprotectedActiveUsers` (no bound key, joined in the last 30 days)
+        for ADMINs only, via getUserPermissions/isAdmin — not
+        requirePermission, which would emit a PERMISSION_DENIED error to
+        every non-admin on a plain read.
+    Client
+      - User Management: an "Identity log" button (ADMIN only) opens the log
+        in place with Back, "Load older" paging, a per-user "Log" button on
+        each row and a "Show everyone" reset. Each row: kind badge, nickname
+        (+ "now X" when renamed), a "privileged" tag, plain-words reason,
+        address/host, fingerprint, time. All dynamic text via textContent.
+      - Settings -> Server: the switch, a note with the unprotected count
+        ("turning this on locks them out until they update" / "safe to turn
+        on"), disabled with an explanation when the env var locks it, hidden
+        against a pre-2.7.0 server (the field is absent).
+
+  Deviation: SERVER_SETTINGS_UPDATED is NOT extended with the new field (the
+  PRD listed it): it is broadcast to everyone and the policy is admin-only
+  information; the changing admin's own UI already knows the new value.
+
+  Key Files Modified:
+    apps/server/prisma/schema.prisma, migrations/20261012120000_add_identity_events (NEW)
+    apps/server/src/services/identity-events.service.ts (NEW)
+    apps/server/src/__tests__/identity-events.service.test.ts (NEW, 33 tests)
+    apps/server/src/config/identity.config.ts
+    apps/server/src/handlers/connection.handler.ts, admin.handler.ts, nudge.handler.ts
+    apps/server/src/index.ts, apps/server/.env.example
+    packages/shared-types/src/models.ts (IIdentityEvent), socket-events.ts
+    apps/client/src/preload.ts, renderer/renderer.ts, renderer/index.html
+    AGENTS.md, apps/server/AGENTS.md, README.md
+
+  Verification:
+    - Migration applied on a fresh database by `prisma migrate deploy` (the
+      scratch server's setup); SQL generated with `migrate diff` against a
+      throwaway shadow database.
+    - tsc --build x3: exit 0; lint: exit 0 (0 errors, 71 warnings, no
+      change); server vitest 16 files / 204 tests; client smoke suites
+      63/20/22/40/14/73, all pass.
+    - Live, real server + real client under Xvfb, 31/31: Alice binds; five
+      retries with the SAME other key are ONE refusal row (a different key
+      per attempt is a separate row, as designed); an unsigned join of a
+      protected id is refused ("protected") while an unsigned join of a
+      never-bound id is accepted; the admin sees "Key bound" x2 with the
+      admin's row tagged privileged and addresses shown; per-user filter
+      shows only that user's rows; the two-step Reset key writes a "Key
+      reset by Boss" row listed first; a non-admin is refused the log, sees
+      no policy fields, and can't change it; switching ON refuses an
+      unsigned join at once with no restart and OFF accepts it again; with
+      REQUIRE_SIGNED_IDENTITY=false in the environment the switch is
+      disabled with the explanation and the server refuses the update.
+      Screenshots of the log and the locked switch were looked at (and the
+      "Identity log" button wrapping onto two lines was fixed).
+    - NOT run: the 90-day prune against real old rows (unit-tested with a
+      fake clock only).
+
+  Next Step: PRD 18.5 — allowed connection names managed in Settings.

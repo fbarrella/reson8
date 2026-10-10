@@ -4,13 +4,40 @@
  */
 
 /**
- * `REQUIRE_SIGNED_IDENTITY=true` refuses every unsigned (pre-2.6.0) join.
- * Default off for a gradual rollout: an identity that has bound a key is
- * protected at once either way; this closes the door for the rest once
- * everyone has updated.
+ * The value an admin set in Settings → Server (PRD 18.4), mirrored in memory
+ * so a join never costs a database read. Loaded at startup and refreshed by
+ * `UPDATE_SERVER_SETTINGS`.
+ */
+let dbRequireSigned = false;
+
+export function setDbRequireSigned(value: boolean): void {
+    dbRequireSigned = value;
+}
+
+/** Pure: the effective value given the raw env string and the stored value. */
+export function resolveRequireSigned(envValue: string | undefined, stored: boolean): boolean {
+    const env = envValue?.trim();
+    return env ? env.toLowerCase() === "true" : stored;
+}
+
+/**
+ * Whether the environment decides this setting. Any non-empty value counts —
+ * including an explicit `false`, which an admin may set on purpose to pin the
+ * policy regardless of the Settings switch.
+ */
+export function requireSignedLockedByEnv(): boolean {
+    return !!process.env.REQUIRE_SIGNED_IDENTITY?.trim();
+}
+
+/**
+ * `REQUIRE_SIGNED_IDENTITY=true` (or the Settings → Server switch) refuses
+ * every unsigned (pre-2.6.0) join. Default off for a gradual rollout: an
+ * identity that has bound a key is protected at once either way; this closes
+ * the door for the rest once everyone has updated. The environment variable,
+ * when set, always wins over the switch.
  */
 export function requireSignedIdentity(): boolean {
-    return process.env.REQUIRE_SIGNED_IDENTITY?.trim().toLowerCase() === "true";
+    return resolveRequireSigned(process.env.REQUIRE_SIGNED_IDENTITY, dbRequireSigned);
 }
 
 /**

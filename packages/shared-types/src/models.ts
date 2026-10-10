@@ -142,6 +142,35 @@ export interface IUserProfile {
     isOnline: boolean;
 }
 
+/**
+ * One row of the identity log (PRD 18.4) — a key being bound, an admin
+ * resetting it, or a join refused for identity reasons. ADMIN-only.
+ */
+export interface IIdentityEvent {
+    id: string;
+    userId: string;
+    /** Nickname at the time of the event. */
+    nickname: string;
+    /** The user's nickname now, only when it differs from `nickname`. */
+    currentNickname?: string;
+    kind: "BOUND" | "RESET" | "REFUSED";
+    /** For REFUSED: the identity-refusal key (e.g. "otherDevice"), never message text. */
+    reason: string | null;
+    /** `SHA256:…` fingerprint of the key involved, when there was one. */
+    fingerprint: string | null;
+    /** Client address (resolved with TRUST_PROXY rules). */
+    address: string | null;
+    /** The host the proof was signed for. */
+    host: string | null;
+    /** For RESET: the admin who did it. */
+    actorId: string | null;
+    actorNickname?: string | null;
+    /** ISO time. */
+    createdAt: string;
+    /** The user currently holds ADMIN or MANAGE_ROLES — their binds deserve a second look. */
+    privileged?: boolean;
+}
+
 /** Lightweight presence record for channel occupants. */
 export interface IUserPresence {
     userId: string;

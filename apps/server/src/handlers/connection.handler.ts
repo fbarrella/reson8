@@ -32,6 +32,7 @@ import {
     verifyAuthSignature,
 } from "../services/identity.service.js";
 import { adminKeyFingerprint, authAllowedHosts, requireSignedIdentity } from "../config/identity.config.js";
+import { recordIdentityEvent } from "../services/identity-events.service.js";
 import { issueViewerTicket, resolveViewerTicket, revokeViewerTickets } from "../services/viewer-ticket.service.js";
 
 type TypedIO = SocketIOServer<
@@ -353,6 +354,14 @@ export function registerConnectionHandlers(
 
                 const parsedProof = parseIdentityProof(payload.identity);
                 if (!parsedProof.ok) {
+                    void recordIdentityEvent(app, {
+                        serverId,
+                        userId: instanceId,
+                        nickname: String(nickname ?? ""),
+                        kind: "REFUSED",
+                        reason: "verificationFailed",
+                        address: clientAddress,
+                    });
                     ack({ success: false, error: IDENTITY_MESSAGES.verificationFailed });
                     return;
                 }
@@ -383,7 +392,21 @@ export function registerConnectionHandlers(
                     adminFingerprint: adminKeyFingerprint(),
                 });
                 const identityLog = { userId: instanceId, fingerprint, address: clientAddress, host: proofIn?.host };
+                // The identity log (PRD 18.4): fire-and-forget, never delays or changes a join.
+                const logIdentityEvent = (kind: "BOUND" | "REFUSED", reason?: string): void => {
+                    void recordIdentityEvent(app, {
+                        serverId,
+                        userId: instanceId,
+                        nickname: String(nickname ?? ""),
+                        kind,
+                        reason,
+                        fingerprint,
+                        address: clientAddress,
+                        host: proofIn?.host ?? null,
+                    });
+                };
                 if (decision.action === "refuse") {
+                    logIdentityEvent("REFUSED", decision.reason);
                     app.log.warn({ ...identityLog, reason: decision.reason }, "Join refused (identity)");
                     ack({ success: false, error: IDENTITY_MESSAGES[decision.reason] });
                     return;
@@ -398,11 +421,13 @@ export function registerConnectionHandlers(
                     if (bound.count === 0) {
                         const now = await app.prisma.user.findUnique({ where: { id: instanceId }, select: { publicKey: true } });
                         if (now?.publicKey !== proofIn.publicKey) {
+                            logIdentityEvent("REFUSED", "otherDevice");
                             app.log.warn({ ...identityLog, reason: "otherDevice" }, "Join refused (identity bind race lost)");
                             ack({ success: false, error: IDENTITY_MESSAGES.otherDevice });
                             return;
                         }
                     }
+                    logIdentityEvent("BOUND");
                     app.log.info(identityLog, "Identity key bound");
                 }
 
@@ -456,10 +481,12 @@ export function registerConnectionHandlers(
                 if (decision.bind && !existingUser && proofIn) {
                     if (userRow.publicKey !== proofIn.publicKey) {
                         // Another first join created the row with its own key in between.
+                        logIdentityEvent("REFUSED", "otherDevice");
                         app.log.warn({ ...identityLog, reason: "otherDevice" }, "Join refused (identity create race lost)");
                         ack({ success: false, error: IDENTITY_MESSAGES.otherDevice });
                         return;
                     }
+                    logIdentityEvent("BOUND");
                     app.log.info(identityLog, "Identity key bound (new user)");
                 }
 

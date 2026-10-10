@@ -29,6 +29,9 @@ model Server {
   // client. 4000 by default: generous for legitimate long messages
   // (code snippets, detailed explanations) while making abuse impractical.
   maxMessageLength   Int      @default(4000)
+  /// Refuse unsigned (pre-2.6.0) joins (PRD 18.4). The REQUIRE_SIGNED_IDENTITY
+  /// environment variable, when set, takes precedence over this column.
+  requireSignedIdentity Boolean @default(false)
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
@@ -348,4 +351,41 @@ model Attachment {
   @@index([messageId])
   @@index([dmId])
   @@map("attachments")
+}
+
+// ---------------------------------------------------------------------------
+// IdentityEvent — audit trail of identity-key binds, resets and refusals
+// (PRD 18.4). Deliberately has no relation to User: refusals can concern ids
+// that never became users, and the trail must outlive a user row. Rows are
+// pruned after 90 days by the hourly maintenance job.
+// ---------------------------------------------------------------------------
+
+enum IdentityEventKind {
+  BOUND
+  RESET
+  REFUSED
+}
+
+model IdentityEvent {
+  id          String            @id @default(uuid())
+  serverId    String
+  userId      String
+  /// Nickname at the time of the event.
+  nickname    String
+  kind        IdentityEventKind
+  /// For REFUSED: the IDENTITY_MESSAGES key (e.g. "otherDevice"), never the message text.
+  reason      String?
+  /// SHA256:… fingerprint of the key involved, when there was one.
+  fingerprint String?
+  /// Client address as resolved with TRUST_PROXY rules (PRD 18.2).
+  address     String?
+  /// The host the proof was signed for.
+  host        String?
+  /// For RESET: the admin who did it.
+  actorId     String?
+  createdAt   DateTime          @default(now())
+
+  @@index([serverId, createdAt(sort: Desc)])
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("identity_events")
 }

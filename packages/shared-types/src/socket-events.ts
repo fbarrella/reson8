@@ -24,6 +24,7 @@ import type {
     IReactionSummary,
     IAvatarSelection,
     IUserProfile,
+    IIdentityEvent,
 } from "./models.js";
 
 // ---------------------------------------------------------------------------
@@ -77,6 +78,16 @@ export interface ClientToServerEvents {
     RESET_IDENTITY_KEY: (
         payload: { userId: string },
         ack: (response: { success: boolean; error?: string }) => void,
+    ) => void;
+
+    /**
+     * ADMIN only (PRD 18.4): the identity log — key binds, resets and refused
+     * joins, newest first, cursor-paginated by `before` (an ISO time).
+     * `userId` filters to one user. `limit` is 1–100 (default 50).
+     */
+    GET_IDENTITY_EVENTS: (
+        payload: { userId?: string; before?: string; limit?: number },
+        ack: (response: { success: boolean; events?: IIdentityEvent[]; hasMore?: boolean; error?: string }) => void,
     ) => void;
 
     /** Client signals they are leaving the server. */
@@ -649,6 +660,15 @@ export interface ClientToServerEvents {
             maxMessageLength?: number;
             /** The running server build's version (from apps/server/package.json), for client/server version-mismatch warnings. */
             version?: string;
+            /**
+             * ADMIN callers only (PRD 18.4): refuse unsigned (pre-2.6.0) joins,
+             * whether the environment variable locks it, and how many users
+             * active in the last 30 days still have no bound key (the number
+             * that tells an admin whether turning it on is safe).
+             */
+            requireSignedIdentity?: boolean;
+            requireSignedIdentityLockedByEnv?: boolean;
+            unprotectedActiveUsers?: number;
             error?: string;
         }) => void,
     ) => void;
@@ -660,7 +680,13 @@ export interface ClientToServerEvents {
      * payload (PRD 12.14).
      */
     UPDATE_SERVER_SETTINGS: (
-        payload: { nudgeEnabled?: boolean; screenShareEnabled?: boolean; maxMessageLength?: number },
+        payload: {
+            nudgeEnabled?: boolean;
+            screenShareEnabled?: boolean;
+            maxMessageLength?: number;
+            /** PRD 18.4. Refused while REQUIRE_SIGNED_IDENTITY is set in the server's environment. */
+            requireSignedIdentity?: boolean;
+        },
         ack: (response: { success: boolean; error?: string }) => void,
     ) => void;
 }

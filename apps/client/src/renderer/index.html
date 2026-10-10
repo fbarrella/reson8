@@ -3664,6 +3664,94 @@
       color: var(--text-primary);
     }
 
+    /* ── Identity log (PRD 18.4) ───────────────────────────────────────── */
+    .identity-log-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 10px;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .identity-log-bar .btn,
+    .identity-log-head .btn { white-space: nowrap; flex-shrink: 0; }
+
+    .identity-log-head {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 10px;
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+
+    .identity-log-head .identity-log-filter { flex: 1; min-width: 0; }
+
+    .identity-log-row {
+      display: grid;
+      grid-template-columns: 92px 1fr auto;
+      gap: 4px 12px;
+      padding: 8px 10px;
+      margin-bottom: 6px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--bg-input);
+      font-size: 12px;
+    }
+
+    .identity-log-kind {
+      align-self: start;
+      justify-self: start;
+      padding: 1px 6px;
+      border-radius: 3px;
+      border: 1px solid currentColor;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.3px;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+
+    .identity-log-kind.bound { color: var(--success); }
+    .identity-log-kind.reset { color: var(--accent); }
+    .identity-log-kind.refused { color: var(--danger); }
+
+    .identity-log-who { font-weight: 600; word-break: break-word; }
+    .identity-log-who .identity-log-now { font-weight: 400; color: var(--text-muted); }
+
+    .identity-log-privileged {
+      margin-left: 6px;
+      padding: 0 5px;
+      border-radius: 3px;
+      border: 1px solid var(--warning);
+      color: var(--warning);
+      font-size: 9px;
+      font-weight: 700;
+      text-transform: uppercase;
+      vertical-align: middle;
+    }
+
+    .identity-log-time { color: var(--text-muted); font-size: 11px; white-space: nowrap; text-align: right; }
+
+    .identity-log-detail {
+      grid-column: 2 / 4;
+      color: var(--text-secondary);
+      font-size: 11px;
+      line-height: 1.5;
+      word-break: break-word;
+    }
+
+    .identity-log-detail code { font-size: 10px; color: var(--text-muted); }
+
+    .toggle-row-note {
+      display: block;
+      margin-top: 4px;
+      font-size: 11px;
+      color: var(--warning);
+    }
+
     /* Message avatars and nicknames open the card (PRD 17.3). */
     .chat-msg .msg-header > .avatar,
     .chat-msg .msg-nick {
@@ -5244,6 +5332,20 @@
 
       <!-- Roles Tab -->
       <div class="settings-panel active" data-settings-panel="roles">
+        <!-- Identity log (PRD 18.4) — ADMIN only; the server checks it too. -->
+        <div class="identity-log-bar" id="identity-log-bar" style="display:none;">
+          <span>Who bound a key, who reset one, and which sign-ins were refused.</span>
+          <button type="button" class="btn btn-cancel" id="btn-identity-log">Identity log</button>
+        </div>
+        <div id="identity-log-panel" style="display:none;">
+          <div class="identity-log-head">
+            <button type="button" class="btn btn-cancel" id="btn-identity-log-back">← Back to users</button>
+            <span class="identity-log-filter" id="identity-log-filter"></span>
+            <button type="button" class="btn btn-cancel" id="btn-identity-log-clear-filter" style="display:none;">Show everyone</button>
+          </div>
+          <div id="identity-log-list" class="admin-user-list"></div>
+          <button type="button" class="btn btn-cancel" id="btn-identity-log-more" style="display:none; width:100%; margin-top:6px;">Load older</button>
+        </div>
         <div id="admin-user-list" class="admin-user-list">
           <div class="admin-empty">Loading users...</div>
         </div>
@@ -5286,6 +5388,20 @@
             <input type="number" id="input-max-message-length" min="1" max="100000" step="1" style="width:90px; margin-bottom:0;">
             <button class="btn btn-connect" id="btn-save-max-message-length">Save</button>
           </div>
+        </div>
+        <!-- Require signed identity (PRD 18.4) -->
+        <div class="toggle-row">
+          <div class="toggle-row-info">
+            <div class="toggle-row-text">
+              <span class="toggle-row-title">🔒 Require signed identity</span>
+              <span class="toggle-row-desc">Refuse clients older than 2.6.0, which can't prove who they are. People who already connected with 2.6.0 or newer are protected either way.</span>
+              <span class="toggle-row-note" id="require-signed-note" style="display:none;"></span>
+            </div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="chk-require-signed">
+            <span class="toggle-slider"></span>
+          </label>
         </div>
       </div>
 

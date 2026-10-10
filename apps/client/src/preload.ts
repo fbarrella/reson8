@@ -25,6 +25,7 @@ import type {
     IDirectMessage,
     ICustomEmoji,
     IPinnedMessage,
+    IIdentityEvent,
 } from "@reson8/shared-types";
 import { VoiceService, VoiceSignaling } from "./services/voice.service";
 import { createHash } from "crypto";
@@ -1320,6 +1321,23 @@ const api = {
     },
 
     /** ADMIN: forget a user's bound identity key (PRD 17.12). */
+    /** The identity log (PRD 18.4) — ADMIN only, newest first, paginated by `before`. */
+    getIdentityEvents(payload: {
+        userId?: string;
+        before?: string;
+        limit?: number;
+    }): Promise<{ success: boolean; events?: IIdentityEvent[]; hasMore?: boolean; error?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.timeout(10000).emit("GET_IDENTITY_EVENTS", payload, (err, res) => {
+                resolve(err ? { success: false, error: "The server didn't answer" } : res);
+            });
+        });
+    },
+
     resetIdentityKey(userId: string): Promise<{ success: boolean; error?: string }> {
         return new Promise((resolve) => {
             if (!socket?.connected) {
@@ -1775,6 +1793,10 @@ const api = {
         name?: string;
         maxMessageLength?: number;
         version?: string;
+        /** ADMIN callers only (PRD 18.4). */
+        requireSignedIdentity?: boolean;
+        requireSignedIdentityLockedByEnv?: boolean;
+        unprotectedActiveUsers?: number;
         error?: string;
     }> {
         return new Promise((resolve) => {
@@ -1787,7 +1809,12 @@ const api = {
     },
 
     updateServerSettings(
-        settings: { nudgeEnabled?: boolean; screenShareEnabled?: boolean; maxMessageLength?: number },
+        settings: {
+            nudgeEnabled?: boolean;
+            screenShareEnabled?: boolean;
+            maxMessageLength?: number;
+            requireSignedIdentity?: boolean;
+        },
     ): Promise<{ success: boolean; error?: string }> {
         return new Promise((resolve) => {
             if (!socket?.connected) {

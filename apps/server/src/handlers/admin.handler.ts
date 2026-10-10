@@ -20,6 +20,12 @@ import type {
 import { requirePermission, requireAnyPermission } from "../middleware/permissions.middleware.js";
 import { PermissionFlags } from "@reson8/shared-types";
 import { revokeViewerTickets } from "../services/viewer-ticket.service.js";
+import { keyFingerprint } from "../services/identity.service.js";
+import {
+    fetchIdentityEventsPage,
+    parseIdentityEventsQuery,
+    recordIdentityEvent,
+} from "../services/identity-events.service.js";
 
 type TypedIO = SocketIOServer<
     ClientToServerEvents,
@@ -60,6 +66,11 @@ export function registerAdminHandlers(
                     ack({ success: false, error: "User not found" });
                     return;
                 }
+                // Read what is about to be forgotten, for the identity log (PRD 18.4).
+                const before = await app.prisma.user.findUnique({
+                    where: { id: userId },
+                    select: { nickname: true, publicKey: true },
+                });
                 const result = await app.prisma.user.updateMany({
                     where: { id: userId },
                     data: { publicKey: null, publicKeyBoundAt: null },
@@ -68,6 +79,15 @@ export function registerAdminHandlers(
                     ack({ success: false, error: "User not found" });
                     return;
                 }
+                void recordIdentityEvent(app, {
+                    serverId: socket.data.serverId,
+                    userId,
+                    nickname: before?.nickname ?? "",
+                    kind: "RESET",
+                    fingerprint: before?.publicKey ? keyFingerprint(before.publicKey) : null,
+                    address: socket.data.clientAddress ?? null,
+                    actorId: socket.data.userId,
+                });
                 await revokeViewerTickets(app.redis, userId);
                 let disconnected = 0;
                 for (const [, s] of io.sockets.sockets) {
@@ -84,6 +104,30 @@ export function registerAdminHandlers(
             } catch (err) {
                 app.log.error({ err }, "Error in RESET_IDENTITY_KEY");
                 ack({ success: false, error: "Failed to reset the identity key" });
+            }
+        });
+
+        // ── GET_IDENTITY_EVENTS (PRD 18.4) ─────────────────────────────────
+        // ADMIN only: the log carries client addresses, so the permission is
+        // checked here, not just hidden in the UI.
+        socket.on("GET_IDENTITY_EVENTS", async (payload, ack) => {
+            if (typeof ack !== "function") return;
+            const allowed = await requirePermission(app, socket, BigInt(PermissionFlags.ADMIN));
+            if (!allowed) {
+                ack({ success: false, error: "Permission denied" });
+                return;
+            }
+            const query = parseIdentityEventsQuery(payload);
+            if (!query.ok) {
+                ack({ success: false, error: query.error });
+                return;
+            }
+            try {
+                const page = await fetchIdentityEventsPage(app.prisma, socket.data.serverId, query.value);
+                ack({ success: true, ...page });
+            } catch (err) {
+                app.log.error({ err }, "Error in GET_IDENTITY_EVENTS");
+                ack({ success: false, error: "Failed to load the identity log" });
             }
         });
 
