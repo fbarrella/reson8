@@ -2279,6 +2279,101 @@
     .status-latency.warn { color: #f0ad4e; }
     .status-latency.bad { color: var(--danger); }
 
+    /* ── Encrypted connections (PRD 18.3) ──────────────────────────────── */
+    .conn-security {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      margin-left: 8px;
+      font-size: 10px;
+      color: var(--text-muted);
+      cursor: default;
+      vertical-align: middle;
+    }
+
+    .conn-security[hidden] { display: none; }
+    .conn-security.secure { color: var(--success); }
+    .conn-security.insecure { color: var(--warning); }
+
+    #tls-warning-banner {
+      display: none;
+      align-items: center;
+      gap: 10px;
+      padding: 6px 12px;
+      background: rgba(255, 167, 38, 0.12);
+      border-bottom: 1px solid var(--warning);
+      color: var(--text-primary);
+      font-size: 12px;
+      flex-shrink: 0;
+    }
+
+    #tls-warning-banner.visible { display: flex; }
+    #tls-warning-banner .tls-warning-text { flex: 1; min-width: 0; }
+
+    #tls-warning-banner button {
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      color: var(--text-secondary);
+      cursor: pointer;
+      font-size: 11px;
+      padding: 3px 8px;
+    }
+
+    #tls-warning-banner button:hover { color: var(--text-primary); border-color: var(--text-muted); }
+
+    .tls-fingerprint {
+      display: block;
+      padding: 8px 10px;
+      margin: 8px 0;
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      font-family: monospace;
+      font-size: 12px;
+      line-height: 1.5;
+      word-break: break-all;
+      user-select: all;
+    }
+
+    .tls-detail-grid {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 4px 12px;
+      margin: 10px 0;
+      font-size: 12px;
+    }
+
+    .tls-detail-grid dt { color: var(--text-muted); }
+    .tls-detail-grid dd { margin: 0; word-break: break-word; color: var(--text-primary); }
+
+    #tls-trust-modal .profile-hint { margin: 10px 0 16px; }
+
+    .tls-modal-warning {
+      margin: 10px 0 0;
+      padding: 8px 10px;
+      border-left: 3px solid var(--danger);
+      background: rgba(239, 83, 80, 0.08);
+      font-size: 12px;
+      color: var(--text-primary);
+    }
+
+    .tls-trusted-empty,
+    .tls-trusted-row {
+      padding: 8px 10px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--bg-input);
+      font-size: 12px;
+      margin-bottom: 6px;
+    }
+
+    .tls-trusted-empty { color: var(--text-muted); }
+    .tls-trusted-row { display: flex; align-items: center; gap: 10px; }
+    .tls-trusted-row .tls-trusted-info { flex: 1; min-width: 0; }
+    .tls-trusted-row .tls-trusted-host { font-weight: 600; word-break: break-all; }
+    .tls-trusted-row .tls-trusted-meta { color: var(--text-muted); font-size: 11px; word-break: break-all; }
+
     #status-instance-area {
       display: flex;
       align-items: center;
@@ -2322,6 +2417,8 @@
     #pin-replace-confirm-modal,
     #screen-share-modal,
     #watch-share-confirm-modal,
+    #tls-trust-modal,
+    #tls-changed-modal,
     #stream-name-modal {
       display: none;
       position: fixed;
@@ -2352,6 +2449,8 @@
     #pin-replace-confirm-modal.visible,
     #screen-share-modal.visible,
     #watch-share-confirm-modal.visible,
+    #tls-trust-modal.visible,
+    #tls-changed-modal.visible,
     #stream-name-modal.visible {
       display: flex;
     }
@@ -4645,6 +4744,13 @@
     <button class="btn btn-disconnect" id="btn-disconnect" disabled>Disconnect</button>
   </div>
 
+  <!-- ── Unencrypted-connection warning (PRD 18.3) ───────────────────── -->
+  <div id="tls-warning-banner" role="status">
+    <span class="tls-warning-text" id="tls-warning-text"></span>
+    <button type="button" id="btn-tls-warning-dismiss">Don't warn me again for this server</button>
+    <button type="button" id="btn-tls-warning-close" aria-label="Close this warning">✕</button>
+  </div>
+
   <!-- ── Main Three-Pane Layout ──────────────────────────────────────── -->
   <div id="main">
     <!-- Left Pane: Channel Tree -->
@@ -4778,6 +4884,7 @@
       <span class="status-dot" id="status-dot"></span>
       <span class="status-text" id="status-text">Disconnected</span>
       <span class="status-latency" id="status-latency"></span>
+      <span class="conn-security" id="conn-security" hidden></span>
     </div>
     <div id="status-instance-area">
       <span id="status-instance"></span>
@@ -4872,6 +4979,48 @@
       <div class="modal-actions">
         <button class="btn btn-cancel" id="btn-nsfw-cancel">Cancel</button>
         <button class="btn btn-disconnect" id="btn-nsfw-confirm">Continue</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Unknown certificate: trust it? (PRD 18.3) ───────────────────────── -->
+  <div id="tls-trust-modal" role="dialog" aria-modal="true" aria-labelledby="tls-trust-title">
+    <div class="modal-content">
+      <h3 id="tls-trust-title"><svg width="16" height="16" style="vertical-align: middle; margin-right: 6px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>Trust this server's certificate?</h3>
+      <p>The certificate of <strong id="tls-trust-host"></strong> isn't signed by an authority your computer knows
+        (<span id="tls-trust-reason"></span>). That is normal for a server you or a friend set up yourself —
+        but only trust it if you are sure this is the right server.</p>
+      <dl class="tls-detail-grid">
+        <dt>Subject</dt><dd id="tls-trust-subject"></dd>
+        <dt>Names</dt><dd id="tls-trust-names"></dd>
+        <dt>Valid until</dt><dd id="tls-trust-expiry"></dd>
+      </dl>
+      <div>Fingerprint (SHA-256) — compare it with the one the server's owner gave you:</div>
+      <code class="tls-fingerprint" id="tls-trust-fingerprint"></code>
+      <p class="profile-hint">If it changes later, Reson8 will refuse to connect and tell you, instead of trusting the new one automatically.</p>
+      <div class="modal-actions">
+        <button class="btn btn-cancel" id="btn-tls-trust-copy">Copy fingerprint</button>
+        <button class="btn btn-cancel" id="btn-tls-trust-cancel">Cancel</button>
+        <button class="btn btn-create" id="btn-tls-trust-confirm">Trust and connect</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Certificate changed: refuse (PRD 18.3) ──────────────────────────── -->
+  <div id="tls-changed-modal" role="alertdialog" aria-modal="true" aria-labelledby="tls-changed-title">
+    <div class="modal-content">
+      <h3 id="tls-changed-title">⚠️ This server's certificate changed</h3>
+      <p>You trusted a certificate for <strong id="tls-changed-host"></strong>, but the server now presents a
+        <strong>different</strong> one. Reson8 did not connect.</p>
+      <dl class="tls-detail-grid">
+        <dt>You trusted</dt><dd><code id="tls-changed-old"></code></dd>
+        <dt>It now shows</dt><dd><code id="tls-changed-new"></code></dd>
+      </dl>
+      <p class="tls-modal-warning">This can be a legitimate renewal or a re-installed server — or someone intercepting
+        the connection. Check with the server's owner. If you are sure, remove the old certificate in
+        Settings → Application → Trusted certificates and connect again.</p>
+      <div class="modal-actions">
+        <button class="btn btn-cancel" id="btn-tls-changed-close">Close</button>
       </div>
     </div>
   </div>
@@ -5459,6 +5608,11 @@
             <span class="toggle-slider"></span>
           </label>
         </div>
+
+        <!-- Trusted certificates (PRD 18.3) -->
+        <label style="font-size:11px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px; display:block; margin-bottom:10px; margin-top:16px;">Trusted certificates</label>
+        <p class="profile-hint" style="margin-bottom:10px;">Self-signed servers you chose to trust. Reson8 connects to them only while they present exactly this certificate.</p>
+        <div id="tls-trusted-list"></div>
       </div>
 
       <!-- Audio Tab -->

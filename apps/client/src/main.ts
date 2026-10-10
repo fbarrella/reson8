@@ -7,6 +7,7 @@
 
 import { app, BrowserWindow, session, ipcMain, globalShortcut, Menu, Tray, nativeImage, shell, desktopCapturer, dialog, net, clipboard } from "electron";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { getInstanceId, hasExistingInstanceId } from "./instance-id.js";
 import { autoUpdater, NsisUpdater } from "electron-updater";
 import { startCapture, resolvePidForWindowSourceId, listAudioProducingApps, platformSupportsCapture } from "@reson8/native-audio";
@@ -15,6 +16,9 @@ import MarkdownIt from "markdown-it";
 import { loadWindowState, trackWindowState } from "./window-state.js";
 import { FIXER_USER_AGENT, decodeHtmlEntities, displayDomain, toFixerUrl } from "./link-fixers.js";
 import { getIdentityPublic, signAuthChallenge } from "./identity-key.js";
+import { TlsTrustStore } from "./tls-store.js";
+import { probeServer } from "./tls-probe.js";
+import { hostKey, isFingerprint, type CertInfo } from "./tls-trust.js";
 
 // ── Single-instance lock (PRD 13.18) ────────────────────────────────────
 // Requested as early as possible, before any other startup work. Opening
@@ -487,7 +491,69 @@ function showMainWindow(source: string): void {
     console.log(`[main] showMainWindow(${source}) after: ${snapshot()}`);
 }
 
+// ── Encrypted connections (PRD 18.3) ─────────────────────────────────────
+// Certificates the user chose to trust (pinned by SHA-256) and the servers
+// reached over HTTPS live HERE, in the main process — the renderer can only
+// ask, through the narrow IPC below, so it can't be tricked into pinning an
+// arbitrary certificate or into downgrading a server.
+
+let tlsStore: TlsTrustStore | null = null;
+function getTlsStore(): TlsTrustStore {
+    tlsStore ??= new TlsTrustStore(path.join(app.getPath("userData"), "tls-trust.json"));
+    return tlsStore;
+}
+
+/** The certificate each host:port presented the last time it was probed. Only
+ *  a certificate seen here, moments ago, can be pinned. */
+const lastProbes = new Map<string, { cert: CertInfo; certPem: string; at: number }>();
+const PIN_WINDOW_MS = 5 * 60 * 1000;
+
+/** webContents id of a Viewer window → the server it watches (for its TLS options). */
+const viewerServers = new Map<number, { host: string; port: number }>();
+
+function validHostPort(host: unknown, port: unknown): host is string {
+    return (
+        typeof host === "string" &&
+        host.length > 0 &&
+        host.length <= 255 &&
+        /^[A-Za-z0-9._:-]+$/.test(host) &&
+        typeof port === "number" &&
+        Number.isInteger(port) &&
+        port >= 1 &&
+        port <= 65535
+    );
+}
+
+/** DER bytes of a PEM certificate (Chromium hands us PEM in `certificate.data`). */
+function pemToDer(pem: string): Buffer {
+    return Buffer.from(pem.replace(/-----(BEGIN|END) CERTIFICATE-----/g, "").replace(/\s+/g, ""), "base64");
+}
+
+/**
+ * Chromium's side of a pin: the main window's uploads, images, emoji and the
+ * Viewer window go through the default session. A certificate is accepted
+ * here ONLY when its SHA-256 equals a pin the user created for that hostname
+ * (and it hasn't expired); everything else falls through to Chromium's own
+ * verdict (-3), so a bad certificate that isn't pinned still fails.
+ */
+function installCertificateVerifier(): void {
+    session.defaultSession.setCertificateVerifyProc((request, callback) => {
+        try {
+            const pins = getTlsStore().pinsForHostname(request.hostname);
+            if (pins.length > 0 && request.certificate.validExpiry * 1000 > Date.now()) {
+                const fp = createHash("sha256").update(pemToDer(request.certificate.data)).digest("hex");
+                if (pins.some((p) => p.fingerprint256 === fp)) return callback(0);
+            }
+        } catch (err) {
+            console.error("[tls] certificate check failed:", err);
+        }
+        callback(-3);
+    });
+}
+
 function createWindow(): void {
+    installCertificateVerifier();
+
     // Grant mic/camera permission requests automatically
     session.defaultSession.setPermissionRequestHandler(
         (_webContents, permission, callback) => {
@@ -838,6 +904,77 @@ app.whenReady().then(() => {
     ipcMain.handle("identity-get-public", () => getIdentityPublic());
     ipcMain.handle("identity-sign-challenge", (_event, nonce: unknown, host: unknown) => signAuthChallenge(nonce, host));
 
+    // ── Encrypted connections (PRD 18.3) ─────────────────────────────────
+    // One round trip gives the renderer everything `decideScheme()` needs.
+    // The PEM stays here; the renderer only ever sees the fingerprint data.
+    ipcMain.handle("tls-probe", async (_event, host: unknown, port: unknown) => {
+        if (!validHostPort(host, port)) return { error: "Invalid server address" };
+        const key = hostKey(host, port as number);
+        const outcome = await probeServer(host, port as number);
+        const cert =
+            outcome.result.kind === "trusted" || outcome.result.kind === "untrusted" ? outcome.result.cert : null;
+        if (cert && outcome.certPem) lastProbes.set(key, { cert, certPem: outcome.certPem, at: Date.now() });
+        const pin = getTlsStore().getPin(key);
+        return {
+            result: outcome.result,
+            pinnedFingerprint: pin ? pin.fingerprint256 : null,
+            httpsRemembered: getTlsStore().isHttpsRemembered(key),
+        };
+    });
+
+    // Pins the certificate the LAST probe of this host:port showed — not one
+    // the renderer names — and never overwrites an existing, different pin
+    // (that's the changed-certificate case: the user must remove the old
+    // trust deliberately, as with SSH host keys).
+    ipcMain.handle("tls-trust-certificate", (_event, host: unknown, port: unknown, fingerprint: unknown) => {
+        if (!validHostPort(host, port) || !isFingerprint(fingerprint)) return { ok: false, error: "Invalid request" };
+        const key = hostKey(host, port as number);
+        const seen = lastProbes.get(key);
+        if (!seen || seen.cert.fingerprint256 !== fingerprint || Date.now() - seen.at > PIN_WINDOW_MS) {
+            return { ok: false, error: "That certificate was not just presented by the server — try connecting again" };
+        }
+        const existing = getTlsStore().getPin(key);
+        if (existing && existing.fingerprint256 !== fingerprint) {
+            return { ok: false, error: "A different certificate is already trusted for this server — remove it in Settings first" };
+        }
+        try {
+            getTlsStore().setPin(key, {
+                fingerprint256: fingerprint,
+                subject: seen.cert.subject,
+                validTo: seen.cert.validTo,
+                pinnedAt: new Date().toISOString(),
+                certPem: seen.certPem,
+            });
+            return { ok: true };
+        } catch (err) {
+            return { ok: false, error: (err as Error).message };
+        }
+    });
+
+    ipcMain.handle("tls-get-connect-options", (_event, host: unknown, port: unknown) => {
+        if (!validHostPort(host, port)) return null;
+        const pin = getTlsStore().getPin(hostKey(host, port as number));
+        return pin ? { ca: pin.certPem, fingerprint256: pin.fingerprint256 } : null;
+    });
+
+    ipcMain.handle("tls-remember-https", (_event, host: unknown, port: unknown) => {
+        if (validHostPort(host, port)) getTlsStore().rememberHttps(hostKey(host, port as number));
+    });
+
+    ipcMain.handle("tls-list-trusted", () => getTlsStore().listPins());
+
+    ipcMain.handle("tls-remove-trust", (_event, key: unknown) => {
+        return typeof key === "string" && key.length <= 300 ? getTlsStore().removePin(key) : false;
+    });
+
+    // A Viewer window's own socket needs the same pin the main window used.
+    ipcMain.handle("viewer-get-tls-options", (event) => {
+        const server = viewerServers.get(event.sender.id);
+        if (!server) return null;
+        const pin = getTlsStore().getPin(hostKey(server.host, server.port));
+        return pin ? { ca: pin.certPem, fingerprint256: pin.fingerprint256 } : null;
+    });
+
     // PTT shortcut IPC
     ipcMain.on("set-ptt-key", (_event, key: string) => {
         registerPttShortcut(key);
@@ -1143,7 +1280,17 @@ app.whenReady().then(() => {
             // preload fetches it over IPC instead.
             const contentsId = viewerWindow.webContents.id;
             if (typeof args.viewerTicket === "string") viewerTickets.set(contentsId, args.viewerTicket);
-            viewerWindow.on("closed", () => viewerTickets.delete(contentsId));
+            try {
+                const u = new URL(args.serverBaseUrl);
+                const host = u.hostname.replace(/^\[|\]$/g, "");
+                viewerServers.set(contentsId, { host, port: Number(u.port) || (u.protocol === "https:" ? 443 : 80) });
+            } catch {
+                /* a malformed base URL just means no pin for this window */
+            }
+            viewerWindow.on("closed", () => {
+                viewerTickets.delete(contentsId);
+                viewerServers.delete(contentsId);
+            });
             viewerWindow.loadFile(path.join(__dirname, "renderer", "viewer.html"));
             return { success: true };
         },

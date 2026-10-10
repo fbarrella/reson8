@@ -884,3 +884,103 @@ Feature/Fix: Server-side TLS, Caddy setup and trusted client addresses (PRD 18.2
   Socket.io client — trust a CA with NODE_EXTRA_CA_CERTS (relevant to 18.3).
 
   Next Step: PRD 18.3 — client HTTPS-first connection, TOFU pins, lock icon.
+
+
+--- Entry: 10/10/2026 ---
+
+Feature/Fix: Encrypted connections in the client — HTTPS first, trusted self-signed certificates, lock indicator (PRD 18.3)
+
+  Problem: The client always built `http://host[:port]`: a typed `https://`
+  was silently stripped and connected over plain HTTP, an IPv6 address could
+  not be entered (the box split on ":"), and an empty address quietly became
+  `localhost`. There was no way to use a server that has a self-signed
+  certificate, and no indication of whether the connection was encrypted.
+
+  Solution:
+    Address + decision (pure, tls-trust.ts)
+      - `parseServerAddress()`: host, host:port, [::1]:port, optional
+        http/https/ws/wss prefix; refuses paths, queries, credentials, bad
+        ports with specific messages; an explicit default port (":80") is
+        kept because the URL class drops it. `identityHostOf()` is
+        byte-identical to what 2.6.0 signed (unit-tested against a copy of
+        the old parser) so bound identities and AUTH_ALLOWED_HOSTS keep
+        matching. `decideScheme()` is the PRD's table, one test per row.
+    Probe + pins (main process)
+      - tls-probe.ts classifies a server: trusted / untrusted (+ the
+        presented certificate) / no-tls (a plain HTTP server, or a TCP
+        server that accepts and never answers) / unreachable. IPC `tls-probe`
+        returns the result, any pin and the HTTPS memory in ONE round trip;
+        the PEM never reaches the renderer.
+      - tls-store.ts (`<userData>/tls-trust.json`, atomic writes, corrupt
+        file -> empty): pins by SHA-256 + the "reached over HTTPS" memory.
+        `tls-trust-certificate` only pins the certificate the LAST probe of
+        that host:port just showed (5-minute window) and never overwrites a
+        different existing pin (the SSH model: remove the old trust first).
+    Two TLS stacks
+      - Socket.io in the preload runs on Node `ws`: a pinned connection is
+        given `ca: [pinned PEM]` plus a SHA-256 `checkServerIdentity`.
+      - Uploads, images, emoji and the Viewer's media use Chromium:
+        `session.defaultSession.setCertificateVerifyProc` accepts a
+        certificate ONLY if its SHA-256 equals a pin for that hostname and it
+        hasn't expired; everything else gets Chromium's verdict (-3).
+      - The Viewer window gets the same pin through `viewer-get-tls-options`
+        (main remembers each Viewer's server by webContents id).
+    UI
+      - Trust modal (fingerprint, subject, names, expiry, reason, Copy;
+        Cancel is the focused default) and a red changed-certificate modal
+        with no override. Status-bar "Encrypted" / "Not encrypted" lock; a
+        per-server dismissible banner for unencrypted connections
+        (`reson8-tls-http-warning-dismissed`); Settings -> Application ->
+        Trusted certificates list with Remove.
+      - A port-less address with nothing speaking TLS on 443 still falls back
+        to plain http on port 80 (the old behavior), unless that host was
+        reached over HTTPS before. The renderer's duplicate `serverBaseUrl`
+        (assigned, never read) is gone; `api.getServerBaseUrl()` replaces it.
+
+  Deviations from the PRD: the probe/store were split into Electron-free
+  modules (tls-probe.ts, tls-store.ts taking a path) so they are tested
+  against real servers in plain Node; the verify hook has no `errorCode === 0`
+  branch (it returns -3 unless pinned, which is the same outcome with less
+  code); one `tls-probe` IPC instead of probe + separate pin/remembered calls.
+
+  Key Files Modified:
+    apps/client/src/tls-trust.ts (NEW), tls-probe.ts (NEW), tls-store.ts (NEW)
+    apps/client/scripts/tls-trust-smoke.mjs (NEW), apps/client/package.json
+      (`test:tls`)
+    apps/client/src/main.ts, preload.ts, preload-viewer.ts
+    apps/client/src/renderer/renderer.ts, renderer/index.html
+    AGENTS.md, apps/client/AGENTS.md, README.md
+
+  Verification:
+    - tsc --build in shared-types, server, client: exit 0; `npm run lint`:
+      exit 0 (0 errors, 71 warnings; one fewer than before — the dead
+      `serverBaseUrl` is gone).
+    - `npm run test:tls`: 73 checks (address table incl. IPv6 and error
+      messages, the 2.6.0 identity-host equality, every decideScheme row,
+      the store incl. corruption and invalid entries, and the probe against a
+      real plain HTTP server, a silent TCP server, a closed port and a
+      self-signed HTTPS server with its fingerprint checked independently).
+      markdown 63, avatar 20, soft-clip 22, link-fixers 40, identity 14 all
+      still pass.
+    - Real client under Xvfb driven over CDP against the real server, 43/43:
+        (a) plain HTTP typed without a scheme -> http, "Not encrypted",
+            banner, dismiss persists per server
+        (e) explicit http:// connects without a probe
+        (b) native TLS + self-signed: modal fields match the certificate,
+            Cancel pins nothing, Trust -> "Encrypted", base URL https, a
+            Chromium fetch of /health = 200, an upload + read-back over TLS,
+            one pin with the right fingerprint, a chat message over wss
+        (g) the Viewer window's own socket connects over the pin
+        (c) a different certificate -> changed modal naming both
+            fingerprints, no connection, old pin untouched, no trust offer
+        (d) the same host back on plain HTTP -> refused with "was encrypted
+            before..."; explicit http:// still works
+        Settings lists and removes the pin; the new certificate can then be
+            trusted
+        (f) [::1]:9811 connects, base URL keeps the brackets
+        (h) "", ftp://x, a path, port 99999 -> refused with a message
+      Screenshots of the trust modal, changed modal and banner were looked at.
+    - NOT run: a real Let's Encrypt/Caddy server through the client; Windows
+      and macOS; a packaged build.
+
+  Next Step: PRD 18.4 — identity log and the "Require signed identity" switch.

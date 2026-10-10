@@ -738,12 +738,71 @@ const EMOJI_DATA: EmojiEntry[] = [
     { emoji: "🇳🇿", name: "flag new zealand", keywords: ["new zealand", "kiwi"], category: "Flags" },
 ];
 
+// ── Encrypted connections (PRD 18.3) — mirrors of tls-trust.ts (the renderer is a
+// plain script and can't import it; the pure functions arrive through the preload).
+interface TlsCertInfo {
+    fingerprint256: string;
+    subject: string;
+    issuer: string;
+    validTo: string;
+    sans: string[];
+}
+type TlsProbeResult =
+    | { kind: "trusted"; cert: TlsCertInfo }
+    | { kind: "untrusted"; cert: TlsCertInfo; reason: string }
+    | { kind: "no-tls" }
+    | { kind: "unreachable"; code: string };
+type TlsSchemeDecision =
+    | { action: "connect"; scheme: "https"; pinned: boolean }
+    | { action: "connect"; scheme: "http"; warn: true }
+    | { action: "ask-trust"; cert: TlsCertInfo }
+    | { action: "pin-mismatch"; cert: TlsCertInfo; pinnedFingerprint: string }
+    | { action: "error"; message: string };
+interface TlsServerAddress {
+    scheme: "https" | "http" | null;
+    host: string;
+    port: number | undefined;
+}
+interface TlsPinSummary {
+    hostKey: string;
+    fingerprint256: string;
+    subject: string;
+    validTo: string;
+    pinnedAt: string;
+}
+
 interface Reson8Api {
     readonly platform: string;
     readonly isLinuxWayland: boolean;
     getInstanceId(): string;
     isExistingInstall(): Promise<boolean>;
-    connect(host: string, port: number | undefined, nickname: string, password?: string): Promise<void>;
+    connect(
+        address: { scheme: "https" | "http"; host: string; port?: number; pinned?: boolean },
+        nickname: string,
+        password?: string,
+    ): Promise<void>;
+    getServerBaseUrl(): string;
+    tls: {
+        parseServerAddress(raw: string): { ok: true; value: TlsServerAddress } | { ok: false; error: string };
+        decideScheme(input: {
+            explicit: "https" | "http" | null;
+            probe: TlsProbeResult | null;
+            pinnedFingerprint: string | null;
+            httpsRemembered: boolean;
+        }): TlsSchemeDecision;
+        formatFingerprint(hex: string): string;
+        hostKey(host: string, port: number): string;
+        probe(
+            host: string,
+            port: number,
+        ): Promise<
+            | { error: string }
+            | { result: TlsProbeResult; pinnedFingerprint: string | null; httpsRemembered: boolean }
+        >;
+        trustCertificate(host: string, port: number, fingerprint256: string): Promise<{ ok: boolean; error?: string }>;
+        listTrusted(): Promise<TlsPinSummary[]>;
+        removeTrust(hostKey: string): Promise<boolean>;
+    };
     disconnect(): void;
     joinVoiceChannel(channelId: string): Promise<{ success: boolean; error?: string }>;
     leaveVoiceChannel(): void;
@@ -974,7 +1033,6 @@ let pendingAttachments: PendingAttachment[] = [];
 // Keyed by tab id, so a draft reply belongs to the conversation it was started
 // in — switching tabs hides the bar, coming back restores it.
 const replyTargets = new Map<string, { messageId: string; nickname: string }>();
-let serverBaseUrl: string = "";
 
 // Active speakers state
 const activeSpeakers = new Set<string>();
@@ -1896,28 +1954,27 @@ function showToast(message: string, durationMs = 4000): void {
 
 // ── Connection ──────────────────────────────────────────────────────────
 
-function parseServerUrl(raw: string): { host: string; port: number | undefined } {
-    let url = raw.trim();
-    // Strip protocol if provided
-    url = url.replace(/^https?:\/\//, "").replace(/^wss?:\/\//, "");
-    // Remove trailing slash
-    url = url.replace(/\/+$/, "");
-
-    const parts = url.split(":");
-    const host = parts[0] || "localhost";
-    const port = parts[1] ? parseInt(parts[1], 10) : undefined;
-    return { host, port };
+/** `host` or `host:port` for messages — IPv6 literals bracketed like in a URL. */
+function displayAddress(host: string, port?: number): string {
+    const h = host.includes(":") ? `[${host}]` : host;
+    return port ? `${h}:${port}` : h;
 }
 
-btnConnect.addEventListener("click", () => {
-    const { host, port } = parseServerUrl(serverUrlInput.value);
-    const nickname = nicknameInput.value.trim() || "User";
-    const password = serverPasswordInput.value || undefined;
+/** The connection being made / made — what the status bar and the warning banner describe. */
+let currentConnection: { scheme: "https" | "http"; host: string; port: number | undefined; pinned: boolean } | null = null;
+let connectInProgress = false;
 
-    if (!host) {
-        log("Please enter a server URL", "error");
+async function startConnect(): Promise<void> {
+    if (connectInProgress || isConnected) return;
+
+    const parsed = api.tls.parseServerAddress(serverUrlInput.value);
+    if (!parsed.ok) {
+        log(parsed.error, "error");
         return;
     }
+    const address = parsed.value;
+    const nickname = nicknameInput.value.trim() || "User";
+    const password = serverPasswordInput.value || undefined;
 
     // Persist or clear server info based on Remember Me checkbox
     if (rememberMeCheckbox.checked) {
@@ -1932,9 +1989,294 @@ btnConnect.addEventListener("click", () => {
         localStorage.removeItem("reson8-server-password");
     }
 
-    log(`Connecting to ${host}${port ? `:${port}` : ""} as "${nickname}"...`, "info");
-    serverBaseUrl = `http://${host}${port ? `:${port}` : ""}`;
-    api.connect(host, port, nickname, password);
+    connectInProgress = true;
+    btnConnect.disabled = true; // the probe can take a few seconds
+    try {
+        const target = await resolveConnectionTarget(address);
+        if (!target) return; // refused or cancelled — the reason was already shown
+
+        currentConnection = target;
+        const shown = displayAddress(target.host, target.port);
+        log(
+            `Connecting to ${shown} ${target.scheme === "https" ? "over HTTPS" : "(not encrypted)"} as "${nickname}"...`,
+            "info",
+        );
+        await api.connect(target, nickname, password);
+    } finally {
+        connectInProgress = false;
+        if (!isConnected) btnConnect.disabled = false;
+    }
+}
+
+/**
+ * Decides HOW to connect (PRD 18.3): probes the server's TLS, applies the
+ * pure `decideScheme()` rules, and asks the user when an unknown certificate
+ * needs a decision. Returns null when the attempt should stop.
+ */
+async function resolveConnectionTarget(
+    address: TlsServerAddress,
+): Promise<{ scheme: "https" | "http"; host: string; port: number | undefined; pinned: boolean } | null> {
+    const { host, port } = address;
+    // Typing http:// is an explicit choice: no probe, connect as asked.
+    if (address.scheme === "http") return { scheme: "http", host, port, pinned: false };
+
+    const probePort = port ?? 443;
+    log(`Checking ${displayAddress(host, port)} for an encrypted connection...`, "info");
+    const reply = await api.tls.probe(host, probePort);
+    if ("error" in reply) {
+        log(reply.error, "error");
+        return null;
+    }
+
+    // No scheme and no port was plain http on port 80 before 2.7.0. If nothing
+    // on 443 speaks TLS, keep doing that — unless this server was reached over
+    // HTTPS before, which must never silently downgrade.
+    if (
+        address.scheme === null &&
+        port === undefined &&
+        (reply.result.kind === "no-tls" || reply.result.kind === "unreachable") &&
+        !reply.httpsRemembered
+    ) {
+        return { scheme: "http", host, port: undefined, pinned: false };
+    }
+
+    const decision = api.tls.decideScheme({
+        explicit: address.scheme,
+        probe: reply.result,
+        pinnedFingerprint: reply.pinnedFingerprint,
+        httpsRemembered: reply.httpsRemembered,
+    });
+
+    switch (decision.action) {
+        case "connect":
+            return { scheme: decision.scheme, host, port, pinned: decision.scheme === "https" && decision.pinned };
+
+        case "ask-trust": {
+            const trusted = await askToTrustCertificate(host, probePort, decision.cert, reply.result);
+            if (!trusted) {
+                log("Connection cancelled — the server's certificate was not trusted", "info");
+                return null;
+            }
+            const pinned = await api.tls.trustCertificate(host, probePort, decision.cert.fingerprint256);
+            if (!pinned.ok) {
+                log(pinned.error ?? "Couldn't store the trusted certificate", "error");
+                return null;
+            }
+            log(`Trusted the certificate of ${displayAddress(host, port)} (${api.tls.formatFingerprint(decision.cert.fingerprint256).slice(0, 23)}…)`, "success");
+            return { scheme: "https", host, port, pinned: true };
+        }
+
+        case "pin-mismatch":
+            log(`The certificate of ${displayAddress(host, port)} changed — not connecting`, "error");
+            await showCertificateChanged(host, probePort, decision.pinnedFingerprint, decision.cert.fingerprint256);
+            return null;
+
+        case "error":
+            log(decision.message, "error");
+            return null;
+    }
+}
+
+// ── Certificate modals (PRD 18.3) ─────────────────────────────────────────
+const tlsTrustModal = document.getElementById("tls-trust-modal") as HTMLDivElement;
+const tlsChangedModal = document.getElementById("tls-changed-modal") as HTMLDivElement;
+let tlsTrustResolver: ((trusted: boolean) => void) | null = null;
+let tlsChangedResolver: (() => void) | null = null;
+let tlsTrustFingerprint = "";
+
+function describeCertificateReason(reason: string): string {
+    switch (reason) {
+        case "DEPTH_ZERO_SELF_SIGNED_CERT":
+        case "SELF_SIGNED_CERT_IN_CHAIN":
+            return "it is self-signed";
+        case "UNABLE_TO_VERIFY_LEAF_SIGNATURE":
+        case "UNABLE_TO_GET_ISSUER_CERT_LOCALLY":
+            return "its issuer is unknown";
+        case "CERT_HAS_EXPIRED":
+            return "it has expired";
+        case "ERR_TLS_CERT_ALTNAME_INVALID":
+            return "it was issued for a different name";
+        default:
+            return "it can't be verified";
+    }
+}
+
+function askToTrustCertificate(host: string, port: number, cert: TlsCertInfo, probe: TlsProbeResult): Promise<boolean> {
+    const el = (id: string): HTMLElement => document.getElementById(id) as HTMLElement;
+    el("tls-trust-host").textContent = displayAddress(host, port);
+    el("tls-trust-reason").textContent = describeCertificateReason(probe.kind === "untrusted" ? probe.reason : "");
+    el("tls-trust-subject").textContent = cert.subject || "(none)";
+    el("tls-trust-names").textContent = cert.sans.length ? cert.sans.join(", ") : "(none)";
+    el("tls-trust-expiry").textContent = new Date(cert.validTo).toLocaleDateString("en-US", {
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+    });
+    el("tls-trust-fingerprint").textContent = api.tls.formatFingerprint(cert.fingerprint256);
+    tlsTrustFingerprint = api.tls.formatFingerprint(cert.fingerprint256);
+    tlsTrustModal.classList.add("visible");
+    (document.getElementById("btn-tls-trust-cancel") as HTMLButtonElement).focus(); // the safe default
+    return new Promise((resolve) => {
+        tlsTrustResolver = resolve;
+    });
+}
+
+function closeTlsTrustModal(trusted: boolean): void {
+    tlsTrustModal.classList.remove("visible");
+    const resolve = tlsTrustResolver;
+    tlsTrustResolver = null;
+    resolve?.(trusted);
+}
+
+function showCertificateChanged(host: string, port: number, pinned: string, seen: string): Promise<void> {
+    (document.getElementById("tls-changed-host") as HTMLElement).textContent = displayAddress(host, port);
+    (document.getElementById("tls-changed-old") as HTMLElement).textContent = api.tls.formatFingerprint(pinned);
+    (document.getElementById("tls-changed-new") as HTMLElement).textContent = api.tls.formatFingerprint(seen);
+    tlsChangedModal.classList.add("visible");
+    return new Promise((resolve) => {
+        tlsChangedResolver = resolve;
+    });
+}
+
+function closeTlsChangedModal(): void {
+    tlsChangedModal.classList.remove("visible");
+    const resolve = tlsChangedResolver;
+    tlsChangedResolver = null;
+    resolve?.();
+}
+
+document.getElementById("btn-tls-trust-confirm")!.addEventListener("click", () => closeTlsTrustModal(true));
+document.getElementById("btn-tls-trust-cancel")!.addEventListener("click", () => closeTlsTrustModal(false));
+document.getElementById("btn-tls-trust-copy")!.addEventListener("click", () => {
+    api.copyText(tlsTrustFingerprint).then((ok) => showToast(ok ? "Fingerprint copied" : "Couldn't copy the fingerprint"));
+});
+document.getElementById("btn-tls-changed-close")!.addEventListener("click", closeTlsChangedModal);
+tlsTrustModal.addEventListener("click", (e) => {
+    if (e.target === tlsTrustModal) closeTlsTrustModal(false);
+});
+tlsChangedModal.addEventListener("click", (e) => {
+    if (e.target === tlsChangedModal) closeTlsChangedModal();
+});
+document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    if (tlsTrustModal.classList.contains("visible")) closeTlsTrustModal(false);
+    else if (tlsChangedModal.classList.contains("visible")) closeTlsChangedModal();
+});
+
+// ── Status-bar lock + "not encrypted" warning (PRD 18.3) ──────────────────
+const connSecurityEl = document.getElementById("conn-security") as HTMLSpanElement;
+const tlsWarningBanner = document.getElementById("tls-warning-banner") as HTMLDivElement;
+const TLS_HTTP_WARNING_KEY = "reson8-tls-http-warning-dismissed";
+const LOCK_CLOSED_SVG =
+    '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>';
+const LOCK_OPEN_SVG =
+    '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>';
+
+function readDismissedHttpWarnings(): string[] {
+    try {
+        const parsed = JSON.parse(localStorage.getItem(TLS_HTTP_WARNING_KEY) ?? "[]");
+        return Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === "string") : [];
+    } catch {
+        return [];
+    }
+}
+
+function dismissHttpWarningFor(key: string): void {
+    try {
+        const list = readDismissedHttpWarnings().filter((k) => k !== key);
+        list.push(key);
+        localStorage.setItem(TLS_HTTP_WARNING_KEY, JSON.stringify(list.slice(-100)));
+    } catch {
+        /* the warning just shows again next time */
+    }
+}
+
+function renderConnectionSecurity(): void {
+    const c = currentConnection;
+    if (!isConnected || !c) {
+        connSecurityEl.hidden = true;
+        tlsWarningBanner.classList.remove("visible");
+        return;
+    }
+    connSecurityEl.hidden = false;
+    connSecurityEl.classList.toggle("secure", c.scheme === "https");
+    connSecurityEl.classList.toggle("insecure", c.scheme === "http");
+    if (c.scheme === "https") {
+        connSecurityEl.innerHTML = LOCK_CLOSED_SVG + "<span>Encrypted</span>";
+        connSecurityEl.title = c.pinned
+            ? "Encrypted connection. The server's certificate is self-signed and you chose to trust it."
+            : "Encrypted connection (HTTPS)";
+        tlsWarningBanner.classList.remove("visible");
+        return;
+    }
+    connSecurityEl.innerHTML = LOCK_OPEN_SVG + "<span>Not encrypted</span>";
+    connSecurityEl.title = "This connection is not encrypted: anyone on the network path can read your messages.";
+
+    const key = api.tls.hostKey(c.host, c.port ?? 80);
+    if (!readDismissedHttpWarnings().includes(key)) {
+        (document.getElementById("tls-warning-text") as HTMLElement).textContent =
+            `The connection to ${c.host} isn't encrypted — messages, direct messages and files can be read by anyone ` +
+            `on the network between you and the server. Ask its owner to enable HTTPS.`;
+        tlsWarningBanner.classList.add("visible");
+    }
+}
+
+document.getElementById("btn-tls-warning-close")!.addEventListener("click", () => {
+    tlsWarningBanner.classList.remove("visible");
+});
+document.getElementById("btn-tls-warning-dismiss")!.addEventListener("click", () => {
+    if (currentConnection) dismissHttpWarningFor(api.tls.hostKey(currentConnection.host, currentConnection.port ?? 80));
+    tlsWarningBanner.classList.remove("visible");
+});
+
+// ── Settings → Application → Trusted certificates (PRD 18.3) ──────────────
+async function renderTrustedCertificates(): Promise<void> {
+    const list = document.getElementById("tls-trusted-list") as HTMLDivElement;
+    let pins: TlsPinSummary[] = [];
+    try {
+        pins = await api.tls.listTrusted();
+    } catch {
+        /* an empty list is a safe rendering */
+    }
+    list.textContent = "";
+    if (pins.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "tls-trusted-empty";
+        empty.textContent = "No self-signed certificates trusted.";
+        list.appendChild(empty);
+        return;
+    }
+    for (const pin of pins) {
+        const row = document.createElement("div");
+        row.className = "tls-trusted-row";
+        const info = document.createElement("div");
+        info.className = "tls-trusted-info";
+        const host = document.createElement("div");
+        host.className = "tls-trusted-host";
+        host.textContent = pin.hostKey;
+        const meta = document.createElement("div");
+        meta.className = "tls-trusted-meta";
+        const fp = api.tls.formatFingerprint(pin.fingerprint256);
+        const fmt = (iso: string): string => {
+            const d = new Date(iso);
+            return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
+        };
+        meta.textContent = `${fp.slice(0, 23)}… · trusted ${fmt(pin.pinnedAt)} · expires ${fmt(pin.validTo)}`;
+        info.append(host, meta);
+        const remove = document.createElement("button");
+        remove.className = "btn btn-cancel";
+        remove.textContent = "Remove";
+        remove.addEventListener("click", async () => {
+            await api.tls.removeTrust(pin.hostKey);
+            void renderTrustedCertificates();
+        });
+        row.append(info, remove);
+        list.appendChild(row);
+    }
+}
+
+btnConnect.addEventListener("click", () => {
+    void startConnect();
 });
 
 btnDisconnect.addEventListener("click", () => {
@@ -3275,7 +3617,7 @@ api.on("dm-deleted", (payload: { dmId: string }) => {
 
 // ── Event Listeners ───────────────────────────────────────────────────────
 
-api.on("connected", (data: { serverId: string; instanceId: string }) => {
+api.on("connected", (data: { serverId: string; instanceId: string; secure?: boolean; pinned?: boolean }) => {
     isConnected = true;
     currentServerId = data.serverId;
     btnConnect.disabled = true;
@@ -3287,6 +3629,7 @@ api.on("connected", (data: { serverId: string; instanceId: string }) => {
     statusText.textContent = `Connected as ${nicknameInput.value.trim() || "User"}`;
     statusText.classList.add("connected");
     statusInstance.textContent = `ID: ${data.instanceId}`;
+    renderConnectionSecurity(); // PRD 18.3: lock icon / "not encrypted" warning
     if (lastDisconnectAt !== null) {
         const secs = ((Date.now() - lastDisconnectAt) / 1000).toFixed(1);
         log(`Connected to server (reconnected after ${secs}s)`, "success");
@@ -3391,6 +3734,7 @@ api.on("disconnected", (data?: { reason?: string }) => {
     serverUrlInput.disabled = false;
     nicknameInput.disabled = false;
     serverPasswordInput.disabled = false;
+    renderConnectionSecurity(); // isConnected is false → hides the lock and the warning (PRD 18.3)
     statusDot.classList.remove("connected");
     statusText.textContent = "Disconnected";
     statusText.classList.remove("connected");
@@ -6775,6 +7119,7 @@ async function openSettingsPanel(): Promise<void> {
     chkNsfwWarn.checked = isNsfwWarningEnabled();
     chkNsfwBlur.checked = isNsfwBlurEnabled();
     syncProfileSection(); // discard an unsaved avatar draft from a previous visit (PRD 17.1)
+    void renderTrustedCertificates(); // PRD 18.3
     adminModal.classList.add("visible");
 
     // Populate audio devices

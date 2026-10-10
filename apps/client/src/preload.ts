@@ -27,6 +27,14 @@ import type {
     IPinnedMessage,
 } from "@reson8/shared-types";
 import { VoiceService, VoiceSignaling } from "./services/voice.service";
+import { createHash } from "crypto";
+import {
+    decideScheme,
+    formatFingerprint,
+    hostKey,
+    identityHostOf,
+    parseServerAddress,
+} from "./tls-trust";
 
 type TypedSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 
@@ -433,9 +441,47 @@ const api = {
         return ipcRenderer.invoke("is-existing-install");
     },
 
+    /** The base URL (with the scheme that was decided) of the current connection, or "". */
+    getServerBaseUrl(): string {
+        return serverBaseUrl;
+    },
+
+    // ── Encrypted connections (PRD 18.3) ─────────────────────────────────
+    // The pure rules (tls-trust.ts) run here because the renderer is a plain
+    // <script>; probing and pinning go through main, which owns the store.
+    tls: {
+        parseServerAddress,
+        decideScheme,
+        formatFingerprint,
+        hostKey,
+        probe(host: string, port: number): Promise<unknown> {
+            return ipcRenderer.invoke("tls-probe", host, port);
+        },
+        trustCertificate(host: string, port: number, fingerprint256: string): Promise<{ ok: boolean; error?: string }> {
+            return ipcRenderer.invoke("tls-trust-certificate", host, port, fingerprint256);
+        },
+        listTrusted(): Promise<unknown[]> {
+            return ipcRenderer.invoke("tls-list-trusted");
+        },
+        removeTrust(key: string): Promise<boolean> {
+            return ipcRenderer.invoke("tls-remove-trust", key);
+        },
+    },
+
     // ── Connection ──────────────────────────────────────────────────────────
 
-    async connect(host: string, port: number | undefined, nickname: string, password?: string): Promise<void> {
+    /**
+     * `address.scheme` has already been decided by the renderer from a probe
+     * of the server (PRD 18.3, `tls.decideScheme()`); `pinned` means the user
+     * trusted this server's self-signed certificate, so the Socket.io
+     * connection must accept exactly that certificate. Uploads and media go
+     * through Chromium, which main's certificate hook handles the same way.
+     */
+    async connect(
+        address: { scheme: "https" | "http"; host: string; port?: number; pinned?: boolean },
+        nickname: string,
+        password?: string,
+    ): Promise<void> {
         if (socket?.connected) {
             socket.disconnect();
         }
@@ -445,11 +491,45 @@ const api = {
             instanceId = await ipcRenderer.invoke("get-instance-id");
         }
 
-        const serverUrl = port ? `http://${host}:${port}` : `http://${host}`;
+        const { host, port } = address;
+        const hostPart = host.includes(":") ? `[${host}]` : host;
+        const serverUrl = `${address.scheme}://${hostPart}${port ? `:${port}` : ""}`;
+
+        // The pinned certificate, for the Node/`ws` side (see the note at the
+        // top of tls-trust.ts: this stack is NOT Chromium's). `ca` replaces
+        // the default trust store for this socket, and the fingerprint check
+        // replaces the hostname check — a pin is stronger than a name match.
+        let pinnedTls:
+            | { ca: string[]; checkServerIdentity: (hostname: string, cert: { raw?: Buffer }) => Error | undefined }
+            | undefined;
+        if (address.scheme === "https" && address.pinned) {
+            const opts: { ca: string; fingerprint256: string } | null = await ipcRenderer.invoke(
+                "tls-get-connect-options",
+                host,
+                port ?? 443,
+            );
+            if (!opts) {
+                emit("error", {
+                    code: "CONNECT_ERROR",
+                    message: "The trusted certificate for this server is no longer stored — connect again to review it",
+                });
+                return;
+            }
+            const wanted = opts.fingerprint256;
+            pinnedTls = {
+                ca: [opts.ca],
+                checkServerIdentity: (_hostname, cert) => {
+                    const actual = cert.raw ? createHash("sha256").update(cert.raw).digest("hex") : "";
+                    return actual === wanted ? undefined : new Error("The server's certificate changed");
+                },
+            };
+        }
+
         serverBaseUrl = serverUrl;
         uploadToken = null; // a token belongs to the previous connection (PRD 16.8)
         socket = io(serverUrl, {
             transports: ["websocket"],
+            ...(pinnedTls ?? {}),
             reconnection: true,
             // Unlimited attempts (delay backs off up to Socket.io's 5s
             // default cap) — a weak connection that's still recovering
@@ -468,8 +548,10 @@ const api = {
         // Latency measurement — started after connect, cleared on disconnect
         let latencyInterval: ReturnType<typeof setInterval> | null = null;
 
-        // What the identity proof is signed for: the host as the user typed it (PRD 17.12).
-        const identityHost = port ? `${host}:${port}` : host;
+        // What the identity proof is signed for: the host as the user typed it,
+        // without a scheme (PRD 17.12; unchanged by 18.3 so bound identities
+        // and AUTH_ALLOWED_HOSTS keep matching).
+        const identityHost = identityHostOf({ host, port });
 
         socket.on("connect", async () => {
             // Guard against duplicate emissions from Socket.io auto-reconnect
@@ -493,7 +575,16 @@ const api = {
                 (res) => {
                     joinServerInFlight = false;
                     if (res.success && res.serverId) {
-                        emit("connected", { serverId: res.serverId, instanceId });
+                        // From now on this server must not be silently downgraded to HTTP (PRD 18.3).
+                        if (address.scheme === "https") {
+                            void ipcRenderer.invoke("tls-remember-https", host, port ?? 443);
+                        }
+                        emit("connected", {
+                            serverId: res.serverId,
+                            instanceId,
+                            secure: address.scheme === "https",
+                            pinned: address.scheme === "https" && !!address.pinned,
+                        });
 
                         // If we were in a voice channel before this connect
                         // (i.e. this is a reconnect, not the first-ever
