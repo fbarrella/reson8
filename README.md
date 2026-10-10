@@ -142,7 +142,7 @@ and private server ownership.
 
 ### Prerequisites
 
-- **Node.js** ≥ 20
+- **Node.js** ≥ 20 (≥ 20.19 to run `npm run lint`, which uses ESLint 10)
 - **Docker** & **Docker Compose** (for databases, or full-stack deployment)
 
 ### 1. Clone & Install

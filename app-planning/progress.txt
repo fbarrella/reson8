@@ -659,3 +659,133 @@ Feature/Fix: <name>
   Verification:
     ...
   Next Step: ...
+
+
+--- Entry: 10/10/2026 ---
+
+Feature/Fix: Working ESLint setup — `npm run lint` (PRD 18.1)
+
+  Problem: The root `lint` script ran `eslint . --ext .ts,.tsx`, but eslint was
+  not installed anywhere in the repo (so the command failed outright) and
+  `--ext` no longer exists in flat-config ESLint. The project had no static
+  check beyond `tsc`, and Prettier had no config at all.
+
+  Solution: ESLint 10 flat config at the repo root, `typescript-eslint`
+  `recommended` (deliberately NOT type-aware: `tsc` is the type check, and a
+  type-aware pass over a ~10k-line renderer.ts is slow) and
+  `eslint-config-prettier` last. `npm run lint` exits 0 on the current code.
+  First run: 25 errors / 76 warnings. Final: 0 errors / 72 warnings.
+
+  Toolchain (root devDependencies only; pinned on 10/10/2026): eslint 10.12.0,
+  @eslint/js 10.0.1, typescript-eslint 8.71.1, globals 17.13.0,
+  eslint-config-prettier 10.1.8. ESLint 10 needs Node >= 20.19 (stated in
+  AGENTS.md and the README). The lock file gained 74 packages, removed none,
+  and bumped two transitive ones (minimatch 10.2.4 -> 10.2.6,
+  brace-expansion 5.0.4 -> 5.0.12).
+
+  Config decisions (eslint.config.mjs):
+    - `defineConfig`/`globalIgnores` from `eslint/config`, NOT the PRD's
+      `tseslint.config()` — typescript-eslint now marks that helper
+      deprecated in favor of ESLint core's `defineConfig`.
+    - Ignores: dist/release/node_modules, apps/client/assets (vendored
+      WASM/fonts/sounds), packages/native-audio/prebuilds and target
+      (NAPI-RS generated), `*.node`, prisma/migrations, and
+      apps/client/.release-vendor (git-ignored staging copies made by
+      scripts/before-pack.mjs — found on the first run, 11 false errors).
+      packages/native-audio/index.js is hand-written and IS linted.
+    - The renderer is a classic script, so `no-unused-vars` uses
+      `vars: "local"` there (top-level functions are called from index.html
+      and from DevTools `Runtime.evaluate` in the headless tests).
+    - `no-explicit-any` and `no-unused-vars` are warnings (the code uses `any`
+      at socket/IPC boundaries on purpose); `no-empty` allows empty `catch`.
+    - `no-undef` is off for .ts files by typescript-eslint's own preset; tsc
+      covers it.
+
+  Fixes made (every one behavior-preserving; no blanket `--fix` was run):
+    - prefer-const x4: apps/client/src/main.ts (`videoType`, `siteName`
+      declared `let` then assigned once -> declared at the assignment),
+      apps/server/src/handlers/voice.handler.ts (destructuring split so
+      `streamName` is const while `isSharingScreen`, which is reassigned,
+      stays let), renderer.ts (`recordingKeys`).
+    - ban-ts-comment x6 (main.ts metascraper imports): the PRD said
+      @ts-ignore -> @ts-expect-error. Tried it: tsc reported all six as
+      "Unused '@ts-expect-error' directive" — the imports raise no error, so
+      the comments were dead and were DELETED instead.
+    - packages/native-audio/index.js: removed an eslint-disable comment for
+      `global-require`/`import/no-dynamic-require`, rules of a plugin this
+      repo doesn't use (ESLint 10 reports an unknown rule in a directive as
+      an error).
+    - packages/shared-types/src/socket-events.ts: the existing directive
+      named the removed rule `no-empty-interface`; updated to
+      `no-empty-object-type`, and one more directive (with a reason) on
+      `USER_BANNED: (payload: {})`. The wire type itself is unchanged.
+    - apps/client/scripts/markdown-smoke.mjs: a literal U+00A0 inside a regex
+      is now written ` ` (same character; `no-irregular-whitespace`).
+
+  Prettier: added `.prettierrc.json` (tabWidth 4, printWidth 120,
+  trailingComma "all", double quotes, semicolons) and `.prettierignore`
+  (package-lock.json, tsbuildinfo, assets, prebuilds, app-planning/archive;
+  `package-lock.json` would otherwise be re-indented by `npm run format`).
+  Measured, not guessed: the code is 4-space, double-quoted, no tabs, but it
+  was never Prettier-formatted — even the best-fitting config leaves 44 of 70
+  .ts files differing. So `npm run format` was NOT run, and AGENTS.md now
+  says not to run it repo-wide.
+
+  Warnings left alone (not fixed on purpose — report, don't delete):
+    - no-explicit-any x67: renderer.ts 20, preload.ts 10, voice.service.ts 9,
+      preload-viewer.ts 8, socket-events.ts 6, main.ts 5, models.ts 4,
+      permissions.middleware.ts 2, viewer.ts 1, channel.handler.ts 1,
+      reaction.handler.ts 1.
+    - no-unused-vars x5, candidates for a later cleanup (nothing deleted):
+        renderer.ts:977   `serverBaseUrl` assigned, never read (PRD 18.3
+                          removes this duplicate anyway)
+        renderer.ts:3156  `channelName` (unused parameter)
+        renderer.ts:3927  `openVideoLightbox` (function never called)
+        renderer.ts:5459  `dayKey` (assigned, never read)
+        connection.handler.ts:754  `userSession` (assigned, never read)
+
+  Key Files Modified:
+    eslint.config.mjs (NEW)
+    .prettierrc.json (NEW)
+    .prettierignore (NEW)
+    package.json — `lint` fixed, `lint:fix` added, 5 devDependencies
+    package-lock.json
+    AGENTS.md — lint is no longer "BROKEN"; part of the verification step
+    README.md — Node >= 20.19 note for linting
+    apps/client/src/main.ts
+    apps/client/src/renderer/renderer.ts
+    apps/server/src/handlers/voice.handler.ts
+    apps/client/scripts/markdown-smoke.mjs
+    packages/native-audio/index.js
+    packages/shared-types/src/socket-events.ts
+    apps/server/tsconfig.tsbuildinfo, packages/shared-types/tsconfig.tsbuildinfo
+      (tracked build caches, updated by `tsc --build` as in earlier commits)
+
+  Verification:
+    - `npx tsc --build` in shared-types, server, client: all exit 0.
+    - `npm run lint`: exit 0 (0 errors, 72 warnings). A probe file with a
+      `let` never reassigned reported the error as expected.
+    - `npm run test` (server): 13 files, 148 tests passed.
+    - Client: test:markdown 63, test:avatar 20, test:soft-clip 22,
+      test:link-fixers 40, test:identity 14 — all PASS, 0 FAIL.
+    - Emitted JavaScript of the four changed TS files, old vs new, compiled
+      with the project's own options: the only differences are `let` ->
+      `const` and the destructuring split; socket-events.ts is identical.
+    - Headless smoke of the real built client under Xvfb against a real
+      server on a throwaway database (reson8_scratch, Redis db 7, port 9811),
+      driven over CDP: 10/10 checks — preload bridge, join, channel tree,
+      open a text channel, send a message, Markdown rendering (bold + code),
+      no console errors; the screenshot was looked at. The scratch database
+      and processes were removed afterwards.
+    - NOT run: `npm run lint:fix` (nothing to autofix that the manual pass
+      didn't cover) and any packaged build.
+
+  Notes for later items:
+    - ESLint 10 removed the `compact` formatter from core; use the default or
+      `-f json`.
+    - The smoke harness (scratch DB/server script + CDP driver) lives in the
+      session scratchpad, not in the repo; the recipe is in
+      apps/server/AGENTS.md ("Booting the real server") and
+      apps/client/AGENTS.md ("Driving the real app headlessly").
+
+  Next Step: PRD 18.2 — server-side TLS, the Caddy setup and TRUST_PROXY.

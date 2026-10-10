@@ -49,17 +49,11 @@ if (!gotSingleInstanceLock) {
 }
 
 // ── Link Preview (metascraper) ───────────────────────────────────────────
-// @ts-ignore — metascraper packages lack type declarations
 import metascraperModule from "metascraper";
-// @ts-ignore
 import metascraperTitle from "metascraper-title";
-// @ts-ignore
 import metascraperDescription from "metascraper-description";
-// @ts-ignore
 import metascraperImage from "metascraper-image";
-// @ts-ignore
 import metascraperUrl from "metascraper-url";
-// @ts-ignore
 import metascraperVideo from "metascraper-video";
 
 const metascraper = metascraperModule([
@@ -328,8 +322,6 @@ async function fetchLinkPreviewFast(
         let rawDesc = sanitizeText(metadata.description);
         let image = isValidImageUrl(metadata.image) ? metadata.image : undefined;
         let video = isValidImageUrl(metadata.video) ? metadata.video : undefined;
-        let videoType: string | undefined;
-        let siteName: string | undefined;
 
         // Manual OG tag fallback — extract if metascraper missed key fields
         const ogTags = extractOgTags(html);
@@ -348,8 +340,8 @@ async function fetchLinkPreviewFast(
             const ogVideo = ogTags["og:video:url"] || ogTags["og:video:secure_url"] || ogTags["og:video"];
             if (isValidImageUrl(ogVideo)) video = ogVideo;
         }
-        videoType = ogTags["og:video:type"] || undefined;
-        siteName = sanitizeText(ogTags["og:site_name"]) || undefined;
+        const videoType = ogTags["og:video:type"] || undefined;
+        const siteName = sanitizeText(ogTags["og:site_name"]) || undefined;
 
         const description = rawDesc && rawDesc.length > 200 ? rawDesc.slice(0, 200) + "…" : rawDesc;
 

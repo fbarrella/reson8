@@ -103,7 +103,7 @@ check("fenced code keeps its whitespace-only line verbatim", r("```\nx\n   \ny\n
 check("~~~ fence too", r("~~~\nx\n  \ny\n~~~").html.includes("x\n  \ny"), r("~~~\nx\n  \ny\n~~~").html);
 check("after a fence closes, a space line is a blank line again", blankLines(r("```\ncode\n```\ntext\n \nmore").html) === 1, r("```\ncode\n```\ntext\n \nmore").html);
 check("a longer closing fence closes; a shorter one doesn't", preserveWhitespaceOnlyLines("````\na\n```\n \n````\n \nb") === `\`\`\`\`\na\n\`\`\`\n \n\`\`\`\`\n${NB}\nb`, JSON.stringify(preserveWhitespaceOnlyLines("````\na\n```\n \n````\n \nb")));
-check("quote: the blank line stays inside the quote", /<blockquote>[\s\S]*a<br>\n <br>\nb[\s\S]*<\/blockquote>/.test(r("> a\n \n> b").html), r("> a\n \n> b").html);
+check("quote: the blank line stays inside the quote", /<blockquote>[\s\S]*a<br>\n\u00a0<br>\nb[\s\S]*<\/blockquote>/.test(r("> a\n \n> b").html), r("> a\n \n> b").html);
 check("list: stays a list", r("- a\n \n- b").html.includes("<ul>") && r("- a\n \n- b").html.includes("<li>b</li>"), r("- a\n \n- b").html);
 check("plain-text preview collapses it away", markdownToPlainText("Line 1\n \nLine 3") === "Line 1 Line 3", markdownToPlainText("Line 1\n \nLine 3"));
 check("no-op fast path returns the same string", preserveWhitespaceOnlyLines("no blank lines here") === "no blank lines here");

@@ -47,10 +47,10 @@ npm run build            # tsc --build --force across all workspaces
 npm run dev:server       # -> apps/server dev
 npm run dev:client       # -> apps/client dev
 npm run format            # prettier --write — works, prettier is installed
-npm run lint              # BROKEN: references eslint, but eslint is not an installed dependency anywhere in the repo. Don't rely on it or tell users to run it.
+npm run lint              # ESLint 10 flat config (eslint.config.mjs) over the whole monorepo; must exit 0 (warnings are allowed). Needs Node >= 20.19. `npm run lint:fix` autofixes — review the diff, and never run it blindly.
 ```
 
-There is no CI pipeline. `npx tsc --noEmit` (or `--build`) per affected workspace — shared-types, server, client — is the verification step consistently used before treating a change as done; run it in each workspace touched.
+There is no CI pipeline. `npx tsc --noEmit` (or `--build`) per affected workspace — shared-types, server, client — plus `npm run lint` from the repo root (it must exit 0) is the verification step used before treating a change as done; run the typecheck in each workspace touched. Lint is deliberately not type-aware (`tsc` is the type check) and the renderer is linted as a classic script, so only variables inside functions are checked for being unused. `npm run format` (Prettier, config in `.prettierrc.json`) is a user-run tool: the codebase was never Prettier-formatted (a repo-wide run rewrites ~60% of the files), so don't run it over the repo or include formatting-only churn in a feature commit.
 
 Shared-types must be built (`npx tsc --build`) before server/client typecheck against changes made there, since both consume it via the `@reson8/shared-types` workspace package.
 

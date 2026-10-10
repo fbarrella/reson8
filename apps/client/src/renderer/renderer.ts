@@ -7070,7 +7070,7 @@ const shortcuts: Record<ShortcutSlot, ShortcutCombo | null> = {
 };
 
 let activeShortcutSlot: ShortcutSlot | null = null;
-let recordingKeys = new Set<string>();
+const recordingKeys = new Set<string>();
 const heldKeys = new Set<string>();
 
 const shortcutInputs: Record<ShortcutSlot, HTMLInputElement> = {

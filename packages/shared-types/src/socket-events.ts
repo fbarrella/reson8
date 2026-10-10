@@ -782,6 +782,7 @@ export interface ServerToClientEvents {
     CHANNEL_USER_KICKED: (payload: { channelId: string; userId: string }) => void;
 
     /** Notifies a user that they have been banned from the server. */
+    // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- the event carries no data; `{}` is the wire type
     USER_BANNED: (payload: {}) => void;
 
     /** Broadcasts updated reactions on a message. */
@@ -829,7 +830,7 @@ export interface ServerToClientEvents {
 // Inter-Server Events (reserved for future clustering)
 // ---------------------------------------------------------------------------
 
-// eslint-disable-next-line @typescript-eslint/no-empty-interface
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- reserved, intentionally empty
 export interface InterServerEvents { }
 
 // ---------------------------------------------------------------------------
