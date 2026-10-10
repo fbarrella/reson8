@@ -1525,6 +1525,13 @@
       display: block;
     }
 
+    /* A link that is itself an image (PRD 18.10). */
+    .link-preview-card.lpc-direct { max-width: 420px; }
+    .lpc-direct-image { max-height: 300px; object-fit: contain; cursor: zoom-in; background: var(--bg-input); }
+
+    /* "Show link previews" off (PRD 18.10): cards already rendered disappear live. */
+    body.link-previews-off .link-preview-card { display: none; }
+
     .lpc-video {
       width: 100%;
       max-height: 300px;
@@ -6269,6 +6276,22 @@
           </div>
           <label class="toggle-switch">
             <input type="checkbox" id="chk-nsfw-blur">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+
+        <div class="toggle-row">
+          <div class="toggle-row-info">
+            <div class="toggle-row-icon">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+            </div>
+            <div class="toggle-row-text">
+              <span class="toggle-row-title">Show link previews</span>
+              <span class="toggle-row-desc">Each preview makes Reson8 contact the linked website, which can see your IP address.</span>
+            </div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="chk-link-previews">
             <span class="toggle-slider"></span>
           </label>
         </div>

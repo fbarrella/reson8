@@ -1524,3 +1524,81 @@ Feature/Fix: Invite codes for new users (PRD 18.9)
       forced interleaving).
 
   Next Step: PRD 18.10.
+
+--- Entry: 10/10/2026 ---
+
+Feature/Fix: Link-preview hardening — size cap, deadlines, caches, private networks, direct images, on/off switch (PRD 18.10)
+
+  Problem: The preview fetch cleared its 5 s timer as soon as headers arrived
+  and then read the body without limit or deadline (a 1 GB link was read whole
+  by EVERY client rendering the message); non-HTML links escalated to a real
+  browser window that downloaded them again; both caches were unbounded and
+  kept failures and expiring signed URLs forever; identical concurrent
+  requests each fetched; ANY host was fetched, including localhost, 192.168.x
+  and 169.254.169.254 (a posted link could make every reader's client probe
+  their own network); the hidden window shared the app's cookies; there was
+  no way to switch previews off.
+
+  Solution:
+    - New Electron-free modules: `link-preview-fetch.ts` (the fast path) and
+      `link-preview-guard.ts` (address table, hostnames, redirect rule,
+      guarded DNS lookup, HTML head reader, charset sniffing, TtlLru), so all
+      of it is tested in plain Node. `main.ts` keeps the IPC, caches and the
+      hidden window.
+    - One 8 s deadline over connect+headers+body; redirects by hand (<= 5),
+      each hop re-validated; the body is read only to </head> (<= 1 MB) with
+      charset sniffing and incremental decoding; image/* (not SVG, <= 20 MB)
+      -> a direct-image preview without reading it; any other type ->
+      NOT_HTML, which never escalates to the hidden window.
+    - Private networks: 0/8, 10/8, 100.64/10, 127/8, 169.254/16, 172.16/12,
+      192.0.0/24, 192.168/16, 198.18/15, 224/3, ::, ::1, fc00::/7, fe80::/10,
+      ff00::/8 (+ IPv4-mapped, NAT64 and 6to4 embedded forms); local names
+      (localhost, *.local, *.internal, *.home.arpa, *.lan, single-label); and
+      a `connect.lookup` on an undici Agent that resolves, drops blocked
+      addresses and connects to the address it checked (no rebinding gap).
+      undici is pinned ^7 (Electron 34's Node is 20.19; undici 8 needs 22.19).
+    - Hidden window: URL + DNS validated first; a dedicated in-memory
+      `link-preview` partition; every request checked (names resolving to a
+      private address are cancelled too), downloads cancelled, permissions
+      denied, popups denied, audio muted.
+    - Caches: main LRU 500 (success 6 h, fixer video 30 min, failure 10 min),
+      renderer 300 with the same TTLs; in-flight de-duplication.
+    - Renderer: direct-image card (picture + domain, opens the zoom-only
+      viewer); Settings -> Application "Show link previews" (reson8-link-
+      previews): off = no request at all + cards hidden live.
+
+  Key Files Modified:
+    apps/client/src/link-preview-fetch.ts, link-preview-guard.ts (NEW)
+    apps/client/scripts/link-preview-smoke.mjs (NEW), package.json (undici ^7, test:link-preview)
+    apps/client/src/main.ts, preload.ts (types), renderer/renderer.ts, renderer/index.html
+    AGENTS.md, apps/client/AGENTS.md, README.md, package-lock.json
+
+  Verification:
+    - tsc x3 exit 0; lint exit 0 (0 errors); server vitest 353; all client
+      suites green incl. link-fixers; new `test:link-preview` 106 checks
+      (address table, hostnames, URL/redirect rules, charset sniffing, head
+      reader incl. split multi-byte and caps, LRU/TTL, fetch against local
+      servers: page, direct image, 30 MB image, SVG, zip, relative redirect,
+      loop, 404, endless body stops fast at the cap, stalling body cut by the
+      deadline, and the production guard leaves a local listener untouched).
+    - Live in the real app (IPC -> main -> network), 30/30: example.com,
+      Wikipedia and a GitHub page still preview; a PNG link -> kind "image";
+      a zip link -> null in < 3.5 s (the hidden window was NOT opened); 12
+      private targets (127.0.0.1, localhost, [::1], decimal and hex IPv4,
+      localtest.me and 127.0.0.1.nip.io which are PUBLIC names resolving to
+      loopback, 192.168/10/169.254.169.254, .local, a single-label host) all
+      null, and a local listener saw ZERO requests; a public redirect into the
+      listener was not followed (the hidden window's own session cancelled it:
+      ERR_BLOCKED_BY_CLIENT); the direct-image card is picture + domain and
+      opens the preview-only viewer; switch off -> no request and nothing
+      cached, on -> card, off again -> card hidden live; Settings switch
+      persists.
+    - Real bugs found by running it: none beyond a lint error (a dead
+      assignment) in the new code.
+    - Old-vs-new comparison on the PRD's URL list was only run for the
+      sites reachable here (example.com, Wikipedia, GitHub): same fields.
+    - NOT run: a Cloudflare-walled page (none available), the 1 GB URL (the
+      endless-body test stands in for it), the fixer networks (YouTube/X/...
+      — covered by test:link-fixers and unchanged host rules).
+
+  Next Step: PRD 18.11.

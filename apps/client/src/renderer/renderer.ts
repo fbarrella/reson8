@@ -112,6 +112,8 @@ interface CustomEmoji {
 }
 
 interface LinkPreviewData {
+    /** Absent = a normal page card; "image" = the link itself is an image (PRD 18.10). */
+    kind?: "page" | "image";
     title?: string;
     description?: string;
     image?: string;
@@ -1156,8 +1158,45 @@ let suppressNextPresenceSound = false;
 let micSensitivityEnabled = localStorage.getItem("reson8-mic-sensitivity-enabled") === "true";
 let micLevelAnimId: number | null = null;
 
-// Link preview cache (renderer-side to avoid redundant IPC calls)
-const linkPreviewCache = new Map<string, LinkPreviewData | null>();
+// Link preview cache (renderer-side to avoid redundant IPC calls). Bounded and
+// expiring (PRD 18.10): a failure is retried after a while, and a signed video
+// URL from a link fixer can't outlive its signature. The same rules as main's.
+class TtlCache<V> {
+    private readonly entries = new Map<string, { value: V; expiresAt: number }>();
+    constructor(private readonly max: number) {}
+
+    get(key: string): V | undefined {
+        const entry = this.entries.get(key);
+        if (!entry) return undefined;
+        if (entry.expiresAt <= Date.now()) {
+            this.entries.delete(key);
+            return undefined;
+        }
+        this.entries.delete(key);
+        this.entries.set(key, entry); // refresh recency
+        return entry.value;
+    }
+
+    set(key: string, value: V, ttlMs: number): void {
+        this.entries.delete(key);
+        this.entries.set(key, { value, expiresAt: Date.now() + ttlMs });
+        while (this.entries.size > this.max) {
+            this.entries.delete(this.entries.keys().next().value as string);
+        }
+    }
+}
+
+const LINK_PREVIEW_TTL_MS = { success: 6 * 60 * 60 * 1000, video: 30 * 60 * 1000, failure: 10 * 60 * 1000 };
+const linkPreviewCache = new TtlCache<LinkPreviewData | null>(300);
+
+function cacheLinkPreview(url: string, data: LinkPreviewData | null): void {
+    const ttl = !data
+        ? LINK_PREVIEW_TTL_MS.failure
+        : data.video
+          ? LINK_PREVIEW_TTL_MS.video
+          : LINK_PREVIEW_TTL_MS.success;
+    linkPreviewCache.set(url, data, ttl);
+}
 
 // Voice session timers: channelId → ISO startedAt
 const sessionTimers = new Map<string, string>();
@@ -1576,6 +1615,34 @@ function setNsfwBlurEnabled(enabled: boolean): void {
 /** Pure CSS switch — see `body.nsfw-blur-off` in index.html. Applies live to every rendered message. */
 function applyNsfwBlurPreference(): void {
     document.body.classList.toggle("nsfw-blur-off", !isNsfwBlurEnabled());
+}
+
+// ── "Show link previews" (PRD 18.10) ────────────────────────────────────────
+// Per-user, on by default; only an explicit "false" turns it off. Off means NO
+// request is made at all — each preview makes this computer contact the linked
+// website, which can see its IP address.
+const LINK_PREVIEWS_KEY = "reson8-link-previews";
+
+function isLinkPreviewsEnabled(): boolean {
+    try {
+        return localStorage.getItem(LINK_PREVIEWS_KEY) !== "false";
+    } catch {
+        return true;
+    }
+}
+
+function setLinkPreviewsEnabled(enabled: boolean): void {
+    try {
+        localStorage.setItem(LINK_PREVIEWS_KEY, String(enabled));
+    } catch {
+        /* storage unavailable — the preference just won't persist */
+    }
+    applyLinkPreviewPreference();
+}
+
+/** Hides cards already rendered, live — see `body.link-previews-off` in index.html. */
+function applyLinkPreviewPreference(): void {
+    document.body.classList.toggle("link-previews-off", !isLinkPreviewsEnabled());
 }
 
 // ── Avatars (PRD 17.1) ──────────────────────────────────────────────────────
@@ -4418,6 +4485,31 @@ function createPreviewCard(data: LinkPreviewData): HTMLDivElement {
     const card = document.createElement("div");
     card.className = "link-preview-card";
 
+    // The link IS an image (PRD 18.10): just the picture, opened in the
+    // zoom-only viewer (never the "sent by" viewer — it isn't a message image).
+    if (data.kind === "image" && data.image) {
+        card.classList.add("lpc-direct");
+        const img = document.createElement("img");
+        img.className = "lpc-image lpc-direct-image";
+        img.src = data.image;
+        img.alt = data.domain || "Image";
+        img.loading = "lazy";
+        img.addEventListener("click", (e) => {
+            e.stopPropagation();
+            openLightbox(data.image!, { previewOnly: true });
+        });
+        img.addEventListener("error", () => card.remove());
+        card.appendChild(img);
+        if (data.domain) {
+            const domainEl = document.createElement("div");
+            domainEl.className = "lpc-domain";
+            domainEl.textContent = data.domain;
+            card.appendChild(domainEl);
+        }
+        if (data.url) card.addEventListener("click", () => window.open(data.url!, "_blank"));
+        return card;
+    }
+
     // ── Text body (top) ──
     const body = document.createElement("div");
     body.className = "lpc-body";
@@ -4522,6 +4614,8 @@ function createPreviewCard(data: LinkPreviewData): HTMLDivElement {
  * opposite answers, so this can no longer hardcode "always scroll down."
  */
 function injectLinkPreview(messageEl: HTMLElement, url: string, onLoaded?: () => void): void {
+    // Turned off by the user: not even a request (PRD 18.10).
+    if (!isLinkPreviewsEnabled()) return;
     // Check renderer-side cache first
     const cached = linkPreviewCache.get(url);
     if (cached !== undefined) {
@@ -4534,14 +4628,14 @@ function injectLinkPreview(messageEl: HTMLElement, url: string, onLoaded?: () =>
 
     // Fetch asynchronously — don't block message rendering
     api.fetchLinkPreview(url).then((data) => {
-        linkPreviewCache.set(url, data);
+        cacheLinkPreview(url, data);
         if (!data) return;
         // Guard: ensure the message is still in the DOM (tab may have been closed)
         if (!messageEl.isConnected) return;
         messageEl.appendChild(createPreviewCard(data));
         onLoaded?.();
     }).catch(() => {
-        linkPreviewCache.set(url, null);
+        cacheLinkPreview(url, null);
     });
 }
 
@@ -7255,6 +7349,7 @@ async function openSettingsPanel(): Promise<void> {
     // The NSFW modal can change this preference while Settings is closed.
     chkNsfwWarn.checked = isNsfwWarningEnabled();
     chkNsfwBlur.checked = isNsfwBlurEnabled();
+    (document.getElementById("chk-link-previews") as HTMLInputElement).checked = isLinkPreviewsEnabled();
     syncProfileSection(); // discard an unsaved avatar draft from a previous visit (PRD 17.1)
     void renderTrustedCertificates(); // PRD 18.3
     hideIdentityLog(); // always reopen on the user list (PRD 18.4)
@@ -11109,6 +11204,13 @@ applyNsfwBlurPreference();
 
 chkNsfwBlur.addEventListener("change", () => {
     setNsfwBlurEnabled(chkNsfwBlur.checked);
+});
+
+const chkLinkPreviews = document.getElementById("chk-link-previews") as HTMLInputElement;
+chkLinkPreviews.checked = isLinkPreviewsEnabled();
+applyLinkPreviewPreference();
+chkLinkPreviews.addEventListener("change", () => {
+    setLinkPreviewsEnabled(chkLinkPreviews.checked);
 });
 
 // ── Identity fingerprint in Settings → About (PRD 17.12) ────────────────────

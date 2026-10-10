@@ -24,6 +24,7 @@
         "test:avatar": "tsc --build && node scripts/avatar-smoke.mjs",
         "test:soft-clip": "tsc --build && node scripts/soft-clip-smoke.mjs",
         "test:link-fixers": "tsc --build && node scripts/link-fixers-smoke.mjs",
+        "test:link-preview": "tsc --build && node scripts/link-preview-smoke.mjs",
         "test:identity": "tsc --build && node scripts/identity-smoke.mjs",
         "test:tls": "tsc --build && node scripts/tls-trust-smoke.mjs",
         "test:identity-backup": "tsc --build && node scripts/identity-backup-smoke.mjs",
@@ -108,7 +109,8 @@
         "metascraper-title": "^5.49.25",
         "metascraper-url": "^5.49.25",
         "metascraper-video": "^5.49.25",
-        "socket.io-client": "^4.8.0"
+        "socket.io-client": "^4.8.0",
+        "undici": "^7.30.0"
     },
     "devDependencies": {
         "@reson8/native-audio": "*",

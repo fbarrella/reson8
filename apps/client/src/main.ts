@@ -15,7 +15,7 @@ import { startCapture, resolvePidForWindowSourceId, listAudioProducingApps, plat
 import type { CaptureHandle } from "@reson8/native-audio";
 import MarkdownIt from "markdown-it";
 import { loadWindowState, trackWindowState } from "./window-state.js";
-import { FIXER_USER_AGENT, decodeHtmlEntities, displayDomain, toFixerUrl } from "./link-fixers.js";
+import { FIXER_USER_AGENT, displayDomain, toFixerUrl } from "./link-fixers.js";
 import {
     createNewIdentityAfterLock,
     exportIdentityPkcs8Der,
@@ -70,65 +70,32 @@ if (!gotSingleInstanceLock) {
     });
 }
 
-// ── Link Preview (metascraper) ───────────────────────────────────────────
-import metascraperModule from "metascraper";
-import metascraperTitle from "metascraper-title";
-import metascraperDescription from "metascraper-description";
-import metascraperImage from "metascraper-image";
-import metascraperUrl from "metascraper-url";
-import metascraperVideo from "metascraper-video";
+// ── Link Preview ─────────────────────────────────────────────────────────
+// The plain-HTTP half (bounded fetch, private-network guard, direct images)
+// lives in link-preview-fetch.ts / link-preview-guard.ts (PRD 18.10) so it can
+// be tested without Electron; this file keeps the IPC, the caches and the
+// hidden-window fallback.
+import dns from "node:dns";
+import nodeNet from "node:net";
+import {
+    NOT_HTML,
+    fetchLinkPreviewFast,
+    isValidImageUrl,
+    sanitizeText,
+    type LinkPreviewData,
+} from "./link-preview-fetch";
+import {
+    PREVIEW_TTL_MS,
+    TtlLru,
+    checkPreviewUrl,
+    isBlockedAddress,
+    isBlockedHostname,
+} from "./link-preview-guard";
 
-const metascraper = metascraperModule([
-    metascraperTitle(),
-    metascraperDescription(),
-    metascraperImage(),
-    metascraperUrl(),
-    metascraperVideo(),
-]);
-
-interface LinkPreviewData {
-    title?: string;
-    description?: string;
-    image?: string;
-    video?: string;
-    videoType?: string;
-    url?: string;
-    domain?: string;
-    siteName?: string;
-}
-
-// In-memory cache: URL → metadata (null = attempted but failed)
-const linkPreviewCache = new Map<string, LinkPreviewData | null>();
-
-function sanitizeText(text: string | undefined | null): string | undefined {
-    if (!text) return undefined;
-    // Strip HTML tags
-    return text.replace(/<[^>]*>/g, "").trim() || undefined;
-}
-
-function isValidImageUrl(url: string | undefined | null): boolean {
-    if (!url) return false;
-    return url.startsWith("http://") || url.startsWith("https://");
-}
-
-/** Extract OpenGraph meta tags from HTML as a fallback when metascraper returns incomplete data. */
-function extractOgTags(html: string): Record<string, string> {
-    const tags: Record<string, string> = {};
-    const regex = /<meta\s+(?:property|name)=["'](og:[^"']+|twitter:[^"']+)["']\s+content=["']([^"']*)["']\s*\/?>/gi;
-    const reverseRegex = /<meta\s+content=["']([^"']*)["']\s+(?:property|name)=["'](og:[^"']+|twitter:[^"']+)["']\s*\/?>/gi;
-
-    // Values are decoded (PRD 17.9): a regex-extracted attribute still holds
-    // HTML character references (`&amp;`, `&#x1F441;`), which the card would
-    // otherwise show literally.
-    let match;
-    while ((match = regex.exec(html)) !== null) {
-        tags[match[1].toLowerCase()] = decodeHtmlEntities(match[2]);
-    }
-    while ((match = reverseRegex.exec(html)) !== null) {
-        tags[match[2].toLowerCase()] = decodeHtmlEntities(match[1]);
-    }
-    return tags;
-}
+/** URL → preview (null = attempted but failed). Bounded, and entries expire (PRD 18.10). */
+const linkPreviewCache = new TtlLru<LinkPreviewData | null>(500);
+/** Concurrent requests for the same link share one fetch. */
+const linkPreviewInflight = new Map<string, Promise<LinkPreviewData | null>>();
 
 interface ReleaseNotes {
     name: string;
@@ -203,6 +170,67 @@ async function fetchReleaseNotes(version: string): Promise<ReleaseNotes | null> 
     }
 }
 
+/** Partition for the hidden preview window: no `persist:` prefix, so it is in memory only and shares no cookies with the app (PRD 18.10). */
+const PREVIEW_PARTITION = "link-preview";
+let previewSessionConfigured = false;
+/** Per-host DNS verdicts for the window's own requests (true = a private address was found). */
+const previewHostVerdicts = new TtlLru<boolean>(200);
+
+async function hostResolvesToPrivate(host: string): Promise<boolean> {
+    const known = previewHostVerdicts.get(host);
+    if (known !== undefined) return known;
+    let verdict: boolean;
+    try {
+        const addresses = await dns.promises.lookup(host, { all: true });
+        verdict = addresses.some((a) => isBlockedAddress(a.address));
+    } catch {
+        verdict = false; // unresolvable: Chromium will fail the request itself
+    }
+    previewHostVerdicts.set(host, verdict, 60_000);
+    return verdict;
+}
+
+/** One-time hardening of the preview window's session (PRD 18.10). */
+function configurePreviewSession(): Electron.Session {
+    const ses = session.fromPartition(PREVIEW_PARTITION);
+    if (previewSessionConfigured) return ses;
+    previewSessionConfigured = true;
+
+    // Every request the page makes (redirects and subresources included) is
+    // checked: literal private addresses and local names are cancelled, and a
+    // name that resolves to a private address is cancelled too.
+    ses.webRequest.onBeforeRequest(async (details, callback) => {
+        let url: URL;
+        try {
+            url = new URL(details.url);
+        } catch {
+            callback({ cancel: false });
+            return;
+        }
+        if (url.protocol !== "http:" && url.protocol !== "https:" && url.protocol !== "ws:" && url.protocol !== "wss:") {
+            callback({ cancel: false }); // data:, blob: — nothing leaves the machine
+            return;
+        }
+        if (isBlockedHostname(url.hostname)) {
+            callback({ cancel: true });
+            return;
+        }
+        const literal = url.hostname.startsWith("[") || /^[\d.]+$/.test(url.hostname);
+        if (!literal && (await hostResolvesToPrivate(url.hostname))) {
+            callback({ cancel: true });
+            return;
+        }
+        callback({ cancel: false });
+    });
+    ses.on("will-download", (event, item) => {
+        event.preventDefault();
+        item.cancel();
+    });
+    ses.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
+    ses.setPermissionCheckHandler(() => false);
+    return ses;
+}
+
 /** Real Chromium renderer instances currently fetching a fallback preview
  *  (PRD 14.8) — capped since each is a genuinely expensive full renderer
  *  process, and must never become an unbounded resource sink if several
@@ -224,17 +252,28 @@ let activeHiddenWindowFallbacks = 0;
  */
 async function fetchLinkPreviewViaHiddenWindow(url: string): Promise<LinkPreviewData | null> {
     if (activeHiddenWindowFallbacks >= MAX_HIDDEN_WINDOW_FALLBACKS) return null;
+    // Same rules as the fast path (PRD 18.10): never navigate a real browser
+    // window into a private network, by address or by what a name resolves to.
+    const check = checkPreviewUrl(url);
+    if (!check.ok) return null;
+    if (!nodeNet.isIP(check.url.hostname.replace(/^\[|\]$/g, "")) && (await hostResolvesToPrivate(check.url.hostname))) {
+        return null;
+    }
     activeHiddenWindowFallbacks++;
 
     let win: BrowserWindow | null = null;
     try {
+        configurePreviewSession();
         win = new BrowserWindow({
             show: false,
             webPreferences: {
                 sandbox: true,
                 contextIsolation: true,
+                partition: PREVIEW_PARTITION,
             },
         });
+        win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+        win.webContents.setAudioMuted(true);
 
         const run = async (): Promise<LinkPreviewData | null> => {
             await win!.loadURL(url);
@@ -298,131 +337,71 @@ async function fetchLinkPreviewViaHiddenWindow(url: string): Promise<LinkPreview
     }
 }
 
-/** The original plain-`fetch()` + metascraper + OG-fallback path — fast,
- *  and works for the vast majority of links. Returns null (never caches)
- *  on any failure, including a blocked/non-2xx response, so the caller can
- *  decide whether to escalate to the heavier hidden-window fallback.
- *
- *  `opts` (PRD 17.9) is only used for a link-fixer request: its own
- *  User-Agent, and `strict` success rules — the response must still come
- *  from the fixer's host (fixers redirect visitors they won't serve back to
- *  the original site, or to a download page) and must carry an image or a
- *  video (a title alone is a fixer's error page, e.g. "Temporarily
- *  unavailable"). Defaults keep the original behavior exactly. */
-async function fetchLinkPreviewFast(
-    url: string,
-    opts: { userAgent?: string; strict?: { expectedHost: string } } = {},
-): Promise<LinkPreviewData | null> {
-    try {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 5000);
-
-        const response = await fetch(url, {
-            signal: controller.signal,
-            headers: {
-                // Bot-like UA so embed-focused sites (fxtwitter, etc.) serve OG tags
-                "User-Agent": opts.userAgent ?? "Mozilla/5.0 (compatible; Reson8Bot/1.0; +https://github.com/fbarrella/reson8)",
-            },
-        });
-        clearTimeout(timeout);
-
-        if (!response.ok) {
-            return null;
-        }
-        if (opts.strict) {
-            let finalHost = "";
-            try {
-                finalHost = new URL(response.url).hostname.toLowerCase();
-            } catch { /* leave empty → refused */ }
-            if (finalHost !== opts.strict.expectedHost) return null;
-        }
-
-        const html = await response.text();
-        const metadata = await metascraper({ html, url });
-
-        let title = sanitizeText(metadata.title);
-        let rawDesc = sanitizeText(metadata.description);
-        let image = isValidImageUrl(metadata.image) ? metadata.image : undefined;
-        let video = isValidImageUrl(metadata.video) ? metadata.video : undefined;
-
-        // Manual OG tag fallback — extract if metascraper missed key fields
-        const ogTags = extractOgTags(html);
-
-        if (!title) {
-            title = sanitizeText(ogTags["og:title"] || ogTags["twitter:title"]);
-        }
-        if (!rawDesc) {
-            rawDesc = sanitizeText(ogTags["og:description"] || ogTags["twitter:description"]);
-        }
-        if (!image) {
-            const ogImage = ogTags["og:image"] || ogTags["twitter:image"] || ogTags["twitter:image:src"];
-            if (isValidImageUrl(ogImage)) image = ogImage;
-        }
-        if (!video) {
-            const ogVideo = ogTags["og:video:url"] || ogTags["og:video:secure_url"] || ogTags["og:video"];
-            if (isValidImageUrl(ogVideo)) video = ogVideo;
-        }
-        const videoType = ogTags["og:video:type"] || undefined;
-        const siteName = sanitizeText(ogTags["og:site_name"]) || undefined;
-
-        const description = rawDesc && rawDesc.length > 200 ? rawDesc.slice(0, 200) + "…" : rawDesc;
-
-        let domain: string | undefined;
-        try {
-            domain = new URL(url).hostname.replace(/^www\./, "");
-        } catch { /* ignore */ }
-
-        const result: LinkPreviewData = { title, description, image, video, videoType, url: metadata.url || url, domain, siteName };
-
-        // A fixer must deliver media — that's its whole point (PRD 17.9).
-        if (opts.strict) return image || video ? result : null;
-        // Only a genuine result if we got at least a title or image
-        return title || image ? result : null;
-    } catch {
-        return null;
-    }
-}
-
 /**
- * Orchestrates the two-tier link-preview fetch (PRD 14.8): the fast plain-
- * `fetch()` path first (works for the vast majority of links), falling
- * back to a hidden real-browser navigation only when that path is blocked
- * or finds nothing — the fast path already handles most sites, and the
- * fallback is expensive enough (a full Chromium renderer, ~5-15s) that it
- * should never run for a link the fast path already resolved.
+ * Orchestrates the two-tier link-preview fetch (PRD 14.8): the fast plain
+ * HTTP path first (works for the vast majority of links), falling back to a
+ * hidden real-browser navigation only when that path is blocked or finds
+ * nothing — and never for a link that answered with something that isn't a
+ * page (a video, an archive: PRD 18.10).
  */
 async function fetchLinkPreview(url: string): Promise<LinkPreviewData | null> {
-    if (linkPreviewCache.has(url)) {
-        return linkPreviewCache.get(url) ?? null;
-    }
+    const cached = linkPreviewCache.get(url);
+    if (cached !== undefined) return cached;
 
-    // Social-media "fixers" first (PRD 17.9): for YouTube, X, Instagram,
-    // Reddit, Twitch, Bluesky and Imgur links, ask the matching fixer service,
-    // which usually returns a DIRECT video the card can play inline. If it
-    // doesn't deliver, the normal flow below runs on the ORIGINAL url,
-    // exactly as for every other link.
-    let result: LinkPreviewData | null = null;
-    const fixer = toFixerUrl(url);
-    if (fixer) {
-        const fixed = await fetchLinkPreviewFast(fixer.fixerUrl, {
-            userAgent: FIXER_USER_AGENT,
-            strict: { expectedHost: fixer.fixerHost },
-        });
-        if (fixed) {
-            // Clicking the card opens the real post, and the card names the
-            // real site — never the proxy (fixers stuff og:site_name with
-            // their own branding and stats).
-            result = { ...fixed, url, domain: displayDomain(url), siteName: fixer.network };
+    const running = linkPreviewInflight.get(url);
+    if (running) return running;
+
+    const job = (async (): Promise<LinkPreviewData | null> => {
+        // Never request something on the reader's own network (PRD 18.10).
+        if (!checkPreviewUrl(url).ok) {
+            linkPreviewCache.set(url, null, PREVIEW_TTL_MS.failure);
+            return null;
         }
-    }
 
-    if (!result) {
-        const fastResult = await fetchLinkPreviewFast(url);
-        result = fastResult ?? await fetchLinkPreviewViaHiddenWindow(url);
-    }
+        // Social-media "fixers" first (PRD 17.9): for YouTube, X, Instagram,
+        // Reddit, Twitch, Bluesky and Imgur links, ask the matching fixer service,
+        // which usually returns a DIRECT video the card can play inline. If it
+        // doesn't deliver, the normal flow below runs on the ORIGINAL url,
+        // exactly as for every other link.
+        let result: LinkPreviewData | null = null;
+        let notHtml = false;
+        const fixer = toFixerUrl(url);
+        if (fixer) {
+            const fixed = await fetchLinkPreviewFast(fixer.fixerUrl, {
+                userAgent: FIXER_USER_AGENT,
+                strict: { expectedHost: fixer.fixerHost },
+            });
+            if (fixed && fixed !== NOT_HTML) {
+                // Clicking the card opens the real post, and the card names the
+                // real site — never the proxy (fixers stuff og:site_name with
+                // their own branding and stats).
+                result = { ...fixed, url, domain: displayDomain(url), siteName: fixer.network };
+            }
+        }
 
-    linkPreviewCache.set(url, result);
-    return result;
+        if (!result) {
+            const fast = await fetchLinkPreviewFast(url);
+            if (fast === NOT_HTML) notHtml = true;
+            else result = fast;
+        }
+        if (!result && !notHtml) result = await fetchLinkPreviewViaHiddenWindow(url);
+
+        // A fixer's direct video URL is signed and expires: cache it briefly.
+        const ttl = !result
+            ? PREVIEW_TTL_MS.failure
+            : fixer && result.video
+              ? PREVIEW_TTL_MS.video
+              : PREVIEW_TTL_MS.success;
+        linkPreviewCache.set(url, result, ttl);
+        return result;
+    })();
+
+    linkPreviewInflight.set(url, job);
+    try {
+        return await job;
+    } finally {
+        linkPreviewInflight.delete(url);
+    }
 }
 
 let mainWindow: BrowserWindow | null = null;

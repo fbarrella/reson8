@@ -1623,7 +1623,17 @@ const api = {
 
     // ── Link Preview ─────────────────────────────────────────────────────
 
-    async fetchLinkPreview(url: string): Promise<{ title?: string; description?: string; image?: string; url?: string; domain?: string } | null> {
+    async fetchLinkPreview(url: string): Promise<{
+        kind?: "page" | "image";
+        title?: string;
+        description?: string;
+        image?: string;
+        video?: string;
+        videoType?: string;
+        url?: string;
+        domain?: string;
+        siteName?: string;
+    } | null> {
         return ipcRenderer.invoke("fetch-link-preview", url);
     },
 
