@@ -95,6 +95,7 @@ and private server ownership.
 - **Role-Based Permissions** — Bitwise permission system with admin role management. Fine-grained access control.
 - **Server Password Protection** — Optional `SERVER_PRIVATE_PASSWORD` env var with client-side password input.
 - **Upload Ownership & Cleanup** — The server keeps its own record of every file it stores: only the uploader can attach a file (once) as a message image, emoji or channel icon, and the server never deletes anything a client merely points at. Unused uploads are cleaned up automatically (immediately when you remove a picked image, after 24 hours otherwise, and with a deleted channel); self-hosters can also run `npm run uploads:prune` — see "Maintenance" below.
+- **Address Bans** — When banning someone you can also ban the address they connected from, or its surrounding range, so a reinstall doesn't simply bring them back (off by default: a VPN gets around it and a shared network can catch innocent people). Lifting the ban lifts that too; other moderators see addresses masked, and the server's designated admin can always get in.
 - **Kick & Ban** — Admin right-click to kick users from voice channels. Ban/Unban lives in the Settings → User Management tab, which lists every server user (online or not), so offline troublemakers can be banned too — persisted by instance ID. Your own row shows a disabled Ban button so the list stays consistent.
 
 ### 🖥️ Desktop Experience

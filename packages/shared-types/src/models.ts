@@ -171,6 +171,20 @@ export interface IIdentityEvent {
     privileged?: boolean;
 }
 
+/**
+ * A banned address or range (PRD 18.7). `cidr` is the canonical network
+ * (`203.0.113.0/24`) for an ADMIN and a masked form (`203.0.113.x`) for any
+ * other moderator.
+ */
+export interface IBannedAddress {
+    id: string;
+    cidr: string;
+    nickname: string | null;
+    /** The user ban this was created with; unbanning that user lifts it too. */
+    linkedUserId: string | null;
+    createdAt: string;
+}
+
 /** A host name seen in an accepted signed join (PRD 18.5) — a suggestion for the allowed-names list. */
 export interface IObservedAuthHost {
     host: string;

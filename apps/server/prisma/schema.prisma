@@ -102,6 +102,11 @@ model User {
   /// signed join (PRD 17.12). NULL = not bound yet (legacy / never signed).
   publicKey        String?
   publicKeyBoundAt DateTime?
+  /// The address this user last joined from (PRD 18.7), as resolved with the
+  /// TRUST_PROXY rules — what an "also ban their address" decision uses for a
+  /// user who is offline. Personal data: only shown (masked or full) to moderators.
+  lastAddress      String?
+  lastAddressAt    DateTime?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -392,4 +397,28 @@ model IdentityEvent {
   @@index([serverId, createdAt(sort: Desc)])
   @@index([userId, createdAt(sort: Desc)])
   @@map("identity_events")
+}
+
+// ---------------------------------------------------------------------------
+// BannedAddress — an address or range refused at sign-in (PRD 18.7). Bans are
+// otherwise per identity, and a fresh install is a fresh identity; this is the
+// opt-in counter-measure (easy to dodge with a VPN, and it can hit people
+// sharing a network, so it is never the default).
+// ---------------------------------------------------------------------------
+
+model BannedAddress {
+  id           String   @id @default(uuid())
+  serverId     String
+  /// Canonical CIDR: IPv4 "203.0.113.0/24" or "203.0.113.7/32"; IPv6 as eight
+  /// un-compressed lower-case hextets "2001:db8:1:2:0:0:0:0/64".
+  cidr         String
+  /// The user ban this was created with, when there was one (unbanning that
+  /// user lifts it too).
+  linkedUserId String?
+  nickname     String?
+  createdBy    String
+  createdAt    DateTime @default(now())
+
+  @@unique([serverId, cidr])
+  @@map("banned_addresses")
 }

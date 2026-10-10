@@ -887,7 +887,16 @@ interface Reson8Api {
     markDmsRead(partnerId: string): Promise<{ success: boolean; error?: string }>;
     getUnreadDmPartners(): Promise<{ success: boolean; partners?: { partnerId: string; partnerNickname: string; unreadCount: number }[]; error?: string }>;
     kickUser(userId: string, channelId: string): Promise<{ success: boolean; error?: string }>;
-    banUser(userId: string): Promise<{ success: boolean; error?: string }>;
+    banUser(
+        userId: string,
+        addressBan?: "none" | "exact" | "range",
+    ): Promise<{ success: boolean; error?: string; warning?: string; addressBanned?: string }>;
+    getBannedAddresses(): Promise<{
+        success: boolean;
+        addresses?: { id: string; cidr: string; nickname: string | null; linkedUserId: string | null; createdAt: string }[];
+        error?: string;
+    }>;
+    unbanAddress(id: string): Promise<{ success: boolean; error?: string }>;
     unbanUser(userId: string): Promise<{ success: boolean; error?: string }>;
     getBannedUsers(): Promise<{ success: boolean; users?: { userId: string; nickname: string; bannedAt: string }[]; error?: string }>;
     uploadFile(fileBuffer: ArrayBuffer, fileName: string, mimeType: string): Promise<UploadResult>;
@@ -4603,15 +4612,19 @@ function renderAdminUsers(users: any[]): void {
                 ? "Unban"
                 : '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="7" cy="7" r="4"/><circle cx="18" cy="17" r="5"/><line x1="14.5" y1="20.5" x2="21.5" y2="13.5"/></svg> Ban';
             banBtn.addEventListener("click", async () => {
-                const res = user.isBanned
-                    ? await api.unbanUser(user.id)
-                    : await api.banUser(user.id);
+                // Banning asks first (PRD 18.7) so an address ban can be chosen;
+                // lifting a ban stays a single click.
+                if (!user.isBanned) {
+                    openBanDialog({ id: user.id, nickname: user.nickname });
+                    return;
+                }
+                const res = await api.unbanUser(user.id);
                 if (res.success) {
-                    log(`${user.isBanned ? "Unbanned" : "Banned"} ${escapeHtml(user.nickname)}`, "success");
-                    SoundAlert.play(user.isBanned ? "user_unbanned_from_server.mp3" : "user_banned_from_server.mp3");
+                    log(`Unbanned ${escapeHtml(user.nickname)}`, "success");
+                    SoundAlert.play("user_unbanned_from_server.mp3");
                     openSettingsPanel(); // refresh to reflect the new banned state
                 } else {
-                    log(`Failed to ${user.isBanned ? "unban" : "ban"}: ${res.error}`, "error");
+                    log(`Failed to unban: ${res.error}`, "error");
                     if (res.error && /permission|denied/i.test(res.error)) SoundAlert.play("insufficient_perms.mp3");
                 }
             });
@@ -4658,8 +4671,11 @@ function renderAdminUsers(users: any[]): void {
         // This user's slice of the identity log (PRD 18.4).
         if (iAmAdmin) {
             const logBtn = document.createElement("button");
-            logBtn.className = "btn-reset-key";
-            logBtn.textContent = "Log";
+            logBtn.className = "btn-reset-key btn-icon";
+            // A compact icon: a text button here squeezed the nickname column (names truncated).
+            logBtn.innerHTML =
+                '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><circle cx="3.5" cy="6" r="1"/><circle cx="3.5" cy="12" r="1"/><circle cx="3.5" cy="18" r="1"/></svg>';
+            logBtn.setAttribute("aria-label", `Identity log of ${user.nickname}`);
             logBtn.title = `Identity log of ${user.nickname}`;
             logBtn.addEventListener("click", () => showIdentityLog({ id: user.id, nickname: user.nickname }));
             row.appendChild(logBtn);
@@ -7194,6 +7210,7 @@ async function openSettingsPanel(): Promise<void> {
     syncProfileSection(); // discard an unsaved avatar draft from a previous visit (PRD 17.1)
     void renderTrustedCertificates(); // PRD 18.3
     hideIdentityLog(); // always reopen on the user list (PRD 18.4)
+    void renderBannedAddresses(); // PRD 18.7 (no-op for anyone without BAN_USER)
     adminModal.classList.add("visible");
 
     // Populate audio devices
@@ -7313,6 +7330,117 @@ function renderPendingEmojis(emojis: CustomEmoji[]): void {
 btnServerSettings.addEventListener("click", () => {
     openSettingsPanel();
 });
+
+// ── Ban dialog + banned addresses (PRD 18.7) ─────────────────────────────
+const banUserModal = document.getElementById("ban-user-modal") as HTMLDivElement;
+const bannedAddressesSection = document.getElementById("banned-addresses-section") as HTMLDivElement;
+const bannedAddressesList = document.getElementById("banned-addresses-list") as HTMLDivElement;
+let banDialogUser: { id: string; nickname: string } | null = null;
+
+function openBanDialog(user: { id: string; nickname: string }): void {
+    banDialogUser = user;
+    (document.getElementById("ban-user-name") as HTMLElement).textContent = user.nickname;
+    const none = banUserModal.querySelector<HTMLInputElement>('input[name="ban-address-scope"][value="none"]');
+    if (none) none.checked = true;
+    (document.getElementById("ban-scope-warning") as HTMLElement).style.display = "none";
+    banUserModal.classList.add("visible");
+    (document.getElementById("btn-ban-user-cancel") as HTMLButtonElement).focus(); // the safe default
+}
+
+function closeBanDialog(): void {
+    banUserModal.classList.remove("visible");
+    banDialogUser = null;
+}
+
+banUserModal.addEventListener("change", (e) => {
+    const target = e.target as HTMLInputElement;
+    if (target?.name !== "ban-address-scope") return;
+    (document.getElementById("ban-scope-warning") as HTMLElement).style.display = target.value === "none" ? "none" : "";
+});
+document.getElementById("btn-ban-user-cancel")!.addEventListener("click", closeBanDialog);
+banUserModal.addEventListener("click", (e) => {
+    if (e.target === banUserModal) closeBanDialog();
+});
+document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && banUserModal.classList.contains("visible")) closeBanDialog();
+});
+
+document.getElementById("btn-ban-user-confirm")!.addEventListener("click", async () => {
+    const user = banDialogUser;
+    if (!user) return;
+    const checked = banUserModal.querySelector<HTMLInputElement>('input[name="ban-address-scope"]:checked');
+    const scope = (checked?.value ?? "none") as "none" | "exact" | "range";
+    closeBanDialog();
+
+    const res = await api.banUser(user.id, scope);
+    if (res.success) {
+        log(`Banned ${escapeHtml(user.nickname)}${res.addressBanned ? " and their address" : ""}`, "success");
+        // The user ban worked, but the address part couldn't be applied: say why.
+        if (res.warning) {
+            log(escapeHtml(res.warning), "error");
+            showToast(escapeHtml(res.warning), 8000);
+        }
+        SoundAlert.play("user_banned_from_server.mp3");
+        openSettingsPanel(); // refresh to reflect the new banned state
+    } else {
+        log(`Failed to ban: ${escapeHtml(res.error ?? "unknown error")}`, "error");
+        if (res.error && /permission|denied/i.test(res.error)) SoundAlert.play("insufficient_perms.mp3");
+    }
+});
+
+/** The "Banned addresses" list under the users (BAN_USER holders only; the server masks it for non-ADMINs). */
+async function renderBannedAddresses(): Promise<void> {
+    if (!isConnected) {
+        bannedAddressesSection.style.display = "none";
+        return;
+    }
+    const res = await api.getBannedAddresses();
+    if (!res.success || !res.addresses) {
+        bannedAddressesSection.style.display = "none"; // no BAN_USER, or an older server
+        return;
+    }
+    bannedAddressesSection.style.display = "";
+    bannedAddressesList.textContent = "";
+    if (res.addresses.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "admin-empty";
+        empty.textContent = "No banned addresses.";
+        bannedAddressesList.appendChild(empty);
+        return;
+    }
+    for (const entry of res.addresses) {
+        const row = document.createElement("div");
+        row.className = "banned-address-row";
+        const info = document.createElement("div");
+        info.className = "banned-address-info";
+        const code = document.createElement("code");
+        code.textContent = entry.cidr;
+        const meta = document.createElement("div");
+        meta.className = "banned-address-meta";
+        const when = new Date(entry.createdAt);
+        const whenText = Number.isNaN(when.getTime())
+            ? ""
+            : when.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
+        meta.textContent = `${entry.nickname ? `Banned with ${entry.nickname}` : "Banned on its own"}${whenText ? ` · ${whenText}` : ""}`;
+        info.append(code, meta);
+        const unban = document.createElement("button");
+        unban.className = "btn-unban";
+        unban.textContent = "Unban";
+        unban.addEventListener("click", async () => {
+            unban.disabled = true;
+            const r = await api.unbanAddress(entry.id);
+            if (r.success) {
+                log(`Lifted the address ban on ${escapeHtml(entry.cidr)}`, "success");
+                void renderBannedAddresses();
+            } else {
+                unban.disabled = false;
+                log(`Failed to lift the address ban: ${escapeHtml(r.error ?? "unknown error")}`, "error");
+            }
+        });
+        row.append(info, unban);
+        bannedAddressesList.appendChild(row);
+    }
+}
 
 // ── Identity log + "Require signed identity" (PRD 18.4) ──────────────────
 const identityLogBar = document.getElementById("identity-log-bar") as HTMLDivElement;

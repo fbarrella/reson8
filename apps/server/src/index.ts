@@ -40,6 +40,7 @@ import { startUploadSweeper } from "./services/upload-sweeper.js";
 import { startIdentityEventPruner } from "./services/identity-events.service.js";
 import { setDbAllowedHosts, setDbRequireSigned } from "./config/identity.config.js";
 import { getTrustProxy, resolveClientAddress } from "./services/client-address.js";
+import { addressBans, reloadAddressBans } from "./services/address-ban.service.js";
 import { loadTlsMaterial, readTlsEnv, watchTlsFiles } from "./config/tls.config.js";
 
 // Augment Fastify with the resolved server ID
@@ -126,6 +127,7 @@ async function main(): Promise<void> {
     // The admin-set "require signed identity" value (PRD 18.4); the env var still wins.
     setDbRequireSigned(server.requireSignedIdentity);
     setDbAllowedHosts(server.authAllowedHosts);
+    await reloadAddressBans(app.prisma, server.id);
 
     // ── mediasoup SFU ──────────────────────────────────────────────────────
     const mediasoupService = new MediasoupService();
@@ -171,6 +173,16 @@ async function main(): Promise<void> {
             socket.handshake.headers,
             trustProxy.trust,
         );
+        // Banned addresses (PRD 18.7). A Viewer window authenticates with a
+        // ticket, never through USER_JOIN_SERVER, so it is refused right here.
+        // A primary socket is only MARKED: the join decides, because the
+        // designated admin must always be able to get in to undo a mistaken
+        // range ban — and who is joining isn't known until then.
+        socket.data.addressBanned = addressBans.isBanned(socket.data.clientAddress);
+        if (socket.data.role === "viewer" && socket.data.addressBanned) {
+            next(new Error("You are banned from this server"));
+            return;
+        }
         next();
     });
 

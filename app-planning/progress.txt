@@ -1279,3 +1279,89 @@ Feature/Fix: Identity key encrypted at rest + passphrase-protected backup (PRD 1
       packaged build.
 
   Next Step: PRD 18.7 — address (IP / range) bans.
+
+
+--- Entry: 10/10/2026 ---
+
+Feature/Fix: Address (IP / range) bans (PRD 18.7)
+
+  Problem: Bans were per identity only, and a fresh install is a fresh
+  identity, so a banned user came straight back by deleting the app's data
+  folder.
+
+  Solution (opt-in per ban; never the default):
+    - Ban dialog: Ban now asks first (it used to ban on the spot) so a scope
+      can be chosen: no / "This address only" / "Their address range", with a
+      warning about shared networks and VPNs. Cancel is the focused default.
+    - Data: `banned_addresses` (canonical CIDR, unique per server, optional
+      linked user, creator) and `users.lastAddress/lastAddressAt` recorded on
+      every join so an OFFLINE user can still be address-banned. Migration
+      20261014120000_add_banned_addresses, additive.
+    - address-ban.service.ts (pure): exact = /32 or /128, range = /24 or
+      /64 with the host bits zeroed; IPv6 written as eight un-compressed
+      hextets so one network is always one string; IPv4-mapped IPv6 is
+      treated as IPv4; `net.BlockList` matcher loaded at boot and after every
+      change; malformed rows can never ban anyone.
+    - Enforcement: the handshake only MARKS a socket (the user isn't known
+      yet); USER_JOIN_SERVER refuses it AFTER the identity decision, unless
+      that decision accepted the join as ADMIN_INSTANCE_ID (right id, and the
+      right key when ADMIN_KEY_FINGERPRINT is set) — so the designated admin
+      can always undo a mistaken range ban from the same network. A Viewer
+      socket from a banned address is refused at the handshake.
+    - BAN_USER: the address part never fails the user ban. A `warning` comes
+      back instead when: no address is known; the address is private and the
+      range was asked; the address is private/loopback while TRUST_PROXY is
+      unset (behind an untrusted proxy EVERY client has the proxy's address —
+      banning it would ban everyone; TRUST_PROXY=false stated explicitly
+      says "no proxy" and allows an exact ban); or the network includes the
+      moderator's own address. Everyone else connected from the newly banned
+      network is disconnected, except the moderator and the designated admin.
+    - UNBAN_USER also lifts the address ban made with that user;
+      GET_BANNED_ADDRESSES (BAN_USER) returns full networks to an ADMIN and
+      `203.0.113.x` / `2001:db8:1:2:x` to any other moderator;
+      UNBAN_ADDRESS lifts one row. A "Banned addresses" list sits under the
+      users in User Management.
+    - Also: the per-user identity-log button from 18.4 became a compact icon
+      (the text button squeezed nicknames to "Bystan…" in the user list).
+
+  Key Files Modified:
+    apps/server/prisma/schema.prisma, migrations/20261014120000_add_banned_addresses (NEW)
+    apps/server/src/services/address-ban.service.ts (NEW)
+    apps/server/src/__tests__/address-ban.service.test.ts (NEW, 57 tests)
+    apps/server/src/handlers/moderation.handler.ts, connection.handler.ts
+    apps/server/src/services/client-address.ts (trustProxyExplicitlyOff), index.ts
+    packages/shared-types/src/models.ts (IBannedAddress), socket-events.ts
+    apps/client/src/preload.ts, renderer/renderer.ts, renderer/index.html
+    AGENTS.md, apps/server/AGENTS.md, README.md
+
+  Verification:
+    - tsc --build x3: exit 0; lint exit 0 (0 errors, 71 warnings, unchanged);
+      server vitest 18 files / 291 tests; client suites unchanged (63/20/22/
+      40/14/73/56).
+    - Live, real server + the real client + Postgres/Redis, 37/37 (with
+      TRUST_PROXY=loopback so scripted users get distinct addresses through a
+      forged X-Forwarded-For): from the UI, banning Troll with "Their address
+      range" — the dialog is on top of Settings, defaults to "No", warns only
+      once an address option is picked — disconnects Troll (USER_BANNED) AND
+      his neighbor in the same /24 while a user on another network is
+      untouched; the database holds the canonical /24 and the ADMIN sees it
+      with "Banned with Troll"; a new identity from that range is refused, one
+      from elsewhere joins, a Viewer socket from the range is refused at the
+      handshake; a range of private addresses is refused with a reason while
+      the user ban still happened; an exact ban stores a /32 (the address
+      next to it still joins); an OFFLINE user is banned by their last
+      address; unbanning the user lifts the range; "Unban" on an address row
+      lifts only that one; after a server restart the ban is still enforced
+      (loaded at boot) while the designated admin still gets in from the
+      banned network; a BAN_USER-only holder gets masked networks, the ADMIN
+      real ones, a plain member is refused, an unknown scope is rejected;
+      with TRUST_PROXY unset a private address is NOT banned (warning, user
+      ban succeeds) and everyone behind the proxy can still join.
+    - Real bugs found by running it (not typecheck): my "re-ban a range" test
+      step hit Unban on an already-banned user (test bug); a text "Log"
+      button had squeezed nicknames in the user list (fixed above).
+    - NOT run: a real reverse proxy in front for an address ban (the forged
+      header from a trusted loopback peer exercises the same code path);
+      IPv6 clients end-to-end (unit tests only).
+
+  Next Step: PRD 18.8 — "Approve new users" mode.

@@ -34,6 +34,7 @@ import {
 import { adminKeyFingerprint, authAllowedHosts, requireSignedIdentity } from "../config/identity.config.js";
 import { recordIdentityEvent } from "../services/identity-events.service.js";
 import { normalizeAuthHost, observeAuthHost } from "../services/auth-hosts.service.js";
+import { normalizeIp } from "../services/address-ban.service.js";
 import { issueViewerTicket, resolveViewerTicket, revokeViewerTickets } from "../services/viewer-ticket.service.js";
 
 type TypedIO = SocketIOServer<
@@ -412,6 +413,17 @@ export function registerConnectionHandlers(
                     ack({ success: false, error: IDENTITY_MESSAGES[decision.reason] });
                     return;
                 }
+                // Banned address (PRD 18.7). Decided here, after the identity decision,
+                // because the designated admin must always be able to get in to undo a
+                // mistaken range ban: that exemption applies only when the identity
+                // check itself accepted them AS the admin (right id AND, with
+                // ADMIN_KEY_FINGERPRINT set, the right key).
+                if (socket.data.addressBanned && !(isAdminId && decision.action === "accept" && decision.grantAdmin)) {
+                    app.log.warn({ userId: instanceId, address: clientAddress }, "Join refused (banned address)");
+                    ack({ success: false, error: "You are banned from this server" });
+                    return;
+                }
+
                 // Which name this signed join was addressed to (PRD 18.5): remembered so
                 // an admin can pick the names people really use, and so the allowed-names
                 // guard knows what THIS admin's own session was signed for.
@@ -473,15 +485,20 @@ export function registerConnectionHandlers(
                     decision.bind && !existingUser && proofIn
                         ? { publicKey: proofIn.publicKey, publicKeyBoundAt: new Date() }
                         : {};
+                // Where they joined from, for an offline "also ban their address" (PRD 18.7).
+                const lastAddressData = normalizeIp(clientAddress)
+                    ? { lastAddress: normalizeIp(clientAddress), lastAddressAt: new Date() }
+                    : {};
                 const userRow = await app.prisma.user.upsert({
                     where: { id: instanceId },
-                    update: { nickname, ...avatarData },
+                    update: { nickname, ...avatarData, ...lastAddressData },
                     create: {
                         id: instanceId,
                         username: instanceId,
                         nickname,
                         password: "instance-auth", // identity is the bound key (PRD 17.12), not a password
                         ...avatarData,
+                        ...lastAddressData,
                         ...bindOnCreate,
                     },
                     select: { publicKey: true },

@@ -2422,6 +2422,7 @@
     #identity-export-modal,
     #identity-import-modal,
     #identity-locked-modal,
+    #ban-user-modal,
     #stream-name-modal {
       display: none;
       position: fixed;
@@ -2457,6 +2458,7 @@
     #identity-export-modal.visible,
     #identity-import-modal.visible,
     #identity-locked-modal.visible,
+    #ban-user-modal.visible,
     #stream-name-modal.visible {
       display: flex;
     }
@@ -2465,7 +2467,8 @@
        they must sit above it or they open invisibly behind it. */
     #identity-export-modal,
     #identity-import-modal,
-    #identity-locked-modal {
+    #identity-locked-modal,
+    #ban-user-modal {
       z-index: 110;
     }
 
@@ -3704,6 +3707,12 @@
       cursor: pointer;
     }
 
+    .btn-reset-key.btn-icon {
+      padding: 4px 6px;
+      display: inline-flex;
+      align-items: center;
+    }
+
     .btn-reset-key:hover {
       border-color: var(--warning);
       color: var(--text-primary);
@@ -3804,6 +3813,62 @@
     }
 
     .toggle-row-note.safe { color: var(--success); }
+
+    /* ── Ban dialog + banned addresses (PRD 18.7) ───────────────────────── */
+    .modal-content fieldset.ban-scope {
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 8px 12px 4px;
+      margin: 0 0 12px;
+    }
+
+    .modal-content fieldset.ban-scope legend {
+      padding: 0 6px;
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    .modal-content fieldset.ban-scope label.ban-scope-option {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 0 0 6px;
+      font-size: 12px;
+      color: var(--text-primary);
+      cursor: pointer;
+    }
+
+    .modal-content fieldset.ban-scope label.ban-scope-option input[type="radio"] {
+      width: auto;
+      margin: 0;
+      padding: 0;
+      flex-shrink: 0;
+    }
+
+    .banned-addresses-title {
+      margin: 14px 0 6px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      color: var(--text-muted);
+    }
+
+    .banned-address-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 7px 10px;
+      margin-bottom: 6px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--bg-input);
+      font-size: 12px;
+    }
+
+    .banned-address-row .banned-address-info { flex: 1; min-width: 0; }
+    .banned-address-row code { font-size: 12px; color: var(--text-primary); }
+    .banned-address-row .banned-address-meta { color: var(--text-muted); font-size: 11px; margin-top: 2px; word-break: break-word; }
 
     /* ── Connection names / relay protection (PRD 18.5) ─────────────────── */
     .relay-hosts {
@@ -5178,6 +5243,28 @@
     </div>
   </div>
 
+  <!-- ── Ban a user, optionally with their address (PRD 18.7) ────────────── -->
+  <div id="ban-user-modal" role="dialog" aria-modal="true" aria-labelledby="ban-user-title">
+    <div class="modal-content">
+      <h3 id="ban-user-title">🚫 Ban <span id="ban-user-name"></span>?</h3>
+      <p>They won't be able to connect to this server with this identity any more. You can lift the ban from the same list.</p>
+      <fieldset class="ban-scope">
+        <legend>Also ban their address</legend>
+        <label class="ban-scope-option"><input type="radio" name="ban-address-scope" value="none" checked> No — just this user</label>
+        <label class="ban-scope-option"><input type="radio" name="ban-address-scope" value="exact"> This address only</label>
+        <label class="ban-scope-option"><input type="radio" name="ban-address-scope" value="range"> Their address range</label>
+      </fieldset>
+      <p class="tls-modal-warning" id="ban-scope-warning" style="display:none;">An address ban can block other
+        people on the same network (shared Wi-Fi, a school, a mobile carrier), and a VPN or mobile data gets around
+        it. A fresh install of Reson8 is a new identity, so this is the only thing that stops them coming back from
+        the same place.</p>
+      <div class="modal-actions">
+        <button class="btn btn-cancel" id="btn-ban-user-cancel">Cancel</button>
+        <button class="btn btn-disconnect" id="btn-ban-user-confirm">Ban</button>
+      </div>
+    </div>
+  </div>
+
   <!-- ── Export identity (PRD 18.6) ──────────────────────────────────────── -->
   <div id="identity-export-modal" role="dialog" aria-modal="true" aria-labelledby="identity-export-title">
     <div class="modal-content">
@@ -5521,6 +5608,11 @@
         </div>
         <div id="admin-user-list" class="admin-user-list">
           <div class="admin-empty">Loading users...</div>
+        </div>
+        <!-- Banned addresses (PRD 18.7) — BAN_USER holders; masked unless ADMIN -->
+        <div id="banned-addresses-section" style="display:none;">
+          <div class="banned-addresses-title">Banned addresses</div>
+          <div id="banned-addresses-list"></div>
         </div>
       </div>
 

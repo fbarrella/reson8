@@ -120,6 +120,15 @@ export function getTrustProxy(): TrustProxyConfig {
     return cached;
 }
 
+/**
+ * `TRUST_PROXY` is literally "false": the admin said "no proxy in front of
+ * this server" on purpose, as opposed to never having thought about it. A
+ * LAN-only server can then ban exact private addresses (PRD 18.7).
+ */
+export function trustProxyExplicitlyOff(env: NodeJS.ProcessEnv = process.env): boolean {
+    return (env.TRUST_PROXY ?? "").trim().toLowerCase() === "false";
+}
+
 /** Test hook: forget the memoized configuration. */
 export function resetTrustProxyCache(): void {
     cached = null;

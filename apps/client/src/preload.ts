@@ -1198,13 +1198,41 @@ const api = {
         });
     },
 
-    banUser(userId: string): Promise<{ success: boolean; error?: string }> {
+    /** `addressBan` (PRD 18.7) also bans the user's address or its range; the ack carries a `warning` when only the user could be banned. */
+    banUser(
+        userId: string,
+        addressBan: "none" | "exact" | "range" = "none",
+    ): Promise<{ success: boolean; error?: string; warning?: string; addressBanned?: string }> {
         return new Promise((resolve) => {
             if (!socket?.connected) {
                 resolve({ success: false, error: "Not connected" });
                 return;
             }
-            socket.emit("BAN_USER", { userId }, resolve);
+            socket.emit("BAN_USER", { userId, addressBan }, resolve);
+        });
+    },
+
+    getBannedAddresses(): Promise<{
+        success: boolean;
+        addresses?: { id: string; cidr: string; nickname: string | null; linkedUserId: string | null; createdAt: string }[];
+        error?: string;
+    }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.emit("GET_BANNED_ADDRESSES", resolve);
+        });
+    },
+
+    unbanAddress(id: string): Promise<{ success: boolean; error?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.emit("UNBAN_ADDRESS", { id }, resolve);
         });
     },
 

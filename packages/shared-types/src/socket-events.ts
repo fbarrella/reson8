@@ -26,6 +26,7 @@ import type {
     IUserProfile,
     IIdentityEvent,
     IObservedAuthHost,
+    IBannedAddress,
 } from "./models.js";
 
 // ---------------------------------------------------------------------------
@@ -344,7 +345,33 @@ export interface ClientToServerEvents {
 
     /** Admin bans a user from the server (blacklist by instance ID). */
     BAN_USER: (
-        payload: { userId: string },
+        payload: {
+            userId: string;
+            /**
+             * PRD 18.7: also ban the address the user connected from — exactly
+             * that address, or its range (/24 for IPv4, /64 for IPv6). Default
+             * "none" (a plain user ban).
+             */
+            addressBan?: "none" | "exact" | "range";
+        },
+        ack: (response: {
+            success: boolean;
+            error?: string;
+            /** The user was banned but the address part could not be (why). */
+            warning?: string;
+            /** The network that was banned along with the user. */
+            addressBanned?: string;
+        }) => void,
+    ) => void;
+
+    /** Lists banned addresses/ranges (BAN_USER). Masked for everyone but an ADMIN (PRD 18.7). */
+    GET_BANNED_ADDRESSES: (
+        ack: (response: { success: boolean; addresses?: IBannedAddress[]; error?: string }) => void,
+    ) => void;
+
+    /** Lifts one address/range ban (BAN_USER) (PRD 18.7). */
+    UNBAN_ADDRESS: (
+        payload: { id: string },
         ack: (response: { success: boolean; error?: string }) => void,
     ) => void;
 
@@ -923,4 +950,6 @@ export interface SocketData {
     clientAddress?: string;
     /** The (lower-cased) host this socket's accepted identity proof was signed for (PRD 18.5). */
     authHost?: string;
+    /** This socket's address is inside a banned range (PRD 18.7); decided at the handshake, enforced at join. */
+    addressBanned?: boolean;
 }
