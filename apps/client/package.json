@@ -26,6 +26,7 @@
         "test:link-fixers": "tsc --build && node scripts/link-fixers-smoke.mjs",
         "test:identity": "tsc --build && node scripts/identity-smoke.mjs",
         "test:tls": "tsc --build && node scripts/tls-trust-smoke.mjs",
+        "test:identity-backup": "tsc --build && node scripts/identity-backup-smoke.mjs",
         "typecheck": "tsc --noEmit"
     },
     "build": {

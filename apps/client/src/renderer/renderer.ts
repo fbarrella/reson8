@@ -903,6 +903,29 @@ interface Reson8Api {
     };
     setAvatarSelection(selection: { provider: "libravatar" | "gravatar"; hash: string } | null): void;
     getIdentityFingerprint(): Promise<string>;
+    identity: {
+        getStatus(): Promise<
+            | { state: "ok"; storage: "encrypted" | "file" | "ephemeral"; fingerprint: string; canBackup: boolean }
+            | { state: "locked"; storage: "encrypted"; canBackup: boolean }
+        >;
+        exportBackup(passphrase: string): Promise<{ ok: boolean; path?: string; canceled?: boolean; error?: string }>;
+        pickBackup(): Promise<{ ok: boolean; token?: string; fileName?: string; canceled?: boolean; error?: string }>;
+        decryptBackup(
+            token: string,
+            passphrase: string,
+        ): Promise<{
+            ok: boolean;
+            error?: string;
+            code?: string;
+            fingerprint?: string;
+            instanceId?: string;
+            createdAt?: string;
+            currentFingerprint?: string | null;
+            currentInstanceId?: string;
+        }>;
+        applyBackup(token: string): Promise<{ ok: boolean; error?: string }>;
+        createNew(): Promise<{ ok: boolean; error?: string }>;
+    };
     resetIdentityKey(userId: string): Promise<{ success: boolean; error?: string }>;
     getUserProfile(userId: string): Promise<{
         success: boolean;
@@ -10478,19 +10501,220 @@ chkNsfwBlur.addEventListener("change", () => {
 // ── Identity fingerprint in Settings → About (PRD 17.12) ────────────────────
 const aboutIdentityFingerprint = document.getElementById("about-identity-fingerprint") as HTMLElement;
 const btnCopyFingerprint = document.getElementById("btn-copy-fingerprint") as HTMLButtonElement;
-api.getIdentityFingerprint()
-    .then((fp) => {
-        aboutIdentityFingerprint.textContent = fp;
-    })
-    .catch(() => {
-        aboutIdentityFingerprint.textContent = "Unavailable";
-    });
 btnCopyFingerprint.addEventListener("click", async () => {
     const fp = aboutIdentityFingerprint.textContent ?? "";
     if (!fp.startsWith("SHA256:")) return;
     const ok = await api.copyText(fp);
     btnCopyFingerprint.textContent = ok ? "Copied!" : "Copy failed";
     setTimeout(() => (btnCopyFingerprint.textContent = "Copy"), 1500);
+});
+
+// ── Identity key storage, backup and restore (PRD 18.6) ─────────────────────
+const aboutIdentityStorage = document.getElementById("about-identity-storage") as HTMLDivElement;
+const btnIdentityExport = document.getElementById("btn-identity-export") as HTMLButtonElement;
+const btnIdentityImport = document.getElementById("btn-identity-import") as HTMLButtonElement;
+const identityExportModal = document.getElementById("identity-export-modal") as HTMLDivElement;
+const identityImportModal = document.getElementById("identity-import-modal") as HTMLDivElement;
+const identityLockedModal = document.getElementById("identity-locked-modal") as HTMLDivElement;
+const identityExportPass = document.getElementById("identity-export-pass") as HTMLInputElement;
+const identityExportPass2 = document.getElementById("identity-export-pass2") as HTMLInputElement;
+const identityExportError = document.getElementById("identity-export-error") as HTMLDivElement;
+const btnIdentityExportConfirm = document.getElementById("btn-identity-export-confirm") as HTMLButtonElement;
+const identityImportPass = document.getElementById("identity-import-pass") as HTMLInputElement;
+const identityImportError = document.getElementById("identity-import-error") as HTMLDivElement;
+const btnIdentityImportUnlock = document.getElementById("btn-identity-import-unlock") as HTMLButtonElement;
+const btnIdentityImportApply = document.getElementById("btn-identity-import-apply") as HTMLButtonElement;
+const MIN_BACKUP_PASSPHRASE = 10; // mirrors identity-backup.ts; main re-validates
+
+let importToken: string | null = null;
+
+/** Fills the About → Identity block from the main process's view of the key. */
+async function refreshIdentityPanel(): Promise<void> {
+    try {
+        const st = await api.identity.getStatus();
+        if (st.state === "locked") {
+            aboutIdentityFingerprint.textContent = "Locked";
+            aboutIdentityStorage.textContent =
+                "Your identity key couldn't be unlocked, so you can't connect. Import a backup or create a new identity.";
+            aboutIdentityStorage.classList.add("warn");
+        } else {
+            aboutIdentityFingerprint.textContent = st.fingerprint;
+            aboutIdentityStorage.classList.remove("warn");
+            aboutIdentityStorage.textContent =
+                st.storage === "encrypted"
+                    ? "Stored encrypted by your operating system."
+                    : st.storage === "file"
+                      ? "Stored as a protected file in Reson8's data folder (no system keyring available)."
+                      : "Temporary identity for this development build — it changes every launch.";
+        }
+        btnIdentityExport.disabled = !st.canBackup || st.state === "locked";
+        btnIdentityImport.disabled = !st.canBackup;
+        const devTitle = "Not available in development builds, which use a temporary identity";
+        btnIdentityExport.title = st.canBackup ? "" : devTitle;
+        btnIdentityImport.title = st.canBackup ? "" : devTitle;
+        if (st.state === "locked") identityLockedModal.classList.add("visible");
+    } catch {
+        aboutIdentityFingerprint.textContent = "Unavailable";
+    }
+}
+void refreshIdentityPanel();
+
+function closeIdentityExportModal(): void {
+    identityExportModal.classList.remove("visible");
+    identityExportPass.value = "";
+    identityExportPass2.value = "";
+}
+
+function closeIdentityImportModal(): void {
+    identityImportModal.classList.remove("visible");
+    identityImportPass.value = "";
+    importToken = null;
+}
+
+btnIdentityExport.addEventListener("click", () => {
+    identityExportPass.value = "";
+    identityExportPass2.value = "";
+    identityExportError.textContent = "";
+    identityExportModal.classList.add("visible");
+    identityExportPass.focus();
+});
+document.getElementById("btn-identity-export-cancel")!.addEventListener("click", closeIdentityExportModal);
+
+btnIdentityExportConfirm.addEventListener("click", async () => {
+    const pass = identityExportPass.value;
+    identityExportError.textContent = "";
+    if (pass.normalize("NFC").length < MIN_BACKUP_PASSPHRASE) {
+        identityExportError.textContent = `Use at least ${MIN_BACKUP_PASSPHRASE} characters.`;
+        return;
+    }
+    if (pass !== identityExportPass2.value) {
+        identityExportError.textContent = "The two passphrases don't match.";
+        return;
+    }
+    btnIdentityExportConfirm.disabled = true;
+    try {
+        const res = await api.identity.exportBackup(pass);
+        if (res.ok) {
+            closeIdentityExportModal();
+            showToast(`Identity saved to <strong>${escapeHtml(res.path ?? "the chosen file")}</strong>`, 6000);
+            log("Identity backup exported", "success");
+        } else if (!res.canceled) {
+            identityExportError.textContent = res.error ?? "Couldn't export the identity.";
+        }
+    } finally {
+        btnIdentityExportConfirm.disabled = false;
+    }
+});
+
+async function startIdentityImport(): Promise<void> {
+    const picked = await api.identity.pickBackup();
+    if (!picked.ok || !picked.token) {
+        if (!picked.canceled) showToast(escapeHtml(picked.error ?? "Couldn't open that file"));
+        return;
+    }
+    importToken = picked.token;
+    (document.getElementById("identity-import-file") as HTMLElement).textContent = picked.fileName ?? "backup";
+    identityImportPass.value = "";
+    identityImportError.textContent = "";
+    (document.getElementById("identity-import-step-pass") as HTMLElement).style.display = "";
+    (document.getElementById("identity-import-step-confirm") as HTMLElement).style.display = "none";
+    identityLockedModal.classList.remove("visible");
+    identityImportModal.classList.add("visible");
+    identityImportPass.focus();
+}
+
+btnIdentityImport.addEventListener("click", () => void startIdentityImport());
+document.getElementById("btn-identity-import-cancel")!.addEventListener("click", closeIdentityImportModal);
+document.getElementById("btn-identity-import-back")!.addEventListener("click", closeIdentityImportModal);
+
+btnIdentityImportUnlock.addEventListener("click", async () => {
+    if (!importToken) return;
+    identityImportError.textContent = "";
+    btnIdentityImportUnlock.disabled = true;
+    try {
+        const res = await api.identity.decryptBackup(importToken, identityImportPass.value);
+        identityImportPass.value = "";
+        if (!res.ok) {
+            identityImportError.textContent = res.error ?? "Couldn't unlock the backup.";
+            return;
+        }
+        if (res.fingerprint === res.currentFingerprint && res.instanceId === res.currentInstanceId) {
+            closeIdentityImportModal();
+            showToast("That backup is the identity this install already uses — nothing to import.");
+            return;
+        }
+        const set = (id: string, text: string): void => {
+            (document.getElementById(id) as HTMLElement).textContent = text;
+        };
+        set("identity-import-new-fp", res.fingerprint ?? "");
+        set("identity-import-new-id", `User ID ${res.instanceId ?? ""}`);
+        set("identity-import-cur-fp", res.currentFingerprint ?? "(locked)");
+        set("identity-import-cur-id", `User ID ${res.currentInstanceId ?? ""}`);
+        (document.getElementById("identity-import-step-pass") as HTMLElement).style.display = "none";
+        (document.getElementById("identity-import-step-confirm") as HTMLElement).style.display = "";
+    } finally {
+        btnIdentityImportUnlock.disabled = false;
+    }
+});
+identityImportPass.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") btnIdentityImportUnlock.click();
+});
+
+btnIdentityImportApply.addEventListener("click", async () => {
+    if (!importToken) return;
+    btnIdentityImportApply.disabled = true;
+    const res = await api.identity.applyBackup(importToken);
+    if (!res.ok) {
+        btnIdentityImportApply.disabled = false;
+        showToast(escapeHtml(res.error ?? "Couldn't apply the backup"));
+        closeIdentityImportModal();
+        return;
+    }
+    btnIdentityImportApply.textContent = "Restarting…"; // the app relaunches on its own
+});
+
+// Locked key (PRD 18.6): raised by the preload when a connect finds it.
+api.on("identity-locked", () => {
+    identityLockedModal.classList.add("visible");
+    log("Your identity key is locked — import a backup or create a new identity", "error");
+    void refreshIdentityPanel();
+});
+document.getElementById("btn-identity-locked-close")!.addEventListener("click", () => {
+    identityLockedModal.classList.remove("visible");
+});
+document.getElementById("btn-identity-locked-import")!.addEventListener("click", () => void startIdentityImport());
+{
+    // Creating a new identity orphans every binding the old key had on servers,
+    // so it takes a second, deliberate click (the same arming pattern as "Reset key").
+    const btn = document.getElementById("btn-identity-locked-new") as HTMLButtonElement;
+    let armedUntil = 0;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    btn.addEventListener("click", async () => {
+        if (Date.now() > armedUntil) {
+            armedUntil = Date.now() + 5000;
+            btn.textContent = "Click again to confirm";
+            if (timer) clearTimeout(timer);
+            timer = setTimeout(() => (btn.textContent = "Create new identity"), 5000);
+            return;
+        }
+        if (timer) clearTimeout(timer);
+        btn.textContent = "Create new identity";
+        const res = await api.identity.createNew();
+        if (res.ok) {
+            identityLockedModal.classList.remove("visible");
+            showToast("New identity created. Ask a server admin to reset your old one to get your roles back.", 7000);
+            log("Created a new identity (the old key file was kept aside)", "success");
+            void refreshIdentityPanel();
+        } else {
+            showToast(escapeHtml(res.error ?? "Couldn't create a new identity"));
+        }
+    });
+}
+document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    if (identityExportModal.classList.contains("visible")) closeIdentityExportModal();
+    else if (identityImportModal.classList.contains("visible")) closeIdentityImportModal();
+    else if (identityLockedModal.classList.contains("visible")) identityLockedModal.classList.remove("visible");
 });
 
 // ── Profile: avatar settings (PRD 17.1) ─────────────────────────────────────

@@ -1,79 +1,95 @@
 /**
- * This install's identity key (PRD 17.12) — MAIN PROCESS ONLY. The private
- * key never leaves this process: the preload asks for a signature over a
- * server challenge via IPC, and gets only the signature back.
+ * This install's identity key (PRD 17.12, protected at rest by PRD 18.6) —
+ * MAIN PROCESS ONLY. The private key never leaves this process: the preload
+ * asks for a signature over a server challenge via IPC and gets only the
+ * signature back; a backup is built here and written by a main-process dialog.
  *
- * Packaged builds keep an Ed25519 key in `<userData>/identity-key.pem`
- * (PKCS#8, file mode 0600), next to `instance-id.txt`. OS-keychain
- * encryption (`safeStorage`) was rejected on purpose: on Linux without a
- * keyring it silently falls back to plain text, and if the keyring later
- * becomes unavailable decryption fails and the identity is lost for good.
+ * The storage rules (OS-encrypted file where that is reliable, a 0600 PEM
+ * otherwise, a `locked` state instead of ever replacing a key that can't be
+ * decrypted) live in `identity-store.ts`; this file only supplies Electron's
+ * `safeStorage` and the userData folder.
+ *
+ * `safeStorage` is reliable on Windows (DPAPI) and macOS (Keychain). On Linux
+ * it is trusted only when a real keyring backend was selected — with
+ * "basic_text" the "encryption" is a fixed key anyone can read, so the file
+ * stays a plain 0600 PEM instead of pretending.
+ *
+ * Honest limit: this does not stop malware running AS the user on Windows or
+ * Linux (it can ask the OS to decrypt, like Reson8 does). It protects copied
+ * backups and synced folders, offline disk access and other OS accounts.
+ *
  * Dev builds use an ephemeral key per launch, matching the fresh instance id
- * dev mode already uses (see instance-id.ts).
+ * dev mode already uses. `RESON8_FORCE_PERSISTENT_IDENTITY=1` is a TEST-ONLY
+ * switch that makes an unpackaged build behave like a packaged one (always
+ * together with a throwaway `--user-data-dir`).
  */
 
-import { app } from "electron";
-import { createPrivateKey, generateKeyPairSync, type KeyObject } from "crypto";
-import { existsSync, readFileSync, renameSync, writeFileSync } from "fs";
-import { join } from "path";
-import { fingerprintOf, publicKeyBase64, signChallenge } from "./identity-proof";
-
-interface Identity {
-    privateKey: KeyObject;
-    publicKey: string;
-    fingerprint: string;
-}
-
-let identity: Identity | null = null;
-
-function keyFile(): string {
-    return join(app.getPath("userData"), "identity-key.pem");
-}
+import { app, safeStorage } from "electron";
+import { IdentityStore, type IdentityStatus, type KeyCipher } from "./identity-store";
 
 function isDevBuild(): boolean {
+    if (process.env.RESON8_FORCE_PERSISTENT_IDENTITY === "1") return false;
     return process.env.NODE_ENV === "development" || !app.isPackaged;
 }
 
-function loadOrCreate(): Identity {
-    if (identity) return identity;
-
-    let privateKey: KeyObject | null = null;
-    if (!isDevBuild() && existsSync(keyFile())) {
+const cipher: KeyCipher = {
+    isReliable(): boolean {
+        // safeStorage can't be used before the app is ready.
+        if (!app.isReady()) return false;
         try {
-            const loaded = createPrivateKey(readFileSync(keyFile(), "utf8"));
-            if (loaded.asymmetricKeyType !== "ed25519") throw new Error(`unexpected key type ${loaded.asymmetricKeyType}`);
-            privateKey = loaded;
-        } catch (err) {
-            // Keep the unreadable file for inspection instead of overwriting it.
-            // The new key won't match what servers have bound: a server admin
-            // can "Reset key" in User Management (PRD 17.12).
-            console.error("[identity] identity key unreadable, creating a new one:", err);
-            try {
-                renameSync(keyFile(), `${keyFile()}.unreadable-${Date.now()}`);
-            } catch { /* best effort */ }
+            if (!safeStorage.isEncryptionAvailable()) return false;
+            if (process.platform === "linux") {
+                const backend = safeStorage.getSelectedStorageBackend();
+                return backend !== "basic_text" && backend !== "unknown";
+            }
+            return true;
+        } catch {
+            return false;
         }
-    }
+    },
+    encrypt: (plain) => safeStorage.encryptString(plain).toString("base64"),
+    decrypt: (encoded) => safeStorage.decryptString(Buffer.from(encoded, "base64")),
+};
 
-    if (!privateKey) {
-        privateKey = generateKeyPairSync("ed25519").privateKey;
-        if (!isDevBuild()) {
-            const pem = privateKey.export({ format: "pem", type: "pkcs8" }).toString();
-            writeFileSync(keyFile(), pem, { encoding: "utf8", mode: 0o600 });
-        }
-    }
+let store: IdentityStore | null = null;
 
-    const publicKey = publicKeyBase64(privateKey);
-    identity = { privateKey, publicKey, fingerprint: fingerprintOf(publicKey) };
-    return identity;
+function getStore(): IdentityStore {
+    store ??= new IdentityStore({
+        dir: app.getPath("userData"),
+        ephemeral: isDevBuild(),
+        cipher,
+        log: (message, err) => console.error(`[identity] ${message}`, err ?? ""),
+    });
+    return store;
 }
 
-/** The public half and its fingerprint (shown in Settings → About). */
-export function getIdentityPublic(): { publicKey: string; fingerprint: string } {
-    const { publicKey, fingerprint } = loadOrCreate();
-    return { publicKey, fingerprint };
+/** Whether this is a development build (no persistent identity, so no backup/restore). */
+export function isEphemeralIdentity(): boolean {
+    return isDevBuild();
 }
 
-/** A signature over a server challenge, or null when the nonce/host is malformed. */
+export function getIdentityStatus(): IdentityStatus {
+    return getStore().status();
+}
+
+/** The public half and its fingerprint (shown in Settings → About); null while locked. */
+export function getIdentityPublic(): { publicKey: string; fingerprint: string } | null {
+    return getStore().publicInfo();
+}
+
+/** A signature over a server challenge, or null when the nonce/host is malformed or the key is locked. */
 export function signAuthChallenge(nonce: unknown, host: unknown): string | null {
-    return signChallenge(loadOrCreate().privateKey, nonce, host);
+    return getStore().sign(nonce, host);
+}
+
+export function exportIdentityPkcs8Der(): Buffer | null {
+    return getStore().exportPkcs8Der();
+}
+
+export function replaceIdentityKey(der: Buffer): void {
+    getStore().replaceKey(der);
+}
+
+export function createNewIdentityAfterLock(): IdentityStatus {
+    return getStore().createNewAfterLock();
 }

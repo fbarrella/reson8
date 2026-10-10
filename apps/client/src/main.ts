@@ -7,15 +7,33 @@
 
 import { app, BrowserWindow, session, ipcMain, globalShortcut, Menu, Tray, nativeImage, shell, desktopCapturer, dialog, net, clipboard } from "electron";
 import path from "node:path";
-import { createHash } from "node:crypto";
-import { getInstanceId, hasExistingInstanceId } from "./instance-id.js";
+import { createHash, createPrivateKey, randomBytes } from "node:crypto";
+import { readFileSync, statSync, writeFileSync } from "node:fs";
+import { getInstanceId, hasExistingInstanceId, replaceInstanceId } from "./instance-id.js";
 import { autoUpdater, NsisUpdater } from "electron-updater";
 import { startCapture, resolvePidForWindowSourceId, listAudioProducingApps, platformSupportsCapture } from "@reson8/native-audio";
 import type { CaptureHandle } from "@reson8/native-audio";
 import MarkdownIt from "markdown-it";
 import { loadWindowState, trackWindowState } from "./window-state.js";
 import { FIXER_USER_AGENT, decodeHtmlEntities, displayDomain, toFixerUrl } from "./link-fixers.js";
-import { getIdentityPublic, signAuthChallenge } from "./identity-key.js";
+import {
+    createNewIdentityAfterLock,
+    exportIdentityPkcs8Der,
+    getIdentityPublic,
+    getIdentityStatus,
+    isEphemeralIdentity,
+    replaceIdentityKey,
+    signAuthChallenge,
+} from "./identity-key.js";
+import {
+    BackupError,
+    MAX_BACKUP_FILE_BYTES,
+    decryptBackup,
+    encryptBackup,
+    validatePassphrase,
+    type BackupPayload,
+} from "./identity-backup.js";
+import { fingerprintOf, publicKeyBase64 } from "./identity-proof.js";
 import { TlsTrustStore } from "./tls-store.js";
 import { probeServer } from "./tls-probe.js";
 import { hostKey, isFingerprint, type CertInfo } from "./tls-trust.js";
@@ -901,8 +919,125 @@ app.whenReady().then(() => {
     // preload gets the public half, and signatures over server challenges
     // only — identity-key.ts refuses anything that isn't a well-formed
     // nonce + host, so a compromised renderer can't get arbitrary data signed.
-    ipcMain.handle("identity-get-public", () => getIdentityPublic());
+    ipcMain.handle("identity-get-public", () => getIdentityPublic()); // null while the key is locked
     ipcMain.handle("identity-sign-challenge", (_event, nonce: unknown, host: unknown) => signAuthChallenge(nonce, host));
+
+    // ── Identity backup / restore (PRD 18.6) ─────────────────────────────
+    // Everything that touches key material or files happens HERE. The renderer
+    // only passes passphrases in and gets fingerprints/status back.
+    const BACKUP_FILTERS = [{ name: "Reson8 identity", extensions: ["reson8-identity"] }];
+    const IMPORT_WINDOW_MS = 10 * 60 * 1000;
+    let pendingImport: { token: string; text: string; at: number; payload?: BackupPayload } | null = null;
+    const DEV_ONLY = { ok: false, error: "Identity backup isn't available in development builds (they use a temporary identity)" };
+
+    ipcMain.handle("identity-get-status", () => ({ ...getIdentityStatus(), canBackup: !isEphemeralIdentity() }));
+
+    ipcMain.handle("identity-export", async (event, passphrase: unknown) => {
+        if (isEphemeralIdentity()) return DEV_ONLY;
+        const problem = validatePassphrase(passphrase);
+        if (problem) return { ok: false, error: problem };
+        const der = exportIdentityPkcs8Der();
+        const pub = getIdentityPublic();
+        if (!der || !pub) {
+            return { ok: false, error: "Your identity key is locked — import a backup or create a new identity first" };
+        }
+        const win = BrowserWindow.fromWebContents(event.sender) ?? undefined;
+        const shortFp = pub.fingerprint.replace(/[^A-Za-z0-9]/g, "").slice(6, 14).toLowerCase();
+        const options = {
+            title: "Export identity",
+            defaultPath: path.join(app.getPath("documents"), `reson8-identity-${shortFp}.reson8-identity`),
+            filters: BACKUP_FILTERS,
+        };
+        const chosen = win ? await dialog.showSaveDialog(win, options) : await dialog.showSaveDialog(options);
+        if (chosen.canceled || !chosen.filePath) return { ok: false, canceled: true };
+        try {
+            const text = await encryptBackup(
+                {
+                    instanceId: getInstanceId(),
+                    privateKeyPkcs8Der: der.toString("base64"),
+                    createdAt: new Date().toISOString(),
+                    appVersion: app.getVersion(),
+                },
+                passphrase as string,
+            );
+            writeFileSync(chosen.filePath, text, { encoding: "utf8", mode: 0o600 });
+            return { ok: true, path: chosen.filePath };
+        } catch (err) {
+            console.error("[identity] export failed:", err);
+            return { ok: false, error: "Couldn't write the backup file" };
+        }
+    });
+
+    ipcMain.handle("identity-import-pick", async (event) => {
+        if (isEphemeralIdentity()) return DEV_ONLY;
+        const win = BrowserWindow.fromWebContents(event.sender) ?? undefined;
+        const options = { title: "Import identity", properties: ["openFile" as const], filters: BACKUP_FILTERS };
+        const chosen = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options);
+        if (chosen.canceled || !chosen.filePaths[0]) return { ok: false, canceled: true };
+        try {
+            const file = chosen.filePaths[0];
+            if (statSync(file).size > MAX_BACKUP_FILE_BYTES) {
+                return { ok: false, error: "That file is too large to be an identity backup" };
+            }
+            // The contents stay in this process; the renderer gets an opaque token.
+            pendingImport = { token: randomBytes(16).toString("hex"), text: readFileSync(file, "utf8"), at: Date.now() };
+            return { ok: true, token: pendingImport.token, fileName: path.basename(file) };
+        } catch {
+            return { ok: false, error: "Couldn't read that file" };
+        }
+    });
+
+    ipcMain.handle("identity-import-decrypt", async (_event, token: unknown, passphrase: unknown) => {
+        if (isEphemeralIdentity()) return DEV_ONLY;
+        if (!pendingImport || token !== pendingImport.token || Date.now() - pendingImport.at > IMPORT_WINDOW_MS) {
+            return { ok: false, error: "Pick the backup file again" };
+        }
+        if (typeof passphrase !== "string") return { ok: false, error: "Enter the passphrase" };
+        try {
+            const payload = await decryptBackup(pendingImport.text, passphrase);
+            pendingImport.payload = payload;
+            const key = createPrivateKey({ key: Buffer.from(payload.privateKeyPkcs8Der, "base64"), format: "der", type: "pkcs8" });
+            return {
+                ok: true,
+                fingerprint: fingerprintOf(publicKeyBase64(key)),
+                instanceId: payload.instanceId,
+                createdAt: payload.createdAt,
+                currentFingerprint: getIdentityPublic()?.fingerprint ?? null,
+                currentInstanceId: getInstanceId(),
+            };
+        } catch (err) {
+            if (err instanceof BackupError) return { ok: false, error: err.message, code: err.code };
+            console.error("[identity] import failed:", err);
+            return { ok: false, error: "Couldn't read the backup" };
+        }
+    });
+
+    ipcMain.handle("identity-import-apply", (_event, token: unknown) => {
+        if (isEphemeralIdentity()) return DEV_ONLY;
+        if (!pendingImport?.payload || token !== pendingImport.token) {
+            return { ok: false, error: "Open the backup again and enter its passphrase" };
+        }
+        try {
+            const { instanceId, privateKeyPkcs8Der } = pendingImport.payload;
+            replaceIdentityKey(Buffer.from(privateKeyPkcs8Der, "base64"));
+            replaceInstanceId(instanceId);
+            pendingImport = null;
+            // The instance id is cached in several places: restart is the clean way.
+            // app.quit() (not exit) so the graceful-disconnect handler runs.
+            app.relaunch();
+            app.quit();
+            return { ok: true };
+        } catch (err) {
+            console.error("[identity] applying the backup failed:", err);
+            return { ok: false, error: "Couldn't apply the backup" };
+        }
+    });
+
+    // Recovery from a locked key: starts a fresh identity (the old file is kept aside).
+    ipcMain.handle("identity-create-new", () => {
+        if (isEphemeralIdentity()) return DEV_ONLY;
+        return { ok: true, status: createNewIdentityAfterLock() };
+    });
 
     // ── Encrypted connections (PRD 18.3) ─────────────────────────────────
     // One round trip gives the renderer everything `decideScheme()` needs.

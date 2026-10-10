@@ -1173,3 +1173,109 @@ Feature/Fix: Allowed connection names managed in Settings — relay protection (
     - NOT run: the script inside the production Docker image.
 
   Next Step: PRD 18.6 — identity key encrypted at rest + passphrase backup.
+
+
+--- Entry: 10/10/2026 ---
+
+Feature/Fix: Identity key encrypted at rest + passphrase-protected backup (PRD 18.6)
+
+  Problem: The Ed25519 private key was a plain PKCS#8 PEM (0600) in the
+  userData folder, so a copy of that folder — a backup, a synced folder — was
+  a copy of the identity. And if the key was ever lost there was no recovery
+  at all: an unreadable PEM silently minted a NEW key, orphaning every
+  identity bound on servers until an admin reset each one.
+
+  Solution:
+    Storage (identity-store.ts, Electron-free; identity-key.ts is the adapter)
+      - `identity-key.enc` = Electron safeStorage (DPAPI / Keychain /
+        libsecret / KWallet), used only where it is RELIABLE: Windows and
+        macOS, and Linux only when `getSelectedStorageBackend()` isn't
+        "basic_text"/"unknown" (there the "encryption" is a fixed key anyone
+        can read, so the file stays a 0600 PEM instead of pretending).
+      - Migration of a 2.6.0 PEM: encrypt -> write .enc atomically -> read it
+        back, decrypt, compare DER -> only THEN delete the PEM. Any failure
+        leaves the PEM where it was and removes only the .enc that attempt
+        created. A leftover plaintext copy of the SAME key next to a working
+        .enc (interrupted migration) is removed; a DIFFERENT PEM is left alone.
+      - LOCKED state: an .enc that can't be decrypted (keyring reset, moved to
+        another account) never creates a replacement. Public key, signing and
+        export all return null, nothing on disk changes, and the preload stops
+        the connect (emits `identity-locked`) instead of joining unsigned — an
+        unsigned join of a bound id would only fail with a confusing "another
+        device" error.
+    Backup (identity-backup.ts, pure)
+      - `*.reson8-identity`: scrypt N=2^17 r=8 p=1 (128 MiB, async so main
+        stays responsive) + AES-256-GCM, header bound in as AAD, passphrase
+        NFC-normalized, >= 10 characters. A wrong passphrase and a tampered
+        file are indistinguishable by design ("Wrong passphrase or damaged
+        file"). Cost parameters in a file are NEVER trusted: anything but our
+        exact values is "unsupported" before any hashing. The payload (user
+        id + PKCS#8 key) is validated as a UUID + a real Ed25519 key, and a
+        backup that couldn't be restored is never written.
+    Flows (main-process IPC; the renderer only passes passphrases and gets
+    fingerprints back; file dialogs and key bytes stay in main)
+      - Settings -> About: storage line ("Stored encrypted by your operating
+        system" / protected file / temporary dev identity), Export, Import.
+      - Import: pick file (64 KB cap, opaque token) -> passphrase -> a
+        comparison of the backup's identity with the current one ->
+        "Replace and restart". The replaced key and instance-id files are
+        renamed aside (never deleted); then `app.relaunch(); app.quit()` so
+        the graceful-disconnect handler runs. Importing the identity already
+        in use is detected and changes nothing.
+      - Locked dialog: Import backup, or "Create new identity" which needs a
+        second click (it orphans every binding; the old file is kept aside).
+      - Dev builds (ephemeral identity) disable both buttons with a reason.
+
+  Bugs found by actually looking/driving (not by typecheck):
+    - The three new modals open FROM the Settings modal, which has the same
+      z-index and is later in the DOM — they opened invisibly behind it while
+      their `visible` class was set. Fixed with z-index 110, placed AFTER the
+      base modal block (my first attempt sat before it and lost).
+    - instance-id.ts had its own dev check, so under the test flag every
+      `getInstanceId()` call returned a fresh UUID; it now honors
+      RESON8_FORCE_PERSISTENT_IDENTITY too (test-only, documented).
+
+  Key Files Modified:
+    apps/client/src/identity-store.ts (NEW), identity-backup.ts (NEW)
+    apps/client/src/identity-key.ts (rewritten as the adapter)
+    apps/client/src/instance-id.ts (replaceInstanceId; test flag)
+    apps/client/scripts/identity-backup-smoke.mjs (NEW, 56 checks), package.json
+    apps/client/src/main.ts, preload.ts, renderer/renderer.ts, renderer/index.html
+    AGENTS.md, apps/client/AGENTS.md, README.md
+
+  Verification:
+    - tsc --build x3: exit 0; lint exit 0 (0 errors; 71 warnings after
+      removing the two this item introduced); server 234 tests; client
+      markdown 63, avatar 20, soft-clip 22, link-fixers 40, identity 14, tls
+      73, identity-backup 56.
+    - `test:identity-backup`: round trip; wrong passphrase; a flipped
+      ciphertext/tag/salt/IV byte; v:2; a huge or a weakened scrypt cost;
+      another format; non-JSON; an oversized file; NFC; a non-Ed25519 key and
+      a bad id are never written. The store, with a fake cipher that can be
+      unreliable, throw, belong to another "keyring" or return a corrupted
+      read-back: fresh encrypted/plain, migration keeping the SAME key, a
+      failing encrypt, a mismatching read-back, locked (byte-for-byte
+      unchanged, nothing created, intact when the keyring returns), create
+      new, replace (also from locked), an unreadable PEM, ephemeral, and the
+      interrupted-migration leftovers.
+    - Real Electron, real server, 43/43: App 1 (fresh install; on this
+      machine the keyring is real so the ENCRYPTED path ran) export with the
+      modal checks (short, mismatch, valid; file 0600, no id or passphrase in
+      it, fields cleared), the same identity imported = no-op, then bound on
+      the server; App 2 (another install) wrong passphrase -> error and
+      nothing replaced, right one -> the comparison, nothing changes before
+      "Replace and restart", after the relaunch it IS the backup's key and
+      user id, the replaced files kept aside, and the server that had bound
+      the original key ACCEPTS it; App 3 an undecryptable .enc -> locked
+      (nothing created or replaced), connect stopped, About says Locked,
+      Export disabled, then recovered by importing; App 4 locked -> first
+      click arms, second creates a different identity with the old file
+      aside. A 2.6.0-style plaintext PEM was migrated live: same
+      fingerprint, only .enc left, no PEM text inside it, instance id
+      untouched. Screenshots of the About block and the export modal were
+      looked at.
+    - NOT run: macOS and Windows (DPAPI/Keychain); a Linux machine WITHOUT a
+      keyring (covered by the unreliable-cipher store tests only); a
+      packaged build.
+
+  Next Step: PRD 18.7 — address (IP / range) bans.

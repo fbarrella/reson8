@@ -2419,6 +2419,9 @@
     #watch-share-confirm-modal,
     #tls-trust-modal,
     #tls-changed-modal,
+    #identity-export-modal,
+    #identity-import-modal,
+    #identity-locked-modal,
     #stream-name-modal {
       display: none;
       position: fixed;
@@ -2451,8 +2454,19 @@
     #watch-share-confirm-modal.visible,
     #tls-trust-modal.visible,
     #tls-changed-modal.visible,
+    #identity-export-modal.visible,
+    #identity-import-modal.visible,
+    #identity-locked-modal.visible,
     #stream-name-modal.visible {
       display: flex;
+    }
+
+    /* (After the modal block above, or the base rule wins.) These open FROM the Settings modal (same z-index, later in the DOM), so
+       they must sit above it or they open invisibly behind it. */
+    #identity-export-modal,
+    #identity-import-modal,
+    #identity-locked-modal {
+      z-index: 110;
     }
 
     #whats-new-modal .whats-new-body {
@@ -3620,6 +3634,43 @@
       align-items: center;
       gap: 8px;
     }
+
+    /* ── Identity storage, backup and restore (PRD 18.6) ────────────────── */
+    .identity-row-storage {
+      margin-top: 8px;
+      font-size: 11px;
+      color: var(--text-secondary);
+    }
+
+    .identity-row-storage.warn { color: var(--warning); }
+
+    .identity-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .identity-actions .btn { white-space: nowrap; }
+
+    .identity-modal-error {
+      min-height: 16px;
+      margin: -4px 0 8px;
+      font-size: 11px;
+      color: var(--danger);
+    }
+
+    .identity-compare {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 6px 12px;
+      margin: 10px 0;
+      font-size: 12px;
+    }
+
+    .identity-compare dt { color: var(--text-muted); }
+    .identity-compare dd { margin: 0; word-break: break-all; color: var(--text-primary); }
+    .identity-compare code { font-size: 11px; }
 
     .identity-row-value code {
       flex: 1;
@@ -5127,6 +5178,72 @@
     </div>
   </div>
 
+  <!-- ── Export identity (PRD 18.6) ──────────────────────────────────────── -->
+  <div id="identity-export-modal" role="dialog" aria-modal="true" aria-labelledby="identity-export-title">
+    <div class="modal-content">
+      <h3 id="identity-export-title">Export identity</h3>
+      <p>Saves your identity — your user ID and the private key that proves it is you — in a file protected by a
+        passphrase. Use it to move to another computer, or to restore it after a reinstall.</p>
+      <label for="identity-export-pass">Passphrase (at least 10 characters)</label>
+      <input type="password" id="identity-export-pass" autocomplete="new-password" maxlength="256" spellcheck="false">
+      <label for="identity-export-pass2">Repeat the passphrase</label>
+      <input type="password" id="identity-export-pass2" autocomplete="new-password" maxlength="256" spellcheck="false">
+      <div class="identity-modal-error" id="identity-export-error" role="alert"></div>
+      <p class="tls-modal-warning">Anyone with this file <strong>and</strong> its passphrase can act as you on every
+        server. Keep it somewhere safe — and don't forget the passphrase: it can't be recovered.</p>
+      <div class="modal-actions">
+        <button class="btn btn-cancel" id="btn-identity-export-cancel">Cancel</button>
+        <button class="btn btn-create" id="btn-identity-export-confirm">Choose where to save…</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Import identity (PRD 18.6) ──────────────────────────────────────── -->
+  <div id="identity-import-modal" role="dialog" aria-modal="true" aria-labelledby="identity-import-title">
+    <div class="modal-content">
+      <h3 id="identity-import-title">Import identity</h3>
+      <div id="identity-import-step-pass">
+        <p>Backup file: <strong id="identity-import-file"></strong></p>
+        <label for="identity-import-pass">Passphrase</label>
+        <input type="password" id="identity-import-pass" autocomplete="off" maxlength="256" spellcheck="false">
+        <div class="identity-modal-error" id="identity-import-error" role="alert"></div>
+        <div class="modal-actions">
+          <button class="btn btn-cancel" id="btn-identity-import-cancel">Cancel</button>
+          <button class="btn btn-create" id="btn-identity-import-unlock">Unlock</button>
+        </div>
+      </div>
+      <div id="identity-import-step-confirm" style="display:none;">
+        <p>This backup holds a different identity from the one this install uses now. Importing replaces it.</p>
+        <dl class="identity-compare">
+          <dt>In the backup</dt><dd><code id="identity-import-new-fp"></code><br><span id="identity-import-new-id"></span></dd>
+          <dt>Used now</dt><dd><code id="identity-import-cur-fp"></code><br><span id="identity-import-cur-id"></span></dd>
+        </dl>
+        <p class="tls-modal-warning">Reson8 will restart. The identity in use now is kept aside, not deleted. Don't use
+          the same identity on two computers at once.</p>
+        <div class="modal-actions">
+          <button class="btn btn-cancel" id="btn-identity-import-back">Cancel</button>
+          <button class="btn btn-disconnect" id="btn-identity-import-apply">Replace and restart</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Identity key locked (PRD 18.6) ──────────────────────────────────── -->
+  <div id="identity-locked-modal" role="alertdialog" aria-modal="true" aria-labelledby="identity-locked-title">
+    <div class="modal-content">
+      <h3 id="identity-locked-title">🔒 Your identity key is locked</h3>
+      <p>Reson8 couldn't unlock this install's identity key — the system keyring may have been reset or changed. The
+        key was <strong>not</strong> replaced, and you can't connect until this is resolved.</p>
+      <p>If you have an identity backup, import it. Otherwise you can create a new identity; a server admin will then
+        have to reset your old one for you to keep your name and roles.</p>
+      <div class="modal-actions">
+        <button class="btn btn-cancel" id="btn-identity-locked-close">Close</button>
+        <button class="btn btn-cancel" id="btn-identity-locked-new">Create new identity</button>
+        <button class="btn btn-create" id="btn-identity-locked-import">Import backup…</button>
+      </div>
+    </div>
+  </div>
+
   <!-- ── Unknown certificate: trust it? (PRD 18.3) ───────────────────────── -->
   <div id="tls-trust-modal" role="dialog" aria-modal="true" aria-labelledby="tls-trust-title">
     <div class="modal-content">
@@ -5856,6 +5973,12 @@
             <button type="button" class="btn btn-cancel" id="btn-copy-fingerprint">Copy</button>
           </div>
           <div class="identity-row-hint">Your server admin may ask for this to protect the admin account (<code>ADMIN_KEY_FINGERPRINT</code>).</div>
+          <!-- Where the key is stored, and backup/restore (PRD 18.6) -->
+          <div class="identity-row-storage" id="about-identity-storage"></div>
+          <div class="identity-actions">
+            <button type="button" class="btn btn-cancel" id="btn-identity-export">Export identity…</button>
+            <button type="button" class="btn btn-cancel" id="btn-identity-import">Import identity…</button>
+          </div>
         </div>
       </div>
 

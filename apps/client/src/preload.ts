@@ -559,6 +559,19 @@ const api = {
             if (joinServerInFlight) return;
             joinServerInFlight = true;
 
+            // A key that exists but can't be unlocked (PRD 18.6) must stop the
+            // join: going on unsigned would only be refused by every server where
+            // this identity is bound, with a confusing "another device" error.
+            const keyStatus: { state: string } | null = await ipcRenderer.invoke("identity-get-status").catch(() => null);
+            if (keyStatus?.state === "locked") {
+                joinServerInFlight = false;
+                socket?.removeAllListeners();
+                socket?.disconnect();
+                socket = null;
+                emit("identity-locked", null);
+                return;
+            }
+
             // Prove we own this identity (PRD 17.12) — a fresh challenge on
             // every connect, reconnects included. Against a pre-2.6.0 server
             // there's no challenge: join the old way.
@@ -1317,7 +1330,48 @@ const api = {
 
     /** This install's identity key fingerprint, for Settings → About (PRD 17.12). */
     getIdentityFingerprint(): Promise<string> {
-        return ipcRenderer.invoke("identity-get-public").then((r: { fingerprint: string }) => r.fingerprint);
+        return ipcRenderer
+            .invoke("identity-get-public")
+            .then((r: { fingerprint: string } | null) => r?.fingerprint ?? "");
+    },
+
+    // ── Identity key at rest + backup (PRD 18.6) ─────────────────────────
+    // Everything here is a thin call into main, which owns the key and the
+    // file dialogs. Passphrases go in; fingerprints and statuses come out.
+    identity: {
+        getStatus(): Promise<
+            | { state: "ok"; storage: "encrypted" | "file" | "ephemeral"; fingerprint: string; canBackup: boolean }
+            | { state: "locked"; storage: "encrypted"; canBackup: boolean }
+        > {
+            return ipcRenderer.invoke("identity-get-status");
+        },
+        exportBackup(passphrase: string): Promise<{ ok: boolean; path?: string; canceled?: boolean; error?: string }> {
+            return ipcRenderer.invoke("identity-export", passphrase);
+        },
+        pickBackup(): Promise<{ ok: boolean; token?: string; fileName?: string; canceled?: boolean; error?: string }> {
+            return ipcRenderer.invoke("identity-import-pick");
+        },
+        decryptBackup(
+            token: string,
+            passphrase: string,
+        ): Promise<{
+            ok: boolean;
+            error?: string;
+            code?: string;
+            fingerprint?: string;
+            instanceId?: string;
+            createdAt?: string;
+            currentFingerprint?: string | null;
+            currentInstanceId?: string;
+        }> {
+            return ipcRenderer.invoke("identity-import-decrypt", token, passphrase);
+        },
+        applyBackup(token: string): Promise<{ ok: boolean; error?: string }> {
+            return ipcRenderer.invoke("identity-import-apply", token);
+        },
+        createNew(): Promise<{ ok: boolean; error?: string }> {
+            return ipcRenderer.invoke("identity-create-new");
+        },
     },
 
     /** ADMIN: forget a user's bound identity key (PRD 17.12). */
