@@ -39,6 +39,7 @@ model Server {
   /// New identities must be approved by a moderator before they can use the
   /// server (PRD 18.8). People who have joined before are never affected.
   requireApproval    Boolean   @default(false)
+  requireInvite      Boolean   @default(false)
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
@@ -443,10 +444,49 @@ model PendingApproval {
   fingerprint String
   address     String?
   host        String?
+  /// The invite this request came in with (PRD 18.9): validated at request time, consumed on approval.
+  inviteId    String?
   requestedAt DateTime @default(now())
   lastSeenAt  DateTime @default(now())
 
   @@unique([serverId, userId])
   @@index([serverId, requestedAt])
   @@map("pending_approvals")
+}
+
+// ---------------------------------------------------------------------------
+// Invite codes (PRD 18.9)
+// ---------------------------------------------------------------------------
+
+model Invite {
+  id         String    @id @default(uuid())
+  serverId   String
+  /// SHA-256 of the normalized code — the plain code is shown once, at creation.
+  codeHash   String    @unique
+  /// First four characters, so a moderator can tell invites apart.
+  codePrefix String
+  label      String?
+  createdBy  String
+  createdAt  DateTime  @default(now())
+  expiresAt  DateTime?
+  maxUses    Int?
+  uses       Int       @default(0)
+  revokedAt  DateTime?
+
+  usedBy InviteUse[]
+
+  @@index([serverId, createdAt])
+  @@map("invites")
+}
+
+model InviteUse {
+  id       String   @id @default(uuid())
+  inviteId String
+  userId   String
+  usedAt   DateTime @default(now())
+
+  invite Invite @relation(fields: [inviteId], references: [id], onDelete: Cascade)
+
+  @@index([inviteId])
+  @@map("invite_uses")
 }

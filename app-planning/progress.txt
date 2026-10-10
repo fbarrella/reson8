@@ -1450,3 +1450,77 @@ Feature/Fix: "Approve new users" mode, plus a default-deny gate for every event 
       the server logic); a reverse proxy in front.
 
   Next Step: PRD 18.9 — invite links / codes (same opt-in pattern).
+
+--- Entry: 10/10/2026 ---
+
+Feature/Fix: Invite codes for new users (PRD 18.9)
+
+  Problem: With a public address, anyone could join. "Approve new users"
+  (18.8) is one answer; an invite code is the lighter one: hand a code to the
+  people you want.
+
+  Solution (opt-in; its own ADMIN switch in Settings -> Server, off by default):
+    - A NEW identity must present a code while the switch is on; returning
+      members and the designated admin never do. Codes: 12 Crockford Base32
+      characters (~60 bits), shown once as XXXX-XXXX-XXXX, accepted in any
+      case / with or without dashes and spaces (O->0, I/L->1).
+    - Stored only as SHA-256(normalized code) + a 4-character prefix
+      (`invites`, `invite_uses`); never logged or returned after creation.
+    - Join gate (before the approval gate): no code -> INVITE_REQUIRED; any
+      unusable code -> one generic INVITE_INVALID; 10 failures / 15 min per
+      address -> INVITE_THROTTLED (Redis counter; the code isn't looked at).
+    - The use is consumed by an atomic UPDATE ... WHERE uses < maxUses ...
+      RETURNING on the SAME transaction that creates the user, so a failed
+      join costs nothing and a race for the last use has exactly one winner.
+    - With approval on: a valid code is required to enter the queue; the
+      request stores inviteId; the use is consumed on approval and rejecting
+      costs nothing; approving with a dead invite is refused with a reason.
+    - Moderators (BAN_USER/ADMIN): User Management -> Invites: create (label,
+      expiry never/1h/24h/7d/30d, uses unlimited/1/5/10/25/custom), list
+      with status and "who used it", revoke. The code appears once in a
+      dialog with Copy and is wiped from the page when closed.
+    - Connect form: a hidden "Invite code" field, revealed and focused by
+      the server's error code, cleared after joining, never stored.
+    - Wire: USER_JOIN_SERVER.inviteCode, ack.errorCode, CREATE_INVITE /
+      GET_INVITES / REVOKE_INVITE, settings.requireInvite (all additive).
+
+  Key Files Modified:
+    apps/server/prisma/schema.prisma, migrations/20261016120000_add_invites (NEW)
+    apps/server/src/services/invite.service.ts, config/invite.config.ts (NEW)
+    apps/server/src/handlers/invite.handler.ts (NEW), connection.handler.ts,
+      approval.handler.ts, nudge.handler.ts, index.ts
+    apps/server/src/__tests__/invite.service.test.ts (NEW, 28 tests)
+    packages/shared-types/src/models.ts, socket-events.ts
+    apps/client/src/preload.ts, renderer/renderer.ts, renderer/index.html
+    AGENTS.md, apps/server/AGENTS.md, apps/client/AGENTS.md, README.md
+
+  Verification:
+    - tsc x3 exit 0; lint exit 0 (0 errors); server vitest 21 files / 353
+      tests; client suites unchanged and green; migration applied to a fresh
+      scratch database by `prisma migrate deploy`.
+    - Live, real server + the real client + Postgres/Redis, 63/63: the
+      Invites section and switch; creating an invite from the UI (dialog on
+      top of Settings, code format, only hash+prefix stored, plain code
+      nowhere in the table, expiry/max applied, code wiped on close, list
+      shows 0 / 1 uses and active); no code -> INVITE_REQUIRED, wrong or
+      garbage -> INVITE_INVALID and nothing created; a valid code in a
+      different spelling joins and is counted against the user; a single-use
+      code refuses a second new person; returning members need no code; UI
+      shows "used up" and who used it; revoked and expired codes refused;
+      8 joins racing for 3 uses -> exactly 3 win, 3 uses, exactly 3 users;
+      11th attempt from an address throttled even with a valid code, another
+      address unaffected; with approval on: a code is needed to queue, the
+      use is NOT consumed until approval, rejecting keeps it, approval
+      refused when the invite was revoked meanwhile; BAN_USER holders can
+      create/list but not flip the switch, plain members can do none of it,
+      bad expiry/max/label rejected; designated admin joins without a code;
+      the real client reveals + focuses the field on INVITE_REQUIRED, keeps
+      it on a wrong code, joins on the right one, clears/hides it and never
+      stored it.
+    - Real bugs found by running it: none beyond harness mistakes (the first
+      draft of the script left a stray unsigned socket open).
+    - NOT run: an invite claim failing the key-race branch inside the
+      transaction (covered by reasoning and the transaction shape, not by a
+      forced interleaving).
+
+  Next Step: PRD 18.10.

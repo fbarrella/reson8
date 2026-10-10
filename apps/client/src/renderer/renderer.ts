@@ -797,6 +797,7 @@ interface Reson8Api {
         address: { scheme: "https" | "http"; host: string; port?: number; pinned?: boolean },
         nickname: string,
         password?: string,
+        inviteCode?: string,
     ): Promise<void>;
     getServerBaseUrl(): string;
     tls: {
@@ -897,6 +898,13 @@ interface Reson8Api {
         error?: string;
     }>;
     unbanAddress(id: string): Promise<{ success: boolean; error?: string }>;
+    createInvite(opts: {
+        label?: string;
+        expiresInHours?: number | null;
+        maxUses?: number | null;
+    }): Promise<{ success: boolean; code?: string; invite?: InviteRow; error?: string }>;
+    getInvites(): Promise<{ success: boolean; invites?: InviteRow[]; error?: string }>;
+    revokeInvite(id: string): Promise<{ success: boolean; error?: string }>;
     getPendingApprovals(): Promise<{
         success: boolean;
         requests?: {
@@ -1007,6 +1015,8 @@ interface Reson8Api {
         unprotectedActiveUsers?: number;
         /** ADMIN callers only (PRD 18.8). */
         requireApproval?: boolean;
+        /** ADMIN callers only (PRD 18.9). */
+        requireInvite?: boolean;
         /** ADMIN callers only (PRD 18.5). */
         authAllowedHosts?: string[];
         authAllowedHostsLockedByEnv?: boolean;
@@ -1021,6 +1031,7 @@ interface Reson8Api {
             requireSignedIdentity?: boolean;
             authAllowedHosts?: string[];
             requireApproval?: boolean;
+            requireInvite?: boolean;
         },
     ): Promise<{ success: boolean; error?: string }>;
     getIdentityEvents(payload: {
@@ -2065,6 +2076,8 @@ async function startConnect(): Promise<void> {
     const address = parsed.value;
     const nickname = nicknameInput.value.trim() || "User";
     const password = serverPasswordInput.value || undefined;
+    // Only sent when typed; never remembered (a code is single-purpose, PRD 18.9).
+    const inviteCode = inviteCodeInput.value.trim() || undefined;
 
     // Persist or clear server info based on Remember Me checkbox
     if (rememberMeCheckbox.checked) {
@@ -2091,7 +2104,7 @@ async function startConnect(): Promise<void> {
             `Connecting to ${shown} ${target.scheme === "https" ? "over HTTPS" : "(not encrypted)"} as "${nickname}"...`,
             "info",
         );
-        await api.connect(target, nickname, password);
+        await api.connect(target, nickname, password, inviteCode);
     } finally {
         connectInProgress = false;
         if (!isConnected) btnConnect.disabled = false;
@@ -3721,6 +3734,7 @@ api.on("connected", (data: { serverId: string; instanceId: string; secure?: bool
     statusInstance.textContent = `ID: ${data.instanceId}`;
     renderConnectionSecurity(); // PRD 18.3: lock icon / "not encrypted" warning
     hideApprovalScreen(); // PRD 18.8: a waiting identity that was just let in
+    clearInviteField(); // PRD 18.9: a code is single-purpose
     if (lastDisconnectAt !== null) {
         const secs = ((Date.now() - lastDisconnectAt) / 1000).toFixed(1);
         log(`Connected to server (reconnected after ${secs}s)`, "success");
@@ -3830,6 +3844,8 @@ api.on("disconnected", (data?: { reason?: string }) => {
     hideApprovalScreen(); // PRD 18.8
     pendingApprovals = [];
     setPendingBadges(0);
+    invites = [];
+    invitesSection.style.display = "none";
     statusDot.classList.remove("connected");
     statusText.textContent = "Disconnected";
     statusText.classList.remove("connected");
@@ -3922,6 +3938,11 @@ api.on("error", (data: { code?: string; message: string }) => {
     // Suppress permission-denied errors — they are already handled
     // gracefully by ack callbacks (e.g., disabling the Roles tab).
     if (data.code === "PERMISSION_DENIED") return;
+    // The server wants (or didn't accept) an invite code (PRD 18.9): show the field.
+    if (data.code === "INVITE_REQUIRED" || data.code === "INVITE_INVALID" || data.code === "INVITE_THROTTLED") {
+        revealInviteField(data.message, data.code !== "INVITE_REQUIRED");
+        return;
+    }
     log(`Error: ${data.message}`, "error");
 });
 
@@ -7239,6 +7260,7 @@ async function openSettingsPanel(): Promise<void> {
     hideIdentityLog(); // always reopen on the user list (PRD 18.4)
     void renderBannedAddresses(); // PRD 18.7 (no-op for anyone without BAN_USER)
     void refreshPendingApprovals(); // PRD 18.8
+    void refreshInvites(); // PRD 18.9
     adminModal.classList.add("visible");
 
     // Populate audio devices
@@ -7295,6 +7317,9 @@ async function openSettingsPanel(): Promise<void> {
                 inputMaxMessageLength.value = String(settingsRes.maxMessageLength ?? serverMaxMessageLength);
                 renderRequireSignedSetting(settingsRes);
                 renderRelayHosts(settingsRes);
+                chkRequireInvite.checked = settingsRes.requireInvite ?? false;
+                (chkRequireInvite.closest(".toggle-row") as HTMLElement).style.display =
+                    settingsRes.requireInvite === undefined ? "none" : "";
                 chkRequireApproval.checked = settingsRes.requireApproval ?? false;
                 (chkRequireApproval.closest(".toggle-row") as HTMLElement).style.display =
                     settingsRes.requireApproval === undefined ? "none" : "";
@@ -7525,6 +7550,249 @@ chkRequireApproval.addEventListener("change", async () => {
         log(`New people ${desired ? "now need a moderator's approval" : "no longer need approval"} to join`, "success");
     } else {
         chkRequireApproval.checked = !desired; // revert on failure
+        log(`Failed to update server settings: ${result.error}`, "error");
+        if (result.error && /permission|denied/i.test(result.error)) SoundAlert.play("insufficient_perms.mp3");
+    }
+});
+
+// ── Invite codes (PRD 18.9) ──────────────────────────────────────────────
+interface InviteRow {
+    id: string;
+    codePrefix: string;
+    label: string | null;
+    createdBy: string;
+    createdByNickname: string | null;
+    createdAt: string;
+    expiresAt: string | null;
+    maxUses: number | null;
+    uses: number;
+    status: "active" | "expired" | "used-up" | "revoked";
+    usedBy: { userId: string; nickname: string | null; usedAt: string }[];
+}
+
+const inviteCodeInput = document.getElementById("invite-code") as HTMLInputElement;
+const invitesSection = document.getElementById("invites-section") as HTMLDivElement;
+const invitesList = document.getElementById("invites-list") as HTMLDivElement;
+const chkRequireInvite = document.getElementById("chk-require-invite") as HTMLInputElement;
+const inviteCreateModal = document.getElementById("invite-create-modal") as HTMLDivElement;
+const inviteCodeModal = document.getElementById("invite-code-modal") as HTMLDivElement;
+let invites: InviteRow[] = [];
+const expandedInvites = new Set<string>();
+
+/** Shows the code field on the connect form, focused, with the server's reason. */
+function revealInviteField(message: string, invalid: boolean): void {
+    inviteCodeInput.style.display = "";
+    inviteCodeInput.classList.add("invite-needed");
+    if (invalid) inviteCodeInput.select();
+    inviteCodeInput.focus();
+    log(escapeHtml(message), "error");
+    showToast(escapeHtml(message), 6000);
+}
+
+/** After a successful join: forget the code and hide the field again. */
+function clearInviteField(): void {
+    inviteCodeInput.value = "";
+    inviteCodeInput.classList.remove("invite-needed");
+    inviteCodeInput.style.display = "none";
+}
+
+function describeInviteExpiry(inv: InviteRow): string {
+    if (!inv.expiresAt) return "never expires";
+    const when = new Date(inv.expiresAt);
+    if (Number.isNaN(when.getTime())) return "";
+    const text = when.toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+    return inv.status === "expired" ? `expired ${text}` : `expires ${text}`;
+}
+
+async function refreshInvites(): Promise<void> {
+    if (!isConnected) {
+        invites = [];
+        invitesSection.style.display = "none";
+        return;
+    }
+    const res = await api.getInvites();
+    if (!res.success || !res.invites) {
+        // No BAN_USER/ADMIN: the section simply isn't there.
+        invites = [];
+        invitesSection.style.display = "none";
+        return;
+    }
+    invites = res.invites;
+    invitesSection.style.display = "";
+    renderInvites();
+}
+
+function renderInvites(): void {
+    invitesList.textContent = "";
+    if (invites.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "admin-empty";
+        empty.textContent = "No invites yet.";
+        invitesList.appendChild(empty);
+        return;
+    }
+    for (const inv of invites) {
+        const row = document.createElement("div");
+        row.className = "invite-row" + (inv.status === "active" ? "" : " invite-inactive");
+
+        const main = document.createElement("div");
+        main.className = "invite-main";
+        const info = document.createElement("div");
+        info.className = "invite-info";
+
+        const title = document.createElement("div");
+        title.className = "invite-title";
+        const code = document.createElement("code");
+        code.textContent = `${inv.codePrefix}-…`;
+        const label = document.createElement("span");
+        label.textContent = inv.label || "Untitled invite";
+        const status = document.createElement("span");
+        status.className = `invite-status ${inv.status}`;
+        status.textContent = inv.status === "used-up" ? "used up" : inv.status;
+        title.append(code, label, status);
+
+        const meta = document.createElement("div");
+        meta.className = "invite-meta";
+        const created = new Date(inv.createdAt);
+        const createdText = Number.isNaN(created.getTime()) ? "" : created.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+        meta.textContent =
+            `${inv.uses}${inv.maxUses !== null ? ` / ${inv.maxUses}` : ""} ${inv.uses === 1 ? "use" : "uses"}` +
+            ` · ${describeInviteExpiry(inv)}` +
+            ` · by ${inv.createdByNickname ?? "someone"}${createdText ? `, ${createdText}` : ""}`;
+        info.append(title, meta);
+
+        const actions = document.createElement("div");
+        actions.className = "invite-actions";
+        if (inv.usedBy.length > 0) {
+            const toggle = document.createElement("button");
+            toggle.className = "btn btn-cancel";
+            toggle.textContent = expandedInvites.has(inv.id) ? "Hide" : "Who used it";
+            toggle.addEventListener("click", () => {
+                if (expandedInvites.has(inv.id)) expandedInvites.delete(inv.id);
+                else expandedInvites.add(inv.id);
+                renderInvites();
+            });
+            actions.appendChild(toggle);
+        }
+        if (inv.status === "active") {
+            const revoke = document.createElement("button");
+            revoke.className = "btn btn-disconnect";
+            revoke.textContent = "Revoke";
+            revoke.addEventListener("click", async () => {
+                revoke.disabled = true;
+                const r = await api.revokeInvite(inv.id);
+                log(
+                    r.success
+                        ? `Revoked invite ${escapeHtml(inv.codePrefix)}-…`
+                        : `Couldn't revoke the invite: ${escapeHtml(r.error ?? "unknown error")}`,
+                    r.success ? "success" : "error",
+                );
+                void refreshInvites();
+            });
+            actions.appendChild(revoke);
+        }
+
+        main.append(info, actions);
+        row.appendChild(main);
+
+        if (expandedInvites.has(inv.id) && inv.usedBy.length > 0) {
+            const uses = document.createElement("div");
+            uses.className = "invite-uses";
+            for (const u of inv.usedBy) {
+                const line = document.createElement("div");
+                const at = new Date(u.usedAt);
+                line.textContent = `${u.nickname ?? u.userId.slice(0, 8)}${
+                    Number.isNaN(at.getTime())
+                        ? ""
+                        : ` — ${at.toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}`
+                }`;
+                uses.appendChild(line);
+            }
+            row.appendChild(uses);
+        }
+        invitesList.appendChild(row);
+    }
+}
+
+const inviteLabelInput = document.getElementById("invite-label") as HTMLInputElement;
+const inviteExpirySelect = document.getElementById("invite-expiry") as HTMLSelectElement;
+const inviteMaxUsesSelect = document.getElementById("invite-max-uses") as HTMLSelectElement;
+const inviteMaxUsesCustom = document.getElementById("invite-max-uses-custom") as HTMLInputElement;
+const inviteCreateError = document.getElementById("invite-create-error") as HTMLDivElement;
+
+function closeInviteCreateModal(): void {
+    inviteCreateModal.classList.remove("visible");
+}
+
+document.getElementById("btn-create-invite")!.addEventListener("click", () => {
+    inviteLabelInput.value = "";
+    inviteExpirySelect.value = "";
+    inviteMaxUsesSelect.value = "";
+    inviteMaxUsesCustom.value = "";
+    inviteMaxUsesCustom.style.display = "none";
+    inviteCreateError.textContent = "";
+    inviteCreateModal.classList.add("visible");
+    inviteLabelInput.focus();
+});
+
+inviteMaxUsesSelect.addEventListener("change", () => {
+    const custom = inviteMaxUsesSelect.value === "custom";
+    inviteMaxUsesCustom.style.display = custom ? "" : "none";
+    if (custom) inviteMaxUsesCustom.focus();
+});
+
+document.getElementById("btn-invite-create-cancel")!.addEventListener("click", closeInviteCreateModal);
+
+document.getElementById("btn-invite-create-confirm")!.addEventListener("click", async () => {
+    let maxUses: number | null = null;
+    if (inviteMaxUsesSelect.value === "custom") {
+        const n = Number(inviteMaxUsesCustom.value);
+        if (!Number.isInteger(n) || n < 1 || n > 1000) {
+            inviteCreateError.textContent = "Enter a whole number from 1 to 1000.";
+            return;
+        }
+        maxUses = n;
+    } else if (inviteMaxUsesSelect.value) {
+        maxUses = Number(inviteMaxUsesSelect.value);
+    }
+    const confirm = document.getElementById("btn-invite-create-confirm") as HTMLButtonElement;
+    confirm.disabled = true;
+    const res = await api.createInvite({
+        label: inviteLabelInput.value.trim() || undefined,
+        expiresInHours: inviteExpirySelect.value ? Number(inviteExpirySelect.value) : null,
+        maxUses,
+    });
+    confirm.disabled = false;
+    if (!res.success || !res.code) {
+        inviteCreateError.textContent = res.error ?? "Couldn't create the invite";
+        return;
+    }
+    closeInviteCreateModal();
+    (document.getElementById("invite-code-value") as HTMLElement).textContent = res.code;
+    inviteCodeModal.classList.add("visible");
+    log("Created an invite", "success");
+    void refreshInvites();
+});
+
+document.getElementById("btn-invite-code-copy")!.addEventListener("click", async () => {
+    const text = (document.getElementById("invite-code-value") as HTMLElement).textContent ?? "";
+    const ok = await api.copyText(text);
+    showToast(ok ? "Invite code copied" : "Couldn't copy the code — select it and copy by hand");
+});
+
+document.getElementById("btn-invite-code-close")!.addEventListener("click", () => {
+    inviteCodeModal.classList.remove("visible");
+    // The code must not linger in the page once it has been shown.
+    (document.getElementById("invite-code-value") as HTMLElement).textContent = "";
+});
+
+chkRequireInvite.addEventListener("change", async () => {
+    const desired = chkRequireInvite.checked;
+    const result = await api.updateServerSettings({ requireInvite: desired });
+    if (result.success) {
+        log(`New people ${desired ? "now need an invite code" : "no longer need an invite code"} to join`, "success");
+    } else {
+        chkRequireInvite.checked = !desired; // revert on failure
         log(`Failed to update server settings: ${result.error}`, "error");
         if (result.error && /permission|denied/i.test(result.error)) SoundAlert.play("insufficient_perms.mp3");
     }

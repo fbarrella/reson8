@@ -26,6 +26,7 @@ import type {
     ICustomEmoji,
     IPinnedMessage,
     IIdentityEvent,
+    IInvite,
 } from "@reson8/shared-types";
 import { VoiceService, VoiceSignaling } from "./services/voice.service";
 import { createHash } from "crypto";
@@ -482,6 +483,8 @@ const api = {
         address: { scheme: "https" | "http"; host: string; port?: number; pinned?: boolean },
         nickname: string,
         password?: string,
+        /** Only for a NEW identity on a server that requires one (PRD 18.9); never stored. */
+        inviteCode?: string,
     ): Promise<void> {
         if (socket?.connected) {
             socket.disconnect();
@@ -592,7 +595,7 @@ const api = {
             // Join the server — let the server decide the serverId
             joiningSocket.emit(
                 "USER_JOIN_SERVER",
-                { nickname, instanceId, password, avatar: avatarSelection, identity },
+                { nickname, instanceId, password, avatar: avatarSelection, identity, inviteCode },
                 (res) => {
                     joinServerInFlight = false;
                     if (res.pending) {
@@ -634,7 +637,9 @@ const api = {
                         measureLatencyAndClockOffset();
                     } else {
                         emit("error", {
-                            code: "JOIN_FAILED",
+                            // INVITE_REQUIRED / INVITE_INVALID / INVITE_THROTTLED (PRD 18.9)
+                            // tell the renderer to ask for a code; anything else is generic.
+                            code: res.errorCode ?? "JOIN_FAILED",
                             message: res.error ?? "Failed to join server",
                         });
                         // Tear down the transport-level socket so a
@@ -1297,6 +1302,41 @@ const api = {
                 return;
             }
             socket.emit("REJECT_USER", { userId, ...opts }, resolve);
+        });
+    },
+
+    /** Invite codes (PRD 18.9; BAN_USER or ADMIN). The code is in this response only. */
+    createInvite(opts: {
+        label?: string;
+        expiresInHours?: number | null;
+        maxUses?: number | null;
+    }): Promise<{ success: boolean; code?: string; invite?: IInvite; error?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.emit("CREATE_INVITE", opts, resolve);
+        });
+    },
+
+    getInvites(): Promise<{ success: boolean; invites?: IInvite[]; error?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.emit("GET_INVITES", resolve);
+        });
+    },
+
+    revokeInvite(id: string): Promise<{ success: boolean; error?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.emit("REVOKE_INVITE", { id }, resolve);
         });
     },
 
@@ -1975,6 +2015,8 @@ const api = {
             maxMessageLength?: number;
             requireSignedIdentity?: boolean;
             authAllowedHosts?: string[];
+            requireApproval?: boolean;
+            requireInvite?: boolean;
         },
     ): Promise<{ success: boolean; error?: string }> {
         return new Promise((resolve) => {

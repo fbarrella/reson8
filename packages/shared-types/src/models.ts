@@ -171,6 +171,26 @@ export interface IIdentityEvent {
     privileged?: boolean;
 }
 
+/** Why a join was refused in a way the client reacts to (PRD 18.9). */
+export type JoinErrorCode = "INVITE_REQUIRED" | "INVITE_INVALID" | "INVITE_THROTTLED";
+
+/** An invite code as a moderator sees it (PRD 18.9). The code itself is never included after creation. */
+export interface IInvite {
+    id: string;
+    /** First four characters of the code, to tell invites apart. */
+    codePrefix: string;
+    label: string | null;
+    createdBy: string;
+    createdByNickname: string | null;
+    createdAt: string;
+    expiresAt: string | null;
+    maxUses: number | null;
+    uses: number;
+    status: "active" | "expired" | "used-up" | "revoked";
+    /** Who came in with it, newest first. */
+    usedBy: { userId: string; nickname: string | null; usedAt: string }[];
+}
+
 /** A new identity waiting for a moderator's approval (PRD 18.8). `address` is masked for non-ADMIN moderators. */
 export interface IPendingApproval {
     userId: string;

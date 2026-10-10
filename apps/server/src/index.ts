@@ -42,6 +42,8 @@ import { startUploadSweeper } from "./services/upload-sweeper.js";
 import { startIdentityEventPruner } from "./services/identity-events.service.js";
 import { setDbAllowedHosts, setDbRequireSigned } from "./config/identity.config.js";
 import { setDbRequireApproval } from "./config/approval.config.js";
+import { setDbRequireInvite } from "./config/invite.config.js";
+import { registerInviteHandlers } from "./handlers/invite.handler.js";
 import { startApprovalPruner } from "./services/approval.service.js";
 import { getTrustProxy, resolveClientAddress } from "./services/client-address.js";
 import { addressBans, reloadAddressBans } from "./services/address-ban.service.js";
@@ -133,6 +135,7 @@ async function main(): Promise<void> {
     setDbAllowedHosts(server.authAllowedHosts);
     await reloadAddressBans(app.prisma, server.id);
     setDbRequireApproval(server.requireApproval);
+    setDbRequireInvite(server.requireInvite);
 
     // ── mediasoup SFU ──────────────────────────────────────────────────────
     const mediasoupService = new MediasoupService();
@@ -233,6 +236,7 @@ async function main(): Promise<void> {
     registerUploadHandlers(io, app);
     registerProfileHandlers(io, app);
     registerApprovalHandlers(io, app);
+    registerInviteHandlers(io, app);
     startUploadSweeper(app);
     startIdentityEventPruner(app);
     startApprovalPruner(app);

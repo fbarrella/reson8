@@ -38,6 +38,19 @@ import { normalizeIp } from "../services/address-ban.service.js";
 import { requireApproval } from "../config/approval.config.js";
 import { APPROVAL_MESSAGES, decideApprovalGate, pendingRoom } from "../services/approval.service.js";
 import { notifyPendingChanged, syncModeratorRoom } from "./approval.handler.js";
+import { requireInvite } from "../config/invite.config.js";
+import {
+    INVITE_FAIL_WINDOW_SECONDS,
+    INVITE_MESSAGES,
+    claimInviteUse,
+    findUsableInviteId,
+    hashInviteCode,
+    isInviteThrottled,
+    normalizeInviteCode,
+} from "../services/invite.service.js";
+
+/** Thrown inside the user-creation transaction to roll the whole join back. */
+class InviteUnusableError extends Error {}
 import { issueViewerTicket, resolveViewerTicket, revokeViewerTickets } from "../services/viewer-ticket.service.js";
 
 type TypedIO = SocketIOServer<
@@ -427,6 +440,50 @@ export function registerConnectionHandlers(
                     return;
                 }
 
+                // ── Invite gate (PRD 18.9) ─────────────────────────────────────
+                // A NEW identity needs a valid invite code while the switch is on.
+                // Here the code is only CHECKED; the use is consumed in the same
+                // transaction that creates the user (or, with approval on, when a
+                // moderator approves) — so a failed join never costs a use. A
+                // person already waiting for approval got in with a valid code
+                // once and keeps their place without presenting it again. Every
+                // invalid state gets one message, so codes can't be probed.
+                let invitedBy: string | null = null;
+                if (requireInvite() && !existingUser && !(isAdminId && decision.action === "accept" && decision.grantAdmin)) {
+                    const alreadyQueued =
+                        requireApproval() &&
+                        !!(await app.prisma.pendingApproval.findUnique({
+                            where: { serverId_userId: { serverId, userId: instanceId } },
+                            select: { id: true },
+                        }));
+                    if (!alreadyQueued) {
+                        const failKey = `invite-fail:${serverId}:${clientAddress}`;
+                        const failures = Number((await app.redis.get(failKey)) ?? 0);
+                        if (isInviteThrottled(failures)) {
+                            app.log.warn({ userId: instanceId, address: clientAddress }, "Join refused (invite throttled)");
+                            ack({ success: false, error: INVITE_MESSAGES.throttled, errorCode: "INVITE_THROTTLED" });
+                            return;
+                        }
+                        const rawCode = typeof payload.inviteCode === "string" ? payload.inviteCode.trim() : "";
+                        if (rawCode.length === 0) {
+                            ack({ success: false, error: INVITE_MESSAGES.required, errorCode: "INVITE_REQUIRED" });
+                            return;
+                        }
+                        const normalized = normalizeInviteCode(rawCode);
+                        const found = normalized
+                            ? await findUsableInviteId(app.prisma, serverId, hashInviteCode(normalized))
+                            : null;
+                        if (!found) {
+                            const count = await app.redis.incr(failKey);
+                            if (count === 1) await app.redis.expire(failKey, INVITE_FAIL_WINDOW_SECONDS);
+                            app.log.warn({ userId: instanceId, address: clientAddress }, "Join refused (invalid invite code)");
+                            ack({ success: false, error: INVITE_MESSAGES.invalid, errorCode: "INVITE_INVALID" });
+                            return;
+                        }
+                        invitedBy = found;
+                    }
+                }
+
                 // ── Approval gate (PRD 18.8) ───────────────────────────────────
                 // When the server approves new users, a brand-new identity waits for
                 // a moderator. Decided here — after every other check passed and
@@ -481,6 +538,7 @@ export function registerConnectionHandlers(
                                 lastSeenAt: new Date(),
                             },
                             create: {
+                                inviteId: invitedBy,
                                 serverId,
                                 userId: instanceId,
                                 nickname: String(nickname ?? "").slice(0, 64),
@@ -572,20 +630,47 @@ export function registerConnectionHandlers(
                 const lastAddressData = normalizeIp(clientAddress)
                     ? { lastAddress: normalizeIp(clientAddress), lastAddressAt: new Date() }
                     : {};
-                const userRow = await app.prisma.user.upsert({
-                    where: { id: instanceId },
-                    update: { nickname, ...avatarData, ...lastAddressData },
-                    create: {
-                        id: instanceId,
-                        username: instanceId,
-                        nickname,
-                        password: "instance-auth", // identity is the bound key (PRD 17.12), not a password
-                        ...avatarData,
-                        ...lastAddressData,
-                        ...bindOnCreate,
-                    },
-                    select: { publicKey: true },
-                });
+                const upsertUser = (db: Pick<typeof app.prisma, "user">) =>
+                    db.user.upsert({
+                        where: { id: instanceId },
+                        update: { nickname, ...avatarData, ...lastAddressData },
+                        create: {
+                            id: instanceId,
+                            username: instanceId,
+                            nickname,
+                            password: "instance-auth", // identity is the bound key (PRD 17.12), not a password
+                            ...avatarData,
+                            ...lastAddressData,
+                            ...bindOnCreate,
+                        },
+                        select: { publicKey: true },
+                    });
+                let userRow: { publicKey: string | null };
+                if (invitedBy) {
+                    // A new user coming in with an invite (PRD 18.9): the user and the
+                    // consumed use are ONE transaction, so a failed join costs nothing
+                    // and two joins racing for the last use cannot both win.
+                    const inviteId = invitedBy;
+                    try {
+                        userRow = await app.prisma.$transaction(async (tx) => {
+                            const row = await upsertUser(tx);
+                            // Lost the key race: no use is consumed; handled right below.
+                            if (decision.bind && proofIn && row.publicKey !== proofIn.publicKey) return row;
+                            if (!(await claimInviteUse(tx, serverId, inviteId))) throw new InviteUnusableError();
+                            await tx.inviteUse.create({ data: { inviteId, userId: instanceId } });
+                            return row;
+                        });
+                    } catch (err) {
+                        if (err instanceof InviteUnusableError) {
+                            // Used up / revoked / expired between the check and now.
+                            ack({ success: false, error: INVITE_MESSAGES.invalid, errorCode: "INVITE_INVALID" });
+                            return;
+                        }
+                        throw err;
+                    }
+                } else {
+                    userRow = await upsertUser(app.prisma);
+                }
                 if (decision.bind && !existingUser && proofIn) {
                     if (userRow.publicKey !== proofIn.publicKey) {
                         // Another first join created the row with its own key in between.

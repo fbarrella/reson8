@@ -24,6 +24,10 @@ import { executeBan } from "../services/ban.service.js";
 import { normalizeIp } from "../services/address-ban.service.js";
 import { recordIdentityEvent } from "../services/identity-events.service.js";
 import { moderatorsRoom, pendingRoom, toPendingDto } from "../services/approval.service.js";
+import { INVITE_MESSAGES, claimInviteUse } from "../services/invite.service.js";
+
+/** Rolls the approval transaction back when the request's invite is no longer usable. */
+class StaleInviteError extends Error {}
 
 type TypedIO = SocketIOServer<ClientToServerEvents, ServerToClientEvents, InterServerEvents, SocketData>;
 type TypedSocket = Socket<ClientToServerEvents, ServerToClientEvents, InterServerEvents, SocketData>;
@@ -124,6 +128,7 @@ export function registerApprovalHandlers(io: TypedIO, app: FastifyInstance): voi
                 // same time: the second finds the user and fails cleanly.
                 const lastAddress = normalizeIp(request.address);
                 let alreadyMember = false;
+                try {
                 await app.prisma.$transaction(async (tx) => {
                     const existing = await tx.user.findUnique({ where: { id: userId }, select: { id: true } });
                     if (existing) {
@@ -143,8 +148,21 @@ export function registerApprovalHandlers(io: TypedIO, app: FastifyInstance): voi
                         },
                     });
                     await tx.userRole.create({ data: { userId, roleId: "role-default" } });
+                    // The invite the request came in with is consumed NOW (PRD 18.9), in
+                    // the same transaction: rejecting a request never costs a use.
+                    if (request.inviteId) {
+                        if (!(await claimInviteUse(tx, serverId, request.inviteId))) throw new StaleInviteError();
+                        await tx.inviteUse.create({ data: { inviteId: request.inviteId, userId } });
+                    }
                     await tx.pendingApproval.delete({ where: { id: request.id } });
                 });
+                } catch (err) {
+                    if (err instanceof StaleInviteError) {
+                        ack({ success: false, error: INVITE_MESSAGES.staleOnApproval });
+                        return;
+                    }
+                    throw err;
+                }
                 if (alreadyMember) {
                     ack({ success: false, error: "That person is already a member" });
                     return;

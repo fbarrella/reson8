@@ -28,6 +28,8 @@ import type {
     IObservedAuthHost,
     IBannedAddress,
     IPendingApproval,
+    IInvite,
+    JoinErrorCode,
 } from "./models.js";
 
 // ---------------------------------------------------------------------------
@@ -57,11 +59,19 @@ export interface ClientToServerEvents {
              * socket. Absent = a pre-v2.6.0 client (legacy join rules).
              */
             identity?: { publicKey: string; signature: string; host: string };
+            /**
+             * An invite code (PRD 18.9), only needed by a NEW identity on a
+             * server that requires one. Any spelling the server's
+             * normalization accepts (dashes, case, Crockford look-alikes).
+             */
+            inviteCode?: string;
         },
         ack: (response: {
             success: boolean;
             serverId?: string;
             error?: string;
+            /** PRD 18.9: why the join was refused, when the client should react to it. */
+            errorCode?: JoinErrorCode;
             /**
              * PRD 18.8: the join was NOT completed — this identity is new and the
              * server approves new users first. The socket stays connected and is
@@ -373,6 +383,28 @@ export interface ClientToServerEvents {
             /** The network that was banned along with the user. */
             addressBanned?: string;
         }) => void,
+    ) => void;
+
+    /**
+     * Creates an invite code (BAN_USER or ADMIN) (PRD 18.9). The full code is
+     * in this response and nowhere else — the server keeps only its hash.
+     * `expiresInHours` is one of 1, 24, 168, 720 (or omitted = never);
+     * `maxUses` is 1–1000 (or omitted = unlimited).
+     */
+    CREATE_INVITE: (
+        payload: { label?: string; expiresInHours?: number | null; maxUses?: number | null },
+        ack: (response: { success: boolean; code?: string; invite?: IInvite; error?: string }) => void,
+    ) => void;
+
+    /** Lists invites, newest first, with who used each (BAN_USER or ADMIN) (PRD 18.9). */
+    GET_INVITES: (
+        ack: (response: { success: boolean; invites?: IInvite[]; error?: string }) => void,
+    ) => void;
+
+    /** Revokes an invite so it can't be used again (BAN_USER or ADMIN) (PRD 18.9). People already in stay in. */
+    REVOKE_INVITE: (
+        payload: { id: string },
+        ack: (response: { success: boolean; error?: string }) => void,
     ) => void;
 
     /** The queue of new identities waiting for approval (BAN_USER or ADMIN) (PRD 18.8). */
@@ -733,6 +765,8 @@ export interface ClientToServerEvents {
             unprotectedActiveUsers?: number;
             /** ADMIN callers only (PRD 18.8): new identities need a moderator's approval. */
             requireApproval?: boolean;
+            /** ADMIN callers only (PRD 18.9): new identities need a valid invite code. */
+            requireInvite?: boolean;
             /**
              * ADMIN callers only (PRD 18.5): the names a signed join may be
              * addressed to (empty = any), whether AUTH_ALLOWED_HOSTS decides
@@ -766,6 +800,8 @@ export interface ClientToServerEvents {
             authAllowedHosts?: string[];
             /** PRD 18.8. */
             requireApproval?: boolean;
+            /** PRD 18.9. */
+            requireInvite?: boolean;
         },
         ack: (response: { success: boolean; error?: string }) => void,
     ) => void;
