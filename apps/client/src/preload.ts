@@ -1633,6 +1633,7 @@ const api = {
         url?: string;
         domain?: string;
         siteName?: string;
+        adult?: boolean;
     } | null> {
         return ipcRenderer.invoke("fetch-link-preview", url);
     },

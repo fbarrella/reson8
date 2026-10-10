@@ -1529,6 +1529,43 @@
     .link-preview-card.lpc-direct { max-width: 420px; }
     .lpc-direct-image { max-height: 300px; object-fit: contain; cursor: zoom-in; background: var(--bg-input); }
 
+    /* Blurred previews (PRD 18.11). The wrap/overlay always exist; these rules decide
+       whether the blur is active: a reason applies (NSFW tab / site-marked adult) AND
+       its switch is on AND the card hasn't been revealed. */
+    .lpc-blur-wrap { position: relative; overflow: hidden; }
+    .lpc-blur-overlay {
+      display: none;
+      position: absolute;
+      inset: 0;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 10px;
+      background: rgba(0, 0, 0, 0.45);
+      color: #fff;
+      text-align: center;
+      font-size: 11px;
+      font-weight: 500;
+      cursor: pointer;
+      z-index: 2;
+    }
+    .lpc-blur-label-adult { display: none; }
+    .lpc-adult .lpc-blur-label-adult { display: inline; }
+    .lpc-adult .lpc-blur-label-nsfw { display: none; }
+
+    body:not(.lp-nsfw-blur-off) .tab-nsfw .lpc-blur-wrap:not(.revealed) > :first-child,
+    body:not(.lp-adult-blur-off) .lpc-adult .lpc-blur-wrap:not(.revealed) > :first-child {
+      filter: blur(20px);
+      transform: scale(1.05); /* hides blurred edge fringing */
+      pointer-events: none;   /* a blurred video's controls stay unusable until revealed */
+    }
+
+    body:not(.lp-nsfw-blur-off) .tab-nsfw .lpc-blur-wrap:not(.revealed) > .lpc-blur-overlay,
+    body:not(.lp-adult-blur-off) .lpc-adult .lpc-blur-wrap:not(.revealed) > .lpc-blur-overlay {
+      display: flex;
+    }
+
     /* "Show link previews" off (PRD 18.10): cards already rendered disappear live. */
     body.link-previews-off .link-preview-card { display: none; }
 
@@ -6276,6 +6313,32 @@
           </div>
           <label class="toggle-switch">
             <input type="checkbox" id="chk-nsfw-blur">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+
+        <div class="toggle-row">
+          <div class="toggle-row-info">
+            <div class="toggle-row-text">
+              <span class="toggle-row-title">Blur link previews in NSFW channels</span>
+              <span class="toggle-row-desc">Hide the picture or video of a link preview in NSFW channels until you click it</span>
+            </div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="chk-lp-nsfw-blur">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+
+        <div class="toggle-row">
+          <div class="toggle-row-info">
+            <div class="toggle-row-text">
+              <span class="toggle-row-title">Blur link previews marked as adult content</span>
+              <span class="toggle-row-desc">When a website itself says a page is adult content, hide its preview in any channel and in direct messages until you click it</span>
+            </div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="chk-lp-adult-blur">
             <span class="toggle-slider"></span>
           </label>
         </div>

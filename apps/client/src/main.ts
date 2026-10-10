@@ -84,6 +84,7 @@ import {
     sanitizeText,
     type LinkPreviewData,
 } from "./link-preview-fetch";
+import { detectAdult } from "./link-preview-adult";
 import {
     PREVIEW_TTL_MS,
     TtlLru,
@@ -291,6 +292,8 @@ async function fetchLinkPreviewViaHiddenWindow(url: string): Promise<LinkPreview
                 ogImage?: string;
                 ogSiteName?: string;
                 ogUrl?: string;
+                ageRestriction?: string;
+                rating?: string;
             } = await win!.webContents.executeJavaScript(`(() => {
                 const getMeta = (selector) => document.querySelector(selector)?.getAttribute("content") || undefined;
                 return {
@@ -300,6 +303,8 @@ async function fetchLinkPreviewViaHiddenWindow(url: string): Promise<LinkPreview
                     ogImage: getMeta('meta[property="og:image"]') || getMeta('meta[name="twitter:image"]') || getMeta('meta[name="twitter:image:src"]'),
                     ogSiteName: getMeta('meta[property="og:site_name"]'),
                     ogUrl: getMeta('meta[property="og:url"]'),
+                    ageRestriction: getMeta('meta[property="og:restrictions:age"]'),
+                    rating: getMeta('meta[name="rating" i]'),
                 };
             })()`);
 
@@ -316,7 +321,11 @@ async function fetchLinkPreviewViaHiddenWindow(url: string): Promise<LinkPreview
                 domain = new URL(url).hostname.replace(/^www\./, "");
             } catch { /* ignore */ }
 
-            return { title, description, image, url: extracted?.ogUrl || url, domain, siteName };
+            const adult = detectAdult({
+                ogTags: extracted?.ageRestriction ? { "og:restrictions:age": extracted.ageRestriction } : {},
+                metaByName: extracted?.rating ? { rating: extracted.rating } : {},
+            });
+            return { title, description, image, url: extracted?.ogUrl || url, domain, siteName, ...(adult ? { adult: true } : {}) };
         };
 
         // Resolves to null on timeout rather than rejecting — either way

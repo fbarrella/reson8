@@ -23,6 +23,7 @@ import metascraperImage from "metascraper-image";
 import metascraperUrl from "metascraper-url";
 import metascraperVideo from "metascraper-video";
 import { decodeHtmlEntities } from "./link-fixers";
+import { detectAdult, extractNamedMeta } from "./link-preview-adult";
 import { checkPreviewUrl, guardedLookup, nextRedirectUrl, readHtmlHead } from "./link-preview-guard";
 
 const metascraper = metascraperModule([
@@ -44,6 +45,8 @@ export interface LinkPreviewData {
     url?: string;
     domain?: string;
     siteName?: string;
+    /** The site itself marks this as adult content (PRD 18.11). Client-only, not on the wire. */
+    adult?: boolean;
 }
 
 /** The link answered, but not with HTML or an image — never worth a browser window. */
@@ -227,6 +230,7 @@ export async function fetchLinkPreviewFast(
             url: metadata.url || url,
             domain: domainOf(url),
             siteName,
+            ...(detectAdult({ ogTags, metaByName: extractNamedMeta(html, ["rating"]) }) ? { adult: true } : {}),
         };
 
         // A fixer must deliver media — that's its whole point (PRD 17.9).

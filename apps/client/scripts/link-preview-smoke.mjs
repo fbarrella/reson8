@@ -13,6 +13,7 @@ const require = createRequire(import.meta.url);
 const here = dirname(fileURLToPath(import.meta.url));
 const guard = require(resolve(here, "../dist/link-preview-guard.js"));
 const fetcher = require(resolve(here, "../dist/link-preview-fetch.js"));
+const adult = require(resolve(here, "../dist/link-preview-adult.js"));
 
 let failures = 0;
 const check = (name, ok, detail = "") => {
@@ -108,6 +109,12 @@ const server = http.createServer((req, res) => {
     if (u === "/page") {
         res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
         res.end('<html><head><title>Hello</title><meta property="og:description" content="A &amp; B"><meta property="og:image" content="https://example.com/i.png"><meta property="og:site_name" content="Site"></head><body>hi</body></html>');
+    } else if (u === "/adult") {
+        res.writeHead(200, { "content-type": "text/html" });
+        res.end('<html><head><title>A</title><meta property="og:restrictions:age" content="18+"><meta property="og:image" content="https://example.com/a.png"></head></html>');
+    } else if (u === "/rated") {
+        res.writeHead(200, { "content-type": "text/html" });
+        res.end('<html><head><title>R</title><meta name="rating" content="adult"></head></html>');
     } else if (u === "/img.png") {
         res.writeHead(200, { "content-type": "image/png", "content-length": "67" });
         res.end(Buffer.alloc(67));
@@ -194,6 +201,25 @@ await new Promise((resolve) => {
         resolve();
     });
 });
+
+// ── Adult detection (PRD 18.11) ──
+const det = (ogTags, metaByName = {}) => adult.detectAdult({ ogTags, metaByName });
+check("og:restrictions:age 18+ is adult", det({ "og:restrictions:age": "18+" }) === true);
+check("og:restrictions:age 21 is adult", det({ "og:restrictions:age": "21" }) === true);
+check("og:restrictions:age 13+ is not", det({ "og:restrictions:age": "13+" }) === false);
+check("an unreadable age value is not adult", det({ "og:restrictions:age": "mature" }) === false);
+for (const r of ["adult", "Adult", "MATURE", "restricted", "RTA-5042-1996-1400-1577-RTA", "general, adult", " adult "]) {
+    check(`rating "${r}" is adult`, det({}, { rating: r }) === true);
+}
+for (const r of ["general", "safe for kids", "14 years", ""]) check(`rating "${r}" is not adult`, det({}, { rating: r }) === false);
+check("no signals is not adult", det({}) === false);
+const named = adult.extractNamedMeta('<meta NAME="Rating" content="adult"><meta content="x" name="keywords"><meta content="RTA-5042-1996-1400-1577-RTA" name="rating">', ["rating"]);
+check("extractNamedMeta reads both attribute orders, case-insensitively, only wanted names", named.rating === "RTA-5042-1996-1400-1577-RTA" && !("keywords" in named), JSON.stringify(named));
+const adultPage = await fetcher.fetchLinkPreviewFast(`${base}/adult`, T);
+check("a page with og:restrictions:age 18+ comes back with adult: true", adultPage && adultPage.adult === true, JSON.stringify(adultPage));
+const ratedPage = await fetcher.fetchLinkPreviewFast(`${base}/rated`, T);
+check("a page with <meta name=rating content=adult> comes back with adult: true", ratedPage && ratedPage.adult === true, JSON.stringify(ratedPage));
+check("a normal page has no adult flag", page && !("adult" in page));
 
 server.close();
 console.log(failures === 0 ? "\nAll link-preview checks passed." : `\n${failures} check(s) FAILED.`);

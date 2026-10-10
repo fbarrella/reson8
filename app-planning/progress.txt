@@ -1602,3 +1602,60 @@ Feature/Fix: Link-preview hardening — size cap, deadlines, caches, private net
       — covered by test:link-fixers and unchanged host rules).
 
   Next Step: PRD 18.11.
+
+--- Entry: 10/10/2026 ---
+
+Feature/Fix: Blur link previews in NSFW channels and for adult content (PRD 18.11)
+
+  Problem: The NSFW blur covered attachments only. Link-preview images and
+  videos (including fixer-proxied posts) showed unblurred everywhere, and a
+  site's own "adult" flags were ignored.
+
+  Solution:
+    - Every media branch of the card (image, direct video, embed thumbnail,
+      direct image) is wrapped in `.lpc-blur-wrap` + an overlay (eye icon,
+      "NSFW channel - click to reveal" / "Marked as adult content by the site
+      - click to reveal"). Only CSS decides whether it is blurred, so
+      switches and a channel's NSFW flag apply LIVE to rendered cards.
+    - Reasons: the channel tab has `.tab-nsfw` (from the CURRENT tree, kept
+      in step on every tree update) or the card has `.lpc-adult` (site-marked,
+      in any channel and in DMs). Independent switches, both on by default:
+      "Blur link previews in NSFW channels" (reson8-lp-nsfw-blur) and "Blur
+      link previews marked as adult content" (reson8-lp-adult-blur).
+    - Reveal is per card, inline, and does not open the link; a blurred
+      video's controls are unusable until revealed (pointer-events: none).
+    - Adult detection (pure `link-preview-adult.ts`): `og:restrictions:age`
+      >= 18, or `<meta name=rating>` adult / mature / restricted / the RTA
+      label; run in the fast path and in the hidden-window script.
+    - The attachment switch ("Blur images in NSFW channels") is untouched and
+      does not affect previews (separate classes).
+
+  Key Files Modified:
+    apps/client/src/link-preview-adult.ts (NEW), link-preview-fetch.ts, main.ts, preload.ts
+    apps/client/scripts/link-preview-smoke.mjs
+    apps/client/src/renderer/renderer.ts, renderer/index.html
+    AGENTS.md, apps/client/AGENTS.md, README.md
+
+  Verification:
+    - tsc exit 0; lint exit 0; test:link-preview (now with the detector: each
+      signal, case/list variants, negatives, and real fetches of an
+      og:restrictions:age page and a rating=adult page) green.
+    - Live, real client + server, 26/26: ordinary preview clear in a normal
+      channel; site-marked one blurred with the adult label; flagging the
+      channel NSFW via the real UPDATE_CHANNEL blurs open previews live (tab
+      class from the tree update); video controls inert; reveal is per card;
+      NSFW switch off clears ordinary previews but NOT adult-marked ones;
+      adult switch off clears them; preferences persist under their own keys;
+      the attachment switch does not un-blur previews; un-flagging the
+      channel un-blurs live; adult-marked preview blurred in a DM, ordinary
+      one clear; a clear card's click still opens the URL.
+    - Evidence limits (honest): the PRD asked for live research on an
+      age-restricted YouTube video and a Reddit NSFW post through the real
+      pipeline. A normal YouTube video was fetched (not flagged). No
+      age-restricted YouTube URL or Reddit NSFW post was fetched, so ONLY the
+      two standard signals above are implemented — no Reddit-specific one.
+      This is recorded as an open item for the manual pass.
+    - NOT run: 18.12's reserved aspect-ratio box (re-check screenshots after
+      18.12, per the PRD).
+
+  Next Step: PRD 18.12.

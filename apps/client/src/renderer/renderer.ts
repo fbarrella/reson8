@@ -114,6 +114,8 @@ interface CustomEmoji {
 interface LinkPreviewData {
     /** Absent = a normal page card; "image" = the link itself is an image (PRD 18.10). */
     kind?: "page" | "image";
+    /** The site marks this as adult content (PRD 18.11). */
+    adult?: boolean;
     title?: string;
     description?: string;
     image?: string;
@@ -1645,6 +1647,42 @@ function applyLinkPreviewPreference(): void {
     document.body.classList.toggle("link-previews-off", !isLinkPreviewsEnabled());
 }
 
+// ── Blur link previews (PRD 18.11) ──────────────────────────────────────────
+// Two independent per-user switches, both on by default (only "false" turns
+// one off): previews in NSFW channels, and previews the SITE marks as adult
+// (in any channel and in DMs). Pure CSS on body classes, so they apply live.
+const LP_NSFW_BLUR_KEY = "reson8-lp-nsfw-blur";
+const LP_ADULT_BLUR_KEY = "reson8-lp-adult-blur";
+
+function readBoolPref(key: string): boolean {
+    try {
+        return localStorage.getItem(key) !== "false";
+    } catch {
+        return true;
+    }
+}
+
+function writeBoolPref(key: string, value: boolean): void {
+    try {
+        localStorage.setItem(key, String(value));
+    } catch {
+        /* storage unavailable — the preference just won't persist */
+    }
+}
+
+function applyLinkPreviewBlurPreferences(): void {
+    document.body.classList.toggle("lp-nsfw-blur-off", !readBoolPref(LP_NSFW_BLUR_KEY));
+    document.body.classList.toggle("lp-adult-blur-off", !readBoolPref(LP_ADULT_BLUR_KEY));
+}
+
+/** Marks a channel tab as NSFW from the CURRENT tree, so a flag change updates open previews live. */
+function syncTabNsfwClass(channelId: string): void {
+    const tab = chatTabs.get(channelId);
+    if (!tab) return;
+    const node = findChannelNodeById(currentTree as TreeNode[], channelId);
+    tab.contentEl.classList.toggle("tab-nsfw", !!node?.isNsfw);
+}
+
 // ── Avatars (PRD 17.1) ──────────────────────────────────────────────────────
 // A user's avatar is a Libravatar/Gravatar URL the SERVER built from the
 // { provider, hash } the user chose; users without one get a generated
@@ -2484,6 +2522,7 @@ function findChannelNodeById(nodes: TreeNode[], id: string): TreeNode | null {
 
 function renderTree(tree: TreeNode[]): void {
     currentTree = tree;
+    for (const channelId of chatTabs.keys()) syncTabNsfwClass(channelId); // PRD 18.11
     channelTree.innerHTML = "";
 
     if (tree.length === 0) {
@@ -4481,6 +4520,43 @@ videoLightboxModal.addEventListener("click", (e) => {
     }
 });
 
+const EYE_ICON_SVG = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>`;
+
+/**
+ * Wraps a card's media so it can be blurred (PRD 18.11). The wrap and its
+ * overlay are ALWAYS rendered; whether the blur is active is decided purely by
+ * CSS classes (`.tab-nsfw` on the tab, `.lpc-adult` on the card, and the two
+ * `body.lp-*-blur-off` preferences), so toggling a switch or a channel's NSFW
+ * flag updates cards already on screen. Deliberately NOT the attachment
+ * classes: `body.nsfw-blur-off` (the attachments switch) must not un-blur these.
+ */
+function wrapPreviewMedia(card: HTMLElement, media: HTMLElement, adult: boolean): HTMLDivElement {
+    const wrap = document.createElement("div");
+    wrap.className = "lpc-blur-wrap";
+    wrap.appendChild(media);
+
+    const overlay = document.createElement("div");
+    overlay.className = "lpc-blur-overlay";
+    overlay.innerHTML = EYE_ICON_SVG;
+    const label = document.createElement("span");
+    label.className = "lpc-blur-label-nsfw";
+    label.textContent = "NSFW channel — click to reveal";
+    const labelAdult = document.createElement("span");
+    labelAdult.className = "lpc-blur-label-adult";
+    labelAdult.textContent = "Marked as adult content by the site — click to reveal";
+    overlay.append(label, labelAdult);
+    // Reveal is per card, inline; it must not open the link.
+    overlay.addEventListener("click", (e) => {
+        e.stopPropagation();
+        wrap.classList.add("revealed");
+    });
+    wrap.appendChild(overlay);
+
+    if (adult) card.classList.add("lpc-adult");
+    card.appendChild(wrap);
+    return wrap;
+}
+
 function createPreviewCard(data: LinkPreviewData): HTMLDivElement {
     const card = document.createElement("div");
     card.className = "link-preview-card";
@@ -4499,7 +4575,7 @@ function createPreviewCard(data: LinkPreviewData): HTMLDivElement {
             openLightbox(data.image!, { previewOnly: true });
         });
         img.addEventListener("error", () => card.remove());
-        card.appendChild(img);
+        wrapPreviewMedia(card, img, !!data.adult);
         if (data.domain) {
             const domainEl = document.createElement("div");
             domainEl.className = "lpc-domain";
@@ -4550,7 +4626,7 @@ function createPreviewCard(data: LinkPreviewData): HTMLDivElement {
         if (data.image) videoEl.poster = data.image;
         videoEl.preload = "metadata";
         videoEl.addEventListener("click", (e) => e.stopPropagation());
-        card.appendChild(videoEl);
+        wrapPreviewMedia(card, videoEl, !!data.adult);
     } else if (isEmbedVideo && data.image) {
         // Embed video (YouTube, etc.) — show image with play overlay
         const mediaWrap = document.createElement("div");
@@ -4576,7 +4652,7 @@ function createPreviewCard(data: LinkPreviewData): HTMLDivElement {
             window.open(data.url!, "_blank");
         });
 
-        card.appendChild(mediaWrap);
+        wrapPreviewMedia(card, mediaWrap, !!data.adult);
     } else if (data.image) {
         // Static image — full width
         const img = document.createElement("img");
@@ -4584,8 +4660,8 @@ function createPreviewCard(data: LinkPreviewData): HTMLDivElement {
         img.src = data.image;
         img.alt = data.title || "Preview";
         img.loading = "lazy";
-        img.addEventListener("error", () => { img.style.display = "none"; });
-        card.appendChild(img);
+        const staticWrap = wrapPreviewMedia(card, img, !!data.adult);
+        img.addEventListener("error", () => { staticWrap.style.display = "none"; });
     }
 
     // ── Domain footer ──
@@ -4980,6 +5056,7 @@ function openChatTab(
         mode,
     };
     chatTabs.set(channelId, chatTab);
+    syncTabNsfwClass(channelId); // PRD 18.11
     setupInfiniteScroll(chatTab);
     renderTabMode(chatTab);
     refreshTabUnread(channelId); // e.g. a kept tab restored for a channel with unread messages
@@ -7350,6 +7427,8 @@ async function openSettingsPanel(): Promise<void> {
     chkNsfwWarn.checked = isNsfwWarningEnabled();
     chkNsfwBlur.checked = isNsfwBlurEnabled();
     (document.getElementById("chk-link-previews") as HTMLInputElement).checked = isLinkPreviewsEnabled();
+    (document.getElementById("chk-lp-nsfw-blur") as HTMLInputElement).checked = readBoolPref(LP_NSFW_BLUR_KEY);
+    (document.getElementById("chk-lp-adult-blur") as HTMLInputElement).checked = readBoolPref(LP_ADULT_BLUR_KEY);
     syncProfileSection(); // discard an unsaved avatar draft from a previous visit (PRD 17.1)
     void renderTrustedCertificates(); // PRD 18.3
     hideIdentityLog(); // always reopen on the user list (PRD 18.4)
@@ -11204,6 +11283,20 @@ applyNsfwBlurPreference();
 
 chkNsfwBlur.addEventListener("change", () => {
     setNsfwBlurEnabled(chkNsfwBlur.checked);
+});
+
+const chkLpNsfwBlur = document.getElementById("chk-lp-nsfw-blur") as HTMLInputElement;
+const chkLpAdultBlur = document.getElementById("chk-lp-adult-blur") as HTMLInputElement;
+chkLpNsfwBlur.checked = readBoolPref(LP_NSFW_BLUR_KEY);
+chkLpAdultBlur.checked = readBoolPref(LP_ADULT_BLUR_KEY);
+applyLinkPreviewBlurPreferences();
+chkLpNsfwBlur.addEventListener("change", () => {
+    writeBoolPref(LP_NSFW_BLUR_KEY, chkLpNsfwBlur.checked);
+    applyLinkPreviewBlurPreferences();
+});
+chkLpAdultBlur.addEventListener("change", () => {
+    writeBoolPref(LP_ADULT_BLUR_KEY, chkLpAdultBlur.checked);
+    applyLinkPreviewBlurPreferences();
 });
 
 const chkLinkPreviews = document.getElementById("chk-link-previews") as HTMLInputElement;
