@@ -25,6 +25,7 @@ import metascraperVideo from "metascraper-video";
 import { PLAIN_CRAWLER_USER_AGENT, decodeHtmlEntities } from "./link-fixers";
 import { detectAdult, extractNamedMeta } from "./link-preview-adult";
 import { checkPreviewUrl, guardedLookup, nextRedirectUrl, readHtmlHead } from "./link-preview-guard";
+import { routeFromProbe } from "./media-proxy";
 
 const metascraper = metascraperModule([
     metascraperTitle(),
@@ -127,6 +128,82 @@ function domainOf(url: string): string | undefined {
     } catch {
         return undefined;
     }
+}
+
+export interface RawFetchOptions {
+    headers?: Record<string, string>;
+    signal?: AbortSignal;
+    /** How long to wait for the response HEADERS (the body then streams without a deadline). */
+    headersTimeoutMs?: number;
+    /** Test-only: allow loopback/private targets. */
+    allowPrivate?: boolean;
+}
+
+/**
+ * One guarded request for something that must STREAM (a video): the same
+ * private-network rules and manual, re-validated redirects as the preview
+ * fetch, but only the response headers are under a deadline. Returns null when
+ * a hop is refused, a redirect loop/limit is hit or the request fails. The
+ * caller owns the body (read it or cancel it).
+ */
+export async function guardedFetchRaw(
+    url: string,
+    opts: RawFetchOptions = {},
+): Promise<{ res: Awaited<ReturnType<typeof undiciFetch>>; url: string } | null> {
+    const controller = new AbortController();
+    const onAbort = (): void => controller.abort();
+    opts.signal?.addEventListener("abort", onAbort, { once: true });
+    const timer = setTimeout(() => controller.abort(), opts.headersTimeoutMs ?? 15000);
+    try {
+        const dispatcher = opts.allowPrivate ? permissiveAgent : previewAgent;
+        let current = url;
+        for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+            if (!opts.allowPrivate && !checkPreviewUrl(current).ok) return null;
+            const res = await undiciFetch(current, {
+                dispatcher,
+                redirect: "manual",
+                signal: controller.signal,
+                headers: { "User-Agent": PLAIN_CRAWLER_USER_AGENT, ...(opts.headers ?? {}) },
+            });
+            if (res.status >= 300 && res.status < 400) {
+                const location = res.headers.get("location");
+                await res.body?.cancel().catch(() => undefined);
+                if (!location || hop === MAX_REDIRECTS) return null;
+                const next = opts.allowPrivate ? new URL(location, current).href : nextRedirectUrl(current, location);
+                if (!next) return null;
+                current = next;
+                continue;
+            }
+            return { res, url: current };
+        }
+        return null;
+    } catch {
+        return null;
+    } finally {
+        clearTimeout(timer); // the body is NOT under this deadline
+        opts.signal?.removeEventListener("abort", onAbort);
+    }
+}
+
+/**
+ * Asks a host how it answers the request a `<video>` makes FIRST (`Range:
+ * bytes=0-`, open-ended from zero) and says whether the media proxy would
+ * help. Only the headers are read; the body is cancelled at once. NOT
+ * `bytes=0-0`: the Invidious hosts behind the YouTube fixer answer that with a
+ * proper 206 and only misbehave for the open-ended request (verified
+ * 10/10/2026), so a tiny probe would wrongly call them fine.
+ */
+export async function probeRangeRoute(url: string, opts: { allowPrivate?: boolean } = {}): Promise<"direct" | "proxy"> {
+    const got = await guardedFetchRaw(url, {
+        headers: { Range: "bytes=0-" },
+        headersTimeoutMs: 8000,
+        allowPrivate: opts.allowPrivate,
+    });
+    if (!got) return "direct";
+    const headers: Record<string, string> = {};
+    got.res.headers.forEach((v, k) => { headers[k.toLowerCase()] = v; });
+    await got.res.body?.cancel().catch(() => undefined);
+    return routeFromProbe({ status: got.res.status, headers });
 }
 
 export interface FastFetchOptions {

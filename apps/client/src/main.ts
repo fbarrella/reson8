@@ -5,7 +5,7 @@
  * This is the entry point for the Electron desktop client.
  */
 
-import { app, BrowserWindow, session, ipcMain, globalShortcut, Menu, Tray, nativeImage, shell, desktopCapturer, dialog, net, clipboard } from "electron";
+import { app, BrowserWindow, session, ipcMain, globalShortcut, Menu, Tray, nativeImage, shell, desktopCapturer, dialog, net, clipboard, protocol } from "electron";
 import path from "node:path";
 import { createHash, createPrivateKey, randomBytes } from "node:crypto";
 import { readFileSync, statSync, writeFileSync } from "node:fs";
@@ -80,11 +80,14 @@ import nodeNet from "node:net";
 import {
     NOT_HTML,
     fetchLinkPreviewFast,
+    guardedFetchRaw,
+    probeRangeRoute,
     isValidImageUrl,
     sanitizeText,
     type LinkPreviewData,
 } from "./link-preview-fetch";
 import { detectAdult } from "./link-preview-adult";
+import { isValidRangeHeader, normalizeRangeResponse } from "./media-proxy.js";
 import {
     PREVIEW_TTL_MS,
     TtlLru,
@@ -92,6 +95,39 @@ import {
     isBlockedAddress,
     isBlockedHostname,
 } from "./link-preview-guard";
+
+// ── Link-preview video proxy (PRD 18.19) ──────────────────────────────────
+// A privileged scheme MUST be registered before `ready`, exactly once. The proxy
+// only ever serves ids the main process minted itself for a preview's video, so
+// the renderer can't make it fetch anything else.
+protocol.registerSchemesAsPrivileged([
+    { scheme: "reson8-media", privileges: { standard: true, secure: true, stream: true, supportFetchAPI: true } },
+]);
+
+/** id → the upstream video URL it stands for (bounded; same lifetime as a preview). */
+const proxiedVideos = new TtlLru<string>(200);
+/** Host → whether the proxy helps there, from a `Range: bytes=0-0` probe (6 h). */
+const rangeRouteByHost = new TtlLru<"direct" | "proxy">(200);
+
+async function maybeProxyVideo(preview: LinkPreviewData | null): Promise<LinkPreviewData | null> {
+    if (!preview?.video || !preview.videoType?.startsWith("video/")) return preview;
+    let host: string;
+    try {
+        host = new URL(preview.video).hostname.toLowerCase();
+    } catch {
+        return preview;
+    }
+    let route = rangeRouteByHost.get(host);
+    if (route === undefined) {
+        route = await probeRangeRoute(preview.video);
+        rangeRouteByHost.set(host, route, PREVIEW_TTL_MS.success);
+    }
+    if (route !== "proxy") return preview;
+    const id = randomBytes(16).toString("hex");
+    proxiedVideos.set(id, preview.video, PREVIEW_TTL_MS.video);
+    // The cached preview keeps the upstream URL; the id is minted per IPC answer.
+    return { ...preview, video: `reson8-media://v/${id}` };
+}
 
 /** URL → preview (null = attempted but failed). Bounded, and entries expire (PRD 18.10). */
 const linkPreviewCache = new TtlLru<LinkPreviewData | null>(500);
@@ -560,13 +596,50 @@ function installCertificateVerifier(): void {
 function createWindow(): void {
     installCertificateVerifier();
 
-    // Grant mic/camera permission requests automatically
+    // Grant mic/camera permission requests automatically. HTML fullscreen (a
+    // video's own fullscreen button) is a permission named "fullscreen" in
+    // Electron; without a grant the request never settles (PRD 18.19). It is
+    // granted ONLY to the app's own windows — never to anything else on this session.
     session.defaultSession.setPermissionRequestHandler(
-        (_webContents, permission, callback) => {
+        (webContents, permission, callback) => {
+            if (permission === "fullscreen") {
+                const ownWindow =
+                    (mainWindow !== null && webContents.id === mainWindow.webContents.id) ||
+                    viewerServers.has(webContents.id) ||
+                    viewerTickets.has(webContents.id);
+                callback(ownWindow);
+                return;
+            }
             const allowed = ["media", "audioCapture", "microphone"];
             callback(allowed.includes(permission));
         },
     );
+
+    // The proxy's request handler (the scheme itself is registered above, before ready).
+    protocol.handle("reson8-media", async (request) => {
+        const url = new URL(request.url);
+        const id = url.hostname === "v" ? url.pathname.replace(/^\//, "") : "";
+        const upstream = /^[0-9a-f]{32}$/.test(id) ? proxiedVideos.get(id) : undefined;
+        if (!upstream) return new Response(null, { status: 404 });
+
+        const requested = request.headers.get("range");
+        const range = isValidRangeHeader(requested) ? requested : null;
+        const got = await guardedFetchRaw(upstream, {
+            headers: range ? { Range: range } : {},
+            signal: request.signal,
+            headersTimeoutMs: 15000,
+        });
+        if (!got) return new Response(null, { status: 502 });
+
+        const headers: Record<string, string> = {};
+        got.res.headers.forEach((v, k) => { headers[k.toLowerCase()] = v; });
+        const normalized = normalizeRangeResponse(range, { status: got.res.status, headers });
+        // Streamed straight through, never buffered.
+        return new Response(got.res.body as unknown as ReadableStream, {
+            status: normalized.status,
+            headers: normalized.headers,
+        });
+    });
 
     // Required for `getDisplayMedia()` in the renderer (Linux/Wayland
     // screen-share bypass) — with no handler registered at all, Electron
@@ -1181,7 +1254,7 @@ app.whenReady().then(() => {
     });
 
     ipcMain.handle("fetch-link-preview", async (_event, url: string) => {
-        return fetchLinkPreview(url);
+        return maybeProxyVideo(await fetchLinkPreview(url));
     });
 
     ipcMain.handle("fetch-release-notes", async (_event, version: string) => {

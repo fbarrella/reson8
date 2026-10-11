@@ -4805,6 +4805,14 @@ function createPreviewCard(data: LinkPreviewData): HTMLDivElement {
         img.alt = data.title || "Preview";
         img.loading = "lazy";
         reserveMediaBox(img, data);
+        // The picture opens the limited, zoom-only viewer (PRD 18.19) and does NOT
+        // open the link; the card's text and domain still do. The embed-video
+        // thumbnail (above) keeps opening the link: it stands for a video.
+        img.style.cursor = "zoom-in";
+        img.addEventListener("click", (e) => {
+            e.stopPropagation();
+            openLightbox(data.image!, { previewOnly: true });
+        });
         const staticWrap = wrapPreviewMedia(card, img, !!data.adult);
         img.addEventListener("error", () => { staticWrap.style.display = "none"; });
     }

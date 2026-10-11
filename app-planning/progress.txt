@@ -2048,3 +2048,66 @@ Feature/Fix: Removing the "Member" role actually restricts the user (PRD 18.18)
       disconnected in code, not exercised live).
 
   Next Step: PRD 18.19.
+
+--- Entry: 10/10/2026 ---
+
+Feature/Fix: Link-preview videos can go fullscreen and seek; preview images open the limited viewer (PRD 18.19)
+
+  Problem: (1) a preview video's fullscreen button did nothing; (2) YouTube
+  preview videos often couldn't seek; (3) a preview image opened the link, not
+  the image viewer.
+
+  Step 0 (headless, unfixed, real app): a koutube video: seekable = [0, 0],
+  setting currentTime to half left it at 0; an X video: seekable = [0, 31.5],
+  seek to 15.7 worked. requestFullscreen() on both: never settled (3 s).
+
+  Root causes:
+    - Fullscreen: Electron asks for a permission named "fullscreen" for an
+      element's requestFullscreen(); the session handler only granted the
+      microphone names, so it never settled.
+    - Seeking: the Invidious host behind the fixer answers Chromium's first
+      request (`Range: bytes=0-`) with `200` + Content-Range, no
+      Accept-Ranges; Chromium reads that as "no range support". An explicit
+      small range (`bytes=0-0`, `0-1`, `1000000-1000099`) gets a proper 206 —
+      so the first design (a 0-0 probe) wrongly judged the host fine; the
+      probe is open-ended, like the request that matters.
+
+  Solution:
+    - "fullscreen" is granted in the permission handler ONLY to the main
+      window and Viewer windows (the hidden preview session denies all).
+    - `media-proxy.ts` (pure) + `reson8-media://v/<id>` protocol: the main
+      process probes each video host once (6 h cache); a host that needs it is
+      re-served through the proxy, which forwards a validated Range upstream
+      via the guarded fetch (18.10 rules, manual redirects, only headers under
+      a deadline), turns a `200`+Content-Range into a `206`, passes only safe
+      headers and streams the body. Only ids main minted are served (else
+      404). Hosts that answer correctly keep the direct URL.
+    - CSP: `reson8-media:` in media-src only (not connect-src).
+    - Preview image click -> `openLightbox(url, { previewOnly: true })` with
+      stopPropagation; text/domain and the embed thumbnail still open the link;
+      with 18.11's blur the first click reveals, the next opens the viewer.
+
+  Key Files Modified:
+    apps/client/src/media-proxy.ts (NEW), link-preview-fetch.ts, main.ts
+    apps/client/scripts/media-proxy-smoke.mjs (NEW), package.json (test:media-proxy)
+    apps/client/src/renderer/renderer.ts, renderer/index.html (CSP)
+    AGENTS.md, apps/client/AGENTS.md, README.md
+
+  Verification:
+    - test:media-proxy 44 checks (Content-Range parsing, Range header
+      validation, the normalize table incl. unsafe headers dropped, probe
+      routing, and local servers that mimic the Invidious host); tsc/lint clean.
+    - Live in the real app: YouTube video -> reson8-media://v/<id>,
+      seekable [0, 213.04], seek to half lands at 106.5, readyState 4; X video
+      keeps its direct URL and seeks; both enter and leave fullscreen
+      (document.fullscreenElement is the video); each IPC answer mints its own
+      id; from the main process: unknown id / malformed id / wrong host /
+      smuggled URL -> 404, a ranged request -> 206 of exactly 1000 bytes with
+      Accept-Ranges and video/mp4, the open-ended first request -> 206; a
+      preview image opens the preview-only viewer and does not open the link,
+      the title still does, the embed thumbnail still does.
+    - NOT run: Windows and Wayland/XWayland fullscreen (headless is X only —
+      for the manual pass); a redirect-into-private through the proxy was only
+      exercised at unit level (guardedFetchRaw refuses it).
+
+  Next Step: all PRD items done — version bump, release notes, docs (waiting for the user's manual testing after that).
