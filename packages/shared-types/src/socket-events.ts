@@ -24,6 +24,12 @@ import type {
     IReactionSummary,
     IAvatarSelection,
     IUserProfile,
+    IIdentityEvent,
+    IObservedAuthHost,
+    IBannedAddress,
+    IPendingApproval,
+    IInvite,
+    JoinErrorCode,
 } from "./models.js";
 
 // ---------------------------------------------------------------------------
@@ -53,8 +59,33 @@ export interface ClientToServerEvents {
              * socket. Absent = a pre-v2.6.0 client (legacy join rules).
              */
             identity?: { publicKey: string; signature: string; host: string };
+            /**
+             * An invite code (PRD 18.9), only needed by a NEW identity on a
+             * server that requires one. Any spelling the server's
+             * normalization accepts (dashes, case, Crockford look-alikes).
+             */
+            inviteCode?: string;
         },
-        ack: (response: { success: boolean; serverId?: string; error?: string }) => void,
+        ack: (response: {
+            success: boolean;
+            serverId?: string;
+            error?: string;
+            /** PRD 18.9: why the join was refused, when the client should react to it. */
+            errorCode?: JoinErrorCode;
+            /**
+             * PRD 18.18: whether this user may use the server's channels, DMs and
+             * voice. `false` = they hold neither `CONNECT` nor `ADMIN` (the Member
+             * role was removed): connected, but restricted. Absent from an older
+             * server — treat as `true`.
+             */
+            hasAccess?: boolean;
+            /**
+             * PRD 18.8: the join was NOT completed — this identity is new and the
+             * server approves new users first. The socket stays connected and is
+             * sent APPROVAL_GRANTED / APPROVAL_REJECTED; it can do nothing else.
+             */
+            pending?: true;
+        }) => void,
     ) => void;
 
     /**
@@ -77,6 +108,16 @@ export interface ClientToServerEvents {
     RESET_IDENTITY_KEY: (
         payload: { userId: string },
         ack: (response: { success: boolean; error?: string }) => void,
+    ) => void;
+
+    /**
+     * ADMIN only (PRD 18.4): the identity log — key binds, resets and refused
+     * joins, newest first, cursor-paginated by `before` (an ISO time).
+     * `userId` filters to one user. `limit` is 1–100 (default 50).
+     */
+    GET_IDENTITY_EVENTS: (
+        payload: { userId?: string; before?: string; limit?: number },
+        ack: (response: { success: boolean; events?: IIdentityEvent[]; hasMore?: boolean; error?: string }) => void,
     ) => void;
 
     /** Client signals they are leaving the server. */
@@ -332,7 +373,78 @@ export interface ClientToServerEvents {
 
     /** Admin bans a user from the server (blacklist by instance ID). */
     BAN_USER: (
+        payload: {
+            userId: string;
+            /**
+             * PRD 18.7: also ban the address the user connected from — exactly
+             * that address, or its range (/24 for IPv4, /64 for IPv6). Default
+             * "none" (a plain user ban).
+             */
+            addressBan?: "none" | "exact" | "range";
+        },
+        ack: (response: {
+            success: boolean;
+            error?: string;
+            /** The user was banned but the address part could not be (why). */
+            warning?: string;
+            /** The network that was banned along with the user. */
+            addressBanned?: string;
+        }) => void,
+    ) => void;
+
+    /**
+     * Creates an invite code (BAN_USER or ADMIN) (PRD 18.9). The full code is
+     * in this response and nowhere else — the server keeps only its hash.
+     * `expiresInHours` is one of 1, 24, 168, 720 (or omitted = never);
+     * `maxUses` is 1–1000 (or omitted = unlimited).
+     */
+    CREATE_INVITE: (
+        payload: { label?: string; expiresInHours?: number | null; maxUses?: number | null },
+        ack: (response: { success: boolean; code?: string; invite?: IInvite; error?: string }) => void,
+    ) => void;
+
+    /** Lists invites, newest first, with who used each (BAN_USER or ADMIN) (PRD 18.9). */
+    GET_INVITES: (
+        ack: (response: { success: boolean; invites?: IInvite[]; error?: string }) => void,
+    ) => void;
+
+    /** Revokes an invite so it can't be used again (BAN_USER or ADMIN) (PRD 18.9). People already in stay in. */
+    REVOKE_INVITE: (
+        payload: { id: string },
+        ack: (response: { success: boolean; error?: string }) => void,
+    ) => void;
+
+    /** The queue of new identities waiting for approval (BAN_USER or ADMIN) (PRD 18.8). */
+    GET_PENDING_APPROVALS: (
+        ack: (response: { success: boolean; requests?: IPendingApproval[]; error?: string }) => void,
+    ) => void;
+
+    /**
+     * Lets a waiting identity in (BAN_USER or ADMIN) (PRD 18.8). The user is created
+     * with the key from the request already bound.
+     */
+    APPROVE_USER: (
         payload: { userId: string },
+        ack: (response: { success: boolean; error?: string }) => void,
+    ) => void;
+
+    /**
+     * Declines a waiting identity (PRD 18.8), optionally banning it — and its
+     * address — as well (same options as BAN_USER).
+     */
+    REJECT_USER: (
+        payload: { userId: string; ban?: boolean; addressBan?: "none" | "exact" | "range" },
+        ack: (response: { success: boolean; error?: string; warning?: string }) => void,
+    ) => void;
+
+    /** Lists banned addresses/ranges (BAN_USER). Masked for everyone but an ADMIN (PRD 18.7). */
+    GET_BANNED_ADDRESSES: (
+        ack: (response: { success: boolean; addresses?: IBannedAddress[]; error?: string }) => void,
+    ) => void;
+
+    /** Lifts one address/range ban (BAN_USER) (PRD 18.7). */
+    UNBAN_ADDRESS: (
+        payload: { id: string },
         ack: (response: { success: boolean; error?: string }) => void,
     ) => void;
 
@@ -649,6 +761,27 @@ export interface ClientToServerEvents {
             maxMessageLength?: number;
             /** The running server build's version (from apps/server/package.json), for client/server version-mismatch warnings. */
             version?: string;
+            /**
+             * ADMIN callers only (PRD 18.4): refuse unsigned (pre-2.6.0) joins,
+             * whether the environment variable locks it, and how many users
+             * active in the last 30 days still have no bound key (the number
+             * that tells an admin whether turning it on is safe).
+             */
+            requireSignedIdentity?: boolean;
+            requireSignedIdentityLockedByEnv?: boolean;
+            unprotectedActiveUsers?: number;
+            /** ADMIN callers only (PRD 18.8): new identities need a moderator's approval. */
+            requireApproval?: boolean;
+            /** ADMIN callers only (PRD 18.9): new identities need a valid invite code. */
+            requireInvite?: boolean;
+            /**
+             * ADMIN callers only (PRD 18.5): the names a signed join may be
+             * addressed to (empty = any), whether AUTH_ALLOWED_HOSTS decides
+             * it, and the names actually seen so the admin can pick them.
+             */
+            authAllowedHosts?: string[];
+            authAllowedHostsLockedByEnv?: boolean;
+            observedAuthHosts?: IObservedAuthHost[];
             error?: string;
         }) => void,
     ) => void;
@@ -660,7 +793,23 @@ export interface ClientToServerEvents {
      * payload (PRD 12.14).
      */
     UPDATE_SERVER_SETTINGS: (
-        payload: { nudgeEnabled?: boolean; screenShareEnabled?: boolean; maxMessageLength?: number },
+        payload: {
+            nudgeEnabled?: boolean;
+            screenShareEnabled?: boolean;
+            maxMessageLength?: number;
+            /** PRD 18.4. Refused while REQUIRE_SIGNED_IDENTITY is set in the server's environment. */
+            requireSignedIdentity?: boolean;
+            /**
+             * PRD 18.5: host[:port] names a signed join may be addressed to; an
+             * empty list turns the check off. Refused while AUTH_ALLOWED_HOSTS is
+             * set, and when it would lock the requesting admin's own session out.
+             */
+            authAllowedHosts?: string[];
+            /** PRD 18.8. */
+            requireApproval?: boolean;
+            /** PRD 18.9. */
+            requireInvite?: boolean;
+        },
         ack: (response: { success: boolean; error?: string }) => void,
     ) => void;
 }
@@ -782,7 +931,26 @@ export interface ServerToClientEvents {
     CHANNEL_USER_KICKED: (payload: { channelId: string; userId: string }) => void;
 
     /** Notifies a user that they have been banned from the server. */
+    // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- the event carries no data; `{}` is the wire type
     USER_BANNED: (payload: {}) => void;
+
+    /** A moderator let this waiting identity in (PRD 18.8): the client joins again, which now succeeds. */
+    // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- the event carries no data
+    APPROVAL_GRANTED: (payload: {}) => void;
+
+    /** A moderator declined this waiting identity (PRD 18.8); the server then disconnects it. */
+    // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- the event carries no data
+    APPROVAL_REJECTED: (payload: {}) => void;
+
+    /**
+     * This user's access to the server's channels, DMs and voice changed (PRD
+     * 18.18) — their Member role was removed or given back. Sent to each of
+     * their primary sockets; not sent by a server older than 2.7.0.
+     */
+    ACCESS_CHANGED: (payload: { hasAccess: boolean }) => void;
+
+    /** To moderators (BAN_USER/ADMIN): the approval queue changed (PRD 18.8). */
+    PENDING_APPROVALS_CHANGED: (payload: { count: number; added?: boolean }) => void;
 
     /** Broadcasts updated reactions on a message. */
     REACTION_UPDATED: (payload: {
@@ -829,7 +997,7 @@ export interface ServerToClientEvents {
 // Inter-Server Events (reserved for future clustering)
 // ---------------------------------------------------------------------------
 
-// eslint-disable-next-line @typescript-eslint/no-empty-interface
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- reserved, intentionally empty
 export interface InterServerEvents { }
 
 // ---------------------------------------------------------------------------
@@ -839,6 +1007,12 @@ export interface InterServerEvents { }
 export interface SocketData {
     /** Database user ID, set after authentication. */
     userId: string;
+    /**
+     * Whether this user holds `CONNECT` or `ADMIN` (PRD 18.18), computed at join
+     * and recomputed when their roles change. Gates every event classified
+     * "member" in the server's access table without a database read.
+     */
+    hasAccess?: boolean;
     /** Display name for this session. */
     nickname: string;
     /** The server instance the socket is connected to. */
@@ -872,4 +1046,21 @@ export interface SocketData {
     authNonce?: string;
     /** When `authNonce` was issued (ms epoch); it expires after 60 s. */
     authNonceIssuedAt?: number;
+    /**
+     * The client's network address, resolved ONCE in `index.ts`'s `io.use()`
+     * middleware (PRD 18.2): forwarded-address headers count only when the
+     * peer is a proxy listed in `TRUST_PROXY`. Server-side only; every later
+     * feature that needs "where is this socket from" reads this field.
+     */
+    clientAddress?: string;
+    /** The (lower-cased) host this socket's accepted identity proof was signed for (PRD 18.5). */
+    authHost?: string;
+    /** This socket's address is inside a banned range (PRD 18.7); decided at the handshake, enforced at join. */
+    addressBanned?: boolean;
+    /**
+     * Set INSTEAD of `userId` on a socket whose identity is new and waiting for
+     * approval (PRD 18.8). It deliberately leaves `userId`/`serverId` unset: every
+     * handler is gated on those, so a pending socket can do nothing.
+     */
+    pendingUserId?: string;
 }

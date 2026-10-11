@@ -1,6 +1,6 @@
 {
     "name": "@reson8/server",
-    "version": "2.6.0",
+    "version": "2.7.0",
     "private": true,
     "type": "module",
     "scripts": {
@@ -12,11 +12,13 @@
         "db:push": "prisma db push",
         "test": "vitest run",
         "test:watch": "vitest",
-        "uploads:prune": "node scripts/prune-orphan-uploads.mjs"
+        "uploads:prune": "node scripts/prune-orphan-uploads.mjs",
+        "identity:clear-hosts": "node scripts/identity-clear-hosts.mjs"
     },
     "dependencies": {
         "@fastify/cors": "^11.0.0",
         "@fastify/multipart": "^9.4.0",
+        "@fastify/proxy-addr": "^5.1.2",
         "@fastify/static": "^9.0.0",
         "@prisma/client": "^6.4.0",
         "@reson8/shared-types": "*",

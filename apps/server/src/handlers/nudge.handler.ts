@@ -21,6 +21,23 @@ import type {
 } from "@reson8/shared-types";
 import { PermissionFlags } from "@reson8/shared-types";
 import { requirePermission } from "../middleware/permissions.middleware.js";
+import { getUserPermissions, isAdmin } from "../services/permissions.service.js";
+import {
+    authAllowedHosts,
+    authAllowedHostsLockedByEnv,
+    requireSignedIdentity as isSignedIdentityRequired,
+    requireSignedLockedByEnv,
+    setDbAllowedHosts,
+    setDbRequireSigned,
+} from "../config/identity.config.js";
+import { requireApproval, setDbRequireApproval } from "../config/approval.config.js";
+import { requireInvite, setDbRequireInvite } from "../config/invite.config.js";
+import {
+    checkAllowedHostsUpdate,
+    listObservedAuthHosts,
+    parseAllowedHostsInput,
+} from "../services/auth-hosts.service.js";
+import { countUnprotectedActiveUsers } from "../services/identity-events.service.js";
 import { PresenceService } from "../services/presence.service.js";
 import {
     DEFAULT_MAX_MESSAGE_LENGTH,
@@ -67,6 +84,36 @@ export function registerNudgeHandlers(
                         maxMessageLength: true,
                     },
                 });
+                // Identity-policy details are for ADMINs only (PRD 18.4). Checked
+                // quietly: this is a plain read every user makes, so it must not
+                // emit a PERMISSION_DENIED error the way requirePermission does.
+                let adminOnly: {
+                    requireSignedIdentity?: boolean;
+                    requireSignedIdentityLockedByEnv?: boolean;
+                    unprotectedActiveUsers?: number;
+                    authAllowedHosts?: string[];
+                    authAllowedHostsLockedByEnv?: boolean;
+                    observedAuthHosts?: Awaited<ReturnType<typeof listObservedAuthHosts>>;
+                    requireApproval?: boolean;
+                    requireInvite?: boolean;
+                } = {};
+                const { userId, serverId } = socket.data;
+                if (userId && serverId) {
+                    const perms = await getUserPermissions(app.prisma, userId, serverId);
+                    if (isAdmin(perms)) {
+                        adminOnly = {
+                            requireSignedIdentity: isSignedIdentityRequired(),
+                            requireSignedIdentityLockedByEnv: requireSignedLockedByEnv(),
+                            unprotectedActiveUsers: await countUnprotectedActiveUsers(app.prisma),
+                            requireApproval: requireApproval(),
+                            requireInvite: requireInvite(),
+                            authAllowedHosts: authAllowedHosts(),
+                            authAllowedHostsLockedByEnv: authAllowedHostsLockedByEnv(),
+                            observedAuthHosts: await listObservedAuthHosts(app.redis, serverId),
+                        };
+                    }
+                }
+
                 ack({
                     success: true,
                     nudgeEnabled: server?.nudgeEnabled ?? true,
@@ -74,6 +121,7 @@ export function registerNudgeHandlers(
                     name: server?.name,
                     maxMessageLength: server?.maxMessageLength ?? DEFAULT_MAX_MESSAGE_LENGTH,
                     version: SERVER_VERSION,
+                    ...adminOnly,
                 });
             } catch (err) {
                 app.log.error({ err }, "Error in GET_SERVER_SETTINGS");
@@ -97,10 +145,77 @@ export function registerNudgeHandlers(
                     return;
                 }
 
-                const { nudgeEnabled, screenShareEnabled, maxMessageLength } = payload;
-                const data: { nudgeEnabled?: boolean; screenShareEnabled?: boolean; maxMessageLength?: number } = {};
+                const {
+                    nudgeEnabled,
+                    screenShareEnabled,
+                    maxMessageLength,
+                    requireSignedIdentity,
+                    authAllowedHosts: allowedHostsInput,
+                    requireApproval: requireApprovalInput,
+                    requireInvite: requireInviteInput,
+                } = payload;
+                const data: {
+                    nudgeEnabled?: boolean;
+                    screenShareEnabled?: boolean;
+                    maxMessageLength?: number;
+                    requireSignedIdentity?: boolean;
+                    authAllowedHosts?: string[];
+                    requireApproval?: boolean;
+                    requireInvite?: boolean;
+                } = {};
+                if (requireInviteInput !== undefined) {
+                    if (typeof requireInviteInput !== "boolean") {
+                        ack({ success: false, error: "Invalid value" });
+                        return;
+                    }
+                    data.requireInvite = requireInviteInput;
+                }
+                if (requireApprovalInput !== undefined) {
+                    if (typeof requireApprovalInput !== "boolean") {
+                        ack({ success: false, error: "Invalid value" });
+                        return;
+                    }
+                    data.requireApproval = requireApprovalInput;
+                }
+                if (allowedHostsInput !== undefined) {
+                    if (authAllowedHostsLockedByEnv()) {
+                        ack({
+                            success: false,
+                            error: "Set by the server's AUTH_ALLOWED_HOSTS environment variable",
+                        });
+                        return;
+                    }
+                    const parsed = parseAllowedHostsInput(allowedHostsInput);
+                    if (!parsed.ok) {
+                        ack({ success: false, error: parsed.error });
+                        return;
+                    }
+                    // Never let an admin save a list that excludes the name their own
+                    // session was signed for — they'd be refused on the next reconnect.
+                    const guard = checkAllowedHostsUpdate(parsed.hosts, socket.data.authHost);
+                    if (!guard.ok) {
+                        ack({ success: false, error: guard.error });
+                        return;
+                    }
+                    data.authAllowedHosts = parsed.hosts;
+                }
                 if (nudgeEnabled !== undefined) data.nudgeEnabled = nudgeEnabled;
                 if (screenShareEnabled !== undefined) data.screenShareEnabled = screenShareEnabled;
+                if (requireSignedIdentity !== undefined) {
+                    if (typeof requireSignedIdentity !== "boolean") {
+                        ack({ success: false, error: "Invalid value" });
+                        return;
+                    }
+                    if (requireSignedLockedByEnv()) {
+                        // The environment decides; saving a value that can't take effect would mislead.
+                        ack({
+                            success: false,
+                            error: "Set by the server's REQUIRE_SIGNED_IDENTITY environment variable",
+                        });
+                        return;
+                    }
+                    data.requireSignedIdentity = requireSignedIdentity;
+                }
                 if (maxMessageLength !== undefined) {
                     // Bounded, not just "must be a positive integer" — an
                     // admin fat-fingering an astronomically large value
@@ -122,8 +237,21 @@ export function registerNudgeHandlers(
                 const updated = await app.prisma.server.update({
                     where: { id: socket.data.serverId },
                     data,
-                    select: { nudgeEnabled: true, screenShareEnabled: true, maxMessageLength: true },
+                    select: {
+                        nudgeEnabled: true,
+                        screenShareEnabled: true,
+                        maxMessageLength: true,
+                        requireSignedIdentity: true,
+                        authAllowedHosts: true,
+                        requireApproval: true,
+                        requireInvite: true,
+                    },
                 });
+                setDbRequireApproval(updated.requireApproval); // PRD 18.8: applies to the next join
+                setDbRequireInvite(updated.requireInvite); // PRD 18.9
+                // Both take effect on the very next join, no restart (PRD 18.4/18.5).
+                setDbRequireSigned(updated.requireSignedIdentity);
+                setDbAllowedHosts(updated.authAllowedHosts);
 
                 ack({ success: true });
 

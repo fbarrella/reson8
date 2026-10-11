@@ -8,7 +8,7 @@ A high-performance desktop communication platform inspired by TeamSpeak 3,
 built with modern technology for low-latency voice, hierarchical channel trees,
 and private server ownership.
 
-[![Version](https://img.shields.io/badge/version-2.6.0-blue.svg)](#)
+[![Version](https://img.shields.io/badge/version-2.7.0-blue.svg)](#)
 [![Electron](https://img.shields.io/badge/Electron-34-47848F?logo=electron&logoColor=white)](https://www.electronjs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D20-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
@@ -90,10 +90,19 @@ and private server ownership.
 - **Long Message Truncation** — Messages longer than about 15 lines collapse to 4 lines behind a pill-shaped "See more" button, positioned directly above the message's reactions. Expanded messages always reset — minimizing the app, switching channels, or relaunching all re-collapse them.
 
 ### 🛡️ Administration & Security
-- **Identity Protection** — No accounts or passwords, yet nobody can impersonate you: each install has its own private key and proves it on every connection, and the first connection binds it to your identity. Admins can lock the admin account to their own key (`ADMIN_KEY_FINGERPRINT`), refuse older clients once everyone has updated (`REQUIRE_SIGNED_IDENTITY`), see who's protected (🔒) and reset a user's key from User Management. Your key's fingerprint is in Settings → About.
+- **Identity Protection** — No accounts or passwords, yet nobody can impersonate you: each install has its own private key and proves it on every connection, and the first connection binds it to your identity. Admins can lock the admin account to their own key (`ADMIN_KEY_FINGERPRINT`), refuse older clients once everyone has updated (`REQUIRE_SIGNED_IDENTITY`), see who's protected (🔒) and reset a user's key from User Management. Your key is kept **encrypted by your operating system** where one is available (Windows, macOS, Linux with a keyring), and Settings → About can **export it to a passphrase-protected file** to move to another computer or restore after a reinstall; if the system keyring ever stops unlocking it, Reson8 tells you instead of silently creating a new identity. An **identity log** (admins only, Settings → User Management) records every key bind, reset and refused sign-in with its address, so a suspicious bind of a privileged user gets noticed, and "Require signed identity" is a switch in Settings → Server that tells you how many recently active people would be locked out. The same tab lists the **connection names** your server accepts sign-ins for (relay protection): it suggests the names people actually used, and refuses a list that would lock you out. Your key's fingerprint is in Settings → About.
+- **Encrypted Connections** — Reson8 tries HTTPS first and tells you with a lock in the status bar whether your connection is encrypted (and warns once per server when it isn't). A server with a self-signed certificate (typical on a LAN) shows its fingerprint once so you can trust it, like SSH; if that certificate ever changes, Reson8 refuses and says so rather than trusting it blindly, and a server that was encrypted is never silently downgraded. Trusted certificates are listed — and removable — in Settings → Application.
 - **Role-Based Permissions** — Bitwise permission system with admin role management. Fine-grained access control.
 - **Server Password Protection** — Optional `SERVER_PRIVATE_PASSWORD` env var with client-side password input.
 - **Upload Ownership & Cleanup** — The server keeps its own record of every file it stores: only the uploader can attach a file (once) as a message image, emoji or channel icon, and the server never deletes anything a client merely points at. Unused uploads are cleaned up automatically (immediately when you remove a picked image, after 24 hours otherwise, and with a deleted channel); self-hosters can also run `npm run uploads:prune` — see "Maintenance" below.
+- **Address Bans** — When banning someone you can also ban the address they connected from, or its surrounding range, so a reinstall doesn't simply bring them back (off by default: a VPN gets around it and a shared network can catch innocent people). Lifting the ban lifts that too; other moderators see addresses masked, and the server's designated admin can always get in.
+- **Approve New Users** — An ADMIN can switch on "Approve new users" (Settings → Server): people who have never joined wait on a screen that shows their key fingerprint until a moderator approves them in Settings → User Management (a badge shows how many are waiting). Moderators can approve, reject, or reject and ban (with the usual address options). Members who already joined are not affected, the designated admin is never queued, and the queue is capped (50 requests, 3 per address).
+- **Invite Codes** — An ADMIN can require an invite code for new users (Settings → Server). Moderators create codes in Settings → User Management → Invites (optional label, expiry, and maximum uses), see who came in with each one, and can revoke them. A code is shown once when created; the server keeps only a fingerprint of it. People who already joined never need one, wrong guesses are rate-limited per address, and it combines with "Approve new users" (the use is counted when a moderator approves).
+- **Link Preview Videos Seek and Go Fullscreen** — Videos in link previews can go fullscreen from their own controls, and YouTube previews can seek (the app re-serves such videos with proper range support); clicking a preview picture opens the zoom-only image viewer.
+- **Blurred Link Previews** — Link-preview pictures and videos are blurred (click to reveal) in NSFW channels and wherever a website itself marks the page as adult content, each with its own switch in Settings → Application.
+- **Link Previews, Bounded and Private** — Link previews can't reach into your own network (no requests to private or local addresses, including through redirects or a name pointed at one), read at most the top of a page, show direct image links as images, and can be switched off entirely in Settings → Application (each preview makes Reson8 contact the linked site, which can see your IP address).
+- **DM Unread Indicators** — Open DM tabs you aren't looking at show the same red dot as channel tabs, and a DM only counts as read once its tab is active in a focused window. Long DMs collapse behind "See more" like channel messages.
+- **Removing Member Restricts Someone** — A user without the Member role (and not a Server Admin) is no longer silently given it back on their next connect: they stay connected, but can't open text channels, send or read DMs or join voice until a moderator restores the role — live, with a banner, and with no reconnect needed when it comes back. User Management tags them "No access".
 - **Kick & Ban** — Admin right-click to kick users from voice channels. Ban/Unban lives in the Settings → User Management tab, which lists every server user (online or not), so offline troublemakers can be banned too — persisted by instance ID. Your own row shows a disabled Ban button so the list stays consistent.
 
 ### 🖥️ Desktop Experience
@@ -142,7 +151,7 @@ and private server ownership.
 
 ### Prerequisites
 
-- **Node.js** ≥ 20
+- **Node.js** ≥ 20 (≥ 20.19 to run `npm run lint`, which uses ESLint 10)
 - **Docker** & **Docker Compose** (for databases, or full-stack deployment)
 
 ### 1. Clone & Install
@@ -189,6 +198,11 @@ MEDIASOUP_PRIVATE_ANNOUNCED_IP=<lan-ip>          # For LAN/WAN dual-announce
 ADMIN_KEY_FINGERPRINT=SHA256:...                 # Only this key can be the admin (Settings → About)
 REQUIRE_SIGNED_IDENTITY=true                     # Refuse pre-2.6.0 clients (once everyone updated)
 AUTH_ALLOWED_HOSTS=chat.example.com              # Accept proofs only for these host[:port] names
+
+# Encryption and proxies (optional, 2.7.0+ — see "Encryption" below)
+TLS_CERT_FILE=/etc/reson8/certs/fullchain.pem    # Serve HTTPS/WSS directly (needs TLS_KEY_FILE too)
+TLS_KEY_FILE=/etc/reson8/certs/privkey.pem
+TRUST_PROXY=loopback, uniquelocal                # Believe forwarded addresses from these proxies only
 ```
 
 </details>
@@ -226,6 +240,60 @@ Because Cloudflare Tunnels only proxy TCP, WebRTC voice (UDP) requires a **TURN 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.turn.yml up --build
 ```
+
+---
+
+## 🔒 Encryption (HTTPS)
+
+Voice and screen-share media is always encrypted (WebRTC). **Chat, DMs, uploads and the session itself are only encrypted when the connection to the server is** — over plain `http://` anyone on the network path can read them. Use one of these:
+
+### Caddy (recommended for servers on the internet)
+
+Caddy gets and renews a free Let's Encrypt certificate by itself.
+
+1. Point a DNS record (e.g. `chat.example.com`) at your server and open ports **80** and **443** (TCP; UDP 443 for HTTP/3 is optional).
+2. Start Reson8 with the Caddy override:
+
+```bash
+RESON8_DOMAIN=chat.example.com docker compose -f docker-compose.yml -f docker-compose.caddy.yml up -d
+```
+
+3. Connect from the client as `chat.example.com` (no port).
+
+Port `9800` stays published so clients older than 2.7.0 (which only speak plain HTTP) keep working. Once everyone has updated, stop publishing it so the only way in is the encrypted one.
+
+### TLS in the server itself (LAN, self-signed, or your own certificates)
+
+Set `TLS_CERT_FILE` and `TLS_KEY_FILE` (PEM). The server then speaks HTTPS/WSS on its port, and picks up renewed certificate files without a restart. With Docker, mount the files and point the variables at the mounted paths (see the commented `./certs` volume in `docker-compose.yml`).
+
+A self-signed certificate for a LAN server (list every name or IP clients will type):
+
+```bash
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -days 825 -nodes \
+  -subj "/CN=reson8" -addext "subjectAltName=DNS:reson8.lan,IP:192.168.0.10" \
+  -keyout privkey.pem -out fullchain.pem
+```
+
+### nginx, or Cloudflare Tunnel
+
+Any reverse proxy works as long as it proxies WebSockets and forwards the client address. For nginx:
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:9800;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+}
+```
+
+Cloudflare Tunnel already provides HTTPS at its edge.
+
+### Trusting your proxy (`TRUST_PROXY`)
+
+Behind a proxy, every connection comes from the proxy's address. The server only believes `X-Forwarded-For` / `CF-Connecting-IP` from proxies you list in `TRUST_PROXY` (a comma list of addresses, CIDRs or `loopback`, `linklocal`, `uniquelocal`); by default it ignores them, so a client can never choose the address it is logged under. The Caddy override sets it for you. `TRUST_PROXY=true` is refused on purpose.
 
 ---
 
@@ -333,6 +401,10 @@ reson8/
 │   │   │   ├── identity-proof.ts    # Signs server challenges (pure)
 │   │   │   ├── avatar.ts            # Libravatar/Gravatar hashing + URLs (pure)
 │   │   │   ├── link-fixers.ts       # Social-media embed "fixers" for link previews (pure)
+│   │   │   ├── link-preview-*.ts    # Bounded, private-network-safe preview fetch + adult detection (Electron-free)
+│   │   │   ├── media-proxy.ts       # Range-normalizing proxy rules for preview videos (pure)
+│   │   │   ├── tls-*.ts             # HTTPS-first connect, pinned certificates (pure + main-process stores)
+│   │   │   ├── identity-store.ts / identity-backup.ts   # Key storage rules, passphrase-protected backup
 │   │   │   ├── window-state.ts      # Remembers window size/position between sessions
 │   │   │   ├── renderer/            # Main window UI (HTML + TypeScript)
 │   │   │   │   ├── index.html / renderer.ts    # Main window
@@ -353,10 +425,13 @@ reson8/
 │       │   │   ├── nudge.handler.ts        # Nudge + server-wide settings (screen share toggle, etc.)
 │       │   │   ├── upload.handler.ts       # Upload tokens + discarding unused uploads
 │       │   │   ├── profile.handler.ts      # Avatars + the user profile card
+│       │   │   ├── approval.handler.ts     # "Approve new users" queue
+│       │   │   ├── invite.handler.ts       # Invite codes
 │       │   │   └── moderation.handler.ts   # Kick & ban
 │       │   ├── services/       # mediasoup, presence, permissions, socket ownership, reactions,
 │       │   │                   #   stored-file ledger, attachments, replies, upload sweeper,
-│       │   │                   #   identity, viewer tickets, avatars, profiles, pagination
+│       │   │                   #   identity, viewer tickets, avatars, profiles, pagination,
+│       │   │                   #   identity log, address bans, approvals, invites, access, packet guard
 │       │   ├── config/         # mediasoup, message-length, upload, and version configuration
 │       │   └── plugins/        # Prisma, Redis Fastify plugins
 │       ├── prisma/
@@ -397,12 +472,15 @@ reson8/
 | 15 | **Rich Chat & Sturdier Connections** — Multi-line messages with Discord-style Markdown, a redesigned image viewer (zoom, copy, open in browser, "sent by"), a reaction hover card, bundled Google Noto emoji on every OS, remembered window size/position, a dark-yellow pinned bar and a disabled self-Ban button; plus fixes for users showing offline (and voice dropping a second time) after a quick reconnect, the own voice halo showing while muted, and the Windows re-launch freeze, and richer disconnect diagnostics | ✅ Done |
 | 16 | **Replies, Grouped Chat & Secure Uploads** — Message replies in channels and DMs with jump-to-original snippets, grouped messages with HH:MM times, a floating message toolbar, emoji autocomplete, multi-image messages (up to 10) with persistent previews, a preview viewer and drag & drop, NSFW warning/blur preferences, per-user channel muting and a highlight for the open channel; plus a security fix that stops the server trusting client-supplied file URLs (a stored-file ledger with upload tokens), and automatic cleanup of unused uploads | ✅ Done |
 | 17 | **Avatars, Smarter Tabs & Identity Protection** — Libravatar/Gravatar avatars in chat and a user profile card; preview tabs with "Keep Tab Open" and unread dots; mic volume up to 300% with a soft limiter; a 15-line collapse threshold; social-media videos playing inline; blank lines in messages and emoji autocomplete while editing; plus a fixed pinned-message jump with two-way history paging, and cryptographic identity so nobody can impersonate another user | ✅ Done |
+| 18 | **Encrypted Connections, Admission Control & Safer Previews** — HTTPS-first connections with pinned self-signed certificates and a lock indicator; an identity log, OS-encrypted identity key with a passphrase-protected backup; opt-in address bans, "Approve new users" and invite codes; removing Member genuinely restricts a user; bounded, private-network-safe link previews with NSFW/adult blurring, fullscreen and seekable videos, and a chat that stays put while previews load; DM unread dots; the server can no longer be crashed by a malformed event | ✅ Done |
 
 ---
 
 ## 🤝 Contributing
 
 This is currently a private project. If you'd like to contribute, please reach out to the author directly.
+
+**Working with an AI coding agent?** Project context, architecture, conventions and hard-won gotchas live in [`AGENTS.md`](AGENTS.md) (plus `apps/client/AGENTS.md` and `apps/server/AGENTS.md`), which agents such as Codex, Cursor and Copilot read automatically. The `CLAUDE.md` files next to them only import `AGENTS.md`, so Claude Code gets the same content. Edit `AGENTS.md`, never the `CLAUDE.md` stubs.
 
 ---
 

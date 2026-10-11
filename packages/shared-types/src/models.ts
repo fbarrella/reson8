@@ -142,6 +142,91 @@ export interface IUserProfile {
     isOnline: boolean;
 }
 
+/**
+ * One row of the identity log (PRD 18.4) — a key being bound, an admin
+ * resetting it, or a join refused for identity reasons. ADMIN-only.
+ */
+export interface IIdentityEvent {
+    id: string;
+    userId: string;
+    /** Nickname at the time of the event. */
+    nickname: string;
+    /** The user's nickname now, only when it differs from `nickname`. */
+    currentNickname?: string;
+    kind: "BOUND" | "RESET" | "REFUSED";
+    /** For REFUSED: the identity-refusal key (e.g. "otherDevice"), never message text. */
+    reason: string | null;
+    /** `SHA256:…` fingerprint of the key involved, when there was one. */
+    fingerprint: string | null;
+    /** Client address (resolved with TRUST_PROXY rules). */
+    address: string | null;
+    /** The host the proof was signed for. */
+    host: string | null;
+    /** For RESET: the admin who did it. */
+    actorId: string | null;
+    actorNickname?: string | null;
+    /** ISO time. */
+    createdAt: string;
+    /** The user currently holds ADMIN or MANAGE_ROLES — their binds deserve a second look. */
+    privileged?: boolean;
+}
+
+/** Why a join was refused in a way the client reacts to (PRD 18.9). */
+export type JoinErrorCode = "INVITE_REQUIRED" | "INVITE_INVALID" | "INVITE_THROTTLED";
+
+/** An invite code as a moderator sees it (PRD 18.9). The code itself is never included after creation. */
+export interface IInvite {
+    id: string;
+    /** First four characters of the code, to tell invites apart. */
+    codePrefix: string;
+    label: string | null;
+    createdBy: string;
+    createdByNickname: string | null;
+    createdAt: string;
+    expiresAt: string | null;
+    maxUses: number | null;
+    uses: number;
+    status: "active" | "expired" | "used-up" | "revoked";
+    /** Who came in with it, newest first. */
+    usedBy: { userId: string; nickname: string | null; usedAt: string }[];
+}
+
+/** A new identity waiting for a moderator's approval (PRD 18.8). `address` is masked for non-ADMIN moderators. */
+export interface IPendingApproval {
+    userId: string;
+    nickname: string;
+    /** `SHA256:…` of the key the request was signed with — what the person can read out to a moderator. */
+    fingerprint: string;
+    address: string | null;
+    host: string | null;
+    requestedAt: string;
+    lastSeenAt: string;
+    /** Whether they are connected and waiting right now. */
+    online: boolean;
+}
+
+/**
+ * A banned address or range (PRD 18.7). `cidr` is the canonical network
+ * (`203.0.113.0/24`) for an ADMIN and a masked form (`203.0.113.x`) for any
+ * other moderator.
+ */
+export interface IBannedAddress {
+    id: string;
+    cidr: string;
+    nickname: string | null;
+    /** The user ban this was created with; unbanning that user lifts it too. */
+    linkedUserId: string | null;
+    createdAt: string;
+}
+
+/** A host name seen in an accepted signed join (PRD 18.5) — a suggestion for the allowed-names list. */
+export interface IObservedAuthHost {
+    host: string;
+    joins: number;
+    /** ISO time of the last accepted join under this name. */
+    lastSeen: string | null;
+}
+
 /** Lightweight presence record for channel occupants. */
 export interface IUserPresence {
     userId: string;

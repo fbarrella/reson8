@@ -503,7 +503,8 @@ export function registerVoiceHandlers(
         // ── SET_SCREEN_SHARE_STATE (PRD 12.12) ──────────────────────────────
         socket.on("SET_SCREEN_SHARE_STATE", async (payload, ack) => {
             try {
-                let { isSharingScreen, streamName } = payload;
+                let { isSharingScreen } = payload;
+                const { streamName } = payload;
                 const userId = socket.data.userId;
                 const channelId = socket.data.currentChannelId;
 

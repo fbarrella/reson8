@@ -112,6 +112,13 @@ interface CustomEmoji {
 }
 
 interface LinkPreviewData {
+    /** Absent = a normal page card; "image" = the link itself is an image (PRD 18.10). */
+    kind?: "page" | "image";
+    /** The site marks this as adult content (PRD 18.11). */
+    adult?: boolean;
+    /** The media's declared size, to reserve its box before it loads (PRD 18.12). */
+    mediaWidth?: number;
+    mediaHeight?: number;
     title?: string;
     description?: string;
     image?: string;
@@ -738,12 +745,89 @@ const EMOJI_DATA: EmojiEntry[] = [
     { emoji: "🇳🇿", name: "flag new zealand", keywords: ["new zealand", "kiwi"], category: "Flags" },
 ];
 
+/** Mirror of IIdentityEvent (shared-types) — the renderer can't import it (PRD 18.4). */
+interface IdentityLogEvent {
+    id: string;
+    userId: string;
+    nickname: string;
+    currentNickname?: string;
+    kind: "BOUND" | "RESET" | "REFUSED";
+    reason: string | null;
+    fingerprint: string | null;
+    address: string | null;
+    host: string | null;
+    actorId: string | null;
+    actorNickname?: string | null;
+    createdAt: string;
+    privileged?: boolean;
+}
+
+// ── Encrypted connections (PRD 18.3) — mirrors of tls-trust.ts (the renderer is a
+// plain script and can't import it; the pure functions arrive through the preload).
+interface TlsCertInfo {
+    fingerprint256: string;
+    subject: string;
+    issuer: string;
+    validTo: string;
+    sans: string[];
+}
+type TlsProbeResult =
+    | { kind: "trusted"; cert: TlsCertInfo }
+    | { kind: "untrusted"; cert: TlsCertInfo; reason: string }
+    | { kind: "no-tls" }
+    | { kind: "unreachable"; code: string };
+type TlsSchemeDecision =
+    | { action: "connect"; scheme: "https"; pinned: boolean }
+    | { action: "connect"; scheme: "http"; warn: true }
+    | { action: "ask-trust"; cert: TlsCertInfo }
+    | { action: "pin-mismatch"; cert: TlsCertInfo; pinnedFingerprint: string }
+    | { action: "error"; message: string };
+interface TlsServerAddress {
+    scheme: "https" | "http" | null;
+    host: string;
+    port: number | undefined;
+}
+interface TlsPinSummary {
+    hostKey: string;
+    fingerprint256: string;
+    subject: string;
+    validTo: string;
+    pinnedAt: string;
+}
+
 interface Reson8Api {
     readonly platform: string;
     readonly isLinuxWayland: boolean;
     getInstanceId(): string;
     isExistingInstall(): Promise<boolean>;
-    connect(host: string, port: number | undefined, nickname: string, password?: string): Promise<void>;
+    connect(
+        address: { scheme: "https" | "http"; host: string; port?: number; pinned?: boolean },
+        nickname: string,
+        password?: string,
+        inviteCode?: string,
+    ): Promise<void>;
+    getServerBaseUrl(): string;
+    tls: {
+        parseServerAddress(raw: string): { ok: true; value: TlsServerAddress } | { ok: false; error: string };
+        decideScheme(input: {
+            explicit: "https" | "http" | null;
+            probe: TlsProbeResult | null;
+            pinnedFingerprint: string | null;
+            httpsRemembered: boolean;
+        }): TlsSchemeDecision;
+        formatFingerprint(hex: string): string;
+        hostKey(host: string, port: number): string;
+        probe(
+            host: string,
+            port: number,
+        ): Promise<
+            | { error: string }
+            | { result: TlsProbeResult; pinnedFingerprint: string | null; httpsRemembered: boolean }
+        >;
+        trustCertificate(host: string, port: number, fingerprint256: string): Promise<{ ok: boolean; error?: string }>;
+        listTrusted(): Promise<TlsPinSummary[]>;
+        removeTrust(hostKey: string): Promise<boolean>;
+    };
     disconnect(): void;
     joinVoiceChannel(channelId: string): Promise<{ success: boolean; error?: string }>;
     leaveVoiceChannel(): void;
@@ -811,7 +895,42 @@ interface Reson8Api {
     markDmsRead(partnerId: string): Promise<{ success: boolean; error?: string }>;
     getUnreadDmPartners(): Promise<{ success: boolean; partners?: { partnerId: string; partnerNickname: string; unreadCount: number }[]; error?: string }>;
     kickUser(userId: string, channelId: string): Promise<{ success: boolean; error?: string }>;
-    banUser(userId: string): Promise<{ success: boolean; error?: string }>;
+    banUser(
+        userId: string,
+        addressBan?: "none" | "exact" | "range",
+    ): Promise<{ success: boolean; error?: string; warning?: string; addressBanned?: string }>;
+    getBannedAddresses(): Promise<{
+        success: boolean;
+        addresses?: { id: string; cidr: string; nickname: string | null; linkedUserId: string | null; createdAt: string }[];
+        error?: string;
+    }>;
+    unbanAddress(id: string): Promise<{ success: boolean; error?: string }>;
+    createInvite(opts: {
+        label?: string;
+        expiresInHours?: number | null;
+        maxUses?: number | null;
+    }): Promise<{ success: boolean; code?: string; invite?: InviteRow; error?: string }>;
+    getInvites(): Promise<{ success: boolean; invites?: InviteRow[]; error?: string }>;
+    revokeInvite(id: string): Promise<{ success: boolean; error?: string }>;
+    getPendingApprovals(): Promise<{
+        success: boolean;
+        requests?: {
+            userId: string;
+            nickname: string;
+            fingerprint: string;
+            address: string | null;
+            host: string | null;
+            requestedAt: string;
+            lastSeenAt: string;
+            online: boolean;
+        }[];
+        error?: string;
+    }>;
+    approveUser(userId: string): Promise<{ success: boolean; error?: string }>;
+    rejectUser(
+        userId: string,
+        opts?: { ban?: boolean; addressBan?: "none" | "exact" | "range" },
+    ): Promise<{ success: boolean; error?: string; warning?: string }>;
     unbanUser(userId: string): Promise<{ success: boolean; error?: string }>;
     getBannedUsers(): Promise<{ success: boolean; users?: { userId: string; nickname: string; bannedAt: string }[]; error?: string }>;
     uploadFile(fileBuffer: ArrayBuffer, fileName: string, mimeType: string): Promise<UploadResult>;
@@ -827,6 +946,29 @@ interface Reson8Api {
     };
     setAvatarSelection(selection: { provider: "libravatar" | "gravatar"; hash: string } | null): void;
     getIdentityFingerprint(): Promise<string>;
+    identity: {
+        getStatus(): Promise<
+            | { state: "ok"; storage: "encrypted" | "file" | "ephemeral"; fingerprint: string; canBackup: boolean }
+            | { state: "locked"; storage: "encrypted"; canBackup: boolean }
+        >;
+        exportBackup(passphrase: string): Promise<{ ok: boolean; path?: string; canceled?: boolean; error?: string }>;
+        pickBackup(): Promise<{ ok: boolean; token?: string; fileName?: string; canceled?: boolean; error?: string }>;
+        decryptBackup(
+            token: string,
+            passphrase: string,
+        ): Promise<{
+            ok: boolean;
+            error?: string;
+            code?: string;
+            fingerprint?: string;
+            instanceId?: string;
+            createdAt?: string;
+            currentFingerprint?: string | null;
+            currentInstanceId?: string;
+        }>;
+        applyBackup(token: string): Promise<{ ok: boolean; error?: string }>;
+        createNew(): Promise<{ ok: boolean; error?: string }>;
+    };
     resetIdentityKey(userId: string): Promise<{ success: boolean; error?: string }>;
     getUserProfile(userId: string): Promise<{
         success: boolean;
@@ -874,11 +1016,36 @@ interface Reson8Api {
         name?: string;
         maxMessageLength?: number;
         version?: string;
+        /** ADMIN callers only (PRD 18.4). */
+        requireSignedIdentity?: boolean;
+        requireSignedIdentityLockedByEnv?: boolean;
+        unprotectedActiveUsers?: number;
+        /** ADMIN callers only (PRD 18.8). */
+        requireApproval?: boolean;
+        /** ADMIN callers only (PRD 18.9). */
+        requireInvite?: boolean;
+        /** ADMIN callers only (PRD 18.5). */
+        authAllowedHosts?: string[];
+        authAllowedHostsLockedByEnv?: boolean;
+        observedAuthHosts?: { host: string; joins: number; lastSeen: string | null }[];
         error?: string;
     }>;
     updateServerSettings(
-        settings: { nudgeEnabled?: boolean; screenShareEnabled?: boolean; maxMessageLength?: number },
+        settings: {
+            nudgeEnabled?: boolean;
+            screenShareEnabled?: boolean;
+            maxMessageLength?: number;
+            requireSignedIdentity?: boolean;
+            authAllowedHosts?: string[];
+            requireApproval?: boolean;
+            requireInvite?: boolean;
+        },
     ): Promise<{ success: boolean; error?: string }>;
+    getIdentityEvents(payload: {
+        userId?: string;
+        before?: string;
+        limit?: number;
+    }): Promise<{ success: boolean; events?: IdentityLogEvent[]; hasMore?: boolean; error?: string }>;
     getDesktopSources(): Promise<{
         success: boolean;
         sources?: Array<{
@@ -974,7 +1141,6 @@ let pendingAttachments: PendingAttachment[] = [];
 // Keyed by tab id, so a draft reply belongs to the conversation it was started
 // in — switching tabs hides the bar, coming back restores it.
 const replyTargets = new Map<string, { messageId: string; nickname: string }>();
-let serverBaseUrl: string = "";
 
 // Active speakers state
 const activeSpeakers = new Set<string>();
@@ -997,8 +1163,45 @@ let suppressNextPresenceSound = false;
 let micSensitivityEnabled = localStorage.getItem("reson8-mic-sensitivity-enabled") === "true";
 let micLevelAnimId: number | null = null;
 
-// Link preview cache (renderer-side to avoid redundant IPC calls)
-const linkPreviewCache = new Map<string, LinkPreviewData | null>();
+// Link preview cache (renderer-side to avoid redundant IPC calls). Bounded and
+// expiring (PRD 18.10): a failure is retried after a while, and a signed video
+// URL from a link fixer can't outlive its signature. The same rules as main's.
+class TtlCache<V> {
+    private readonly entries = new Map<string, { value: V; expiresAt: number }>();
+    constructor(private readonly max: number) {}
+
+    get(key: string): V | undefined {
+        const entry = this.entries.get(key);
+        if (!entry) return undefined;
+        if (entry.expiresAt <= Date.now()) {
+            this.entries.delete(key);
+            return undefined;
+        }
+        this.entries.delete(key);
+        this.entries.set(key, entry); // refresh recency
+        return entry.value;
+    }
+
+    set(key: string, value: V, ttlMs: number): void {
+        this.entries.delete(key);
+        this.entries.set(key, { value, expiresAt: Date.now() + ttlMs });
+        while (this.entries.size > this.max) {
+            this.entries.delete(this.entries.keys().next().value as string);
+        }
+    }
+}
+
+const LINK_PREVIEW_TTL_MS = { success: 6 * 60 * 60 * 1000, video: 30 * 60 * 1000, failure: 10 * 60 * 1000 };
+const linkPreviewCache = new TtlCache<LinkPreviewData | null>(300);
+
+function cacheLinkPreview(url: string, data: LinkPreviewData | null): void {
+    const ttl = !data
+        ? LINK_PREVIEW_TTL_MS.failure
+        : data.video
+          ? LINK_PREVIEW_TTL_MS.video
+          : LINK_PREVIEW_TTL_MS.success;
+    linkPreviewCache.set(url, data, ttl);
+}
 
 // Voice session timers: channelId → ISO startedAt
 const sessionTimers = new Map<string, string>();
@@ -1010,6 +1213,10 @@ const sessionTimers = new Map<string, string>();
 // server-wide regardless of which tabs are open); opening a channel's tab
 // clears it and persists the read cursor via MARK_CHANNEL_READ.
 const unreadChannelIds = new Set<string>();
+/** Partner ids of DM conversations with messages you haven't actually seen (PRD 18.13) —
+ *  the DM counterpart of `unreadChannelIds`. A DM counts as read only when its tab is
+ *  active AND the window is focused. */
+const unreadDmPartners = new Set<string>();
 
 // Approved custom server emoji, cached for the picker's "+" tab and for
 // resolving :name: tokens in message content / reaction pills. Refreshed on
@@ -1419,6 +1626,70 @@ function applyNsfwBlurPreference(): void {
     document.body.classList.toggle("nsfw-blur-off", !isNsfwBlurEnabled());
 }
 
+// ── "Show link previews" (PRD 18.10) ────────────────────────────────────────
+// Per-user, on by default; only an explicit "false" turns it off. Off means NO
+// request is made at all — each preview makes this computer contact the linked
+// website, which can see its IP address.
+const LINK_PREVIEWS_KEY = "reson8-link-previews";
+
+function isLinkPreviewsEnabled(): boolean {
+    try {
+        return localStorage.getItem(LINK_PREVIEWS_KEY) !== "false";
+    } catch {
+        return true;
+    }
+}
+
+function setLinkPreviewsEnabled(enabled: boolean): void {
+    try {
+        localStorage.setItem(LINK_PREVIEWS_KEY, String(enabled));
+    } catch {
+        /* storage unavailable — the preference just won't persist */
+    }
+    applyLinkPreviewPreference();
+}
+
+/** Hides cards already rendered, live — see `body.link-previews-off` in index.html. */
+function applyLinkPreviewPreference(): void {
+    document.body.classList.toggle("link-previews-off", !isLinkPreviewsEnabled());
+}
+
+// ── Blur link previews (PRD 18.11) ──────────────────────────────────────────
+// Two independent per-user switches, both on by default (only "false" turns
+// one off): previews in NSFW channels, and previews the SITE marks as adult
+// (in any channel and in DMs). Pure CSS on body classes, so they apply live.
+const LP_NSFW_BLUR_KEY = "reson8-lp-nsfw-blur";
+const LP_ADULT_BLUR_KEY = "reson8-lp-adult-blur";
+
+function readBoolPref(key: string): boolean {
+    try {
+        return localStorage.getItem(key) !== "false";
+    } catch {
+        return true;
+    }
+}
+
+function writeBoolPref(key: string, value: boolean): void {
+    try {
+        localStorage.setItem(key, String(value));
+    } catch {
+        /* storage unavailable — the preference just won't persist */
+    }
+}
+
+function applyLinkPreviewBlurPreferences(): void {
+    document.body.classList.toggle("lp-nsfw-blur-off", !readBoolPref(LP_NSFW_BLUR_KEY));
+    document.body.classList.toggle("lp-adult-blur-off", !readBoolPref(LP_ADULT_BLUR_KEY));
+}
+
+/** Marks a channel tab as NSFW from the CURRENT tree, so a flag change updates open previews live. */
+function syncTabNsfwClass(channelId: string): void {
+    const tab = chatTabs.get(channelId);
+    if (!tab) return;
+    const node = findChannelNodeById(currentTree as TreeNode[], channelId);
+    tab.contentEl.classList.toggle("tab-nsfw", !!node?.isNsfw);
+}
+
 // ── Avatars (PRD 17.1) ──────────────────────────────────────────────────────
 // A user's avatar is a Libravatar/Gravatar URL the SERVER built from the
 // { provider, hash } the user chose; users without one get a generated
@@ -1761,6 +2032,23 @@ interface ChatTab {
      *  sentinels' loaders stand down, so a prepend can't cancel the scroll
      *  to the target (PRD 17.8). */
     jumpInProgress: boolean;
+    /** Whether size changes (previews, images, emoji) should keep the view on
+     *  the bottom (PRD 18.12). Updated ONLY by user-driven scrolls and by the
+     *  code that deliberately positions the view; read when a size change
+     *  actually happens, never captured earlier. */
+    followBottom: boolean;
+    /** > 0 while code (not the user) is moving the scroll position, so the
+     *  scroll listener doesn't mistake it for the user leaving the bottom. */
+    programmaticScroll: number;
+    /** > 0 while a smooth scroll runs: the keeper must not fight it. */
+    smoothScrolling: number;
+    /** The first visible message body and its offset from the viewport top,
+     *  restored after layout changes while the user is reading history. */
+    anchor: { el: HTMLElement; top: number } | null;
+    /** A jump target kept centred until the user takes over (PRD 17.8/18.12). */
+    holdTarget: { el: HTMLElement; until: number } | null;
+    resizeObserver?: ResizeObserver;
+    mutationObserver?: MutationObserver;
     /** Text channel vs DM (PRD 17.5). Only channel tabs have a mode. */
     kind: "channel" | "dm";
     /** "preview" = replaced by the next channel opened; "kept" = stays open
@@ -1844,11 +2132,42 @@ function fillTabElement(tabEl: HTMLElement, icon: string, name: string): void {
  */
 function refreshTabUnread(channelId: string): void {
     const tab = chatTabs.get(channelId);
-    if (!tab || tab.kind !== "channel") return;
+    if (!tab) return;
+    if (tab.kind === "dm") {
+        // PRD 18.13. No mute for DMs. A tab you're looking at in a focused window is read.
+        const partnerId = channelId.slice(3);
+        const showDm = unreadDmPartners.has(partnerId) && !(activeTabId === channelId && document.hasFocus());
+        tab.tabEl.classList.toggle("has-unread", showDm);
+        if (showDm) tab.tabEl.setAttribute("aria-label", `${tab.channelName} (unread)`);
+        else tab.tabEl.removeAttribute("aria-label");
+        return;
+    }
+    if (tab.kind !== "channel") return;
     const show = unreadChannelIds.has(channelId) && !isChannelMuted(channelId) && activeTabId !== channelId;
     tab.tabEl.classList.toggle("has-unread", show);
     if (show) tab.tabEl.setAttribute("aria-label", `${tab.channelName} (unread)`);
     else tab.tabEl.removeAttribute("aria-label");
+}
+
+/**
+ * Marks a DM conversation read — but only when it is really being looked at:
+ * its tab is active and the window has focus (PRD 18.13). `document.hasFocus()`
+ * is synchronous and correct here (the async `api.isWindowFocused()` would
+ * reintroduce ordering bugs). One server call per actual view.
+ */
+function markDmTabRead(tab: ChatTab, opts: { hadUnreadOnPage?: boolean } = {}): void {
+    if (tab.kind !== "dm") return;
+    if (activeTabId !== tab.channelId || !document.hasFocus()) return;
+    // Not seen yet: a tab that is active only because it was just created (its
+    // history is still loading) hasn't shown anything — reading it now would
+    // mark messages read that were never rendered. The load path calls with
+    // `hadUnreadOnPage` once the page IS rendered.
+    if (!tab.initialLoadDone && !opts.hadUnreadOnPage) return;
+    const partnerId = tab.channelId.slice(3);
+    if (!unreadDmPartners.has(partnerId) && !opts.hadUnreadOnPage) return;
+    unreadDmPartners.delete(partnerId);
+    refreshTabUnread(tab.channelId);
+    api.markDmsRead(partnerId);
 }
 
 /** Applies a channel tab's mode to its element (classes + tooltip). */
@@ -1896,28 +2215,29 @@ function showToast(message: string, durationMs = 4000): void {
 
 // ── Connection ──────────────────────────────────────────────────────────
 
-function parseServerUrl(raw: string): { host: string; port: number | undefined } {
-    let url = raw.trim();
-    // Strip protocol if provided
-    url = url.replace(/^https?:\/\//, "").replace(/^wss?:\/\//, "");
-    // Remove trailing slash
-    url = url.replace(/\/+$/, "");
-
-    const parts = url.split(":");
-    const host = parts[0] || "localhost";
-    const port = parts[1] ? parseInt(parts[1], 10) : undefined;
-    return { host, port };
+/** `host` or `host:port` for messages — IPv6 literals bracketed like in a URL. */
+function displayAddress(host: string, port?: number): string {
+    const h = host.includes(":") ? `[${host}]` : host;
+    return port ? `${h}:${port}` : h;
 }
 
-btnConnect.addEventListener("click", () => {
-    const { host, port } = parseServerUrl(serverUrlInput.value);
-    const nickname = nicknameInput.value.trim() || "User";
-    const password = serverPasswordInput.value || undefined;
+/** The connection being made / made — what the status bar and the warning banner describe. */
+let currentConnection: { scheme: "https" | "http"; host: string; port: number | undefined; pinned: boolean } | null = null;
+let connectInProgress = false;
 
-    if (!host) {
-        log("Please enter a server URL", "error");
+async function startConnect(): Promise<void> {
+    if (connectInProgress || isConnected) return;
+
+    const parsed = api.tls.parseServerAddress(serverUrlInput.value);
+    if (!parsed.ok) {
+        log(parsed.error, "error");
         return;
     }
+    const address = parsed.value;
+    const nickname = nicknameInput.value.trim() || "User";
+    const password = serverPasswordInput.value || undefined;
+    // Only sent when typed; never remembered (a code is single-purpose, PRD 18.9).
+    const inviteCode = inviteCodeInput.value.trim() || undefined;
 
     // Persist or clear server info based on Remember Me checkbox
     if (rememberMeCheckbox.checked) {
@@ -1932,9 +2252,294 @@ btnConnect.addEventListener("click", () => {
         localStorage.removeItem("reson8-server-password");
     }
 
-    log(`Connecting to ${host}${port ? `:${port}` : ""} as "${nickname}"...`, "info");
-    serverBaseUrl = `http://${host}${port ? `:${port}` : ""}`;
-    api.connect(host, port, nickname, password);
+    connectInProgress = true;
+    btnConnect.disabled = true; // the probe can take a few seconds
+    try {
+        const target = await resolveConnectionTarget(address);
+        if (!target) return; // refused or cancelled — the reason was already shown
+
+        currentConnection = target;
+        const shown = displayAddress(target.host, target.port);
+        log(
+            `Connecting to ${shown} ${target.scheme === "https" ? "over HTTPS" : "(not encrypted)"} as "${nickname}"...`,
+            "info",
+        );
+        await api.connect(target, nickname, password, inviteCode);
+    } finally {
+        connectInProgress = false;
+        if (!isConnected) btnConnect.disabled = false;
+    }
+}
+
+/**
+ * Decides HOW to connect (PRD 18.3): probes the server's TLS, applies the
+ * pure `decideScheme()` rules, and asks the user when an unknown certificate
+ * needs a decision. Returns null when the attempt should stop.
+ */
+async function resolveConnectionTarget(
+    address: TlsServerAddress,
+): Promise<{ scheme: "https" | "http"; host: string; port: number | undefined; pinned: boolean } | null> {
+    const { host, port } = address;
+    // Typing http:// is an explicit choice: no probe, connect as asked.
+    if (address.scheme === "http") return { scheme: "http", host, port, pinned: false };
+
+    const probePort = port ?? 443;
+    log(`Checking ${displayAddress(host, port)} for an encrypted connection...`, "info");
+    const reply = await api.tls.probe(host, probePort);
+    if ("error" in reply) {
+        log(reply.error, "error");
+        return null;
+    }
+
+    // No scheme and no port was plain http on port 80 before 2.7.0. If nothing
+    // on 443 speaks TLS, keep doing that — unless this server was reached over
+    // HTTPS before, which must never silently downgrade.
+    if (
+        address.scheme === null &&
+        port === undefined &&
+        (reply.result.kind === "no-tls" || reply.result.kind === "unreachable") &&
+        !reply.httpsRemembered
+    ) {
+        return { scheme: "http", host, port: undefined, pinned: false };
+    }
+
+    const decision = api.tls.decideScheme({
+        explicit: address.scheme,
+        probe: reply.result,
+        pinnedFingerprint: reply.pinnedFingerprint,
+        httpsRemembered: reply.httpsRemembered,
+    });
+
+    switch (decision.action) {
+        case "connect":
+            return { scheme: decision.scheme, host, port, pinned: decision.scheme === "https" && decision.pinned };
+
+        case "ask-trust": {
+            const trusted = await askToTrustCertificate(host, probePort, decision.cert, reply.result);
+            if (!trusted) {
+                log("Connection cancelled — the server's certificate was not trusted", "info");
+                return null;
+            }
+            const pinned = await api.tls.trustCertificate(host, probePort, decision.cert.fingerprint256);
+            if (!pinned.ok) {
+                log(pinned.error ?? "Couldn't store the trusted certificate", "error");
+                return null;
+            }
+            log(`Trusted the certificate of ${displayAddress(host, port)} (${api.tls.formatFingerprint(decision.cert.fingerprint256).slice(0, 23)}…)`, "success");
+            return { scheme: "https", host, port, pinned: true };
+        }
+
+        case "pin-mismatch":
+            log(`The certificate of ${displayAddress(host, port)} changed — not connecting`, "error");
+            await showCertificateChanged(host, probePort, decision.pinnedFingerprint, decision.cert.fingerprint256);
+            return null;
+
+        case "error":
+            log(decision.message, "error");
+            return null;
+    }
+}
+
+// ── Certificate modals (PRD 18.3) ─────────────────────────────────────────
+const tlsTrustModal = document.getElementById("tls-trust-modal") as HTMLDivElement;
+const tlsChangedModal = document.getElementById("tls-changed-modal") as HTMLDivElement;
+let tlsTrustResolver: ((trusted: boolean) => void) | null = null;
+let tlsChangedResolver: (() => void) | null = null;
+let tlsTrustFingerprint = "";
+
+function describeCertificateReason(reason: string): string {
+    switch (reason) {
+        case "DEPTH_ZERO_SELF_SIGNED_CERT":
+        case "SELF_SIGNED_CERT_IN_CHAIN":
+            return "it is self-signed";
+        case "UNABLE_TO_VERIFY_LEAF_SIGNATURE":
+        case "UNABLE_TO_GET_ISSUER_CERT_LOCALLY":
+            return "its issuer is unknown";
+        case "CERT_HAS_EXPIRED":
+            return "it has expired";
+        case "ERR_TLS_CERT_ALTNAME_INVALID":
+            return "it was issued for a different name";
+        default:
+            return "it can't be verified";
+    }
+}
+
+function askToTrustCertificate(host: string, port: number, cert: TlsCertInfo, probe: TlsProbeResult): Promise<boolean> {
+    const el = (id: string): HTMLElement => document.getElementById(id) as HTMLElement;
+    el("tls-trust-host").textContent = displayAddress(host, port);
+    el("tls-trust-reason").textContent = describeCertificateReason(probe.kind === "untrusted" ? probe.reason : "");
+    el("tls-trust-subject").textContent = cert.subject || "(none)";
+    el("tls-trust-names").textContent = cert.sans.length ? cert.sans.join(", ") : "(none)";
+    el("tls-trust-expiry").textContent = new Date(cert.validTo).toLocaleDateString("en-US", {
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+    });
+    el("tls-trust-fingerprint").textContent = api.tls.formatFingerprint(cert.fingerprint256);
+    tlsTrustFingerprint = api.tls.formatFingerprint(cert.fingerprint256);
+    tlsTrustModal.classList.add("visible");
+    (document.getElementById("btn-tls-trust-cancel") as HTMLButtonElement).focus(); // the safe default
+    return new Promise((resolve) => {
+        tlsTrustResolver = resolve;
+    });
+}
+
+function closeTlsTrustModal(trusted: boolean): void {
+    tlsTrustModal.classList.remove("visible");
+    const resolve = tlsTrustResolver;
+    tlsTrustResolver = null;
+    resolve?.(trusted);
+}
+
+function showCertificateChanged(host: string, port: number, pinned: string, seen: string): Promise<void> {
+    (document.getElementById("tls-changed-host") as HTMLElement).textContent = displayAddress(host, port);
+    (document.getElementById("tls-changed-old") as HTMLElement).textContent = api.tls.formatFingerprint(pinned);
+    (document.getElementById("tls-changed-new") as HTMLElement).textContent = api.tls.formatFingerprint(seen);
+    tlsChangedModal.classList.add("visible");
+    return new Promise((resolve) => {
+        tlsChangedResolver = resolve;
+    });
+}
+
+function closeTlsChangedModal(): void {
+    tlsChangedModal.classList.remove("visible");
+    const resolve = tlsChangedResolver;
+    tlsChangedResolver = null;
+    resolve?.();
+}
+
+document.getElementById("btn-tls-trust-confirm")!.addEventListener("click", () => closeTlsTrustModal(true));
+document.getElementById("btn-tls-trust-cancel")!.addEventListener("click", () => closeTlsTrustModal(false));
+document.getElementById("btn-tls-trust-copy")!.addEventListener("click", () => {
+    api.copyText(tlsTrustFingerprint).then((ok) => showToast(ok ? "Fingerprint copied" : "Couldn't copy the fingerprint"));
+});
+document.getElementById("btn-tls-changed-close")!.addEventListener("click", closeTlsChangedModal);
+tlsTrustModal.addEventListener("click", (e) => {
+    if (e.target === tlsTrustModal) closeTlsTrustModal(false);
+});
+tlsChangedModal.addEventListener("click", (e) => {
+    if (e.target === tlsChangedModal) closeTlsChangedModal();
+});
+document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    if (tlsTrustModal.classList.contains("visible")) closeTlsTrustModal(false);
+    else if (tlsChangedModal.classList.contains("visible")) closeTlsChangedModal();
+});
+
+// ── Status-bar lock + "not encrypted" warning (PRD 18.3) ──────────────────
+const connSecurityEl = document.getElementById("conn-security") as HTMLSpanElement;
+const tlsWarningBanner = document.getElementById("tls-warning-banner") as HTMLDivElement;
+const TLS_HTTP_WARNING_KEY = "reson8-tls-http-warning-dismissed";
+const LOCK_CLOSED_SVG =
+    '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>';
+const LOCK_OPEN_SVG =
+    '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>';
+
+function readDismissedHttpWarnings(): string[] {
+    try {
+        const parsed = JSON.parse(localStorage.getItem(TLS_HTTP_WARNING_KEY) ?? "[]");
+        return Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === "string") : [];
+    } catch {
+        return [];
+    }
+}
+
+function dismissHttpWarningFor(key: string): void {
+    try {
+        const list = readDismissedHttpWarnings().filter((k) => k !== key);
+        list.push(key);
+        localStorage.setItem(TLS_HTTP_WARNING_KEY, JSON.stringify(list.slice(-100)));
+    } catch {
+        /* the warning just shows again next time */
+    }
+}
+
+function renderConnectionSecurity(): void {
+    const c = currentConnection;
+    if (!isConnected || !c) {
+        connSecurityEl.hidden = true;
+        tlsWarningBanner.classList.remove("visible");
+        return;
+    }
+    connSecurityEl.hidden = false;
+    connSecurityEl.classList.toggle("secure", c.scheme === "https");
+    connSecurityEl.classList.toggle("insecure", c.scheme === "http");
+    if (c.scheme === "https") {
+        connSecurityEl.innerHTML = LOCK_CLOSED_SVG + "<span>Encrypted</span>";
+        connSecurityEl.title = c.pinned
+            ? "Encrypted connection. The server's certificate is self-signed and you chose to trust it."
+            : "Encrypted connection (HTTPS)";
+        tlsWarningBanner.classList.remove("visible");
+        return;
+    }
+    connSecurityEl.innerHTML = LOCK_OPEN_SVG + "<span>Not encrypted</span>";
+    connSecurityEl.title = "This connection is not encrypted: anyone on the network path can read your messages.";
+
+    const key = api.tls.hostKey(c.host, c.port ?? 80);
+    if (!readDismissedHttpWarnings().includes(key)) {
+        (document.getElementById("tls-warning-text") as HTMLElement).textContent =
+            `The connection to ${c.host} isn't encrypted — messages, direct messages and files can be read by anyone ` +
+            `on the network between you and the server. Ask its owner to enable HTTPS.`;
+        tlsWarningBanner.classList.add("visible");
+    }
+}
+
+document.getElementById("btn-tls-warning-close")!.addEventListener("click", () => {
+    tlsWarningBanner.classList.remove("visible");
+});
+document.getElementById("btn-tls-warning-dismiss")!.addEventListener("click", () => {
+    if (currentConnection) dismissHttpWarningFor(api.tls.hostKey(currentConnection.host, currentConnection.port ?? 80));
+    tlsWarningBanner.classList.remove("visible");
+});
+
+// ── Settings → Application → Trusted certificates (PRD 18.3) ──────────────
+async function renderTrustedCertificates(): Promise<void> {
+    const list = document.getElementById("tls-trusted-list") as HTMLDivElement;
+    let pins: TlsPinSummary[] = [];
+    try {
+        pins = await api.tls.listTrusted();
+    } catch {
+        /* an empty list is a safe rendering */
+    }
+    list.textContent = "";
+    if (pins.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "tls-trusted-empty";
+        empty.textContent = "No self-signed certificates trusted.";
+        list.appendChild(empty);
+        return;
+    }
+    for (const pin of pins) {
+        const row = document.createElement("div");
+        row.className = "tls-trusted-row";
+        const info = document.createElement("div");
+        info.className = "tls-trusted-info";
+        const host = document.createElement("div");
+        host.className = "tls-trusted-host";
+        host.textContent = pin.hostKey;
+        const meta = document.createElement("div");
+        meta.className = "tls-trusted-meta";
+        const fp = api.tls.formatFingerprint(pin.fingerprint256);
+        const fmt = (iso: string): string => {
+            const d = new Date(iso);
+            return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
+        };
+        meta.textContent = `${fp.slice(0, 23)}… · trusted ${fmt(pin.pinnedAt)} · expires ${fmt(pin.validTo)}`;
+        info.append(host, meta);
+        const remove = document.createElement("button");
+        remove.className = "btn btn-cancel";
+        remove.textContent = "Remove";
+        remove.addEventListener("click", async () => {
+            await api.tls.removeTrust(pin.hostKey);
+            void renderTrustedCertificates();
+        });
+        row.append(info, remove);
+        list.appendChild(row);
+    }
+}
+
+btnConnect.addEventListener("click", () => {
+    void startConnect();
 });
 
 btnDisconnect.addEventListener("click", () => {
@@ -1972,6 +2577,7 @@ function findChannelNodeById(nodes: TreeNode[], id: string): TreeNode | null {
 
 function renderTree(tree: TreeNode[]): void {
     currentTree = tree;
+    for (const channelId of chatTabs.keys()) syncTabNsfwClass(channelId); // PRD 18.11
     channelTree.innerHTML = "";
 
     if (tree.length === 0) {
@@ -2061,17 +2667,19 @@ function renderCategory(node: TreeNode, siblings: TreeNode[]): HTMLDivElement {
     const category = document.createElement("div");
     category.className = "tree-category";
 
-    // A voice channel that gains a child stays non-joinable (its own
-    // occupant/join affordance never applied once it became a parent) —
-    // previously silent about this, so this badge makes it explicit
-    // instead of the join button just quietly disappearing (PRD 14.6).
-    const voiceBadge = node.type === "VOICE"
-        ? `<span class="category-voice-badge" title="Voice channels with sub-channels can't be joined directly">Category</span>`
-        : "";
+    // Every parent shows the same "Category" badge, whatever it started as
+    // (PRD 18.15). A voice channel that gains a child stays non-joinable (PRD
+    // 14.6) and a text parent's label only toggles collapse — the tooltip says
+    // which of the two it is.
+    const badgeTitle =
+        node.type === "VOICE"
+            ? "A voice channel with sub-channels can't be joined directly"
+            : "A text channel with sub-channels works as a category: clicking it expands or collapses it, and its own chat isn't opened from the tree";
+    const badge = `<span class="category-badge" title="${escapeHtml(badgeTitle)}">Category</span>`;
 
     const label = document.createElement("div");
     label.className = "tree-category-label";
-    label.innerHTML = `<span class="arrow">▾</span> ${escapeHtml(node.name)}${voiceBadge}`;
+    label.innerHTML = `<span class="arrow">▾</span> ${escapeHtml(node.name)}${badge}`;
     label.addEventListener("click", () => {
         category.classList.toggle("collapsed");
     });
@@ -2559,6 +3167,79 @@ function addParentOptions(nodes: TreeNode[], depth: number): void {
     }
 }
 
+// ── Server access (PRD 18.18) ─────────────────────────────────────────────
+// A user without the Member role is connected but restricted: no text channels,
+// DMs or voice, until a moderator gives it back. The server enforces this on
+// every event; the client mirrors it so nothing looks usable that isn't, and
+// every entry point says why instead of failing silently.
+let hasServerAccess = true;
+const ACCESS_BANNER_TEXT =
+    "You don't have access to this server's channels and voice right now. A moderator can give it back in User Management.";
+
+/** True when the user may use channels/DMs/voice; otherwise explains why (a toast) and returns false. */
+function requireServerAccess(): boolean {
+    if (hasServerAccess) return true;
+    showToast(escapeHtml(ACCESS_BANNER_TEXT), 5000);
+    return false;
+}
+
+/** Autopens DM tabs for partners with unread messages (connect time, and when access returns). */
+function autoOpenUnreadDmTabs(): void {
+    api.getUnreadDmPartners().then((res) => {
+        if (res.success && res.partners && res.partners.length > 0) {
+            for (const p of res.partners) {
+                // Seeded first, so the tabs that end up in the background keep
+                // their dot and their "Unread Messages" line (PRD 18.13).
+                unreadDmPartners.add(p.partnerId);
+                openDmTab(p.partnerId, p.partnerNickname, p.unreadCount);
+            }
+        }
+    });
+}
+
+/**
+ * Applies the server's answer to "may this user use channels, DMs and voice?"
+ * `restore` is true when access has just come BACK on a live connection: kept
+ * tabs and unread DM tabs return without a reconnect.
+ */
+function applyAccessState(hasAccess: boolean, opts: { restore?: boolean } = {}): void {
+    const changed = hasServerAccess !== hasAccess;
+    hasServerAccess = hasAccess;
+    document.body.classList.toggle("no-access", !hasAccess);
+    if (!changed) return;
+
+    if (!hasAccess) {
+        // Everything the user had open goes away; kept tabs stay remembered.
+        for (const [tabId] of chatTabs) closeTab(tabId, { reason: "access" });
+        previewTabId = null;
+        keptTabsRestored = false;
+        unreadDmPartners.clear();
+        // The server already removed them from voice; mirror it locally.
+        if (isInVoice) {
+            api.leaveVoiceChannel();
+            isInVoice = false;
+            currentChannelId = null;
+            previousOccupantIds = new Set();
+            previousSharingIds = new Set();
+            voiceChannelName.textContent = "";
+            voicePanel.classList.remove("in-voice");
+        }
+        switchTab("server-log");
+        log("You no longer have access to this server's channels and voice", "error");
+        showToast(escapeHtml(ACCESS_BANNER_TEXT), 7000);
+    } else if (opts.restore) {
+        log("Your access to this server's channels and voice was restored", "success");
+        keptTabsRestored = false;
+        if (currentTree.length > 0 && currentServerId) restoreKeptTabs(currentTree as TreeNode[], currentServerId);
+        autoOpenUnreadDmTabs();
+        if (currentTree.length > 0) renderTree(currentTree as TreeNode[]);
+    }
+}
+
+api.on("access-changed", (data: { hasAccess: boolean }) => {
+    applyAccessState(data.hasAccess, { restore: true });
+});
+
 // ── Channel Interaction ───────────────────────────────────────────────────
 
 let isJoiningChannel = false;
@@ -2566,6 +3247,7 @@ let isJoiningChannel = false;
 async function handleChannelClick(node: TreeNode): Promise<void> {
     if (!isConnected) return;
     if (isJoiningChannel) return; // prevent rapid double-clicks
+    if (!requireServerAccess()) return; // PRD 18.18
 
     if (node.type === "VOICE") {
         // If already in this voice channel, do nothing
@@ -3275,8 +3957,9 @@ api.on("dm-deleted", (payload: { dmId: string }) => {
 
 // ── Event Listeners ───────────────────────────────────────────────────────
 
-api.on("connected", (data: { serverId: string; instanceId: string }) => {
+api.on("connected", (data: { serverId: string; instanceId: string; secure?: boolean; pinned?: boolean; hasAccess?: boolean }) => {
     isConnected = true;
+    applyAccessState(data.hasAccess !== false); // PRD 18.18
     currentServerId = data.serverId;
     btnConnect.disabled = true;
     btnDisconnect.disabled = false;
@@ -3287,6 +3970,9 @@ api.on("connected", (data: { serverId: string; instanceId: string }) => {
     statusText.textContent = `Connected as ${nicknameInput.value.trim() || "User"}`;
     statusText.classList.add("connected");
     statusInstance.textContent = `ID: ${data.instanceId}`;
+    renderConnectionSecurity(); // PRD 18.3: lock icon / "not encrypted" warning
+    hideApprovalScreen(); // PRD 18.8: a waiting identity that was just let in
+    clearInviteField(); // PRD 18.9: a code is single-purpose
     if (lastDisconnectAt !== null) {
         const secs = ((Date.now() - lastDisconnectAt) / 1000).toFixed(1);
         log(`Connected to server (reconnected after ${secs}s)`, "success");
@@ -3313,16 +3999,11 @@ api.on("connected", (data: { serverId: string; instanceId: string }) => {
         canBanUsers = bannedRes.success;
         canManageEmojis = pendingEmojisRes.success;
         settingsTabRoles.disabled = !(isAdminUser || canBanUsers);
+        if (canBanUsers) void refreshPendingApprovals(); // PRD 18.8: the badge is right from the first paint
     });
 
-    // Auto-open DM tabs for partners with unread messages
-    api.getUnreadDmPartners().then((res) => {
-        if (res.success && res.partners && res.partners.length > 0) {
-            for (const p of res.partners) {
-                openDmTab(p.partnerId, p.partnerNickname, p.unreadCount);
-            }
-        }
-    });
+    // Auto-open DM tabs for partners with unread messages (not while restricted — PRD 18.18)
+    if (hasServerAccess) autoOpenUnreadDmTabs();
 
     // Load approved custom emojis for the picker's "+" tab
     api.getApprovedEmojis().then((res) => {
@@ -3391,6 +4072,13 @@ api.on("disconnected", (data?: { reason?: string }) => {
     serverUrlInput.disabled = false;
     nicknameInput.disabled = false;
     serverPasswordInput.disabled = false;
+    renderConnectionSecurity(); // isConnected is false → hides the lock and the warning (PRD 18.3)
+    hideApprovalScreen(); // PRD 18.8
+    pendingApprovals = [];
+    setPendingBadges(0);
+    invites = [];
+    invitesSection.style.display = "none";
+    unreadDmPartners.clear(); // PRD 18.13
     statusDot.classList.remove("connected");
     statusText.textContent = "Disconnected";
     statusText.classList.remove("connected");
@@ -3412,6 +4100,8 @@ api.on("disconnected", (data?: { reason?: string }) => {
     previewTabId = null;
     keptTabsRestored = false;
     keptTabsServerId = null;
+    hasServerAccess = true; // the next connect says otherwise if it must (PRD 18.18)
+    document.body.classList.remove("no-access");
     switchTab("server-log");
     log(`Disconnected from server (${disconnectReason})`, "error");
     SoundAlert.play("disconnected.mp3");
@@ -3483,6 +4173,11 @@ api.on("error", (data: { code?: string; message: string }) => {
     // Suppress permission-denied errors — they are already handled
     // gracefully by ack callbacks (e.g., disabling the Roles tab).
     if (data.code === "PERMISSION_DENIED") return;
+    // The server wants (or didn't accept) an invite code (PRD 18.9): show the field.
+    if (data.code === "INVITE_REQUIRED" || data.code === "INVITE_INVALID" || data.code === "INVITE_THROTTLED") {
+        revealInviteField(data.message, data.code !== "INVITE_REQUIRED");
+        return;
+    }
     log(`Error: ${data.message}`, "error");
 });
 
@@ -3954,9 +4649,84 @@ videoLightboxModal.addEventListener("click", (e) => {
     }
 });
 
+const EYE_ICON_SVG = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>`;
+
+/**
+ * Wraps a card's media so it can be blurred (PRD 18.11). The wrap and its
+ * overlay are ALWAYS rendered; whether the blur is active is decided purely by
+ * CSS classes (`.tab-nsfw` on the tab, `.lpc-adult` on the card, and the two
+ * `body.lp-*-blur-off` preferences), so toggling a switch or a channel's NSFW
+ * flag updates cards already on screen. Deliberately NOT the attachment
+ * classes: `body.nsfw-blur-off` (the attachments switch) must not un-blur these.
+ */
+function wrapPreviewMedia(card: HTMLElement, media: HTMLElement, adult: boolean): HTMLDivElement {
+    const wrap = document.createElement("div");
+    wrap.className = "lpc-blur-wrap";
+    wrap.appendChild(media);
+
+    const overlay = document.createElement("div");
+    overlay.className = "lpc-blur-overlay";
+    overlay.innerHTML = EYE_ICON_SVG;
+    const label = document.createElement("span");
+    label.className = "lpc-blur-label-nsfw";
+    label.textContent = "NSFW channel — click to reveal";
+    const labelAdult = document.createElement("span");
+    labelAdult.className = "lpc-blur-label-adult";
+    labelAdult.textContent = "Marked as adult content by the site — click to reveal";
+    overlay.append(label, labelAdult);
+    // Reveal is per card, inline; it must not open the link.
+    overlay.addEventListener("click", (e) => {
+        e.stopPropagation();
+        wrap.classList.add("revealed");
+    });
+    wrap.appendChild(overlay);
+
+    if (adult) card.classList.add("lpc-adult");
+    card.appendChild(wrap);
+    return wrap;
+}
+
+/**
+ * Gives a card's media its final box as soon as the card is inserted, when the
+ * page declared the media's size (PRD 18.12) — the card then doesn't grow once
+ * the image/video loads. The existing `max-height: 300px; object-fit: cover`
+ * still caps it, so the look is unchanged.
+ */
+function reserveMediaBox(el: HTMLElement, data: LinkPreviewData): void {
+    if (data.mediaWidth && data.mediaHeight) {
+        el.style.aspectRatio = `${data.mediaWidth} / ${data.mediaHeight}`;
+        el.style.width = "100%";
+    }
+}
+
 function createPreviewCard(data: LinkPreviewData): HTMLDivElement {
     const card = document.createElement("div");
     card.className = "link-preview-card";
+
+    // The link IS an image (PRD 18.10): just the picture, opened in the
+    // zoom-only viewer (never the "sent by" viewer — it isn't a message image).
+    if (data.kind === "image" && data.image) {
+        card.classList.add("lpc-direct");
+        const img = document.createElement("img");
+        img.className = "lpc-image lpc-direct-image";
+        img.src = data.image;
+        img.alt = data.domain || "Image";
+        img.loading = "lazy";
+        img.addEventListener("click", (e) => {
+            e.stopPropagation();
+            openLightbox(data.image!, { previewOnly: true });
+        });
+        img.addEventListener("error", () => card.remove());
+        wrapPreviewMedia(card, img, !!data.adult);
+        if (data.domain) {
+            const domainEl = document.createElement("div");
+            domainEl.className = "lpc-domain";
+            domainEl.textContent = data.domain;
+            card.appendChild(domainEl);
+        }
+        if (data.url) card.addEventListener("click", () => window.open(data.url!, "_blank"));
+        return card;
+    }
 
     // ── Text body (top) ──
     const body = document.createElement("div");
@@ -3997,8 +4767,9 @@ function createPreviewCard(data: LinkPreviewData): HTMLDivElement {
         videoEl.controls = true;
         if (data.image) videoEl.poster = data.image;
         videoEl.preload = "metadata";
+        reserveMediaBox(videoEl, data);
         videoEl.addEventListener("click", (e) => e.stopPropagation());
-        card.appendChild(videoEl);
+        wrapPreviewMedia(card, videoEl, !!data.adult);
     } else if (isEmbedVideo && data.image) {
         // Embed video (YouTube, etc.) — show image with play overlay
         const mediaWrap = document.createElement("div");
@@ -4009,6 +4780,7 @@ function createPreviewCard(data: LinkPreviewData): HTMLDivElement {
         img.src = data.image;
         img.alt = data.title || "Preview";
         img.loading = "lazy";
+        reserveMediaBox(mediaWrap, data);
         img.addEventListener("error", () => { mediaWrap.style.display = "none"; });
         mediaWrap.appendChild(img);
 
@@ -4024,7 +4796,7 @@ function createPreviewCard(data: LinkPreviewData): HTMLDivElement {
             window.open(data.url!, "_blank");
         });
 
-        card.appendChild(mediaWrap);
+        wrapPreviewMedia(card, mediaWrap, !!data.adult);
     } else if (data.image) {
         // Static image — full width
         const img = document.createElement("img");
@@ -4032,8 +4804,17 @@ function createPreviewCard(data: LinkPreviewData): HTMLDivElement {
         img.src = data.image;
         img.alt = data.title || "Preview";
         img.loading = "lazy";
-        img.addEventListener("error", () => { img.style.display = "none"; });
-        card.appendChild(img);
+        reserveMediaBox(img, data);
+        // The picture opens the limited, zoom-only viewer (PRD 18.19) and does NOT
+        // open the link; the card's text and domain still do. The embed-video
+        // thumbnail (above) keeps opening the link: it stands for a video.
+        img.style.cursor = "zoom-in";
+        img.addEventListener("click", (e) => {
+            e.stopPropagation();
+            openLightbox(data.image!, { previewOnly: true });
+        });
+        const staticWrap = wrapPreviewMedia(card, img, !!data.adult);
+        img.addEventListener("error", () => { staticWrap.style.display = "none"; });
     }
 
     // ── Domain footer ──
@@ -4062,6 +4843,8 @@ function createPreviewCard(data: LinkPreviewData): HTMLDivElement {
  * opposite answers, so this can no longer hardcode "always scroll down."
  */
 function injectLinkPreview(messageEl: HTMLElement, url: string, onLoaded?: () => void): void {
+    // Turned off by the user: not even a request (PRD 18.10).
+    if (!isLinkPreviewsEnabled()) return;
     // Check renderer-side cache first
     const cached = linkPreviewCache.get(url);
     if (cached !== undefined) {
@@ -4074,14 +4857,14 @@ function injectLinkPreview(messageEl: HTMLElement, url: string, onLoaded?: () =>
 
     // Fetch asynchronously — don't block message rendering
     api.fetchLinkPreview(url).then((data) => {
-        linkPreviewCache.set(url, data);
+        cacheLinkPreview(url, data);
         if (!data) return;
         // Guard: ensure the message is still in the DOM (tab may have been closed)
         if (!messageEl.isConnected) return;
         messageEl.appendChild(createPreviewCard(data));
         onLoaded?.();
     }).catch(() => {
-        linkPreviewCache.set(url, null);
+        cacheLinkPreview(url, null);
     });
 }
 
@@ -4092,6 +4875,7 @@ function renderAdminUsers(users: any[]): void {
 
     if (users.length === 0) {
         adminUserList.innerHTML = '<div class="admin-empty">No users found.</div>';
+        identityLogBar.style.display = "none";
         return;
     }
 
@@ -4108,6 +4892,9 @@ function renderAdminUsers(users: any[]): void {
         }
     });
 
+    // The identity log is ADMIN-only on the server too (PRD 18.4).
+    identityLogBar.style.display = iAmAdmin ? "flex" : "none";
+
     for (const user of users) {
         const row = document.createElement("div");
         row.className = "admin-user-row";
@@ -4122,8 +4909,25 @@ function renderAdminUsers(users: any[]): void {
         const keyBadge = user.hasIdentityKey
             ? ' <span class="user-key-badge" title="Identity key bound — only this user\'s device can connect as them" aria-label="Identity key bound">🔒</span>'
             : "";
+        // Who can't use channels, DMs and voice (PRD 18.18): neither CONNECT nor ADMIN in
+        // any of their roles. That includes a member with no roles at all (PRD 18.17).
+        const CONNECT_BIT = 1n << 0n;
+        const ADMIN_BIT = 1n << 8n;
+        const userHasAccess = (user.roles ?? []).some((r: any) => {
+            try {
+                const p = BigInt(r.permissions);
+                return (p & CONNECT_BIT) !== 0n || (p & ADMIN_BIT) !== 0n;
+            } catch {
+                return false;
+            }
+        });
+        const noRolesBadge = !userHasAccess
+            ? userRoleIds.size === 0
+                ? ' <span class="user-no-access-badge" title="This user holds no roles, so they can\'t use channels, DMs or voice until given one">No access</span>'
+                : ' <span class="user-no-access-badge" title="Their roles don\'t include Member (or Server Admin): they can\'t use channels, DMs or voice">No access</span>'
+            : "";
         infoEl.innerHTML = `
-            <div class="admin-user-nickname">${escapeHtml(user.nickname)}${keyBadge}${bannedBadge}</div>
+            <div class="admin-user-nickname">${escapeHtml(user.nickname)}${keyBadge}${noRolesBadge}${bannedBadge}</div>
             <div class="admin-user-id">${escapeHtml(user.id)}</div>
         `;
         row.appendChild(infoEl);
@@ -4196,15 +5000,19 @@ function renderAdminUsers(users: any[]): void {
                 ? "Unban"
                 : '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="7" cy="7" r="4"/><circle cx="18" cy="17" r="5"/><line x1="14.5" y1="20.5" x2="21.5" y2="13.5"/></svg> Ban';
             banBtn.addEventListener("click", async () => {
-                const res = user.isBanned
-                    ? await api.unbanUser(user.id)
-                    : await api.banUser(user.id);
+                // Banning asks first (PRD 18.7) so an address ban can be chosen;
+                // lifting a ban stays a single click.
+                if (!user.isBanned) {
+                    openBanDialog({ id: user.id, nickname: user.nickname });
+                    return;
+                }
+                const res = await api.unbanUser(user.id);
                 if (res.success) {
-                    log(`${user.isBanned ? "Unbanned" : "Banned"} ${escapeHtml(user.nickname)}`, "success");
-                    SoundAlert.play(user.isBanned ? "user_unbanned_from_server.mp3" : "user_banned_from_server.mp3");
+                    log(`Unbanned ${escapeHtml(user.nickname)}`, "success");
+                    SoundAlert.play("user_unbanned_from_server.mp3");
                     openSettingsPanel(); // refresh to reflect the new banned state
                 } else {
-                    log(`Failed to ${user.isBanned ? "unban" : "ban"}: ${res.error}`, "error");
+                    log(`Failed to unban: ${res.error}`, "error");
                     if (res.error && /permission|denied/i.test(res.error)) SoundAlert.play("insufficient_perms.mp3");
                 }
             });
@@ -4248,6 +5056,19 @@ function renderAdminUsers(users: any[]): void {
             row.appendChild(resetBtn);
         }
 
+        // This user's slice of the identity log (PRD 18.4).
+        if (iAmAdmin) {
+            const logBtn = document.createElement("button");
+            logBtn.className = "btn-reset-key btn-icon";
+            // A compact icon: a text button here squeezed the nickname column (names truncated).
+            logBtn.innerHTML =
+                '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><circle cx="3.5" cy="6" r="1"/><circle cx="3.5" cy="12" r="1"/><circle cx="3.5" cy="18" r="1"/></svg>';
+            logBtn.setAttribute("aria-label", `Identity log of ${user.nickname}`);
+            logBtn.title = `Identity log of ${user.nickname}`;
+            logBtn.addEventListener("click", () => showIdentityLog({ id: user.id, nickname: user.nickname }));
+            row.appendChild(logBtn);
+        }
+
         adminUserList.appendChild(row);
     }
 }
@@ -4287,7 +5108,12 @@ function switchTab(tabId: string): void {
     // its own render loop already lands on the bottom once messages arrive.
     const tab = chatTabs.get(tabId);
     if (tab?.initialLoadDone) {
-        tab.messagesEl.scrollTop = tab.messagesEl.scrollHeight;
+        stickToBottom(tab);
+    }
+    // Looking at a DM tab (in a focused window) reads it (PRD 18.13).
+    if (tab?.kind === "dm") {
+        markDmTabRead(tab);
+        refreshTabUnread(tabId);
     }
     // A kept tab restored at connect loads its history on first view (PRD 17.5).
     if (tab && !tab.loaded) loadChatHistory(tab);
@@ -4317,6 +5143,12 @@ function openChatTab(
     opts: { mode?: "preview" | "kept"; focus?: boolean; deferLoad?: boolean } = {},
 ): void {
     const focus = opts.focus !== false;
+
+    // No access (PRD 18.18): nothing opens. A background restore stays silent.
+    if (!hasServerAccess) {
+        if (focus) requireServerAccess();
+        return;
+    }
 
     // Already open: focus it; "Keep Tab Open" on a preview tab keeps it in place.
     const existing = chatTabs.get(channelId);
@@ -4401,11 +5233,18 @@ function openChatTab(
         atTrueLatest: true,
         loadingNewer: false,
         jumpInProgress: false,
+        followBottom: true,
+        programmaticScroll: 0,
+        smoothScrolling: 0,
+        anchor: null,
+        holdTarget: null,
         kind: "channel",
         mode,
     };
     chatTabs.set(channelId, chatTab);
+    syncTabNsfwClass(channelId); // PRD 18.11
     setupInfiniteScroll(chatTab);
+    setupScrollKeeper(chatTab); // PRD 18.12
     renderTabMode(chatTab);
     refreshTabUnread(channelId); // e.g. a kept tab restored for a channel with unread messages
 
@@ -4424,6 +5263,7 @@ function openChatTab(
 // ── DM Tab Management ─────────────────────────────────────────────────────
 
 function openDmTab(userId: string, nickname: string, unreadCountHint?: number): void {
+    if (!requireServerAccess()) return; // PRD 18.18
     const tabKey = `dm:${userId}`;
 
     // If tab already exists, just switch to it
@@ -4484,10 +5324,16 @@ function openDmTab(userId: string, nickname: string, unreadCountHint?: number): 
         atTrueLatest: true,
         loadingNewer: false,
         jumpInProgress: false,
+        followBottom: true,
+        programmaticScroll: 0,
+        smoothScrolling: 0,
+        anchor: null,
+        holdTarget: null,
         kind: "dm",
     };
     chatTabs.set(tabKey, chatTab);
     setupInfiniteScroll(chatTab);
+    setupScrollKeeper(chatTab); // PRD 18.12
 
     // Switch to the new tab
     switchTab(tabKey);
@@ -4505,13 +5351,15 @@ function openDmTab(userId: string, nickname: string, unreadCountHint?: number): 
  */
 function closeTab(
     channelId: string,
-    opts: { reason?: "user" | "replaced" | "disconnect" | "deleted" } = {},
+    opts: { reason?: "user" | "replaced" | "disconnect" | "deleted" | "access" } = {},
 ): void {
     const reason = opts.reason ?? "user";
     const tab = chatTabs.get(channelId);
     if (!tab) return;
 
     tab.scrollObserver?.disconnect();
+    tab.resizeObserver?.disconnect(); // PRD 18.12
+    tab.mutationObserver?.disconnect();
     tab.tabEl.remove();
     tab.contentEl.remove();
     chatTabs.delete(channelId);
@@ -4607,6 +5455,9 @@ function showChannelTabContextMenu(e: MouseEvent, channelId: string): void {
  */
 function restoreKeptTabs(tree: TreeNode[], serverId: string): void {
     keptTabsServerId = serverId;
+    // Restricted: nothing opens now, and the flag stays unset so the tabs come
+    // back when access does (PRD 18.18).
+    if (!hasServerAccess) return;
     if (keptTabsRestored || tree.length === 0) return;
     keptTabsRestored = true;
     const saved = readKeptTabsStore()[serverId] ?? [];
@@ -4675,9 +5526,13 @@ async function fetchAndRenderLatestPage(tab: ChatTab, unreadCountHint?: number):
                 renderDmMessage(tab, result.messages[i]);
             }
 
-            // Mark messages as read now that the tab is open
+            // Unread until the tab is actually viewed with the window focused
+            // (PRD 18.13): a tab opened in the background on connect keeps its
+            // dot, and its messages stay unread on the server.
             if (firstUnreadIndex !== -1) {
-                api.markDmsRead(partnerId);
+                unreadDmPartners.add(partnerId);
+                refreshTabUnread(tab.channelId);
+                markDmTabRead(tab, { hadUnreadOnPage: true });
             }
 
             // The server says for sure since 2.6.0 (PRD 17.8); guess for older ones.
@@ -4729,7 +5584,8 @@ async function scrollToMostRecent(tab: ChatTab): Promise<void> {
     if (!tab.atTrueLatest) {
         await rebuildTabAtLatest(tab);
     }
-    tab.messagesEl.scrollTo({ top: tab.messagesEl.scrollHeight, behavior: "smooth" });
+    tab.followBottom = true;
+    smoothScroll(tab, () => tab.messagesEl.scrollTo({ top: tab.messagesEl.scrollHeight, behavior: "smooth" }));
     // Landing at the bottom clears unread state, same as a natural
     // scroll-to-bottom or tab switch already does.
     markChannelRead(tab.channelId);
@@ -4810,11 +5666,14 @@ async function loadOlderMessages(tab: ChatTab): Promise<void> {
         prependOlderMessages(tab, result.messages as ChatMessage[], false);
     }
 
-    if (anchorBody?.isConnected) {
-        tab.messagesEl.scrollTop += anchorBody.getBoundingClientRect().top - anchorTopBefore;
-    } else {
-        tab.messagesEl.scrollTop = oldScrollTop + (tab.messagesEl.scrollHeight - oldScrollHeight);
-    }
+    setScroll(tab, () => {
+        if (anchorBody?.isConnected) {
+            tab.messagesEl.scrollTop += anchorBody.getBoundingClientRect().top - anchorTopBefore;
+        } else {
+            tab.messagesEl.scrollTop = oldScrollTop + (tab.messagesEl.scrollHeight - oldScrollHeight);
+        }
+    });
+    recordAnchor(tab); // before the keeper's next frame, so it doesn't undo this correction
     ensureHistoryFilled(tab); // a short page can still leave the sentinel in view
 }
 
@@ -4874,7 +5733,7 @@ async function loadNewerMessages(tab: ChatTab): Promise<void> {
         // page; appending it would leave a hidden gap. Fall back to the old
         // behavior: rebuild the tab at the present.
         await rebuildTabAtLatest(tab);
-        tab.messagesEl.scrollTop = tab.messagesEl.scrollHeight;
+        stickToBottom(tab);
         return;
     }
 
@@ -4918,7 +5777,11 @@ function ensureHistoryFilled(tab: ChatTab): void {
  * content growing above the viewport; this is belt and braces. Stops at once
  * when the user takes over (wheel, touch, keys, pointer).
  */
-function holdJumpTarget(tab: ChatTab, el: HTMLElement, ms = 1500): void {
+function holdJumpTarget(tab: ChatTab, el: HTMLElement, ms = 10_000): void {
+    // The scroll keeper re-centres it on any size change (previews, images),
+    // until the user takes over or the window passes (PRD 18.12).
+    tab.holdTarget = { el, until: performance.now() + ms };
+    tab.followBottom = false;
     const scroller = tab.messagesEl;
     const recenter = (): void => {
         if (el.isConnected) el.scrollIntoView({ behavior: "instant", block: "center" });
@@ -4993,8 +5856,128 @@ function isNearBottom(el: HTMLElement, thresholdPx = 60): boolean {
     return el.scrollHeight - el.scrollTop - el.clientHeight <= thresholdPx;
 }
 
+// ── Scroll keeper (PRD 18.12) ───────────────────────────────────────────────
+// Reproduced on the 18.11 build with delayed previews and slow images: (a) a
+// card's image grows it AFTER the stick that ran when the card was inserted,
+// so the view ended ~900px above the bottom; (b) a preview arriving after the
+// user scrolled up yanked them to the bottom, because `wasNearBottom` had been
+// captured at message-render time. (Content growing above the reading position
+// was already handled by Chromium's native scroll anchoring.)
+// One state per tab (`followBottom`, read when a size change really happens)
+// and one ResizeObserver per tab replace those per-message captures.
+
+/** Runs a programmatic scroll change so the scroll listener ignores it. */
+function setScroll(tab: ChatTab, fn: () => void): void {
+    tab.programmaticScroll++;
+    try {
+        fn();
+    } finally {
+        // The scroll event fires during the next frame's update, BEFORE rAF callbacks.
+        requestAnimationFrame(() => {
+            tab.programmaticScroll = Math.max(0, tab.programmaticScroll - 1);
+            recordAnchor(tab);
+        });
+    }
+}
+
+/** Records the first message whose text is in view, for restoring after layout shifts. */
+function recordAnchor(tab: ChatTab): void {
+    const el = tab.messagesEl;
+    if (el.clientHeight === 0) return; // hidden tab
+    const viewTop = el.getBoundingClientRect().top;
+    const bodies = el.querySelectorAll<HTMLElement>(".chat-msg .msg-body");
+    for (const b of bodies) {
+        const r = b.getBoundingClientRect();
+        if (r.bottom > viewTop) {
+            tab.anchor = { el: b, top: r.top - viewTop };
+            return;
+        }
+    }
+    tab.anchor = null;
+}
+
+/** Applied after every batch of message-size changes. */
+function keepScroll(tab: ChatTab): void {
+    const el = tab.messagesEl;
+    if (el.clientHeight === 0) return; // hidden tab: re-applied by switchTab()
+    if (tab.smoothScrolling > 0) return; // never fight a smooth scroll
+
+    if (tab.followBottom) {
+        if (el.scrollHeight - el.scrollTop - el.clientHeight > 0.5) stickToBottom(tab);
+        return;
+    }
+    if (tab.holdTarget && performance.now() < tab.holdTarget.until && tab.holdTarget.el.isConnected) {
+        const target = tab.holdTarget.el;
+        setScroll(tab, () => target.scrollIntoView({ behavior: "instant", block: "center" }));
+        return;
+    }
+    if (tab.anchor?.el.isConnected) {
+        const viewTop = el.getBoundingClientRect().top;
+        const delta = tab.anchor.el.getBoundingClientRect().top - viewTop - tab.anchor.top;
+        if (Math.abs(delta) >= 1) setScroll(tab, () => { el.scrollTop += delta; });
+    }
+}
+
+/** A smooth scroll that the keeper must not fight: programmatic until it ends. */
+function smoothScroll(tab: ChatTab, start: () => void): void {
+    tab.programmaticScroll++;
+    tab.smoothScrolling++;
+    let done = false;
+    const finish = (): void => {
+        if (done) return;
+        done = true;
+        tab.programmaticScroll = Math.max(0, tab.programmaticScroll - 1);
+        tab.smoothScrolling = Math.max(0, tab.smoothScrolling - 1);
+        tab.followBottom = isNearBottom(tab.messagesEl);
+        recordAnchor(tab);
+    };
+    tab.messagesEl.addEventListener("scrollend", finish, { once: true });
+    setTimeout(finish, 1200); // never leave it stuck if no scroll happens
+    start();
+}
+
+function setupScrollKeeper(tab: ChatTab): void {
+    const el = tab.messagesEl;
+    // Runs in the frame's layout phase, before paint: correcting here means the
+    // shifted frame is never shown. Only the scroll position changes in here,
+    // never an element size, so it cannot feed the observer a loop.
+    const ro = new ResizeObserver(() => keepScroll(tab));
+    const track = (n: Node): void => {
+        if (n instanceof HTMLElement && n.classList.contains("chat-msg")) ro.observe(n);
+    };
+    el.querySelectorAll(".chat-msg").forEach(track);
+    // Every insertion path (live, prepend, jump window, rebuild) adds `.chat-msg`
+    // children of the list; observing them here means no path can forget to.
+    const mo = new MutationObserver((records) => {
+        for (const rec of records) {
+            rec.addedNodes.forEach(track);
+            rec.removedNodes.forEach((n) => {
+                if (n instanceof HTMLElement) ro.unobserve(n);
+            });
+        }
+    });
+    mo.observe(el, { childList: true });
+    tab.resizeObserver = ro;
+    tab.mutationObserver = mo;
+
+    el.addEventListener(
+        "scroll",
+        () => {
+            if (tab.programmaticScroll > 0) return;
+            tab.followBottom = isNearBottom(el);
+            recordAnchor(tab);
+        },
+        { passive: true },
+    );
+    // The user taking over ends a held jump target.
+    for (const type of ["wheel", "touchstart", "keydown", "pointerdown"]) {
+        el.addEventListener(type, () => { tab.holdTarget = null; }, { passive: true });
+    }
+}
+
 function stickToBottom(tab: ChatTab): void {
-    tab.messagesEl.scrollTop = tab.messagesEl.scrollHeight;
+    tab.followBottom = true;
+    setScroll(tab, () => { tab.messagesEl.scrollTop = tab.messagesEl.scrollHeight; });
 }
 
 /** Records the oldest-loaded cursor/date-key the very first time a tab
@@ -5318,10 +6301,11 @@ function buildAttachmentsElement(attachments: { url: string }[], meta: LightboxM
 }
 
 /** Re-sticks the scroll to the bottom as each of a message's images finishes loading (PRD 14.1), if the user was already there. */
-function stickOnImageLoad(el: HTMLElement, tab: ChatTab, wasNearBottom: boolean): void {
+function stickOnImageLoad(el: HTMLElement, tab: ChatTab): void {
     el.querySelectorAll<HTMLImageElement>(".msg-image").forEach((img) => {
         img.addEventListener("load", () => {
-            if (wasNearBottom) stickToBottom(tab);
+            // Read NOW, not at render time: the user may have scrolled away since (PRD 18.12).
+            if (tab.followBottom) stickToBottom(tab);
         });
     });
 }
@@ -5402,7 +6386,7 @@ function renderChatMessage(tab: ChatTab, msg: ChatMessage, opts: { stick?: boole
     // ends up visually short of the true bottom (PRD 14.1). Only re-stick
     // if the user was already at the bottom when this message arrived —
     // never yank someone reading older history.
-    stickOnImageLoad(el, tab, wasNearBottom);
+    stickOnImageLoad(el, tab);
 
     // Long-message truncation (Phase 12 sub-phase item 5) — must run after
     // appendChild, since scrollHeight/clientHeight need the element to
@@ -5417,7 +6401,8 @@ function renderChatMessage(tab: ChatTab, msg: ChatMessage, opts: { stick?: boole
         const url = extractFirstUrl(msg.content);
         if (url) {
             injectLinkPreview(el, url, () => {
-                if (wasNearBottom) stickToBottom(tab);
+                // Read when the card lands, not when the message rendered (PRD 18.12).
+                if (tab.followBottom) stickToBottom(tab);
             });
         }
     }
@@ -5462,7 +6447,7 @@ function prependOlderMessages(tab: ChatTab, messages: ChatMessage[] | DirectMess
             : buildChatMessageElement(tab, msg as ChatMessage);
         tab.topSentinelEl.insertAdjacentElement("afterend", el);
 
-        if (!isDm && msg.content) {
+        if (msg.content) {
             const textEl = el.querySelector(".msg-text") as HTMLElement | null;
             if (textEl) attachMessageTruncation(el, textEl);
         }
@@ -6111,7 +7096,7 @@ api.on("message", (msg: ChatMessage) => {
             // You sent it while reading older history: go to the present so
             // you see it (PRD 17.8), as other chat apps do.
             rebuildTabAtLatest(tab).then(() => {
-                tab.messagesEl.scrollTop = tab.messagesEl.scrollHeight;
+                stickToBottom(tab);
             });
         }
         // Otherwise the tab shows a detached window (after a jump): rendering
@@ -6179,8 +7164,8 @@ function markChannelRead(channelId: string): void {
 /** Builds a DM's DOM element without appending it or touching scroll state —
  *  shared by the forward-append path (`renderDmMessage`) and the
  *  backward-prepend path (`prependOlderMessages`, PRD 14.2). Note: DMs have
- *  never had long-message truncation (unlike channel messages) — preserved
- *  as-is here, not a gap introduced by this refactor. */
+ *  gets the same long-message collapse as channel messages (PRD 18.13) —
+ *  attached by the render/prepend paths, which measure after insertion. */
 function buildDmMessageElement(tab: ChatTab, msg: DirectMessage): HTMLDivElement {
     const el = buildMessageShell({
         kind: "dm",
@@ -6222,14 +7207,22 @@ function renderDmMessage(tab: ChatTab, msg: DirectMessage, opts: { stick?: boole
 
     if (wasNearBottom) stickToBottom(tab);
 
-    stickOnImageLoad(el, tab, wasNearBottom);
+    stickOnImageLoad(el, tab);
+
+    // Long-message collapse, same as channel messages (PRD 18.13). Must run
+    // after insertion: it measures. A hidden tab defers to switchTab().
+    if (msg.content) {
+        const textEl = el.querySelector(".msg-text") as HTMLElement | null;
+        if (textEl) attachMessageTruncation(el, textEl);
+    }
 
     // Async link preview injection
     if (msg.content) {
         const url = extractFirstUrl(msg.content);
         if (url) {
             injectLinkPreview(el, url, () => {
-                if (wasNearBottom) stickToBottom(tab);
+                // Read when the card lands, not when the message rendered (PRD 18.12).
+                if (tab.followBottom) stickToBottom(tab);
             });
         }
     }
@@ -6259,12 +7252,15 @@ api.on("dm-received", async (msg: DirectMessage) => {
             renderDmMessage(tab, msg);
         } else if (msg.senderId === myId) {
             rebuildTabAtLatest(tab).then(() => {
-                tab.messagesEl.scrollTop = tab.messagesEl.scrollHeight;
+                stickToBottom(tab);
             });
         }
-        // Mark as read immediately if the message is from someone else
+        // A message from the partner is unread until you're really looking at
+        // this tab (PRD 18.13); markDmTabRead() clears it at once if you are.
         if (msg.senderId !== myId) {
-            api.markDmsRead(partnerId);
+            unreadDmPartners.add(partnerId);
+            refreshTabUnread(tabKey);
+            markDmTabRead(tab);
         }
     } else {
         // Auto-open a DM tab for incoming messages from others
@@ -6427,6 +7423,7 @@ function buildNudgeButton(userId: string, nickname: string): HTMLButtonElement {
     }
 
     nudgeBtn.addEventListener("click", async () => {
+        if (!requireServerAccess()) return; // PRD 18.18
         nudgeBtn.disabled = true;
         const res = await api.nudgeUser(userId);
         if (res.success) {
@@ -6774,7 +7771,15 @@ async function openSettingsPanel(): Promise<void> {
     // The NSFW modal can change this preference while Settings is closed.
     chkNsfwWarn.checked = isNsfwWarningEnabled();
     chkNsfwBlur.checked = isNsfwBlurEnabled();
+    (document.getElementById("chk-link-previews") as HTMLInputElement).checked = isLinkPreviewsEnabled();
+    (document.getElementById("chk-lp-nsfw-blur") as HTMLInputElement).checked = readBoolPref(LP_NSFW_BLUR_KEY);
+    (document.getElementById("chk-lp-adult-blur") as HTMLInputElement).checked = readBoolPref(LP_ADULT_BLUR_KEY);
     syncProfileSection(); // discard an unsaved avatar draft from a previous visit (PRD 17.1)
+    void renderTrustedCertificates(); // PRD 18.3
+    hideIdentityLog(); // always reopen on the user list (PRD 18.4)
+    void renderBannedAddresses(); // PRD 18.7 (no-op for anyone without BAN_USER)
+    void refreshPendingApprovals(); // PRD 18.8
+    void refreshInvites(); // PRD 18.9
     adminModal.classList.add("visible");
 
     // Populate audio devices
@@ -6829,6 +7834,14 @@ async function openSettingsPanel(): Promise<void> {
                 chkNudgeEnabled.checked = settingsRes.nudgeEnabled ?? true;
                 chkScreenShareEnabled.checked = settingsRes.screenShareEnabled ?? true;
                 inputMaxMessageLength.value = String(settingsRes.maxMessageLength ?? serverMaxMessageLength);
+                renderRequireSignedSetting(settingsRes);
+                renderRelayHosts(settingsRes);
+                chkRequireInvite.checked = settingsRes.requireInvite ?? false;
+                (chkRequireInvite.closest(".toggle-row") as HTMLElement).style.display =
+                    settingsRes.requireInvite === undefined ? "none" : "";
+                chkRequireApproval.checked = settingsRes.requireApproval ?? false;
+                (chkRequireApproval.closest(".toggle-row") as HTMLElement).style.display =
+                    settingsRes.requireApproval === undefined ? "none" : "";
             }
         }
     } else {
@@ -6891,6 +7904,899 @@ function renderPendingEmojis(emojis: CustomEmoji[]): void {
 
 btnServerSettings.addEventListener("click", () => {
     openSettingsPanel();
+});
+
+// ── Approve new users (PRD 18.8) ─────────────────────────────────────────
+const approvalScreen = document.getElementById("approval-screen") as HTMLDivElement;
+const pendingApprovalsSection = document.getElementById("pending-approvals-section") as HTMLDivElement;
+const pendingApprovalsList = document.getElementById("pending-approvals-list") as HTMLDivElement;
+const pendingBadgeGear = document.getElementById("pending-badge-gear") as HTMLSpanElement;
+const pendingBadgeTab = document.getElementById("pending-badge-tab") as HTMLSpanElement;
+const chkRequireApproval = document.getElementById("chk-require-approval") as HTMLInputElement;
+
+type PendingApprovalRow = NonNullable<Awaited<ReturnType<Reson8Api["getPendingApprovals"]>>["requests"]>[number];
+let pendingApprovals: PendingApprovalRow[] = [];
+
+function setPendingBadges(count: number): void {
+    for (const el of [pendingBadgeGear, pendingBadgeTab]) {
+        el.textContent = String(count);
+        el.style.display = count > 0 ? "" : "none";
+    }
+    const tip = count > 0 ? `${count} ${count === 1 ? "person is" : "people are"} waiting for approval` : "Server Settings";
+    (document.getElementById("btn-server-settings") as HTMLElement).title = tip;
+}
+
+/** Loads the queue (BAN_USER/ADMIN only — anyone else just gets a refusal and nothing shows). */
+async function refreshPendingApprovals(): Promise<void> {
+    if (!isConnected) {
+        pendingApprovals = [];
+        setPendingBadges(0);
+        pendingApprovalsSection.style.display = "none";
+        return;
+    }
+    const res = await api.getPendingApprovals();
+    if (!res.success || !res.requests) {
+        pendingApprovals = [];
+        setPendingBadges(0);
+        pendingApprovalsSection.style.display = "none";
+        return;
+    }
+    pendingApprovals = res.requests;
+    setPendingBadges(pendingApprovals.length);
+    renderPendingApprovals();
+}
+
+function renderPendingApprovals(): void {
+    pendingApprovalsList.textContent = "";
+    pendingApprovalsSection.style.display = pendingApprovals.length > 0 ? "" : "none";
+    for (const req of pendingApprovals) {
+        const row = document.createElement("div");
+        row.className = "pending-approval-row";
+
+        const info = document.createElement("div");
+        info.className = "pending-approval-info";
+        const name = document.createElement("div");
+        name.className = "pending-approval-name";
+        name.textContent = req.nickname || "(no nickname)";
+        const meta = document.createElement("div");
+        meta.className = "pending-approval-meta";
+        const when = new Date(req.requestedAt);
+        const whenText = Number.isNaN(when.getTime())
+            ? ""
+            : when.toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+        meta.textContent =
+            `${req.online ? "Waiting now" : "Not connected right now"}${whenText ? ` · asked ${whenText}` : ""}` +
+            `${req.address ? ` · ${req.address}` : ""} · ${req.fingerprint}`;
+        info.append(name, meta);
+
+        const actions = document.createElement("div");
+        actions.className = "pending-approval-actions";
+        const mk = (label: string, cls: string, onClick: () => Promise<void>): HTMLButtonElement => {
+            const b = document.createElement("button");
+            b.className = cls;
+            b.textContent = label;
+            b.addEventListener("click", async () => {
+                for (const x of actions.querySelectorAll("button")) (x as HTMLButtonElement).disabled = true;
+                await onClick();
+            });
+            return b;
+        };
+        actions.append(
+            mk("Approve", "btn btn-create", async () => {
+                const r = await api.approveUser(req.userId);
+                log(
+                    r.success
+                        ? `Approved ${escapeHtml(req.nickname)}`
+                        : `Couldn't approve ${escapeHtml(req.nickname)}: ${escapeHtml(r.error ?? "unknown error")}`,
+                    r.success ? "success" : "error",
+                );
+                void refreshPendingApprovals();
+            }),
+            mk("Reject", "btn btn-cancel", async () => {
+                const r = await api.rejectUser(req.userId);
+                log(
+                    r.success
+                        ? `Declined ${escapeHtml(req.nickname)}`
+                        : `Couldn't decline ${escapeHtml(req.nickname)}: ${escapeHtml(r.error ?? "unknown error")}`,
+                    r.success ? "success" : "error",
+                );
+                void refreshPendingApprovals();
+            }),
+            mk("Reject and ban", "btn btn-disconnect", async () => {
+                openBanDialog({ id: req.userId, nickname: req.nickname, pending: true });
+                for (const x of actions.querySelectorAll("button")) (x as HTMLButtonElement).disabled = false;
+            }),
+        );
+        row.append(info, actions);
+        pendingApprovalsList.appendChild(row);
+    }
+}
+
+// The queue changed (a new request, or another moderator decided).
+api.on("pending-approvals-changed", (payload: { count: number; added?: boolean }) => {
+    setPendingBadges(payload.count);
+    if (payload.added) {
+        SoundAlert.play("user_joined_channel.mp3");
+        log("Someone is waiting for approval — see Settings → User Management", "info");
+    }
+    void refreshPendingApprovals();
+});
+
+// ── The waiting side: a NEW identity on a server that approves newcomers ──
+function showApprovalScreen(fingerprint: string): void {
+    closeSettingsPanel(); // an open dialog would hide the waiting screen
+    (document.getElementById("approval-nickname") as HTMLElement).textContent = nicknameInput.value.trim() || "User";
+    (document.getElementById("approval-fingerprint") as HTMLElement).textContent = fingerprint || "(unavailable)";
+    (document.getElementById("approval-title") as HTMLElement).textContent = "Waiting for approval";
+    (document.getElementById("approval-text") as HTMLElement).textContent =
+        "This server asks a moderator to let new people in. You can leave this window open — you'll join automatically as soon as they do.";
+    approvalScreen.classList.add("visible");
+    btnConnect.disabled = true;
+    btnDisconnect.disabled = false;
+}
+
+function hideApprovalScreen(): void {
+    approvalScreen.classList.remove("visible");
+}
+
+api.on("approval-pending", (payload: { fingerprint?: string }) => {
+    showApprovalScreen(payload?.fingerprint ?? "");
+    log("Waiting for a moderator to approve you…", "info");
+});
+api.on("approval-granted", () => {
+    (document.getElementById("approval-title") as HTMLElement).textContent = "Approved!";
+    (document.getElementById("approval-text") as HTMLElement).textContent = "Joining the server…";
+    log("A moderator approved you — joining…", "success");
+    SoundAlert.play("connected.mp3");
+});
+api.on("approval-rejected", () => {
+    hideApprovalScreen();
+    btnConnect.disabled = false;
+    btnDisconnect.disabled = true;
+    log("A moderator declined your request to join", "error");
+    showToast("A moderator declined your request to join this server.", 7000);
+});
+document.getElementById("btn-approval-cancel")!.addEventListener("click", () => {
+    hideApprovalScreen();
+    api.disconnect();
+    log("Cancelled the request to join", "info");
+});
+
+chkRequireApproval.addEventListener("change", async () => {
+    const desired = chkRequireApproval.checked;
+    const result = await api.updateServerSettings({ requireApproval: desired });
+    if (result.success) {
+        log(`New people ${desired ? "now need a moderator's approval" : "no longer need approval"} to join`, "success");
+    } else {
+        chkRequireApproval.checked = !desired; // revert on failure
+        log(`Failed to update server settings: ${result.error}`, "error");
+        if (result.error && /permission|denied/i.test(result.error)) SoundAlert.play("insufficient_perms.mp3");
+    }
+});
+
+// ── Invite codes (PRD 18.9) ──────────────────────────────────────────────
+interface InviteRow {
+    id: string;
+    codePrefix: string;
+    label: string | null;
+    createdBy: string;
+    createdByNickname: string | null;
+    createdAt: string;
+    expiresAt: string | null;
+    maxUses: number | null;
+    uses: number;
+    status: "active" | "expired" | "used-up" | "revoked";
+    usedBy: { userId: string; nickname: string | null; usedAt: string }[];
+}
+
+const inviteCodeInput = document.getElementById("invite-code") as HTMLInputElement;
+const invitesSection = document.getElementById("invites-section") as HTMLDivElement;
+const invitesList = document.getElementById("invites-list") as HTMLDivElement;
+const chkRequireInvite = document.getElementById("chk-require-invite") as HTMLInputElement;
+const inviteCreateModal = document.getElementById("invite-create-modal") as HTMLDivElement;
+const inviteCodeModal = document.getElementById("invite-code-modal") as HTMLDivElement;
+let invites: InviteRow[] = [];
+const expandedInvites = new Set<string>();
+
+/** Shows the code field on the connect form, focused, with the server's reason. */
+function revealInviteField(message: string, invalid: boolean): void {
+    inviteCodeInput.style.display = "";
+    inviteCodeInput.classList.add("invite-needed");
+    if (invalid) inviteCodeInput.select();
+    inviteCodeInput.focus();
+    log(escapeHtml(message), "error");
+    showToast(escapeHtml(message), 6000);
+}
+
+/** After a successful join: forget the code and hide the field again. */
+function clearInviteField(): void {
+    inviteCodeInput.value = "";
+    inviteCodeInput.classList.remove("invite-needed");
+    inviteCodeInput.style.display = "none";
+}
+
+function describeInviteExpiry(inv: InviteRow): string {
+    if (!inv.expiresAt) return "never expires";
+    const when = new Date(inv.expiresAt);
+    if (Number.isNaN(when.getTime())) return "";
+    const text = when.toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+    return inv.status === "expired" ? `expired ${text}` : `expires ${text}`;
+}
+
+async function refreshInvites(): Promise<void> {
+    if (!isConnected) {
+        invites = [];
+        invitesSection.style.display = "none";
+        return;
+    }
+    const res = await api.getInvites();
+    if (!res.success || !res.invites) {
+        // No BAN_USER/ADMIN: the section simply isn't there.
+        invites = [];
+        invitesSection.style.display = "none";
+        return;
+    }
+    invites = res.invites;
+    invitesSection.style.display = "";
+    renderInvites();
+}
+
+function renderInvites(): void {
+    invitesList.textContent = "";
+    if (invites.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "admin-empty";
+        empty.textContent = "No invites yet.";
+        invitesList.appendChild(empty);
+        return;
+    }
+    for (const inv of invites) {
+        const row = document.createElement("div");
+        row.className = "invite-row" + (inv.status === "active" ? "" : " invite-inactive");
+
+        const main = document.createElement("div");
+        main.className = "invite-main";
+        const info = document.createElement("div");
+        info.className = "invite-info";
+
+        const title = document.createElement("div");
+        title.className = "invite-title";
+        const code = document.createElement("code");
+        code.textContent = `${inv.codePrefix}-…`;
+        const label = document.createElement("span");
+        label.textContent = inv.label || "Untitled invite";
+        const status = document.createElement("span");
+        status.className = `invite-status ${inv.status}`;
+        status.textContent = inv.status === "used-up" ? "used up" : inv.status;
+        title.append(code, label, status);
+
+        const meta = document.createElement("div");
+        meta.className = "invite-meta";
+        const created = new Date(inv.createdAt);
+        const createdText = Number.isNaN(created.getTime()) ? "" : created.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+        meta.textContent =
+            `${inv.uses}${inv.maxUses !== null ? ` / ${inv.maxUses}` : ""} ${inv.uses === 1 ? "use" : "uses"}` +
+            ` · ${describeInviteExpiry(inv)}` +
+            ` · by ${inv.createdByNickname ?? "someone"}${createdText ? `, ${createdText}` : ""}`;
+        info.append(title, meta);
+
+        const actions = document.createElement("div");
+        actions.className = "invite-actions";
+        if (inv.usedBy.length > 0) {
+            const toggle = document.createElement("button");
+            toggle.className = "btn btn-cancel";
+            toggle.textContent = expandedInvites.has(inv.id) ? "Hide" : "Who used it";
+            toggle.addEventListener("click", () => {
+                if (expandedInvites.has(inv.id)) expandedInvites.delete(inv.id);
+                else expandedInvites.add(inv.id);
+                renderInvites();
+            });
+            actions.appendChild(toggle);
+        }
+        if (inv.status === "active") {
+            const revoke = document.createElement("button");
+            revoke.className = "btn btn-disconnect";
+            revoke.textContent = "Revoke";
+            revoke.addEventListener("click", async () => {
+                revoke.disabled = true;
+                const r = await api.revokeInvite(inv.id);
+                log(
+                    r.success
+                        ? `Revoked invite ${escapeHtml(inv.codePrefix)}-…`
+                        : `Couldn't revoke the invite: ${escapeHtml(r.error ?? "unknown error")}`,
+                    r.success ? "success" : "error",
+                );
+                void refreshInvites();
+            });
+            actions.appendChild(revoke);
+        }
+
+        main.append(info, actions);
+        row.appendChild(main);
+
+        if (expandedInvites.has(inv.id) && inv.usedBy.length > 0) {
+            const uses = document.createElement("div");
+            uses.className = "invite-uses";
+            for (const u of inv.usedBy) {
+                const line = document.createElement("div");
+                const at = new Date(u.usedAt);
+                line.textContent = `${u.nickname ?? u.userId.slice(0, 8)}${
+                    Number.isNaN(at.getTime())
+                        ? ""
+                        : ` — ${at.toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}`
+                }`;
+                uses.appendChild(line);
+            }
+            row.appendChild(uses);
+        }
+        invitesList.appendChild(row);
+    }
+}
+
+const inviteLabelInput = document.getElementById("invite-label") as HTMLInputElement;
+const inviteExpirySelect = document.getElementById("invite-expiry") as HTMLSelectElement;
+const inviteMaxUsesSelect = document.getElementById("invite-max-uses") as HTMLSelectElement;
+const inviteMaxUsesCustom = document.getElementById("invite-max-uses-custom") as HTMLInputElement;
+const inviteCreateError = document.getElementById("invite-create-error") as HTMLDivElement;
+
+function closeInviteCreateModal(): void {
+    inviteCreateModal.classList.remove("visible");
+}
+
+document.getElementById("btn-create-invite")!.addEventListener("click", () => {
+    inviteLabelInput.value = "";
+    inviteExpirySelect.value = "";
+    inviteMaxUsesSelect.value = "";
+    inviteMaxUsesCustom.value = "";
+    inviteMaxUsesCustom.style.display = "none";
+    inviteCreateError.textContent = "";
+    inviteCreateModal.classList.add("visible");
+    inviteLabelInput.focus();
+});
+
+inviteMaxUsesSelect.addEventListener("change", () => {
+    const custom = inviteMaxUsesSelect.value === "custom";
+    inviteMaxUsesCustom.style.display = custom ? "" : "none";
+    if (custom) inviteMaxUsesCustom.focus();
+});
+
+document.getElementById("btn-invite-create-cancel")!.addEventListener("click", closeInviteCreateModal);
+
+document.getElementById("btn-invite-create-confirm")!.addEventListener("click", async () => {
+    let maxUses: number | null = null;
+    if (inviteMaxUsesSelect.value === "custom") {
+        const n = Number(inviteMaxUsesCustom.value);
+        if (!Number.isInteger(n) || n < 1 || n > 1000) {
+            inviteCreateError.textContent = "Enter a whole number from 1 to 1000.";
+            return;
+        }
+        maxUses = n;
+    } else if (inviteMaxUsesSelect.value) {
+        maxUses = Number(inviteMaxUsesSelect.value);
+    }
+    const confirm = document.getElementById("btn-invite-create-confirm") as HTMLButtonElement;
+    confirm.disabled = true;
+    const res = await api.createInvite({
+        label: inviteLabelInput.value.trim() || undefined,
+        expiresInHours: inviteExpirySelect.value ? Number(inviteExpirySelect.value) : null,
+        maxUses,
+    });
+    confirm.disabled = false;
+    if (!res.success || !res.code) {
+        inviteCreateError.textContent = res.error ?? "Couldn't create the invite";
+        return;
+    }
+    closeInviteCreateModal();
+    (document.getElementById("invite-code-value") as HTMLElement).textContent = res.code;
+    inviteCodeModal.classList.add("visible");
+    log("Created an invite", "success");
+    void refreshInvites();
+});
+
+document.getElementById("btn-invite-code-copy")!.addEventListener("click", async () => {
+    const text = (document.getElementById("invite-code-value") as HTMLElement).textContent ?? "";
+    const ok = await api.copyText(text);
+    showToast(ok ? "Invite code copied" : "Couldn't copy the code — select it and copy by hand");
+});
+
+document.getElementById("btn-invite-code-close")!.addEventListener("click", () => {
+    inviteCodeModal.classList.remove("visible");
+    // The code must not linger in the page once it has been shown.
+    (document.getElementById("invite-code-value") as HTMLElement).textContent = "";
+});
+
+chkRequireInvite.addEventListener("change", async () => {
+    const desired = chkRequireInvite.checked;
+    const result = await api.updateServerSettings({ requireInvite: desired });
+    if (result.success) {
+        log(`New people ${desired ? "now need an invite code" : "no longer need an invite code"} to join`, "success");
+    } else {
+        chkRequireInvite.checked = !desired; // revert on failure
+        log(`Failed to update server settings: ${result.error}`, "error");
+        if (result.error && /permission|denied/i.test(result.error)) SoundAlert.play("insufficient_perms.mp3");
+    }
+});
+
+// ── Ban dialog + banned addresses (PRD 18.7) ─────────────────────────────
+const banUserModal = document.getElementById("ban-user-modal") as HTMLDivElement;
+const bannedAddressesSection = document.getElementById("banned-addresses-section") as HTMLDivElement;
+const bannedAddressesList = document.getElementById("banned-addresses-list") as HTMLDivElement;
+let banDialogUser: { id: string; nickname: string; pending?: boolean } | null = null;
+
+function openBanDialog(user: { id: string; nickname: string; pending?: boolean }): void {
+    banDialogUser = user;
+    (document.getElementById("ban-user-name") as HTMLElement).textContent = user.nickname;
+    (document.getElementById("btn-ban-user-confirm") as HTMLButtonElement).textContent = user.pending ? "Reject and ban" : "Ban";
+    const none = banUserModal.querySelector<HTMLInputElement>('input[name="ban-address-scope"][value="none"]');
+    if (none) none.checked = true;
+    (document.getElementById("ban-scope-warning") as HTMLElement).style.display = "none";
+    banUserModal.classList.add("visible");
+    (document.getElementById("btn-ban-user-cancel") as HTMLButtonElement).focus(); // the safe default
+}
+
+function closeBanDialog(): void {
+    banUserModal.classList.remove("visible");
+    banDialogUser = null;
+}
+
+banUserModal.addEventListener("change", (e) => {
+    const target = e.target as HTMLInputElement;
+    if (target?.name !== "ban-address-scope") return;
+    (document.getElementById("ban-scope-warning") as HTMLElement).style.display = target.value === "none" ? "none" : "";
+});
+document.getElementById("btn-ban-user-cancel")!.addEventListener("click", closeBanDialog);
+banUserModal.addEventListener("click", (e) => {
+    if (e.target === banUserModal) closeBanDialog();
+});
+document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && banUserModal.classList.contains("visible")) closeBanDialog();
+});
+
+document.getElementById("btn-ban-user-confirm")!.addEventListener("click", async () => {
+    const user = banDialogUser;
+    if (!user) return;
+    const checked = banUserModal.querySelector<HTMLInputElement>('input[name="ban-address-scope"]:checked');
+    const scope = (checked?.value ?? "none") as "none" | "exact" | "range";
+    closeBanDialog();
+
+    // "Reject and ban" on someone waiting in the approval queue (PRD 18.8).
+    if (user.pending) {
+        const r = await api.rejectUser(user.id, { ban: true, addressBan: scope });
+        if (r.success) {
+            log(`Rejected and banned ${escapeHtml(user.nickname)}`, "success");
+            if (r.warning) {
+                log(escapeHtml(r.warning), "error");
+                showToast(escapeHtml(r.warning), 8000);
+            }
+            SoundAlert.play("user_banned_from_server.mp3");
+        } else {
+            log(`Failed to reject: ${escapeHtml(r.error ?? "unknown error")}`, "error");
+        }
+        void refreshPendingApprovals();
+        return;
+    }
+
+    const res = await api.banUser(user.id, scope);
+    if (res.success) {
+        log(`Banned ${escapeHtml(user.nickname)}${res.addressBanned ? " and their address" : ""}`, "success");
+        // The user ban worked, but the address part couldn't be applied: say why.
+        if (res.warning) {
+            log(escapeHtml(res.warning), "error");
+            showToast(escapeHtml(res.warning), 8000);
+        }
+        SoundAlert.play("user_banned_from_server.mp3");
+        openSettingsPanel(); // refresh to reflect the new banned state
+    } else {
+        log(`Failed to ban: ${escapeHtml(res.error ?? "unknown error")}`, "error");
+        if (res.error && /permission|denied/i.test(res.error)) SoundAlert.play("insufficient_perms.mp3");
+    }
+});
+
+/** The "Banned addresses" list under the users (BAN_USER holders only; the server masks it for non-ADMINs). */
+async function renderBannedAddresses(): Promise<void> {
+    if (!isConnected) {
+        bannedAddressesSection.style.display = "none";
+        return;
+    }
+    const res = await api.getBannedAddresses();
+    if (!res.success || !res.addresses) {
+        bannedAddressesSection.style.display = "none"; // no BAN_USER, or an older server
+        return;
+    }
+    bannedAddressesSection.style.display = "";
+    bannedAddressesList.textContent = "";
+    if (res.addresses.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "admin-empty";
+        empty.textContent = "No banned addresses.";
+        bannedAddressesList.appendChild(empty);
+        return;
+    }
+    for (const entry of res.addresses) {
+        const row = document.createElement("div");
+        row.className = "banned-address-row";
+        const info = document.createElement("div");
+        info.className = "banned-address-info";
+        const code = document.createElement("code");
+        code.textContent = entry.cidr;
+        const meta = document.createElement("div");
+        meta.className = "banned-address-meta";
+        const when = new Date(entry.createdAt);
+        const whenText = Number.isNaN(when.getTime())
+            ? ""
+            : when.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
+        meta.textContent = `${entry.nickname ? `Banned with ${entry.nickname}` : "Banned on its own"}${whenText ? ` · ${whenText}` : ""}`;
+        info.append(code, meta);
+        const unban = document.createElement("button");
+        unban.className = "btn-unban";
+        unban.textContent = "Unban";
+        unban.addEventListener("click", async () => {
+            unban.disabled = true;
+            const r = await api.unbanAddress(entry.id);
+            if (r.success) {
+                log(`Lifted the address ban on ${escapeHtml(entry.cidr)}`, "success");
+                void renderBannedAddresses();
+            } else {
+                unban.disabled = false;
+                log(`Failed to lift the address ban: ${escapeHtml(r.error ?? "unknown error")}`, "error");
+            }
+        });
+        row.append(info, unban);
+        bannedAddressesList.appendChild(row);
+    }
+}
+
+// ── Identity log + "Require signed identity" (PRD 18.4) ──────────────────
+const identityLogBar = document.getElementById("identity-log-bar") as HTMLDivElement;
+const btnIdentityLog = document.getElementById("btn-identity-log") as HTMLButtonElement;
+const identityLogPanel = document.getElementById("identity-log-panel") as HTMLDivElement;
+const identityLogList = document.getElementById("identity-log-list") as HTMLDivElement;
+const identityLogFilter = document.getElementById("identity-log-filter") as HTMLSpanElement;
+const btnIdentityLogBack = document.getElementById("btn-identity-log-back") as HTMLButtonElement;
+const btnIdentityLogClearFilter = document.getElementById("btn-identity-log-clear-filter") as HTMLButtonElement;
+const btnIdentityLogMore = document.getElementById("btn-identity-log-more") as HTMLButtonElement;
+const chkRequireSigned = document.getElementById("chk-require-signed") as HTMLInputElement;
+const requireSignedNote = document.getElementById("require-signed-note") as HTMLSpanElement;
+
+let identityLogUser: { id: string; nickname: string } | null = null;
+let identityLogCursor: string | null = null;
+let identityLogLoading = false;
+
+/** Plain words for the refusal keys the server stores (identity.service.ts). */
+const IDENTITY_REFUSAL_WORDS: Record<string, string> = {
+    verificationFailed: "the sign-in proof didn't verify",
+    hostNotAllowed: "it was addressed to a name this server doesn't accept",
+    otherDevice: "the identity belongs to another device",
+    protectedUpdate: "an older Reson8 tried to use a protected identity",
+    requiresSigned: "an older Reson8 while signed identity is required",
+};
+
+function formatLogTime(iso: string): string {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return iso;
+    return (
+        d.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" }) +
+        " " +
+        d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })
+    );
+}
+
+function buildIdentityLogRow(ev: IdentityLogEvent): HTMLDivElement {
+    const row = document.createElement("div");
+    row.className = "identity-log-row";
+
+    const kind = document.createElement("span");
+    kind.className = `identity-log-kind ${ev.kind.toLowerCase()}`;
+    kind.textContent = ev.kind === "BOUND" ? "Key bound" : ev.kind === "RESET" ? "Key reset" : "Refused";
+
+    const who = document.createElement("div");
+    who.className = "identity-log-who";
+    who.textContent = ev.nickname || "(no nickname)";
+    if (ev.currentNickname) {
+        const now = document.createElement("span");
+        now.className = "identity-log-now";
+        now.textContent = ` (now ${ev.currentNickname})`;
+        who.appendChild(now);
+    }
+    if (ev.privileged) {
+        const tag = document.createElement("span");
+        tag.className = "identity-log-privileged";
+        tag.textContent = "privileged";
+        tag.title = "This user holds an admin or role-management role";
+        who.appendChild(tag);
+    }
+
+    const time = document.createElement("span");
+    time.className = "identity-log-time";
+    time.textContent = formatLogTime(ev.createdAt);
+    time.title = ev.createdAt;
+
+    const detail = document.createElement("div");
+    detail.className = "identity-log-detail";
+    const parts: string[] = [];
+    if (ev.kind === "REFUSED") {
+        parts.push(`Sign-in refused: ${IDENTITY_REFUSAL_WORDS[ev.reason ?? ""] ?? ev.reason ?? "unknown reason"}.`);
+    } else if (ev.kind === "RESET") {
+        parts.push(`Key reset by ${ev.actorNickname ?? "an admin who has since left"}.`);
+    } else {
+        parts.push("First sign-in with this key — it is now bound to this identity.");
+    }
+    if (ev.address) parts.push(`From ${ev.address}`);
+    if (ev.host) parts.push(`to ${ev.host}`);
+    detail.appendChild(document.createTextNode(parts.join(" ")));
+    if (ev.fingerprint) {
+        detail.appendChild(document.createElement("br"));
+        const code = document.createElement("code");
+        code.textContent = ev.fingerprint;
+        detail.appendChild(code);
+    }
+
+    row.append(kind, who, time, detail);
+    return row;
+}
+
+async function loadIdentityLog(reset: boolean): Promise<void> {
+    if (identityLogLoading) return;
+    identityLogLoading = true;
+    btnIdentityLogMore.disabled = true;
+    if (reset) {
+        identityLogList.textContent = "";
+        identityLogCursor = null;
+        const loading = document.createElement("div");
+        loading.className = "admin-empty";
+        loading.textContent = "Loading the identity log...";
+        identityLogList.appendChild(loading);
+    }
+    try {
+        const res = await api.getIdentityEvents({
+            ...(identityLogUser ? { userId: identityLogUser.id } : {}),
+            ...(identityLogCursor ? { before: identityLogCursor } : {}),
+            limit: 50,
+        });
+        if (reset) identityLogList.textContent = "";
+        if (!res.success || !res.events) {
+            const err = document.createElement("div");
+            err.className = "admin-empty";
+            err.textContent = res.error ?? "Couldn't load the identity log.";
+            identityLogList.appendChild(err);
+            btnIdentityLogMore.style.display = "none";
+            return;
+        }
+        for (const ev of res.events) identityLogList.appendChild(buildIdentityLogRow(ev));
+        if (res.events.length > 0) identityLogCursor = res.events[res.events.length - 1].createdAt;
+        if (identityLogList.children.length === 0) {
+            const empty = document.createElement("div");
+            empty.className = "admin-empty";
+            empty.textContent = identityLogUser
+                ? "Nothing recorded for this user yet."
+                : "Nothing recorded yet. Key binds, resets and refused sign-ins will show up here.";
+            identityLogList.appendChild(empty);
+        }
+        btnIdentityLogMore.style.display = res.hasMore ? "" : "none";
+    } finally {
+        identityLogLoading = false;
+        btnIdentityLogMore.disabled = false;
+    }
+}
+
+function showIdentityLog(user: { id: string; nickname: string } | null = null): void {
+    identityLogUser = user;
+    identityLogFilter.textContent = user ? `Showing only ${user.nickname}` : "All users";
+    btnIdentityLogClearFilter.style.display = user ? "" : "none";
+    adminUserList.style.display = "none";
+    identityLogBar.style.display = "none";
+    identityLogPanel.style.display = "";
+    void loadIdentityLog(true);
+}
+
+function hideIdentityLog(): void {
+    identityLogPanel.style.display = "none";
+    adminUserList.style.display = "";
+    identityLogUser = null;
+}
+
+btnIdentityLog.addEventListener("click", () => showIdentityLog(null));
+btnIdentityLogBack.addEventListener("click", () => {
+    hideIdentityLog();
+    // Put the bar back (renderAdminUsers hid it when the log opened).
+    identityLogBar.style.display = "flex";
+});
+btnIdentityLogClearFilter.addEventListener("click", () => showIdentityLog(null));
+btnIdentityLogMore.addEventListener("click", () => void loadIdentityLog(false));
+
+/** Fills the Server tab's "Require signed identity" row from GET_SERVER_SETTINGS. */
+function renderRequireSignedSetting(res: {
+    requireSignedIdentity?: boolean;
+    requireSignedIdentityLockedByEnv?: boolean;
+    unprotectedActiveUsers?: number;
+}): void {
+    const row = chkRequireSigned.closest(".toggle-row") as HTMLElement | null;
+    // A server older than 2.7.0 doesn't send the field: hide the row rather than show a dead switch.
+    if (res.requireSignedIdentity === undefined) {
+        if (row) row.style.display = "none";
+        return;
+    }
+    if (row) row.style.display = "";
+    chkRequireSigned.checked = res.requireSignedIdentity;
+    chkRequireSigned.disabled = !!res.requireSignedIdentityLockedByEnv;
+
+    const n = res.unprotectedActiveUsers ?? 0;
+    let note: string;
+    if (res.requireSignedIdentityLockedByEnv) {
+        note = "Set by the server's REQUIRE_SIGNED_IDENTITY environment variable, so it can't be changed here.";
+    } else if (n > 0) {
+        note =
+            `${n} ${n === 1 ? "person" : "people"} active in the last 30 days ${n === 1 ? "hasn't" : "haven't"} ` +
+            `connected with 2.6.0 or newer yet — turning this on locks them out until they update.`;
+    } else {
+        note = "Everyone active in the last 30 days is already protected, so it is safe to turn on.";
+    }
+    requireSignedNote.textContent = note;
+    requireSignedNote.classList.toggle("safe", !res.requireSignedIdentityLockedByEnv && n === 0);
+    requireSignedNote.style.display = "";
+}
+
+chkRequireSigned.addEventListener("change", async () => {
+    const desired = chkRequireSigned.checked;
+    const result = await api.updateServerSettings({ requireSignedIdentity: desired });
+    if (result.success) {
+        log(`Signed identity ${desired ? "is now required" : "is no longer required"} on this server`, "success");
+    } else {
+        chkRequireSigned.checked = !desired; // revert on failure
+        log(`Failed to update server settings: ${result.error}`, "error");
+        if (result.error && /permission|denied/i.test(result.error)) SoundAlert.play("insufficient_perms.mp3");
+    }
+});
+
+// ── Connection names / relay protection (PRD 18.5) ───────────────────────
+const relayHostsSection = document.getElementById("relay-hosts-section") as HTMLDivElement;
+const relayHostsList = document.getElementById("relay-hosts-list") as HTMLDivElement;
+const relayHostsStatus = document.getElementById("relay-hosts-status") as HTMLDivElement;
+const relayHostsInput = document.getElementById("relay-hosts-input") as HTMLInputElement;
+const relayHostsError = document.getElementById("relay-hosts-error") as HTMLDivElement;
+const relayHostsLockNote = document.getElementById("relay-hosts-lock-note") as HTMLSpanElement;
+const btnRelayHostsAdd = document.getElementById("btn-relay-hosts-add") as HTMLButtonElement;
+const btnRelayHostsSave = document.getElementById("btn-relay-hosts-save") as HTMLButtonElement;
+
+/** Same shape the server accepts for a listed name (auth-hosts.service.ts). */
+const RELAY_HOST_ENTRY = /^[a-z0-9._\-[\]:]{1,255}$/;
+
+interface RelayHostChoice {
+    host: string;
+    checked: boolean;
+    joins: number | null;
+    lastSeen: string | null;
+}
+let relayHostChoices: RelayHostChoice[] = [];
+let relayHostsLocked = false;
+
+function refreshRelayHostsStatus(): void {
+    const n = relayHostChoices.filter((c) => c.checked).length;
+    relayHostsStatus.classList.toggle("on", n > 0);
+    relayHostsStatus.textContent =
+        n === 0 ? "Off — any name is accepted" : `On — ${n} ${n === 1 ? "name" : "names"} accepted`;
+}
+
+function renderRelayHostRows(): void {
+    relayHostsList.textContent = "";
+    if (relayHostChoices.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "relay-hosts-empty";
+        empty.textContent = "No names seen yet. They appear here as people sign in; you can also add one below.";
+        relayHostsList.appendChild(empty);
+    }
+    for (const choice of relayHostChoices) {
+        const row = document.createElement("label");
+        row.className = "relay-hosts-row";
+        const box = document.createElement("input");
+        box.type = "checkbox";
+        box.checked = choice.checked;
+        box.disabled = relayHostsLocked;
+        box.addEventListener("change", () => {
+            choice.checked = box.checked;
+            refreshRelayHostsStatus();
+        });
+        const name = document.createElement("span");
+        name.className = "relay-hosts-name";
+        name.textContent = choice.host;
+        const meta = document.createElement("span");
+        meta.className = "relay-hosts-meta";
+        if (choice.joins === null) {
+            meta.textContent = "not seen yet";
+        } else {
+            const when = choice.lastSeen ? new Date(choice.lastSeen) : null;
+            const whenText =
+                when && !Number.isNaN(when.getTime())
+                    ? `, last ${when.toLocaleDateString("en-US", { month: "short", day: "numeric" })}`
+                    : "";
+            meta.textContent = `${choice.joins} ${choice.joins === 1 ? "sign-in" : "sign-ins"}${whenText}`;
+        }
+        row.append(box, name, meta);
+        relayHostsList.appendChild(row);
+    }
+    refreshRelayHostsStatus();
+}
+
+/** Fills the section from GET_SERVER_SETTINGS (ADMIN callers get these fields; older servers don't). */
+function renderRelayHosts(res: {
+    authAllowedHosts?: string[];
+    authAllowedHostsLockedByEnv?: boolean;
+    observedAuthHosts?: { host: string; joins: number; lastSeen: string | null }[];
+}): void {
+    if (res.authAllowedHosts === undefined) {
+        relayHostsSection.style.display = "none";
+        return;
+    }
+    relayHostsSection.style.display = "";
+    relayHostsLocked = !!res.authAllowedHostsLockedByEnv;
+    relayHostsError.textContent = "";
+
+    const listed = new Set(res.authAllowedHosts);
+    const choices: RelayHostChoice[] = [];
+    for (const o of res.observedAuthHosts ?? []) {
+        choices.push({ host: o.host, checked: listed.has(o.host), joins: o.joins, lastSeen: o.lastSeen });
+        listed.delete(o.host);
+    }
+    // Listed names nobody has used (yet) must stay visible, or saving would silently drop them.
+    for (const host of listed) choices.push({ host, checked: true, joins: null, lastSeen: null });
+    relayHostChoices = choices;
+
+    relayHostsInput.disabled = relayHostsLocked;
+    btnRelayHostsAdd.disabled = relayHostsLocked;
+    btnRelayHostsSave.disabled = relayHostsLocked;
+    relayHostsLockNote.style.display = relayHostsLocked ? "" : "none";
+    relayHostsLockNote.textContent = relayHostsLocked
+        ? "Set by the server's AUTH_ALLOWED_HOSTS environment variable, so it can't be changed here."
+        : "";
+    renderRelayHostRows();
+}
+
+function addRelayHostFromInput(): void {
+    const host = relayHostsInput.value.trim().toLowerCase();
+    relayHostsError.textContent = "";
+    if (!host) return;
+    if (!RELAY_HOST_ENTRY.test(host)) {
+        relayHostsError.textContent = "Use a host name or address, with a port if people type one (host or host:port).";
+        return;
+    }
+    const existing = relayHostChoices.find((c) => c.host === host);
+    if (existing) existing.checked = true;
+    else relayHostChoices.push({ host, checked: true, joins: null, lastSeen: null });
+    relayHostsInput.value = "";
+    renderRelayHostRows();
+}
+
+btnRelayHostsAdd.addEventListener("click", addRelayHostFromInput);
+relayHostsInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+        e.preventDefault();
+        addRelayHostFromInput();
+    }
+});
+
+btnRelayHostsSave.addEventListener("click", async () => {
+    relayHostsError.textContent = "";
+    // Anything typed but not added yet counts: don't lose it silently.
+    if (relayHostsInput.value.trim()) addRelayHostFromInput();
+    if (relayHostsError.textContent) return;
+
+    const list = relayHostChoices.filter((c) => c.checked).map((c) => c.host);
+    btnRelayHostsSave.disabled = true;
+    const result = await api.updateServerSettings({ authAllowedHosts: list });
+    btnRelayHostsSave.disabled = relayHostsLocked;
+    if (result.success) {
+        log(
+            list.length === 0
+                ? "Connection names: check turned off — any name is accepted"
+                : `Connection names saved (${list.length}): sign-ins must be addressed to ${list.join(", ")}`,
+            "success",
+        );
+        relayHostChoices = relayHostChoices.filter((c) => c.checked || c.joins !== null);
+        renderRelayHostRows();
+    } else {
+        relayHostsError.textContent = result.error ?? "Couldn't save the list";
+        if (result.error && /permission|denied/i.test(result.error)) SoundAlert.play("insufficient_perms.mp3");
+    }
 });
 
 chkNudgeEnabled.addEventListener("change", async () => {
@@ -7070,7 +8976,7 @@ const shortcuts: Record<ShortcutSlot, ShortcutCombo | null> = {
 };
 
 let activeShortcutSlot: ShortcutSlot | null = null;
-let recordingKeys = new Set<string>();
+const recordingKeys = new Set<string>();
 const heldKeys = new Set<string>();
 
 const shortcutInputs: Record<ShortcutSlot, HTMLInputElement> = {
@@ -7307,6 +9213,7 @@ let nextAttachmentId = 1;
 const attachmentCardEls = new Map<string, HTMLDivElement>();
 
 btnAttach.addEventListener("click", () => {
+    if (!requireServerAccess()) return; // PRD 18.18
     fileInput.click();
 });
 
@@ -7333,6 +9240,7 @@ chatInput.addEventListener("paste", (e) => {
 /** Validates the picked files, adds a card for each acceptable one, and starts uploading. */
 function addFiles(files: File[]): void {
     if (files.length === 0) return;
+    if (!requireServerAccess()) return; // PRD 18.18 (paste and drag-and-drop arrive here too)
     if (!isConnected) {
         log("Not connected — cannot upload", "error");
         return;
@@ -8111,6 +10019,17 @@ document.addEventListener("keydown", (e) => {
 });
 window.addEventListener("blur", hideReactionCard);
 
+// Coming back to the window reads the DM conversation you were left looking at (PRD 18.13).
+window.addEventListener("focus", () => {
+    const tab = chatTabs.get(activeTabId);
+    if (tab?.kind === "dm") markDmTabRead(tab);
+    for (const [id, t] of chatTabs) if (t.kind === "dm") refreshTabUnread(id);
+});
+window.addEventListener("blur", () => {
+    // The active DM tab is no longer "looked at": a message arriving now shows its dot.
+    for (const [id, t] of chatTabs) if (t.kind === "dm") refreshTabUnread(id);
+});
+
 const REACT_ICON_SVG = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>`;
 
 /**
@@ -8435,7 +10354,9 @@ async function jumpToMessage(tabId: string, messageId: string): Promise<void> {
     let el = tab.messagesEl.querySelector(selector) as HTMLDivElement | null;
     if (el) {
         // Already loaded: a smooth scroll reads well over a short distance.
-        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        tab.followBottom = false;
+        const target = el;
+        smoothScroll(tab, () => target.scrollIntoView({ behavior: "smooth", block: "center" }));
         highlightMessage(el);
         return;
     }
@@ -8444,6 +10365,8 @@ async function jumpToMessage(tabId: string, messageId: string): Promise<void> {
     // this runs, neither sentinel may load pages — a prepend's scroll
     // correction would cancel the landing (the bug's H1 path).
     tab.jumpInProgress = true;
+    tab.followBottom = false; // a jump window is not the live bottom (PRD 18.12)
+    tab.holdTarget = null;
     const result = isDm
         ? await api.fetchDirectMessages(tabId.slice(3), undefined, JUMP_WINDOW_SIZE, messageId)
         : await api.fetchMessages(tabId, undefined, JUMP_WINDOW_SIZE, messageId);
@@ -8483,7 +10406,8 @@ async function jumpToMessage(tabId: string, messageId: string): Promise<void> {
     if (el) {
         // Instant: there's nothing meaningful to animate across in a list
         // that was just rebuilt.
-        el.scrollIntoView({ behavior: "instant", block: "center" });
+        const landed = el;
+        setScroll(tab, () => landed.scrollIntoView({ behavior: "instant", block: "center" }));
         holdJumpTarget(tab, el);
         highlightMessage(el);
     }
@@ -9724,22 +11648,244 @@ chkNsfwBlur.addEventListener("change", () => {
     setNsfwBlurEnabled(chkNsfwBlur.checked);
 });
 
+const chkLpNsfwBlur = document.getElementById("chk-lp-nsfw-blur") as HTMLInputElement;
+const chkLpAdultBlur = document.getElementById("chk-lp-adult-blur") as HTMLInputElement;
+chkLpNsfwBlur.checked = readBoolPref(LP_NSFW_BLUR_KEY);
+chkLpAdultBlur.checked = readBoolPref(LP_ADULT_BLUR_KEY);
+applyLinkPreviewBlurPreferences();
+chkLpNsfwBlur.addEventListener("change", () => {
+    writeBoolPref(LP_NSFW_BLUR_KEY, chkLpNsfwBlur.checked);
+    applyLinkPreviewBlurPreferences();
+});
+chkLpAdultBlur.addEventListener("change", () => {
+    writeBoolPref(LP_ADULT_BLUR_KEY, chkLpAdultBlur.checked);
+    applyLinkPreviewBlurPreferences();
+});
+
+const chkLinkPreviews = document.getElementById("chk-link-previews") as HTMLInputElement;
+chkLinkPreviews.checked = isLinkPreviewsEnabled();
+applyLinkPreviewPreference();
+chkLinkPreviews.addEventListener("change", () => {
+    setLinkPreviewsEnabled(chkLinkPreviews.checked);
+});
+
 // ── Identity fingerprint in Settings → About (PRD 17.12) ────────────────────
 const aboutIdentityFingerprint = document.getElementById("about-identity-fingerprint") as HTMLElement;
 const btnCopyFingerprint = document.getElementById("btn-copy-fingerprint") as HTMLButtonElement;
-api.getIdentityFingerprint()
-    .then((fp) => {
-        aboutIdentityFingerprint.textContent = fp;
-    })
-    .catch(() => {
-        aboutIdentityFingerprint.textContent = "Unavailable";
-    });
 btnCopyFingerprint.addEventListener("click", async () => {
     const fp = aboutIdentityFingerprint.textContent ?? "";
     if (!fp.startsWith("SHA256:")) return;
     const ok = await api.copyText(fp);
     btnCopyFingerprint.textContent = ok ? "Copied!" : "Copy failed";
     setTimeout(() => (btnCopyFingerprint.textContent = "Copy"), 1500);
+});
+
+// ── Identity key storage, backup and restore (PRD 18.6) ─────────────────────
+const aboutIdentityStorage = document.getElementById("about-identity-storage") as HTMLDivElement;
+const btnIdentityExport = document.getElementById("btn-identity-export") as HTMLButtonElement;
+const btnIdentityImport = document.getElementById("btn-identity-import") as HTMLButtonElement;
+const identityExportModal = document.getElementById("identity-export-modal") as HTMLDivElement;
+const identityImportModal = document.getElementById("identity-import-modal") as HTMLDivElement;
+const identityLockedModal = document.getElementById("identity-locked-modal") as HTMLDivElement;
+const identityExportPass = document.getElementById("identity-export-pass") as HTMLInputElement;
+const identityExportPass2 = document.getElementById("identity-export-pass2") as HTMLInputElement;
+const identityExportError = document.getElementById("identity-export-error") as HTMLDivElement;
+const btnIdentityExportConfirm = document.getElementById("btn-identity-export-confirm") as HTMLButtonElement;
+const identityImportPass = document.getElementById("identity-import-pass") as HTMLInputElement;
+const identityImportError = document.getElementById("identity-import-error") as HTMLDivElement;
+const btnIdentityImportUnlock = document.getElementById("btn-identity-import-unlock") as HTMLButtonElement;
+const btnIdentityImportApply = document.getElementById("btn-identity-import-apply") as HTMLButtonElement;
+const MIN_BACKUP_PASSPHRASE = 10; // mirrors identity-backup.ts; main re-validates
+
+let importToken: string | null = null;
+
+/** Fills the About → Identity block from the main process's view of the key. */
+async function refreshIdentityPanel(): Promise<void> {
+    try {
+        const st = await api.identity.getStatus();
+        if (st.state === "locked") {
+            aboutIdentityFingerprint.textContent = "Locked";
+            aboutIdentityStorage.textContent =
+                "Your identity key couldn't be unlocked, so you can't connect. Import a backup or create a new identity.";
+            aboutIdentityStorage.classList.add("warn");
+        } else {
+            aboutIdentityFingerprint.textContent = st.fingerprint;
+            aboutIdentityStorage.classList.remove("warn");
+            aboutIdentityStorage.textContent =
+                st.storage === "encrypted"
+                    ? "Stored encrypted by your operating system."
+                    : st.storage === "file"
+                      ? "Stored as a protected file in Reson8's data folder (no system keyring available)."
+                      : "Temporary identity for this development build — it changes every launch.";
+        }
+        btnIdentityExport.disabled = !st.canBackup || st.state === "locked";
+        btnIdentityImport.disabled = !st.canBackup;
+        const devTitle = "Not available in development builds, which use a temporary identity";
+        btnIdentityExport.title = st.canBackup ? "" : devTitle;
+        btnIdentityImport.title = st.canBackup ? "" : devTitle;
+        if (st.state === "locked") identityLockedModal.classList.add("visible");
+    } catch {
+        aboutIdentityFingerprint.textContent = "Unavailable";
+    }
+}
+void refreshIdentityPanel();
+
+function closeIdentityExportModal(): void {
+    identityExportModal.classList.remove("visible");
+    identityExportPass.value = "";
+    identityExportPass2.value = "";
+}
+
+function closeIdentityImportModal(): void {
+    identityImportModal.classList.remove("visible");
+    identityImportPass.value = "";
+    importToken = null;
+}
+
+btnIdentityExport.addEventListener("click", () => {
+    identityExportPass.value = "";
+    identityExportPass2.value = "";
+    identityExportError.textContent = "";
+    identityExportModal.classList.add("visible");
+    identityExportPass.focus();
+});
+document.getElementById("btn-identity-export-cancel")!.addEventListener("click", closeIdentityExportModal);
+
+btnIdentityExportConfirm.addEventListener("click", async () => {
+    const pass = identityExportPass.value;
+    identityExportError.textContent = "";
+    if (pass.normalize("NFC").length < MIN_BACKUP_PASSPHRASE) {
+        identityExportError.textContent = `Use at least ${MIN_BACKUP_PASSPHRASE} characters.`;
+        return;
+    }
+    if (pass !== identityExportPass2.value) {
+        identityExportError.textContent = "The two passphrases don't match.";
+        return;
+    }
+    btnIdentityExportConfirm.disabled = true;
+    try {
+        const res = await api.identity.exportBackup(pass);
+        if (res.ok) {
+            closeIdentityExportModal();
+            showToast(`Identity saved to <strong>${escapeHtml(res.path ?? "the chosen file")}</strong>`, 6000);
+            log("Identity backup exported", "success");
+        } else if (!res.canceled) {
+            identityExportError.textContent = res.error ?? "Couldn't export the identity.";
+        }
+    } finally {
+        btnIdentityExportConfirm.disabled = false;
+    }
+});
+
+async function startIdentityImport(): Promise<void> {
+    const picked = await api.identity.pickBackup();
+    if (!picked.ok || !picked.token) {
+        if (!picked.canceled) showToast(escapeHtml(picked.error ?? "Couldn't open that file"));
+        return;
+    }
+    importToken = picked.token;
+    (document.getElementById("identity-import-file") as HTMLElement).textContent = picked.fileName ?? "backup";
+    identityImportPass.value = "";
+    identityImportError.textContent = "";
+    (document.getElementById("identity-import-step-pass") as HTMLElement).style.display = "";
+    (document.getElementById("identity-import-step-confirm") as HTMLElement).style.display = "none";
+    identityLockedModal.classList.remove("visible");
+    identityImportModal.classList.add("visible");
+    identityImportPass.focus();
+}
+
+btnIdentityImport.addEventListener("click", () => void startIdentityImport());
+document.getElementById("btn-identity-import-cancel")!.addEventListener("click", closeIdentityImportModal);
+document.getElementById("btn-identity-import-back")!.addEventListener("click", closeIdentityImportModal);
+
+btnIdentityImportUnlock.addEventListener("click", async () => {
+    if (!importToken) return;
+    identityImportError.textContent = "";
+    btnIdentityImportUnlock.disabled = true;
+    try {
+        const res = await api.identity.decryptBackup(importToken, identityImportPass.value);
+        identityImportPass.value = "";
+        if (!res.ok) {
+            identityImportError.textContent = res.error ?? "Couldn't unlock the backup.";
+            return;
+        }
+        if (res.fingerprint === res.currentFingerprint && res.instanceId === res.currentInstanceId) {
+            closeIdentityImportModal();
+            showToast("That backup is the identity this install already uses — nothing to import.");
+            return;
+        }
+        const set = (id: string, text: string): void => {
+            (document.getElementById(id) as HTMLElement).textContent = text;
+        };
+        set("identity-import-new-fp", res.fingerprint ?? "");
+        set("identity-import-new-id", `User ID ${res.instanceId ?? ""}`);
+        set("identity-import-cur-fp", res.currentFingerprint ?? "(locked)");
+        set("identity-import-cur-id", `User ID ${res.currentInstanceId ?? ""}`);
+        (document.getElementById("identity-import-step-pass") as HTMLElement).style.display = "none";
+        (document.getElementById("identity-import-step-confirm") as HTMLElement).style.display = "";
+    } finally {
+        btnIdentityImportUnlock.disabled = false;
+    }
+});
+identityImportPass.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") btnIdentityImportUnlock.click();
+});
+
+btnIdentityImportApply.addEventListener("click", async () => {
+    if (!importToken) return;
+    btnIdentityImportApply.disabled = true;
+    const res = await api.identity.applyBackup(importToken);
+    if (!res.ok) {
+        btnIdentityImportApply.disabled = false;
+        showToast(escapeHtml(res.error ?? "Couldn't apply the backup"));
+        closeIdentityImportModal();
+        return;
+    }
+    btnIdentityImportApply.textContent = "Restarting…"; // the app relaunches on its own
+});
+
+// Locked key (PRD 18.6): raised by the preload when a connect finds it.
+api.on("identity-locked", () => {
+    identityLockedModal.classList.add("visible");
+    log("Your identity key is locked — import a backup or create a new identity", "error");
+    void refreshIdentityPanel();
+});
+document.getElementById("btn-identity-locked-close")!.addEventListener("click", () => {
+    identityLockedModal.classList.remove("visible");
+});
+document.getElementById("btn-identity-locked-import")!.addEventListener("click", () => void startIdentityImport());
+{
+    // Creating a new identity orphans every binding the old key had on servers,
+    // so it takes a second, deliberate click (the same arming pattern as "Reset key").
+    const btn = document.getElementById("btn-identity-locked-new") as HTMLButtonElement;
+    let armedUntil = 0;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    btn.addEventListener("click", async () => {
+        if (Date.now() > armedUntil) {
+            armedUntil = Date.now() + 5000;
+            btn.textContent = "Click again to confirm";
+            if (timer) clearTimeout(timer);
+            timer = setTimeout(() => (btn.textContent = "Create new identity"), 5000);
+            return;
+        }
+        if (timer) clearTimeout(timer);
+        btn.textContent = "Create new identity";
+        const res = await api.identity.createNew();
+        if (res.ok) {
+            identityLockedModal.classList.remove("visible");
+            showToast("New identity created. Ask a server admin to reset your old one to get your roles back.", 7000);
+            log("Created a new identity (the old key file was kept aside)", "success");
+            void refreshIdentityPanel();
+        } else {
+            showToast(escapeHtml(res.error ?? "Couldn't create a new identity"));
+        }
+    });
+}
+document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    if (identityExportModal.classList.contains("visible")) closeIdentityExportModal();
+    else if (identityImportModal.classList.contains("visible")) closeIdentityImportModal();
+    else if (identityLockedModal.classList.contains("visible")) identityLockedModal.classList.remove("visible");
 });
 
 // ── Profile: avatar settings (PRD 17.1) ─────────────────────────────────────

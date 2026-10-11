@@ -5,16 +5,38 @@
  * This is the entry point for the Electron desktop client.
  */
 
-import { app, BrowserWindow, session, ipcMain, globalShortcut, Menu, Tray, nativeImage, shell, desktopCapturer, dialog, net, clipboard } from "electron";
+import { app, BrowserWindow, session, ipcMain, globalShortcut, Menu, Tray, nativeImage, shell, desktopCapturer, dialog, net, clipboard, protocol } from "electron";
 import path from "node:path";
-import { getInstanceId, hasExistingInstanceId } from "./instance-id.js";
+import { createHash, createPrivateKey, randomBytes } from "node:crypto";
+import { readFileSync, statSync, writeFileSync } from "node:fs";
+import { getInstanceId, hasExistingInstanceId, replaceInstanceId } from "./instance-id.js";
 import { autoUpdater, NsisUpdater } from "electron-updater";
 import { startCapture, resolvePidForWindowSourceId, listAudioProducingApps, platformSupportsCapture } from "@reson8/native-audio";
 import type { CaptureHandle } from "@reson8/native-audio";
 import MarkdownIt from "markdown-it";
 import { loadWindowState, trackWindowState } from "./window-state.js";
-import { FIXER_USER_AGENT, decodeHtmlEntities, displayDomain, toFixerUrl } from "./link-fixers.js";
-import { getIdentityPublic, signAuthChallenge } from "./identity-key.js";
+import { displayDomain, toFixerUrl } from "./link-fixers.js";
+import {
+    createNewIdentityAfterLock,
+    exportIdentityPkcs8Der,
+    getIdentityPublic,
+    getIdentityStatus,
+    isEphemeralIdentity,
+    replaceIdentityKey,
+    signAuthChallenge,
+} from "./identity-key.js";
+import {
+    BackupError,
+    MAX_BACKUP_FILE_BYTES,
+    decryptBackup,
+    encryptBackup,
+    validatePassphrase,
+    type BackupPayload,
+} from "./identity-backup.js";
+import { fingerprintOf, publicKeyBase64 } from "./identity-proof.js";
+import { TlsTrustStore } from "./tls-store.js";
+import { probeServer } from "./tls-probe.js";
+import { hostKey, isFingerprint, type CertInfo } from "./tls-trust.js";
 
 // ── Single-instance lock (PRD 13.18) ────────────────────────────────────
 // Requested as early as possible, before any other startup work. Opening
@@ -48,71 +70,69 @@ if (!gotSingleInstanceLock) {
     });
 }
 
-// ── Link Preview (metascraper) ───────────────────────────────────────────
-// @ts-ignore — metascraper packages lack type declarations
-import metascraperModule from "metascraper";
-// @ts-ignore
-import metascraperTitle from "metascraper-title";
-// @ts-ignore
-import metascraperDescription from "metascraper-description";
-// @ts-ignore
-import metascraperImage from "metascraper-image";
-// @ts-ignore
-import metascraperUrl from "metascraper-url";
-// @ts-ignore
-import metascraperVideo from "metascraper-video";
+// ── Link Preview ─────────────────────────────────────────────────────────
+// The plain-HTTP half (bounded fetch, private-network guard, direct images)
+// lives in link-preview-fetch.ts / link-preview-guard.ts (PRD 18.10) so it can
+// be tested without Electron; this file keeps the IPC, the caches and the
+// hidden-window fallback.
+import dns from "node:dns";
+import nodeNet from "node:net";
+import {
+    NOT_HTML,
+    fetchLinkPreviewFast,
+    guardedFetchRaw,
+    probeRangeRoute,
+    isValidImageUrl,
+    sanitizeText,
+    type LinkPreviewData,
+} from "./link-preview-fetch";
+import { detectAdult } from "./link-preview-adult";
+import { isValidRangeHeader, normalizeRangeResponse } from "./media-proxy.js";
+import {
+    PREVIEW_TTL_MS,
+    TtlLru,
+    checkPreviewUrl,
+    isBlockedAddress,
+    isBlockedHostname,
+} from "./link-preview-guard";
 
-const metascraper = metascraperModule([
-    metascraperTitle(),
-    metascraperDescription(),
-    metascraperImage(),
-    metascraperUrl(),
-    metascraperVideo(),
+// ── Link-preview video proxy (PRD 18.19) ──────────────────────────────────
+// A privileged scheme MUST be registered before `ready`, exactly once. The proxy
+// only ever serves ids the main process minted itself for a preview's video, so
+// the renderer can't make it fetch anything else.
+protocol.registerSchemesAsPrivileged([
+    { scheme: "reson8-media", privileges: { standard: true, secure: true, stream: true, supportFetchAPI: true } },
 ]);
 
-interface LinkPreviewData {
-    title?: string;
-    description?: string;
-    image?: string;
-    video?: string;
-    videoType?: string;
-    url?: string;
-    domain?: string;
-    siteName?: string;
-}
+/** id → the upstream video URL it stands for (bounded; same lifetime as a preview). */
+const proxiedVideos = new TtlLru<string>(200);
+/** Host → whether the proxy helps there, from a `Range: bytes=0-0` probe (6 h). */
+const rangeRouteByHost = new TtlLru<"direct" | "proxy">(200);
 
-// In-memory cache: URL → metadata (null = attempted but failed)
-const linkPreviewCache = new Map<string, LinkPreviewData | null>();
-
-function sanitizeText(text: string | undefined | null): string | undefined {
-    if (!text) return undefined;
-    // Strip HTML tags
-    return text.replace(/<[^>]*>/g, "").trim() || undefined;
-}
-
-function isValidImageUrl(url: string | undefined | null): boolean {
-    if (!url) return false;
-    return url.startsWith("http://") || url.startsWith("https://");
-}
-
-/** Extract OpenGraph meta tags from HTML as a fallback when metascraper returns incomplete data. */
-function extractOgTags(html: string): Record<string, string> {
-    const tags: Record<string, string> = {};
-    const regex = /<meta\s+(?:property|name)=["'](og:[^"']+|twitter:[^"']+)["']\s+content=["']([^"']*)["']\s*\/?>/gi;
-    const reverseRegex = /<meta\s+content=["']([^"']*)["']\s+(?:property|name)=["'](og:[^"']+|twitter:[^"']+)["']\s*\/?>/gi;
-
-    // Values are decoded (PRD 17.9): a regex-extracted attribute still holds
-    // HTML character references (`&amp;`, `&#x1F441;`), which the card would
-    // otherwise show literally.
-    let match;
-    while ((match = regex.exec(html)) !== null) {
-        tags[match[1].toLowerCase()] = decodeHtmlEntities(match[2]);
+async function maybeProxyVideo(preview: LinkPreviewData | null): Promise<LinkPreviewData | null> {
+    if (!preview?.video || !preview.videoType?.startsWith("video/")) return preview;
+    let host: string;
+    try {
+        host = new URL(preview.video).hostname.toLowerCase();
+    } catch {
+        return preview;
     }
-    while ((match = reverseRegex.exec(html)) !== null) {
-        tags[match[2].toLowerCase()] = decodeHtmlEntities(match[1]);
+    let route = rangeRouteByHost.get(host);
+    if (route === undefined) {
+        route = await probeRangeRoute(preview.video);
+        rangeRouteByHost.set(host, route, PREVIEW_TTL_MS.success);
     }
-    return tags;
+    if (route !== "proxy") return preview;
+    const id = randomBytes(16).toString("hex");
+    proxiedVideos.set(id, preview.video, PREVIEW_TTL_MS.video);
+    // The cached preview keeps the upstream URL; the id is minted per IPC answer.
+    return { ...preview, video: `reson8-media://v/${id}` };
 }
+
+/** URL → preview (null = attempted but failed). Bounded, and entries expire (PRD 18.10). */
+const linkPreviewCache = new TtlLru<LinkPreviewData | null>(500);
+/** Concurrent requests for the same link share one fetch. */
+const linkPreviewInflight = new Map<string, Promise<LinkPreviewData | null>>();
 
 interface ReleaseNotes {
     name: string;
@@ -187,6 +207,67 @@ async function fetchReleaseNotes(version: string): Promise<ReleaseNotes | null> 
     }
 }
 
+/** Partition for the hidden preview window: no `persist:` prefix, so it is in memory only and shares no cookies with the app (PRD 18.10). */
+const PREVIEW_PARTITION = "link-preview";
+let previewSessionConfigured = false;
+/** Per-host DNS verdicts for the window's own requests (true = a private address was found). */
+const previewHostVerdicts = new TtlLru<boolean>(200);
+
+async function hostResolvesToPrivate(host: string): Promise<boolean> {
+    const known = previewHostVerdicts.get(host);
+    if (known !== undefined) return known;
+    let verdict: boolean;
+    try {
+        const addresses = await dns.promises.lookup(host, { all: true });
+        verdict = addresses.some((a) => isBlockedAddress(a.address));
+    } catch {
+        verdict = false; // unresolvable: Chromium will fail the request itself
+    }
+    previewHostVerdicts.set(host, verdict, 60_000);
+    return verdict;
+}
+
+/** One-time hardening of the preview window's session (PRD 18.10). */
+function configurePreviewSession(): Electron.Session {
+    const ses = session.fromPartition(PREVIEW_PARTITION);
+    if (previewSessionConfigured) return ses;
+    previewSessionConfigured = true;
+
+    // Every request the page makes (redirects and subresources included) is
+    // checked: literal private addresses and local names are cancelled, and a
+    // name that resolves to a private address is cancelled too.
+    ses.webRequest.onBeforeRequest(async (details, callback) => {
+        let url: URL;
+        try {
+            url = new URL(details.url);
+        } catch {
+            callback({ cancel: false });
+            return;
+        }
+        if (url.protocol !== "http:" && url.protocol !== "https:" && url.protocol !== "ws:" && url.protocol !== "wss:") {
+            callback({ cancel: false }); // data:, blob: — nothing leaves the machine
+            return;
+        }
+        if (isBlockedHostname(url.hostname)) {
+            callback({ cancel: true });
+            return;
+        }
+        const literal = url.hostname.startsWith("[") || /^[\d.]+$/.test(url.hostname);
+        if (!literal && (await hostResolvesToPrivate(url.hostname))) {
+            callback({ cancel: true });
+            return;
+        }
+        callback({ cancel: false });
+    });
+    ses.on("will-download", (event, item) => {
+        event.preventDefault();
+        item.cancel();
+    });
+    ses.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
+    ses.setPermissionCheckHandler(() => false);
+    return ses;
+}
+
 /** Real Chromium renderer instances currently fetching a fallback preview
  *  (PRD 14.8) — capped since each is a genuinely expensive full renderer
  *  process, and must never become an unbounded resource sink if several
@@ -208,17 +289,28 @@ let activeHiddenWindowFallbacks = 0;
  */
 async function fetchLinkPreviewViaHiddenWindow(url: string): Promise<LinkPreviewData | null> {
     if (activeHiddenWindowFallbacks >= MAX_HIDDEN_WINDOW_FALLBACKS) return null;
+    // Same rules as the fast path (PRD 18.10): never navigate a real browser
+    // window into a private network, by address or by what a name resolves to.
+    const check = checkPreviewUrl(url);
+    if (!check.ok) return null;
+    if (!nodeNet.isIP(check.url.hostname.replace(/^\[|\]$/g, "")) && (await hostResolvesToPrivate(check.url.hostname))) {
+        return null;
+    }
     activeHiddenWindowFallbacks++;
 
     let win: BrowserWindow | null = null;
     try {
+        configurePreviewSession();
         win = new BrowserWindow({
             show: false,
             webPreferences: {
                 sandbox: true,
                 contextIsolation: true,
+                partition: PREVIEW_PARTITION,
             },
         });
+        win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+        win.webContents.setAudioMuted(true);
 
         const run = async (): Promise<LinkPreviewData | null> => {
             await win!.loadURL(url);
@@ -236,6 +328,8 @@ async function fetchLinkPreviewViaHiddenWindow(url: string): Promise<LinkPreview
                 ogImage?: string;
                 ogSiteName?: string;
                 ogUrl?: string;
+                ageRestriction?: string;
+                rating?: string;
             } = await win!.webContents.executeJavaScript(`(() => {
                 const getMeta = (selector) => document.querySelector(selector)?.getAttribute("content") || undefined;
                 return {
@@ -245,6 +339,8 @@ async function fetchLinkPreviewViaHiddenWindow(url: string): Promise<LinkPreview
                     ogImage: getMeta('meta[property="og:image"]') || getMeta('meta[name="twitter:image"]') || getMeta('meta[name="twitter:image:src"]'),
                     ogSiteName: getMeta('meta[property="og:site_name"]'),
                     ogUrl: getMeta('meta[property="og:url"]'),
+                    ageRestriction: getMeta('meta[property="og:restrictions:age"]'),
+                    rating: getMeta('meta[name="rating" i]'),
                 };
             })()`);
 
@@ -261,7 +357,11 @@ async function fetchLinkPreviewViaHiddenWindow(url: string): Promise<LinkPreview
                 domain = new URL(url).hostname.replace(/^www\./, "");
             } catch { /* ignore */ }
 
-            return { title, description, image, url: extracted?.ogUrl || url, domain, siteName };
+            const adult = detectAdult({
+                ogTags: extracted?.ageRestriction ? { "og:restrictions:age": extracted.ageRestriction } : {},
+                metaByName: extracted?.rating ? { rating: extracted.rating } : {},
+            });
+            return { title, description, image, url: extracted?.ogUrl || url, domain, siteName, ...(adult ? { adult: true } : {}) };
         };
 
         // Resolves to null on timeout rather than rejecting — either way
@@ -282,133 +382,71 @@ async function fetchLinkPreviewViaHiddenWindow(url: string): Promise<LinkPreview
     }
 }
 
-/** The original plain-`fetch()` + metascraper + OG-fallback path — fast,
- *  and works for the vast majority of links. Returns null (never caches)
- *  on any failure, including a blocked/non-2xx response, so the caller can
- *  decide whether to escalate to the heavier hidden-window fallback.
- *
- *  `opts` (PRD 17.9) is only used for a link-fixer request: its own
- *  User-Agent, and `strict` success rules — the response must still come
- *  from the fixer's host (fixers redirect visitors they won't serve back to
- *  the original site, or to a download page) and must carry an image or a
- *  video (a title alone is a fixer's error page, e.g. "Temporarily
- *  unavailable"). Defaults keep the original behavior exactly. */
-async function fetchLinkPreviewFast(
-    url: string,
-    opts: { userAgent?: string; strict?: { expectedHost: string } } = {},
-): Promise<LinkPreviewData | null> {
-    try {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 5000);
-
-        const response = await fetch(url, {
-            signal: controller.signal,
-            headers: {
-                // Bot-like UA so embed-focused sites (fxtwitter, etc.) serve OG tags
-                "User-Agent": opts.userAgent ?? "Mozilla/5.0 (compatible; Reson8Bot/1.0; +https://github.com/fbarrella/reson8)",
-            },
-        });
-        clearTimeout(timeout);
-
-        if (!response.ok) {
-            return null;
-        }
-        if (opts.strict) {
-            let finalHost = "";
-            try {
-                finalHost = new URL(response.url).hostname.toLowerCase();
-            } catch { /* leave empty → refused */ }
-            if (finalHost !== opts.strict.expectedHost) return null;
-        }
-
-        const html = await response.text();
-        const metadata = await metascraper({ html, url });
-
-        let title = sanitizeText(metadata.title);
-        let rawDesc = sanitizeText(metadata.description);
-        let image = isValidImageUrl(metadata.image) ? metadata.image : undefined;
-        let video = isValidImageUrl(metadata.video) ? metadata.video : undefined;
-        let videoType: string | undefined;
-        let siteName: string | undefined;
-
-        // Manual OG tag fallback — extract if metascraper missed key fields
-        const ogTags = extractOgTags(html);
-
-        if (!title) {
-            title = sanitizeText(ogTags["og:title"] || ogTags["twitter:title"]);
-        }
-        if (!rawDesc) {
-            rawDesc = sanitizeText(ogTags["og:description"] || ogTags["twitter:description"]);
-        }
-        if (!image) {
-            const ogImage = ogTags["og:image"] || ogTags["twitter:image"] || ogTags["twitter:image:src"];
-            if (isValidImageUrl(ogImage)) image = ogImage;
-        }
-        if (!video) {
-            const ogVideo = ogTags["og:video:url"] || ogTags["og:video:secure_url"] || ogTags["og:video"];
-            if (isValidImageUrl(ogVideo)) video = ogVideo;
-        }
-        videoType = ogTags["og:video:type"] || undefined;
-        siteName = sanitizeText(ogTags["og:site_name"]) || undefined;
-
-        const description = rawDesc && rawDesc.length > 200 ? rawDesc.slice(0, 200) + "…" : rawDesc;
-
-        let domain: string | undefined;
-        try {
-            domain = new URL(url).hostname.replace(/^www\./, "");
-        } catch { /* ignore */ }
-
-        const result: LinkPreviewData = { title, description, image, video, videoType, url: metadata.url || url, domain, siteName };
-
-        // A fixer must deliver media — that's its whole point (PRD 17.9).
-        if (opts.strict) return image || video ? result : null;
-        // Only a genuine result if we got at least a title or image
-        return title || image ? result : null;
-    } catch {
-        return null;
-    }
-}
-
 /**
- * Orchestrates the two-tier link-preview fetch (PRD 14.8): the fast plain-
- * `fetch()` path first (works for the vast majority of links), falling
- * back to a hidden real-browser navigation only when that path is blocked
- * or finds nothing — the fast path already handles most sites, and the
- * fallback is expensive enough (a full Chromium renderer, ~5-15s) that it
- * should never run for a link the fast path already resolved.
+ * Orchestrates the two-tier link-preview fetch (PRD 14.8): the fast plain
+ * HTTP path first (works for the vast majority of links), falling back to a
+ * hidden real-browser navigation only when that path is blocked or finds
+ * nothing — and never for a link that answered with something that isn't a
+ * page (a video, an archive: PRD 18.10).
  */
 async function fetchLinkPreview(url: string): Promise<LinkPreviewData | null> {
-    if (linkPreviewCache.has(url)) {
-        return linkPreviewCache.get(url) ?? null;
-    }
+    const cached = linkPreviewCache.get(url);
+    if (cached !== undefined) return cached;
 
-    // Social-media "fixers" first (PRD 17.9): for YouTube, X, Instagram,
-    // Reddit, Twitch, Bluesky and Imgur links, ask the matching fixer service,
-    // which usually returns a DIRECT video the card can play inline. If it
-    // doesn't deliver, the normal flow below runs on the ORIGINAL url,
-    // exactly as for every other link.
-    let result: LinkPreviewData | null = null;
-    const fixer = toFixerUrl(url);
-    if (fixer) {
-        const fixed = await fetchLinkPreviewFast(fixer.fixerUrl, {
-            userAgent: FIXER_USER_AGENT,
-            strict: { expectedHost: fixer.fixerHost },
-        });
-        if (fixed) {
-            // Clicking the card opens the real post, and the card names the
-            // real site — never the proxy (fixers stuff og:site_name with
-            // their own branding and stats).
-            result = { ...fixed, url, domain: displayDomain(url), siteName: fixer.network };
+    const running = linkPreviewInflight.get(url);
+    if (running) return running;
+
+    const job = (async (): Promise<LinkPreviewData | null> => {
+        // Never request something on the reader's own network (PRD 18.10).
+        if (!checkPreviewUrl(url).ok) {
+            linkPreviewCache.set(url, null, PREVIEW_TTL_MS.failure);
+            return null;
         }
-    }
 
-    if (!result) {
-        const fastResult = await fetchLinkPreviewFast(url);
-        result = fastResult ?? await fetchLinkPreviewViaHiddenWindow(url);
-    }
+        // Social-media "fixers" first (PRD 17.9): for YouTube, X, Instagram,
+        // Reddit, Twitch, Bluesky and Imgur links, ask the matching fixer service,
+        // which usually returns a DIRECT video the card can play inline. If it
+        // doesn't deliver, the normal flow below runs on the ORIGINAL url,
+        // exactly as for every other link.
+        let result: LinkPreviewData | null = null;
+        let notHtml = false;
+        const fixer = toFixerUrl(url);
+        if (fixer) {
+            const fixed = await fetchLinkPreviewFast(fixer.fixerUrl, {
+                userAgent: fixer.userAgent,
+                strict: { expectedHost: fixer.fixerHost },
+            });
+            if (fixed && fixed !== NOT_HTML) {
+                // Clicking the card opens the real post, and the card names the
+                // real site — never the proxy (fixers stuff og:site_name with
+                // their own branding and stats).
+                result = { ...fixed, url, domain: displayDomain(url), siteName: fixer.network };
+            }
+        }
 
-    linkPreviewCache.set(url, result);
-    return result;
+        if (!result) {
+            const fast = await fetchLinkPreviewFast(url);
+            if (fast === NOT_HTML) notHtml = true;
+            else result = fast;
+        }
+        if (!result && !notHtml) result = await fetchLinkPreviewViaHiddenWindow(url);
+
+        // A fixer's direct video URL is signed and expires: cache it briefly.
+        const ttl = !result
+            ? PREVIEW_TTL_MS.failure
+            : fixer && result.video
+              ? PREVIEW_TTL_MS.video
+              : PREVIEW_TTL_MS.success;
+        linkPreviewCache.set(url, result, ttl);
+        return result;
+    })();
+
+    linkPreviewInflight.set(url, job);
+    try {
+        return await job;
+    } finally {
+        linkPreviewInflight.delete(url);
+    }
 }
 
 let mainWindow: BrowserWindow | null = null;
@@ -495,14 +533,113 @@ function showMainWindow(source: string): void {
     console.log(`[main] showMainWindow(${source}) after: ${snapshot()}`);
 }
 
+// ── Encrypted connections (PRD 18.3) ─────────────────────────────────────
+// Certificates the user chose to trust (pinned by SHA-256) and the servers
+// reached over HTTPS live HERE, in the main process — the renderer can only
+// ask, through the narrow IPC below, so it can't be tricked into pinning an
+// arbitrary certificate or into downgrading a server.
+
+let tlsStore: TlsTrustStore | null = null;
+function getTlsStore(): TlsTrustStore {
+    tlsStore ??= new TlsTrustStore(path.join(app.getPath("userData"), "tls-trust.json"));
+    return tlsStore;
+}
+
+/** The certificate each host:port presented the last time it was probed. Only
+ *  a certificate seen here, moments ago, can be pinned. */
+const lastProbes = new Map<string, { cert: CertInfo; certPem: string; at: number }>();
+const PIN_WINDOW_MS = 5 * 60 * 1000;
+
+/** webContents id of a Viewer window → the server it watches (for its TLS options). */
+const viewerServers = new Map<number, { host: string; port: number }>();
+
+function validHostPort(host: unknown, port: unknown): host is string {
+    return (
+        typeof host === "string" &&
+        host.length > 0 &&
+        host.length <= 255 &&
+        /^[A-Za-z0-9._:-]+$/.test(host) &&
+        typeof port === "number" &&
+        Number.isInteger(port) &&
+        port >= 1 &&
+        port <= 65535
+    );
+}
+
+/** DER bytes of a PEM certificate (Chromium hands us PEM in `certificate.data`). */
+function pemToDer(pem: string): Buffer {
+    return Buffer.from(pem.replace(/-----(BEGIN|END) CERTIFICATE-----/g, "").replace(/\s+/g, ""), "base64");
+}
+
+/**
+ * Chromium's side of a pin: the main window's uploads, images, emoji and the
+ * Viewer window go through the default session. A certificate is accepted
+ * here ONLY when its SHA-256 equals a pin the user created for that hostname
+ * (and it hasn't expired); everything else falls through to Chromium's own
+ * verdict (-3), so a bad certificate that isn't pinned still fails.
+ */
+function installCertificateVerifier(): void {
+    session.defaultSession.setCertificateVerifyProc((request, callback) => {
+        try {
+            const pins = getTlsStore().pinsForHostname(request.hostname);
+            if (pins.length > 0 && request.certificate.validExpiry * 1000 > Date.now()) {
+                const fp = createHash("sha256").update(pemToDer(request.certificate.data)).digest("hex");
+                if (pins.some((p) => p.fingerprint256 === fp)) return callback(0);
+            }
+        } catch (err) {
+            console.error("[tls] certificate check failed:", err);
+        }
+        callback(-3);
+    });
+}
+
 function createWindow(): void {
-    // Grant mic/camera permission requests automatically
+    installCertificateVerifier();
+
+    // Grant mic/camera permission requests automatically. HTML fullscreen (a
+    // video's own fullscreen button) is a permission named "fullscreen" in
+    // Electron; without a grant the request never settles (PRD 18.19). It is
+    // granted ONLY to the app's own windows — never to anything else on this session.
     session.defaultSession.setPermissionRequestHandler(
-        (_webContents, permission, callback) => {
+        (webContents, permission, callback) => {
+            if (permission === "fullscreen") {
+                const ownWindow =
+                    (mainWindow !== null && webContents.id === mainWindow.webContents.id) ||
+                    viewerServers.has(webContents.id) ||
+                    viewerTickets.has(webContents.id);
+                callback(ownWindow);
+                return;
+            }
             const allowed = ["media", "audioCapture", "microphone"];
             callback(allowed.includes(permission));
         },
     );
+
+    // The proxy's request handler (the scheme itself is registered above, before ready).
+    protocol.handle("reson8-media", async (request) => {
+        const url = new URL(request.url);
+        const id = url.hostname === "v" ? url.pathname.replace(/^\//, "") : "";
+        const upstream = /^[0-9a-f]{32}$/.test(id) ? proxiedVideos.get(id) : undefined;
+        if (!upstream) return new Response(null, { status: 404 });
+
+        const requested = request.headers.get("range");
+        const range = isValidRangeHeader(requested) ? requested : null;
+        const got = await guardedFetchRaw(upstream, {
+            headers: range ? { Range: range } : {},
+            signal: request.signal,
+            headersTimeoutMs: 15000,
+        });
+        if (!got) return new Response(null, { status: 502 });
+
+        const headers: Record<string, string> = {};
+        got.res.headers.forEach((v, k) => { headers[k.toLowerCase()] = v; });
+        const normalized = normalizeRangeResponse(range, { status: got.res.status, headers });
+        // Streamed straight through, never buffered.
+        return new Response(got.res.body as unknown as ReadableStream, {
+            status: normalized.status,
+            headers: normalized.headers,
+        });
+    });
 
     // Required for `getDisplayMedia()` in the renderer (Linux/Wayland
     // screen-share bypass) — with no handler registered at all, Electron
@@ -843,8 +980,196 @@ app.whenReady().then(() => {
     // preload gets the public half, and signatures over server challenges
     // only — identity-key.ts refuses anything that isn't a well-formed
     // nonce + host, so a compromised renderer can't get arbitrary data signed.
-    ipcMain.handle("identity-get-public", () => getIdentityPublic());
+    ipcMain.handle("identity-get-public", () => getIdentityPublic()); // null while the key is locked
     ipcMain.handle("identity-sign-challenge", (_event, nonce: unknown, host: unknown) => signAuthChallenge(nonce, host));
+
+    // ── Identity backup / restore (PRD 18.6) ─────────────────────────────
+    // Everything that touches key material or files happens HERE. The renderer
+    // only passes passphrases in and gets fingerprints/status back.
+    const BACKUP_FILTERS = [{ name: "Reson8 identity", extensions: ["reson8-identity"] }];
+    const IMPORT_WINDOW_MS = 10 * 60 * 1000;
+    let pendingImport: { token: string; text: string; at: number; payload?: BackupPayload } | null = null;
+    const DEV_ONLY = { ok: false, error: "Identity backup isn't available in development builds (they use a temporary identity)" };
+
+    ipcMain.handle("identity-get-status", () => ({ ...getIdentityStatus(), canBackup: !isEphemeralIdentity() }));
+
+    ipcMain.handle("identity-export", async (event, passphrase: unknown) => {
+        if (isEphemeralIdentity()) return DEV_ONLY;
+        const problem = validatePassphrase(passphrase);
+        if (problem) return { ok: false, error: problem };
+        const der = exportIdentityPkcs8Der();
+        const pub = getIdentityPublic();
+        if (!der || !pub) {
+            return { ok: false, error: "Your identity key is locked — import a backup or create a new identity first" };
+        }
+        const win = BrowserWindow.fromWebContents(event.sender) ?? undefined;
+        const shortFp = pub.fingerprint.replace(/[^A-Za-z0-9]/g, "").slice(6, 14).toLowerCase();
+        const options = {
+            title: "Export identity",
+            defaultPath: path.join(app.getPath("documents"), `reson8-identity-${shortFp}.reson8-identity`),
+            filters: BACKUP_FILTERS,
+        };
+        const chosen = win ? await dialog.showSaveDialog(win, options) : await dialog.showSaveDialog(options);
+        if (chosen.canceled || !chosen.filePath) return { ok: false, canceled: true };
+        try {
+            const text = await encryptBackup(
+                {
+                    instanceId: getInstanceId(),
+                    privateKeyPkcs8Der: der.toString("base64"),
+                    createdAt: new Date().toISOString(),
+                    appVersion: app.getVersion(),
+                },
+                passphrase as string,
+            );
+            writeFileSync(chosen.filePath, text, { encoding: "utf8", mode: 0o600 });
+            return { ok: true, path: chosen.filePath };
+        } catch (err) {
+            console.error("[identity] export failed:", err);
+            return { ok: false, error: "Couldn't write the backup file" };
+        }
+    });
+
+    ipcMain.handle("identity-import-pick", async (event) => {
+        if (isEphemeralIdentity()) return DEV_ONLY;
+        const win = BrowserWindow.fromWebContents(event.sender) ?? undefined;
+        const options = { title: "Import identity", properties: ["openFile" as const], filters: BACKUP_FILTERS };
+        const chosen = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options);
+        if (chosen.canceled || !chosen.filePaths[0]) return { ok: false, canceled: true };
+        try {
+            const file = chosen.filePaths[0];
+            if (statSync(file).size > MAX_BACKUP_FILE_BYTES) {
+                return { ok: false, error: "That file is too large to be an identity backup" };
+            }
+            // The contents stay in this process; the renderer gets an opaque token.
+            pendingImport = { token: randomBytes(16).toString("hex"), text: readFileSync(file, "utf8"), at: Date.now() };
+            return { ok: true, token: pendingImport.token, fileName: path.basename(file) };
+        } catch {
+            return { ok: false, error: "Couldn't read that file" };
+        }
+    });
+
+    ipcMain.handle("identity-import-decrypt", async (_event, token: unknown, passphrase: unknown) => {
+        if (isEphemeralIdentity()) return DEV_ONLY;
+        if (!pendingImport || token !== pendingImport.token || Date.now() - pendingImport.at > IMPORT_WINDOW_MS) {
+            return { ok: false, error: "Pick the backup file again" };
+        }
+        if (typeof passphrase !== "string") return { ok: false, error: "Enter the passphrase" };
+        try {
+            const payload = await decryptBackup(pendingImport.text, passphrase);
+            pendingImport.payload = payload;
+            const key = createPrivateKey({ key: Buffer.from(payload.privateKeyPkcs8Der, "base64"), format: "der", type: "pkcs8" });
+            return {
+                ok: true,
+                fingerprint: fingerprintOf(publicKeyBase64(key)),
+                instanceId: payload.instanceId,
+                createdAt: payload.createdAt,
+                currentFingerprint: getIdentityPublic()?.fingerprint ?? null,
+                currentInstanceId: getInstanceId(),
+            };
+        } catch (err) {
+            if (err instanceof BackupError) return { ok: false, error: err.message, code: err.code };
+            console.error("[identity] import failed:", err);
+            return { ok: false, error: "Couldn't read the backup" };
+        }
+    });
+
+    ipcMain.handle("identity-import-apply", (_event, token: unknown) => {
+        if (isEphemeralIdentity()) return DEV_ONLY;
+        if (!pendingImport?.payload || token !== pendingImport.token) {
+            return { ok: false, error: "Open the backup again and enter its passphrase" };
+        }
+        try {
+            const { instanceId, privateKeyPkcs8Der } = pendingImport.payload;
+            replaceIdentityKey(Buffer.from(privateKeyPkcs8Der, "base64"));
+            replaceInstanceId(instanceId);
+            pendingImport = null;
+            // The instance id is cached in several places: restart is the clean way.
+            // app.quit() (not exit) so the graceful-disconnect handler runs.
+            app.relaunch();
+            app.quit();
+            return { ok: true };
+        } catch (err) {
+            console.error("[identity] applying the backup failed:", err);
+            return { ok: false, error: "Couldn't apply the backup" };
+        }
+    });
+
+    // Recovery from a locked key: starts a fresh identity (the old file is kept aside).
+    ipcMain.handle("identity-create-new", () => {
+        if (isEphemeralIdentity()) return DEV_ONLY;
+        return { ok: true, status: createNewIdentityAfterLock() };
+    });
+
+    // ── Encrypted connections (PRD 18.3) ─────────────────────────────────
+    // One round trip gives the renderer everything `decideScheme()` needs.
+    // The PEM stays here; the renderer only ever sees the fingerprint data.
+    ipcMain.handle("tls-probe", async (_event, host: unknown, port: unknown) => {
+        if (!validHostPort(host, port)) return { error: "Invalid server address" };
+        const key = hostKey(host, port as number);
+        const outcome = await probeServer(host, port as number);
+        const cert =
+            outcome.result.kind === "trusted" || outcome.result.kind === "untrusted" ? outcome.result.cert : null;
+        if (cert && outcome.certPem) lastProbes.set(key, { cert, certPem: outcome.certPem, at: Date.now() });
+        const pin = getTlsStore().getPin(key);
+        return {
+            result: outcome.result,
+            pinnedFingerprint: pin ? pin.fingerprint256 : null,
+            httpsRemembered: getTlsStore().isHttpsRemembered(key),
+        };
+    });
+
+    // Pins the certificate the LAST probe of this host:port showed — not one
+    // the renderer names — and never overwrites an existing, different pin
+    // (that's the changed-certificate case: the user must remove the old
+    // trust deliberately, as with SSH host keys).
+    ipcMain.handle("tls-trust-certificate", (_event, host: unknown, port: unknown, fingerprint: unknown) => {
+        if (!validHostPort(host, port) || !isFingerprint(fingerprint)) return { ok: false, error: "Invalid request" };
+        const key = hostKey(host, port as number);
+        const seen = lastProbes.get(key);
+        if (!seen || seen.cert.fingerprint256 !== fingerprint || Date.now() - seen.at > PIN_WINDOW_MS) {
+            return { ok: false, error: "That certificate was not just presented by the server — try connecting again" };
+        }
+        const existing = getTlsStore().getPin(key);
+        if (existing && existing.fingerprint256 !== fingerprint) {
+            return { ok: false, error: "A different certificate is already trusted for this server — remove it in Settings first" };
+        }
+        try {
+            getTlsStore().setPin(key, {
+                fingerprint256: fingerprint,
+                subject: seen.cert.subject,
+                validTo: seen.cert.validTo,
+                pinnedAt: new Date().toISOString(),
+                certPem: seen.certPem,
+            });
+            return { ok: true };
+        } catch (err) {
+            return { ok: false, error: (err as Error).message };
+        }
+    });
+
+    ipcMain.handle("tls-get-connect-options", (_event, host: unknown, port: unknown) => {
+        if (!validHostPort(host, port)) return null;
+        const pin = getTlsStore().getPin(hostKey(host, port as number));
+        return pin ? { ca: pin.certPem, fingerprint256: pin.fingerprint256 } : null;
+    });
+
+    ipcMain.handle("tls-remember-https", (_event, host: unknown, port: unknown) => {
+        if (validHostPort(host, port)) getTlsStore().rememberHttps(hostKey(host, port as number));
+    });
+
+    ipcMain.handle("tls-list-trusted", () => getTlsStore().listPins());
+
+    ipcMain.handle("tls-remove-trust", (_event, key: unknown) => {
+        return typeof key === "string" && key.length <= 300 ? getTlsStore().removePin(key) : false;
+    });
+
+    // A Viewer window's own socket needs the same pin the main window used.
+    ipcMain.handle("viewer-get-tls-options", (event) => {
+        const server = viewerServers.get(event.sender.id);
+        if (!server) return null;
+        const pin = getTlsStore().getPin(hostKey(server.host, server.port));
+        return pin ? { ca: pin.certPem, fingerprint256: pin.fingerprint256 } : null;
+    });
 
     // PTT shortcut IPC
     ipcMain.on("set-ptt-key", (_event, key: string) => {
@@ -929,7 +1254,7 @@ app.whenReady().then(() => {
     });
 
     ipcMain.handle("fetch-link-preview", async (_event, url: string) => {
-        return fetchLinkPreview(url);
+        return maybeProxyVideo(await fetchLinkPreview(url));
     });
 
     ipcMain.handle("fetch-release-notes", async (_event, version: string) => {
@@ -1151,7 +1476,17 @@ app.whenReady().then(() => {
             // preload fetches it over IPC instead.
             const contentsId = viewerWindow.webContents.id;
             if (typeof args.viewerTicket === "string") viewerTickets.set(contentsId, args.viewerTicket);
-            viewerWindow.on("closed", () => viewerTickets.delete(contentsId));
+            try {
+                const u = new URL(args.serverBaseUrl);
+                const host = u.hostname.replace(/^\[|\]$/g, "");
+                viewerServers.set(contentsId, { host, port: Number(u.port) || (u.protocol === "https:" ? 443 : 80) });
+            } catch {
+                /* a malformed base URL just means no pin for this window */
+            }
+            viewerWindow.on("closed", () => {
+                viewerTickets.delete(contentsId);
+                viewerServers.delete(contentsId);
+            });
             viewerWindow.loadFile(path.join(__dirname, "renderer", "viewer.html"));
             return { success: true };
         },

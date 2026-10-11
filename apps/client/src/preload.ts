@@ -25,8 +25,18 @@ import type {
     IDirectMessage,
     ICustomEmoji,
     IPinnedMessage,
+    IIdentityEvent,
+    IInvite,
 } from "@reson8/shared-types";
 import { VoiceService, VoiceSignaling } from "./services/voice.service";
+import { createHash } from "crypto";
+import {
+    decideScheme,
+    formatFingerprint,
+    hostKey,
+    identityHostOf,
+    parseServerAddress,
+} from "./tls-trust";
 
 type TypedSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 
@@ -433,9 +443,49 @@ const api = {
         return ipcRenderer.invoke("is-existing-install");
     },
 
+    /** The base URL (with the scheme that was decided) of the current connection, or "". */
+    getServerBaseUrl(): string {
+        return serverBaseUrl;
+    },
+
+    // ── Encrypted connections (PRD 18.3) ─────────────────────────────────
+    // The pure rules (tls-trust.ts) run here because the renderer is a plain
+    // <script>; probing and pinning go through main, which owns the store.
+    tls: {
+        parseServerAddress,
+        decideScheme,
+        formatFingerprint,
+        hostKey,
+        probe(host: string, port: number): Promise<unknown> {
+            return ipcRenderer.invoke("tls-probe", host, port);
+        },
+        trustCertificate(host: string, port: number, fingerprint256: string): Promise<{ ok: boolean; error?: string }> {
+            return ipcRenderer.invoke("tls-trust-certificate", host, port, fingerprint256);
+        },
+        listTrusted(): Promise<unknown[]> {
+            return ipcRenderer.invoke("tls-list-trusted");
+        },
+        removeTrust(key: string): Promise<boolean> {
+            return ipcRenderer.invoke("tls-remove-trust", key);
+        },
+    },
+
     // ── Connection ──────────────────────────────────────────────────────────
 
-    async connect(host: string, port: number | undefined, nickname: string, password?: string): Promise<void> {
+    /**
+     * `address.scheme` has already been decided by the renderer from a probe
+     * of the server (PRD 18.3, `tls.decideScheme()`); `pinned` means the user
+     * trusted this server's self-signed certificate, so the Socket.io
+     * connection must accept exactly that certificate. Uploads and media go
+     * through Chromium, which main's certificate hook handles the same way.
+     */
+    async connect(
+        address: { scheme: "https" | "http"; host: string; port?: number; pinned?: boolean },
+        nickname: string,
+        password?: string,
+        /** Only for a NEW identity on a server that requires one (PRD 18.9); never stored. */
+        inviteCode?: string,
+    ): Promise<void> {
         if (socket?.connected) {
             socket.disconnect();
         }
@@ -445,11 +495,45 @@ const api = {
             instanceId = await ipcRenderer.invoke("get-instance-id");
         }
 
-        const serverUrl = port ? `http://${host}:${port}` : `http://${host}`;
+        const { host, port } = address;
+        const hostPart = host.includes(":") ? `[${host}]` : host;
+        const serverUrl = `${address.scheme}://${hostPart}${port ? `:${port}` : ""}`;
+
+        // The pinned certificate, for the Node/`ws` side (see the note at the
+        // top of tls-trust.ts: this stack is NOT Chromium's). `ca` replaces
+        // the default trust store for this socket, and the fingerprint check
+        // replaces the hostname check — a pin is stronger than a name match.
+        let pinnedTls:
+            | { ca: string[]; checkServerIdentity: (hostname: string, cert: { raw?: Buffer }) => Error | undefined }
+            | undefined;
+        if (address.scheme === "https" && address.pinned) {
+            const opts: { ca: string; fingerprint256: string } | null = await ipcRenderer.invoke(
+                "tls-get-connect-options",
+                host,
+                port ?? 443,
+            );
+            if (!opts) {
+                emit("error", {
+                    code: "CONNECT_ERROR",
+                    message: "The trusted certificate for this server is no longer stored — connect again to review it",
+                });
+                return;
+            }
+            const wanted = opts.fingerprint256;
+            pinnedTls = {
+                ca: [opts.ca],
+                checkServerIdentity: (_hostname, cert) => {
+                    const actual = cert.raw ? createHash("sha256").update(cert.raw).digest("hex") : "";
+                    return actual === wanted ? undefined : new Error("The server's certificate changed");
+                },
+            };
+        }
+
         serverBaseUrl = serverUrl;
         uploadToken = null; // a token belongs to the previous connection (PRD 16.8)
         socket = io(serverUrl, {
             transports: ["websocket"],
+            ...(pinnedTls ?? {}),
             reconnection: true,
             // Unlimited attempts (delay backs off up to Socket.io's 5s
             // default cap) — a weak connection that's still recovering
@@ -468,19 +552,41 @@ const api = {
         // Latency measurement — started after connect, cleared on disconnect
         let latencyInterval: ReturnType<typeof setInterval> | null = null;
 
-        // What the identity proof is signed for: the host as the user typed it (PRD 17.12).
-        const identityHost = port ? `${host}:${port}` : host;
+        // What the identity proof is signed for: the host as the user typed it,
+        // without a scheme (PRD 17.12; unchanged by 18.3 so bound identities
+        // and AUTH_ALLOWED_HOSTS keep matching).
+        const identityHost = identityHostOf({ host, port });
 
-        socket.on("connect", async () => {
+        // The join routine is a named function so it can run again when a moderator
+        // approves this (new) identity (PRD 18.8) on the SAME socket.
+        const joinServer = async (): Promise<void> => {
             // Guard against duplicate emissions from Socket.io auto-reconnect
             if (joinServerInFlight) return;
             joinServerInFlight = true;
+
+            // A key that exists but can't be unlocked (PRD 18.6) must stop the
+            // join: going on unsigned would only be refused by every server where
+            // this identity is bound, with a confusing "another device" error.
+            const keyStatus: { state: string } | null = await ipcRenderer.invoke("identity-get-status").catch(() => null);
+            if (keyStatus?.state === "locked") {
+                joinServerInFlight = false;
+                socket?.removeAllListeners();
+                socket?.disconnect();
+                socket = null;
+                emit("identity-locked", null);
+                return;
+            }
 
             // Prove we own this identity (PRD 17.12) — a fresh challenge on
             // every connect, reconnects included. Against a pre-2.6.0 server
             // there's no challenge: join the old way.
             const joiningSocket = socket!;
             const identity = await buildIdentityProof(joiningSocket, identityHost);
+            // For the "waiting for approval" screen: what a moderator will see this request as.
+            const identityFingerprintForUi: string = await ipcRenderer
+                .invoke("identity-get-public")
+                .then((r: { fingerprint: string } | null) => r?.fingerprint ?? "")
+                .catch(() => "");
             if (socket !== joiningSocket || !joiningSocket.connected) {
                 joinServerInFlight = false; // replaced or dropped meanwhile
                 return;
@@ -489,11 +595,29 @@ const api = {
             // Join the server — let the server decide the serverId
             joiningSocket.emit(
                 "USER_JOIN_SERVER",
-                { nickname, instanceId, password, avatar: avatarSelection, identity },
+                { nickname, instanceId, password, avatar: avatarSelection, identity, inviteCode },
                 (res) => {
                     joinServerInFlight = false;
+                    if (res.pending) {
+                        // A new identity on a server that approves newcomers (PRD 18.8): the
+                        // socket stays connected and is told when a moderator decides. A
+                        // reconnect while waiting simply lands here again.
+                        emit("approval-pending", { fingerprint: identityFingerprintForUi });
+                        return;
+                    }
                     if (res.success && res.serverId) {
-                        emit("connected", { serverId: res.serverId, instanceId });
+                        // From now on this server must not be silently downgraded to HTTP (PRD 18.3).
+                        if (address.scheme === "https") {
+                            void ipcRenderer.invoke("tls-remember-https", host, port ?? 443);
+                        }
+                        emit("connected", {
+                            serverId: res.serverId,
+                            // An older server doesn't send it: treat as "has access" (PRD 18.18).
+                            hasAccess: res.hasAccess !== false,
+                            instanceId,
+                            secure: address.scheme === "https",
+                            pinned: address.scheme === "https" && !!address.pinned,
+                        });
 
                         // If we were in a voice channel before this connect
                         // (i.e. this is a reconnect, not the first-ever
@@ -515,7 +639,9 @@ const api = {
                         measureLatencyAndClockOffset();
                     } else {
                         emit("error", {
-                            code: "JOIN_FAILED",
+                            // INVITE_REQUIRED / INVITE_INVALID / INVITE_THROTTLED (PRD 18.9)
+                            // tell the renderer to ask for a code; anything else is generic.
+                            code: res.errorCode ?? "JOIN_FAILED",
                             message: res.error ?? "Failed to join server",
                         });
                         // Tear down the transport-level socket so a
@@ -528,7 +654,27 @@ const api = {
                     }
                 },
             );
+        };
+        socket.on("connect", () => void joinServer());
+
+        // Member role removed / given back (PRD 18.18). Losing access also ended
+        // the voice session on the server; end the local media side too.
+        socket.on("ACCESS_CHANGED", (payload) => {
+            if (!payload.hasAccess) voiceService?.cleanup();
+            emit("access-changed", payload);
         });
+
+        socket.on("APPROVAL_GRANTED", () => {
+            emit("approval-granted", null);
+            void joinServer(); // now a normal join, which succeeds
+        });
+        socket.on("APPROVAL_REJECTED", () => {
+            emit("approval-rejected", null);
+            socket?.removeAllListeners();
+            socket?.disconnect();
+            socket = null;
+        });
+        socket.on("PENDING_APPROVALS_CHANGED", (payload) => emit("pending-approvals-changed", payload));
 
         socket.on("disconnect", (reason) => {
             latencyMs = -1;
@@ -1093,13 +1239,123 @@ const api = {
         });
     },
 
-    banUser(userId: string): Promise<{ success: boolean; error?: string }> {
+    /** `addressBan` (PRD 18.7) also bans the user's address or its range; the ack carries a `warning` when only the user could be banned. */
+    banUser(
+        userId: string,
+        addressBan: "none" | "exact" | "range" = "none",
+    ): Promise<{ success: boolean; error?: string; warning?: string; addressBanned?: string }> {
         return new Promise((resolve) => {
             if (!socket?.connected) {
                 resolve({ success: false, error: "Not connected" });
                 return;
             }
-            socket.emit("BAN_USER", { userId }, resolve);
+            socket.emit("BAN_USER", { userId, addressBan }, resolve);
+        });
+    },
+
+    getBannedAddresses(): Promise<{
+        success: boolean;
+        addresses?: { id: string; cidr: string; nickname: string | null; linkedUserId: string | null; createdAt: string }[];
+        error?: string;
+    }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.emit("GET_BANNED_ADDRESSES", resolve);
+        });
+    },
+
+    /** The approval queue (PRD 18.8; BAN_USER or ADMIN). */
+    getPendingApprovals(): Promise<{
+        success: boolean;
+        requests?: {
+            userId: string;
+            nickname: string;
+            fingerprint: string;
+            address: string | null;
+            host: string | null;
+            requestedAt: string;
+            lastSeenAt: string;
+            online: boolean;
+        }[];
+        error?: string;
+    }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.emit("GET_PENDING_APPROVALS", resolve);
+        });
+    },
+
+    approveUser(userId: string): Promise<{ success: boolean; error?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.emit("APPROVE_USER", { userId }, resolve);
+        });
+    },
+
+    rejectUser(
+        userId: string,
+        opts: { ban?: boolean; addressBan?: "none" | "exact" | "range" } = {},
+    ): Promise<{ success: boolean; error?: string; warning?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.emit("REJECT_USER", { userId, ...opts }, resolve);
+        });
+    },
+
+    /** Invite codes (PRD 18.9; BAN_USER or ADMIN). The code is in this response only. */
+    createInvite(opts: {
+        label?: string;
+        expiresInHours?: number | null;
+        maxUses?: number | null;
+    }): Promise<{ success: boolean; code?: string; invite?: IInvite; error?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.emit("CREATE_INVITE", opts, resolve);
+        });
+    },
+
+    getInvites(): Promise<{ success: boolean; invites?: IInvite[]; error?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.emit("GET_INVITES", resolve);
+        });
+    },
+
+    revokeInvite(id: string): Promise<{ success: boolean; error?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.emit("REVOKE_INVITE", { id }, resolve);
+        });
+    },
+
+    unbanAddress(id: string): Promise<{ success: boolean; error?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.emit("UNBAN_ADDRESS", { id }, resolve);
         });
     },
 
@@ -1225,10 +1481,68 @@ const api = {
 
     /** This install's identity key fingerprint, for Settings → About (PRD 17.12). */
     getIdentityFingerprint(): Promise<string> {
-        return ipcRenderer.invoke("identity-get-public").then((r: { fingerprint: string }) => r.fingerprint);
+        return ipcRenderer
+            .invoke("identity-get-public")
+            .then((r: { fingerprint: string } | null) => r?.fingerprint ?? "");
+    },
+
+    // ── Identity key at rest + backup (PRD 18.6) ─────────────────────────
+    // Everything here is a thin call into main, which owns the key and the
+    // file dialogs. Passphrases go in; fingerprints and statuses come out.
+    identity: {
+        getStatus(): Promise<
+            | { state: "ok"; storage: "encrypted" | "file" | "ephemeral"; fingerprint: string; canBackup: boolean }
+            | { state: "locked"; storage: "encrypted"; canBackup: boolean }
+        > {
+            return ipcRenderer.invoke("identity-get-status");
+        },
+        exportBackup(passphrase: string): Promise<{ ok: boolean; path?: string; canceled?: boolean; error?: string }> {
+            return ipcRenderer.invoke("identity-export", passphrase);
+        },
+        pickBackup(): Promise<{ ok: boolean; token?: string; fileName?: string; canceled?: boolean; error?: string }> {
+            return ipcRenderer.invoke("identity-import-pick");
+        },
+        decryptBackup(
+            token: string,
+            passphrase: string,
+        ): Promise<{
+            ok: boolean;
+            error?: string;
+            code?: string;
+            fingerprint?: string;
+            instanceId?: string;
+            createdAt?: string;
+            currentFingerprint?: string | null;
+            currentInstanceId?: string;
+        }> {
+            return ipcRenderer.invoke("identity-import-decrypt", token, passphrase);
+        },
+        applyBackup(token: string): Promise<{ ok: boolean; error?: string }> {
+            return ipcRenderer.invoke("identity-import-apply", token);
+        },
+        createNew(): Promise<{ ok: boolean; error?: string }> {
+            return ipcRenderer.invoke("identity-create-new");
+        },
     },
 
     /** ADMIN: forget a user's bound identity key (PRD 17.12). */
+    /** The identity log (PRD 18.4) — ADMIN only, newest first, paginated by `before`. */
+    getIdentityEvents(payload: {
+        userId?: string;
+        before?: string;
+        limit?: number;
+    }): Promise<{ success: boolean; events?: IIdentityEvent[]; hasMore?: boolean; error?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.timeout(10000).emit("GET_IDENTITY_EVENTS", payload, (err, res) => {
+                resolve(err ? { success: false, error: "The server didn't answer" } : res);
+            });
+        });
+    },
+
     resetIdentityKey(userId: string): Promise<{ success: boolean; error?: string }> {
         return new Promise((resolve) => {
             if (!socket?.connected) {
@@ -1318,7 +1632,20 @@ const api = {
 
     // ── Link Preview ─────────────────────────────────────────────────────
 
-    async fetchLinkPreview(url: string): Promise<{ title?: string; description?: string; image?: string; url?: string; domain?: string } | null> {
+    async fetchLinkPreview(url: string): Promise<{
+        kind?: "page" | "image";
+        title?: string;
+        description?: string;
+        image?: string;
+        video?: string;
+        videoType?: string;
+        url?: string;
+        domain?: string;
+        siteName?: string;
+        adult?: boolean;
+        mediaWidth?: number;
+        mediaHeight?: number;
+    } | null> {
         return ipcRenderer.invoke("fetch-link-preview", url);
     },
 
@@ -1684,6 +2011,14 @@ const api = {
         name?: string;
         maxMessageLength?: number;
         version?: string;
+        /** ADMIN callers only (PRD 18.4). */
+        requireSignedIdentity?: boolean;
+        requireSignedIdentityLockedByEnv?: boolean;
+        unprotectedActiveUsers?: number;
+        /** ADMIN callers only (PRD 18.5). */
+        authAllowedHosts?: string[];
+        authAllowedHostsLockedByEnv?: boolean;
+        observedAuthHosts?: { host: string; joins: number; lastSeen: string | null }[];
         error?: string;
     }> {
         return new Promise((resolve) => {
@@ -1696,7 +2031,15 @@ const api = {
     },
 
     updateServerSettings(
-        settings: { nudgeEnabled?: boolean; screenShareEnabled?: boolean; maxMessageLength?: number },
+        settings: {
+            nudgeEnabled?: boolean;
+            screenShareEnabled?: boolean;
+            maxMessageLength?: number;
+            requireSignedIdentity?: boolean;
+            authAllowedHosts?: string[];
+            requireApproval?: boolean;
+            requireInvite?: boolean;
+        },
     ): Promise<{ success: boolean; error?: string }> {
         return new Promise((resolve) => {
             if (!socket?.connected) {

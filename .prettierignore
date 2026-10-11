@@ -1,0 +1,9 @@
+# dist/, release/ and other build output are already skipped via .gitignore.
+package-lock.json
+**/*.tsbuildinfo
+apps/client/assets/
+apps/client/.release-vendor/
+packages/native-audio/prebuilds/
+packages/native-audio/target/
+# Historical records: keep them byte-for-byte as written.
+app-planning/archive/

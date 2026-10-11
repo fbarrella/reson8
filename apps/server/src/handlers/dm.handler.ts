@@ -34,6 +34,8 @@ import {
     releaseAttachmentFiles,
 } from "../services/attachment.service.js";
 import { DEFAULT_MAX_MESSAGE_LENGTH } from "../config/message.config.js";
+import { getUserPermissions } from "../services/permissions.service.js";
+import { RECIPIENT_NO_ACCESS_MESSAGE, hasServerAccess } from "../services/access.service.js";
 import { normalizeNewlines } from "../services/message-text.js";
 import { aggregateReactionRows, loadReactorNicknames } from "../services/reaction.service.js";
 import { parseHistoryQuery, trimExtra, windowHalves } from "../services/pagination.service.js";
@@ -114,6 +116,13 @@ export function registerDMHandlers(
                 });
                 if (!recipient) {
                     ack({ success: false, error: "Recipient not found" });
+                    return;
+                }
+
+                // Their DMs would pile up unread and unreachable (PRD 18.18).
+                const recipientPerms = await getUserPermissions(app.prisma, recipientId, socket.data.serverId);
+                if (!hasServerAccess(recipientPerms)) {
+                    ack({ success: false, error: RECIPIENT_NO_ACCESS_MESSAGE });
                     return;
                 }
 

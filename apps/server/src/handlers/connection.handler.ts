@@ -32,6 +32,28 @@ import {
     verifyAuthSignature,
 } from "../services/identity.service.js";
 import { adminKeyFingerprint, authAllowedHosts, requireSignedIdentity } from "../config/identity.config.js";
+import { recordIdentityEvent } from "../services/identity-events.service.js";
+import { normalizeAuthHost, observeAuthHost } from "../services/auth-hosts.service.js";
+import { normalizeIp } from "../services/address-ban.service.js";
+import { requireApproval } from "../config/approval.config.js";
+import { APPROVAL_MESSAGES, decideApprovalGate, pendingRoom } from "../services/approval.service.js";
+import { notifyPendingChanged, syncModeratorRoom } from "./approval.handler.js";
+import { requireInvite } from "../config/invite.config.js";
+import { getUserPermissions } from "../services/permissions.service.js";
+import { hasServerAccess, rolesToGrant } from "../services/access.service.js";
+import { membersRoom } from "../services/access-change.js";
+import {
+    INVITE_FAIL_WINDOW_SECONDS,
+    INVITE_MESSAGES,
+    claimInviteUse,
+    findUsableInviteId,
+    hashInviteCode,
+    isInviteThrottled,
+    normalizeInviteCode,
+} from "../services/invite.service.js";
+
+/** Thrown inside the user-creation transaction to roll the whole join back. */
+class InviteUnusableError extends Error {}
 import { issueViewerTicket, resolveViewerTicket, revokeViewerTickets } from "../services/viewer-ticket.service.js";
 
 type TypedIO = SocketIOServer<
@@ -265,10 +287,9 @@ export function registerConnectionHandlers(
         // guesswork — connection lifetime, transport, and the client's
         // address (an IP change between sockets = roaming network).
         const connectedAt = Date.now();
-        const clientAddress =
-            (socket.handshake.headers["cf-connecting-ip"] as string | undefined) ??
-            (socket.handshake.headers["x-forwarded-for"] as string | undefined) ??
-            socket.handshake.address;
+        // Resolved once in index.ts's io.use() with TRUST_PROXY rules (PRD 18.2):
+        // forwarded headers from an untrusted peer are ignored.
+        const clientAddress = socket.data.clientAddress ?? socket.handshake.address;
         app.log.info({ socketId: socket.id, address: clientAddress }, "Client connected");
 
         // ── PING_LATENCY — instant ack for client-side RTT + clock-offset
@@ -354,6 +375,14 @@ export function registerConnectionHandlers(
 
                 const parsedProof = parseIdentityProof(payload.identity);
                 if (!parsedProof.ok) {
+                    void recordIdentityEvent(app, {
+                        serverId,
+                        userId: instanceId,
+                        nickname: String(nickname ?? ""),
+                        kind: "REFUSED",
+                        reason: "verificationFailed",
+                        address: clientAddress,
+                    });
                     ack({ success: false, error: IDENTITY_MESSAGES.verificationFailed });
                     return;
                 }
@@ -384,10 +413,161 @@ export function registerConnectionHandlers(
                     adminFingerprint: adminKeyFingerprint(),
                 });
                 const identityLog = { userId: instanceId, fingerprint, address: clientAddress, host: proofIn?.host };
+                // The identity log (PRD 18.4): fire-and-forget, never delays or changes a join.
+                const logIdentityEvent = (kind: "BOUND" | "REFUSED", reason?: string): void => {
+                    void recordIdentityEvent(app, {
+                        serverId,
+                        userId: instanceId,
+                        nickname: String(nickname ?? ""),
+                        kind,
+                        reason,
+                        fingerprint,
+                        address: clientAddress,
+                        host: proofIn?.host ?? null,
+                    });
+                };
                 if (decision.action === "refuse") {
+                    logIdentityEvent("REFUSED", decision.reason);
                     app.log.warn({ ...identityLog, reason: decision.reason }, "Join refused (identity)");
                     ack({ success: false, error: IDENTITY_MESSAGES[decision.reason] });
                     return;
+                }
+                // Banned address (PRD 18.7). Decided here, after the identity decision,
+                // because the designated admin must always be able to get in to undo a
+                // mistaken range ban: that exemption applies only when the identity
+                // check itself accepted them AS the admin (right id AND, with
+                // ADMIN_KEY_FINGERPRINT set, the right key).
+                if (socket.data.addressBanned && !(isAdminId && decision.action === "accept" && decision.grantAdmin)) {
+                    app.log.warn({ userId: instanceId, address: clientAddress }, "Join refused (banned address)");
+                    ack({ success: false, error: "You are banned from this server" });
+                    return;
+                }
+
+                // ── Invite gate (PRD 18.9) ─────────────────────────────────────
+                // A NEW identity needs a valid invite code while the switch is on.
+                // Here the code is only CHECKED; the use is consumed in the same
+                // transaction that creates the user (or, with approval on, when a
+                // moderator approves) — so a failed join never costs a use. A
+                // person already waiting for approval got in with a valid code
+                // once and keeps their place without presenting it again. Every
+                // invalid state gets one message, so codes can't be probed.
+                let invitedBy: string | null = null;
+                if (requireInvite() && !existingUser && !(isAdminId && decision.action === "accept" && decision.grantAdmin)) {
+                    const alreadyQueued =
+                        requireApproval() &&
+                        !!(await app.prisma.pendingApproval.findUnique({
+                            where: { serverId_userId: { serverId, userId: instanceId } },
+                            select: { id: true },
+                        }));
+                    if (!alreadyQueued) {
+                        const failKey = `invite-fail:${serverId}:${clientAddress}`;
+                        const failures = Number((await app.redis.get(failKey)) ?? 0);
+                        if (isInviteThrottled(failures)) {
+                            app.log.warn({ userId: instanceId, address: clientAddress }, "Join refused (invite throttled)");
+                            ack({ success: false, error: INVITE_MESSAGES.throttled, errorCode: "INVITE_THROTTLED" });
+                            return;
+                        }
+                        const rawCode = typeof payload.inviteCode === "string" ? payload.inviteCode.trim() : "";
+                        if (rawCode.length === 0) {
+                            ack({ success: false, error: INVITE_MESSAGES.required, errorCode: "INVITE_REQUIRED" });
+                            return;
+                        }
+                        const normalized = normalizeInviteCode(rawCode);
+                        const found = normalized
+                            ? await findUsableInviteId(app.prisma, serverId, hashInviteCode(normalized))
+                            : null;
+                        if (!found) {
+                            const count = await app.redis.incr(failKey);
+                            if (count === 1) await app.redis.expire(failKey, INVITE_FAIL_WINDOW_SECONDS);
+                            app.log.warn({ userId: instanceId, address: clientAddress }, "Join refused (invalid invite code)");
+                            ack({ success: false, error: INVITE_MESSAGES.invalid, errorCode: "INVITE_INVALID" });
+                            return;
+                        }
+                        invitedBy = found;
+                    }
+                }
+
+                // ── Approval gate (PRD 18.8) ───────────────────────────────────
+                // When the server approves new users, a brand-new identity waits for
+                // a moderator. Decided here — after every other check passed and
+                // BEFORE anything is written — because the person is NOT a half-joined
+                // user: no `users` row, no presence, no roles. Their socket stays
+                // connected with `pendingUserId` set and `userId`/`serverId` unset, and
+                // every other handler is gated on those, so it can do nothing.
+                if (
+                    requireApproval() &&
+                    !existingUser &&
+                    !(isAdminId && decision.action === "accept" && decision.grantAdmin)
+                ) {
+                    const requestKey = { serverId_userId: { serverId, userId: instanceId } };
+                    const existingRequest = await app.prisma.pendingApproval.findUnique({
+                        where: requestKey,
+                        select: { publicKey: true },
+                    });
+                    const [pendingTotal, pendingFromAddress] = await Promise.all([
+                        app.prisma.pendingApproval.count({ where: { serverId } }),
+                        app.prisma.pendingApproval.count({
+                            where: { serverId, address: clientAddress, NOT: { userId: instanceId } },
+                        }),
+                    ]);
+                    const gate = decideApprovalGate({
+                        requireApproval: true,
+                        isNewUser: true,
+                        isDesignatedAdmin: false,
+                        hasSignedProof: !!proofIn,
+                        alreadyPending: !!existingRequest,
+                        pendingTotal,
+                        pendingFromAddress,
+                    });
+                    if (gate.action === "refuse") {
+                        app.log.warn({ userId: instanceId, address: clientAddress, reason: gate.reason }, "Join refused (approval)");
+                        ack({ success: false, error: APPROVAL_MESSAGES[gate.reason] });
+                        return;
+                    }
+                    if (gate.action === "queue" && proofIn) {
+                        // Someone else already asked as this id, with another key: the
+                        // approval would bind the first key, so a second one is refused.
+                        if (existingRequest && existingRequest.publicKey !== proofIn.publicKey) {
+                            logIdentityEvent("REFUSED", "otherDevice");
+                            ack({ success: false, error: IDENTITY_MESSAGES.otherDevice });
+                            return;
+                        }
+                        await app.prisma.pendingApproval.upsert({
+                            where: requestKey,
+                            update: {
+                                nickname: String(nickname ?? "").slice(0, 64),
+                                address: clientAddress,
+                                host: proofIn.host,
+                                lastSeenAt: new Date(),
+                            },
+                            create: {
+                                inviteId: invitedBy,
+                                serverId,
+                                userId: instanceId,
+                                nickname: String(nickname ?? "").slice(0, 64),
+                                publicKey: proofIn.publicKey,
+                                fingerprint: fingerprint ?? keyFingerprint(proofIn.publicKey),
+                                address: clientAddress,
+                                host: proofIn.host,
+                            },
+                        });
+                        await socket.join(pendingRoom(instanceId));
+                        socket.data.pendingUserId = instanceId;
+                        if (!existingRequest) {
+                            app.log.info({ userId: instanceId, address: clientAddress }, "New user is waiting for approval");
+                            void notifyPendingChanged(app, io, serverId, true);
+                        }
+                        ack({ success: false, pending: true, error: "Waiting for approval" });
+                        return;
+                    }
+                }
+
+                // Which name this signed join was addressed to (PRD 18.5): remembered so
+                // an admin can pick the names people really use, and so the allowed-names
+                // guard knows what THIS admin's own session was signed for.
+                if (proofIn) {
+                    socket.data.authHost = normalizeAuthHost(proofIn.host);
+                    void observeAuthHost(app.redis, serverId, proofIn.host);
                 }
                 if (decision.bind && existingUser && proofIn) {
                     // Atomic compare-and-set: only binds if nothing is bound yet,
@@ -399,12 +579,20 @@ export function registerConnectionHandlers(
                     if (bound.count === 0) {
                         const now = await app.prisma.user.findUnique({ where: { id: instanceId }, select: { publicKey: true } });
                         if (now?.publicKey !== proofIn.publicKey) {
+                            logIdentityEvent("REFUSED", "otherDevice");
                             app.log.warn({ ...identityLog, reason: "otherDevice" }, "Join refused (identity bind race lost)");
                             ack({ success: false, error: IDENTITY_MESSAGES.otherDevice });
                             return;
                         }
                     }
+                    logIdentityEvent("BOUND");
                     app.log.info(identityLog, "Identity key bound");
+                }
+
+                // No longer waiting (PRD 18.8): this socket may have been pending until just now.
+                if (socket.data.pendingUserId) {
+                    void socket.leave(pendingRoom(socket.data.pendingUserId));
+                    socket.data.pendingUserId = undefined;
                 }
 
                 // Use the persistent instance ID as userId
@@ -441,37 +629,71 @@ export function registerConnectionHandlers(
                     decision.bind && !existingUser && proofIn
                         ? { publicKey: proofIn.publicKey, publicKeyBoundAt: new Date() }
                         : {};
-                const userRow = await app.prisma.user.upsert({
-                    where: { id: instanceId },
-                    update: { nickname, ...avatarData },
-                    create: {
-                        id: instanceId,
-                        username: instanceId,
-                        nickname,
-                        password: "instance-auth", // identity is the bound key (PRD 17.12), not a password
-                        ...avatarData,
-                        ...bindOnCreate,
-                    },
-                    select: { publicKey: true },
-                });
+                // Where they joined from, for an offline "also ban their address" (PRD 18.7).
+                const lastAddressData = normalizeIp(clientAddress)
+                    ? { lastAddress: normalizeIp(clientAddress), lastAddressAt: new Date() }
+                    : {};
+                const upsertUser = (db: Pick<typeof app.prisma, "user">) =>
+                    db.user.upsert({
+                        where: { id: instanceId },
+                        update: { nickname, ...avatarData, ...lastAddressData },
+                        create: {
+                            id: instanceId,
+                            username: instanceId,
+                            nickname,
+                            password: "instance-auth", // identity is the bound key (PRD 17.12), not a password
+                            ...avatarData,
+                            ...lastAddressData,
+                            ...bindOnCreate,
+                        },
+                        select: { publicKey: true },
+                    });
+                let userRow: { publicKey: string | null };
+                if (invitedBy) {
+                    // A new user coming in with an invite (PRD 18.9): the user and the
+                    // consumed use are ONE transaction, so a failed join costs nothing
+                    // and two joins racing for the last use cannot both win.
+                    const inviteId = invitedBy;
+                    try {
+                        userRow = await app.prisma.$transaction(async (tx) => {
+                            const row = await upsertUser(tx);
+                            // Lost the key race: no use is consumed; handled right below.
+                            if (decision.bind && proofIn && row.publicKey !== proofIn.publicKey) return row;
+                            if (!(await claimInviteUse(tx, serverId, inviteId))) throw new InviteUnusableError();
+                            await tx.inviteUse.create({ data: { inviteId, userId: instanceId } });
+                            return row;
+                        });
+                    } catch (err) {
+                        if (err instanceof InviteUnusableError) {
+                            // Used up / revoked / expired between the check and now.
+                            ack({ success: false, error: INVITE_MESSAGES.invalid, errorCode: "INVITE_INVALID" });
+                            return;
+                        }
+                        throw err;
+                    }
+                } else {
+                    userRow = await upsertUser(app.prisma);
+                }
                 if (decision.bind && !existingUser && proofIn) {
                     if (userRow.publicKey !== proofIn.publicKey) {
                         // Another first join created the row with its own key in between.
+                        logIdentityEvent("REFUSED", "otherDevice");
                         app.log.warn({ ...identityLog, reason: "otherDevice" }, "Join refused (identity create race lost)");
                         ack({ success: false, error: IDENTITY_MESSAGES.otherDevice });
                         return;
                     }
+                    logIdentityEvent("BOUND");
                     app.log.info(identityLog, "Identity key bound (new user)");
                 }
 
-                // Assign the default Member role
-                const rolesToAssign = ["role-default"];
-
-                // The designated server admin (ADMIN_INSTANCE_ID) — only with the
-                // right key when ADMIN_KEY_FINGERPRINT is set (PRD 17.12).
-                if (decision.grantAdmin) {
-                    rolesToAssign.push("role-admin");
-                }
+                // The Member role is given when the user is CREATED, not on every
+                // join (PRD 18.18): re-granting it each time made removing it last
+                // only until the next connect. Existing users already hold it (the
+                // old per-join upsert guaranteed that), so nobody loses access when
+                // this ships. The designated server admin (ADMIN_INSTANCE_ID) keeps
+                // their per-join grant — only with the right key when
+                // ADMIN_KEY_FINGERPRINT is set (PRD 17.12).
+                const rolesToAssign = rolesToGrant({ isNewUser: !existingUser, grantAdmin: decision.grantAdmin });
 
                 for (const roleId of rolesToAssign) {
                     await app.prisma.userRole.upsert({
@@ -488,6 +710,15 @@ export function registerConnectionHandlers(
                         },
                     });
                 }
+
+                // Membership (PRD 18.17): User Management lists members, not just
+                // role holders, so a user whose last role is removed stays listed.
+                // `joinedAt` keeps the first join (the update branch is empty).
+                await app.prisma.userServer.upsert({
+                    where: { userId_serverId: { userId: instanceId, serverId } },
+                    update: {},
+                    create: { userId: instanceId, serverId },
+                });
 
                 // Cancel any pending deferred-leave from a recent disconnect —
                 // this instance reconnected within the grace period, so it
@@ -506,8 +737,17 @@ export function registerConnectionHandlers(
                     await supersedeSocket(displacedSocketId, instanceId);
                 }
 
+                // Access to channels, DMs and voice (PRD 18.18): computed once here
+                // and kept current by applyAccessChange() when roles change.
+                socket.data.hasAccess = hasServerAccess(await getUserPermissions(app.prisma, instanceId, serverId));
+
                 // Join the Socket.io room for this server
                 await socket.join(`server:${serverId}`);
+                // Content events (messages, edits, reactions, pins) go to this room
+                // only — a user without access must not receive them live either.
+                if (socket.data.hasAccess) await socket.join(membersRoom(serverId));
+                // Moderators (BAN_USER/ADMIN) are told when the approval queue changes (PRD 18.8).
+                await syncModeratorRoom(app, io, instanceId, serverId).catch(() => {});
 
                 // Register presence in Redis
                 await presence.joinServer(instanceId, serverId, nickname);
@@ -590,7 +830,7 @@ export function registerConnectionHandlers(
 
                 socket.emit("CHANNEL_TREE_UPDATE", { serverId, tree });
 
-                ack({ success: true, serverId });
+                ack({ success: true, serverId, hasAccess: socket.data.hasAccess });
                 app.log.info(
                     { socketId: socket.id, nickname, serverId, instanceId },
                     "User joined server",
@@ -643,6 +883,9 @@ export function registerConnectionHandlers(
                 socket.data.userId = userId;
                 socket.data.nickname = "";
                 socket.data.currentChannelId = null;
+                // The ticket/session this socket authenticated with belongs to a
+                // member; losing access disconnects the viewer (PRD 18.18).
+                socket.data.hasAccess = true;
                 ack({ success: true });
                 app.log.info(
                     { socketId: socket.id, role: "viewer", userId, viaTicket: payload?.ticket !== undefined },

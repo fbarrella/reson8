@@ -20,15 +20,26 @@ export interface FixerTarget {
     /** The real network's name, shown as the card's site name instead of the
      *  fixer's own og:site_name (which fixers fill with stats and branding). */
     network: string;
+    /** The User-Agent to ask this fixer with (PRD 18.14): the default
+     *  `FIXER_USER_AGENT`, except where a fixer is known to hide media from it. */
+    userAgent: string;
 }
 
 interface FixerRule {
     network: string;
     hosts: readonly string[];
     fixerHost: string;
+    /** Overrides `FIXER_USER_AGENT` for this fixer only (PRD 18.14). */
+    userAgent?: string;
     /** Rewrites the path when a plain host swap isn't enough. */
     path?: (pathname: string) => string;
 }
+
+/**
+ * The plain crawler User-Agent every non-fixer request uses (one definition:
+ * the fetch module imports it from here).
+ */
+export const PLAIN_CRAWLER_USER_AGENT = "Mozilla/5.0 (compatible; Reson8Bot/1.0; +https://github.com/fbarrella/reson8)";
 
 const RULES: readonly FixerRule[] = [
     // Verified 07/10/2026: /watch?v=, /<id> (youtu.be form) and /shorts/<id> all work.
@@ -37,6 +48,10 @@ const RULES: readonly FixerRule[] = [
         network: "X",
         hosts: ["twitter.com", "www.twitter.com", "mobile.twitter.com", "x.com", "www.x.com", "mobile.x.com"],
         fixerHost: "fxtwitter.com",
+        // fxtwitter treats the Discordbot token specially and, for a video post,
+        // answers WITHOUT og:video/og:image (only an ActivityPub link) — verified
+        // live 10/10/2026: the plain crawler UA gets a direct video.twimg.com MP4.
+        userAgent: PLAIN_CRAWLER_USER_AGENT,
     },
     { network: "Instagram", hosts: ["instagram.com", "www.instagram.com"], fixerHost: "oginstagram.com" },
     {
@@ -73,16 +88,25 @@ export function toFixerUrl(original: string): FixerTarget | null {
 
     const pathname = rule.path ? rule.path(url.pathname) : url.pathname;
     if (pathname === "/" && !url.search) return null; // a bare homepage has nothing to fix
-    return { fixerUrl: `https://${rule.fixerHost}${pathname}${url.search}`, fixerHost: rule.fixerHost, network: rule.network };
+    return {
+        fixerUrl: `https://${rule.fixerHost}${pathname}${url.search}`,
+        fixerHost: rule.fixerHost,
+        network: rule.network,
+        userAgent: rule.userAgent ?? FIXER_USER_AGENT,
+    };
 }
 
 /**
- * The User-Agent for fixer requests. The services only serve embed metadata
- * to recognized link-preview crawlers: verified 07/10/2026 that vxreddit
- * redirected our plain `Reson8Bot` UA to reddit.com, and served metadata once
- * the UA also carried the `Discordbot/2.0` token (fxtwitter accepted both; a
- * normal browser UA makes fxtwitter redirect to x.com). Used for fixer hosts
- * only — every other request keeps the existing UA.
+ * The DEFAULT User-Agent for fixer requests. The services only serve embed
+ * metadata to recognized link-preview crawlers: verified 07/10/2026 that
+ * vxreddit redirected our plain `Reson8Bot` UA to reddit.com, and served
+ * metadata once the UA also carried the `Discordbot/2.0` token (a normal
+ * browser UA makes fxtwitter redirect to x.com). Used for fixer hosts only —
+ * every other request keeps the plain UA. fxtwitter is the exception
+ * (PRD 18.14): it hides a video post's media from Discordbot, so its rule
+ * carries `PLAIN_CRAWLER_USER_AGENT`. Re-verified 10/10/2026: Twitch's fixer
+ * REQUIRES Discordbot (the plain UA is redirected to twitch.tv); YouTube's and
+ * Bluesky's answer both alike.
  */
 export const FIXER_USER_AGENT =
     "Mozilla/5.0 (compatible; Reson8Bot/1.0; Discordbot/2.0; +https://github.com/fbarrella/reson8)";

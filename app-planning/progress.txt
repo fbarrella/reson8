@@ -22,8 +22,9 @@ Monorepo structure:
   packages/shared-types/    — Shared DTOs, enums, and Socket.io event types
 
 For build commands, environment variables, ports, and architecture details,
-see the root CLAUDE.md (and apps/client/CLAUDE.md, apps/server/CLAUDE.md) —
-not duplicated here to avoid drift between docs.
+see the root AGENTS.md (and apps/client/AGENTS.md, apps/server/AGENTS.md; the
+CLAUDE.md files next to them just import these) — not duplicated here to
+avoid drift between docs.
 
 Full unabridged entry-by-entry history (every bug's root cause, every file
 touched, every verification step) for everything summarized below lives in
@@ -640,10 +641,88 @@ Testing lessons worth keeping:
 
 
 ================================================================================
+  PHASE 18 SUMMARY — COMPLETE ✅  (current version: 2.7.0)
+================================================================================
+
+PHASE 18 — Encrypted Connections, Hardened Identity, Admission Control &
+Chat/Preview Polish (PRD 18.x — 19 items from app-planning/nextsteps.txt (the
+open risks carried out of Phase 17) plus user requests; reached v2.7.0. DB
+migrations: identity_events + servers.requireSignedIdentity,
+servers.authAllowedHosts, banned_addresses + users.lastAddress,
+pending_approvals + servers.requireApproval, invites/invite_uses +
+servers.requireInvite, and a membership backfill.)
+  - Tooling (18.1): a real ESLint 10 flat config + Prettier; `npm run lint`
+    exits 0 (the old script referenced a package that was never installed).
+  - Encryption (18.2-18.3): server-side TLS (cert/key env with hot reload) and
+    a reverse-proxy recipe; TRUST_PROXY with a strict address-resolution rule
+    (forwarded headers count only from listed proxies). The client connects
+    HTTPS-first: it probes, applies a pure scheme-decision table, shows the
+    fingerprint for unknown certificates and PINS trusted self-signed ones
+    (per host, main process only); a changed certificate is refused with no
+    one-click override; a server ever reached over HTTPS is never silently
+    downgraded; a lock/"Not encrypted" indicator. Two TLS stacks (Node `ws`
+    for Socket.io, Chromium for media/uploads) both honor the pin.
+  - Identity hardening (18.4-18.6): an ADMIN-only identity log (binds, resets,
+    refusals; de-duplicated, capped, pruned) and a "Require signed identity"
+    switch in Settings; allowed connection names managed in Settings (with a
+    lock-out guard and a CLI recovery); the key encrypted at rest (OS
+    keychain where reliable, never silently minting a replacement) with a
+    passphrase-protected backup/restore (scrypt + AES-256-GCM).
+  - Admission and moderation (18.7-18.9, 18.17-18.18): opt-in address / range
+    bans on top of identity bans (canonical CIDRs, private-address guard,
+    designated admin exempt); "Approve new users" (a pending identity is NOT
+    a half-joined user; limits; approve / reject / reject-and-ban); invite
+    codes (12-char Crockford, hashed, shown once; the use is consumed in the
+    same transaction that creates the user or on approval; throttled);
+    role-less members stay listed (membership table + backfill); removing
+    Member now genuinely restricts (one central access gate, content events
+    on a members room, live ACCESS_CHANGED, quiet voice teardown).
+  - Link previews (18.10-18.12, 18.14, 18.19): bounded, private-network-safe
+    fetching (one deadline, manual re-validated redirects, head-only reads,
+    guarded DNS lookup, in-memory locked-down hidden window, bounded TTL
+    caches, a "Show link previews" switch, direct image cards); blurred
+    previews in NSFW channels and for site-marked adult content; a scroll
+    keeper so the chat stays put while previews/images load; X videos work
+    again (a per-fixer User-Agent); videos go fullscreen and YouTube seeks
+    (a narrow range-normalizing media proxy); preview images open the
+    zoom-only viewer.
+  - Chat polish (18.13, 18.15, 18.16): unread dot and "See more" for DM tabs
+    (read only when the tab is active in a focused window); the Category
+    badge on every parent; a centred About description.
+
+Security findings made by the live event fuzz (18.8), both pre-existing:
+  - Any connected socket could crash the whole server by emitting an event
+    without a callback (an unhandled `ack(...)` on undefined), and several
+    handlers answered sockets that had never signed in. Fixed centrally by a
+    default-deny packet gate (services/packet-guard.ts), which later also
+    carried the access rule.
+
+Testing lessons worth keeping:
+  - An event fuzz against the real server (every event, three payload shapes,
+    on a socket that is allowed to do nothing) found a crash and unauthenticated
+    reads that typechecking and unit tests could not.
+  - Reproduce first, again: 18.12's instrumented run showed which of the PRD's
+    hypotheses fired (two did, one didn't) and 18.15's showed the report had
+    the badge the wrong way round.
+  - A correction applied one frame late is visible: scroll fixes belong in the
+    ResizeObserver callback (before paint), not a following rAF.
+  - Probe the request that matters: the Invidious host answered `bytes=0-0`
+    correctly and only misbehaved for the open-ended request.
+  - Stale infrastructure masquerades as product bugs (a server from an
+    aborted run still bound to the port against a recreated database); check
+    who owns the port first.
+  - The renderer's CSP also stops the test harness: test a custom protocol's
+    status codes from the main process (`--inspect`).
+  - Close-out: bumped to 2.7.0, release notes with the upgrade guidance, the
+    AGENTS.md files and README updated, the PRD archived.
+
+
+================================================================================
   ONGOING LOG — new entries go below this line
 ================================================================================
 
-Use `/log-progress` (see .claude/commands/log-progress.md) to append entries
+Use `/log-progress` in Claude Code, or follow .claude/commands/log-progress.md
+by hand in any other agent, to append entries
 here in the established format:
 
 --- Entry: DD/MM/YYYY ---

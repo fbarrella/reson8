@@ -5,7 +5,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy"
-    content="default-src 'self'; script-src 'self' blob:; connect-src 'self' file: ws: wss: http: https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; media-src 'self' blob: http: https:; img-src 'self' blob: http: https: data:; frame-src https:;">
+    content="default-src 'self'; script-src 'self' blob:; connect-src 'self' file: ws: wss: http: https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; media-src 'self' blob: http: https: reson8-media:; img-src 'self' blob: http: https: data:; frame-src https:;">
   <title>Reson8</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -257,7 +257,7 @@
        makes that explicit instead of its join affordance just silently
        disappearing (PRD 14.6). Same outlined-badge shape as .nsfw-badge,
        muted rather than red since it's informational, not a warning. */
-    .category-voice-badge {
+    .category-badge {
       display: inline-flex;
       align-items: center;
       font-size: 9px;
@@ -1525,8 +1525,53 @@
       display: block;
     }
 
+    /* A link that is itself an image (PRD 18.10). */
+    .link-preview-card.lpc-direct { max-width: 420px; }
+    .lpc-direct-image { max-height: 300px; object-fit: contain; cursor: zoom-in; background: var(--bg-input); }
+
+    /* Blurred previews (PRD 18.11). The wrap/overlay always exist; these rules decide
+       whether the blur is active: a reason applies (NSFW tab / site-marked adult) AND
+       its switch is on AND the card hasn't been revealed. */
+    .lpc-blur-wrap { position: relative; overflow: hidden; }
+    .lpc-blur-overlay {
+      display: none;
+      position: absolute;
+      inset: 0;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 10px;
+      background: rgba(0, 0, 0, 0.45);
+      color: #fff;
+      text-align: center;
+      font-size: 11px;
+      font-weight: 500;
+      cursor: pointer;
+      z-index: 2;
+    }
+    .lpc-blur-label-adult { display: none; }
+    .lpc-adult .lpc-blur-label-adult { display: inline; }
+    .lpc-adult .lpc-blur-label-nsfw { display: none; }
+
+    body:not(.lp-nsfw-blur-off) .tab-nsfw .lpc-blur-wrap:not(.revealed) > :first-child,
+    body:not(.lp-adult-blur-off) .lpc-adult .lpc-blur-wrap:not(.revealed) > :first-child {
+      filter: blur(20px);
+      transform: scale(1.05); /* hides blurred edge fringing */
+      pointer-events: none;   /* a blurred video's controls stay unusable until revealed */
+    }
+
+    body:not(.lp-nsfw-blur-off) .tab-nsfw .lpc-blur-wrap:not(.revealed) > .lpc-blur-overlay,
+    body:not(.lp-adult-blur-off) .lpc-adult .lpc-blur-wrap:not(.revealed) > .lpc-blur-overlay {
+      display: flex;
+    }
+
+    /* "Show link previews" off (PRD 18.10): cards already rendered disappear live. */
+    body.link-previews-off .link-preview-card { display: none; }
+
     .lpc-video {
       width: 100%;
+      aspect-ratio: 16 / 9; /* a known box before the first frame (PRD 18.12); an inline style overrides it */
       max-height: 300px;
       display: block;
       background: #000;
@@ -2279,6 +2324,101 @@
     .status-latency.warn { color: #f0ad4e; }
     .status-latency.bad { color: var(--danger); }
 
+    /* ── Encrypted connections (PRD 18.3) ──────────────────────────────── */
+    .conn-security {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      margin-left: 8px;
+      font-size: 10px;
+      color: var(--text-muted);
+      cursor: default;
+      vertical-align: middle;
+    }
+
+    .conn-security[hidden] { display: none; }
+    .conn-security.secure { color: var(--success); }
+    .conn-security.insecure { color: var(--warning); }
+
+    #tls-warning-banner {
+      display: none;
+      align-items: center;
+      gap: 10px;
+      padding: 6px 12px;
+      background: rgba(255, 167, 38, 0.12);
+      border-bottom: 1px solid var(--warning);
+      color: var(--text-primary);
+      font-size: 12px;
+      flex-shrink: 0;
+    }
+
+    #tls-warning-banner.visible { display: flex; }
+    #tls-warning-banner .tls-warning-text { flex: 1; min-width: 0; }
+
+    #tls-warning-banner button {
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      color: var(--text-secondary);
+      cursor: pointer;
+      font-size: 11px;
+      padding: 3px 8px;
+    }
+
+    #tls-warning-banner button:hover { color: var(--text-primary); border-color: var(--text-muted); }
+
+    .tls-fingerprint {
+      display: block;
+      padding: 8px 10px;
+      margin: 8px 0;
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      font-family: monospace;
+      font-size: 12px;
+      line-height: 1.5;
+      word-break: break-all;
+      user-select: all;
+    }
+
+    .tls-detail-grid {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 4px 12px;
+      margin: 10px 0;
+      font-size: 12px;
+    }
+
+    .tls-detail-grid dt { color: var(--text-muted); }
+    .tls-detail-grid dd { margin: 0; word-break: break-word; color: var(--text-primary); }
+
+    #tls-trust-modal .profile-hint { margin: 10px 0 16px; }
+
+    .tls-modal-warning {
+      margin: 10px 0 0;
+      padding: 8px 10px;
+      border-left: 3px solid var(--danger);
+      background: rgba(239, 83, 80, 0.08);
+      font-size: 12px;
+      color: var(--text-primary);
+    }
+
+    .tls-trusted-empty,
+    .tls-trusted-row {
+      padding: 8px 10px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--bg-input);
+      font-size: 12px;
+      margin-bottom: 6px;
+    }
+
+    .tls-trusted-empty { color: var(--text-muted); }
+    .tls-trusted-row { display: flex; align-items: center; gap: 10px; }
+    .tls-trusted-row .tls-trusted-info { flex: 1; min-width: 0; }
+    .tls-trusted-row .tls-trusted-host { font-weight: 600; word-break: break-all; }
+    .tls-trusted-row .tls-trusted-meta { color: var(--text-muted); font-size: 11px; word-break: break-all; }
+
     #status-instance-area {
       display: flex;
       align-items: center;
@@ -2322,6 +2462,14 @@
     #pin-replace-confirm-modal,
     #screen-share-modal,
     #watch-share-confirm-modal,
+    #tls-trust-modal,
+    #tls-changed-modal,
+    #identity-export-modal,
+    #identity-import-modal,
+    #identity-locked-modal,
+    #ban-user-modal,
+    #invite-create-modal,
+    #invite-code-modal,
     #stream-name-modal {
       display: none;
       position: fixed;
@@ -2352,8 +2500,27 @@
     #pin-replace-confirm-modal.visible,
     #screen-share-modal.visible,
     #watch-share-confirm-modal.visible,
+    #tls-trust-modal.visible,
+    #tls-changed-modal.visible,
+    #identity-export-modal.visible,
+    #identity-import-modal.visible,
+    #identity-locked-modal.visible,
+    #ban-user-modal.visible,
+    #invite-create-modal.visible,
+    #invite-code-modal.visible,
     #stream-name-modal.visible {
       display: flex;
+    }
+
+    /* (After the modal block above, or the base rule wins.) These open FROM the Settings modal (same z-index, later in the DOM), so
+       they must sit above it or they open invisibly behind it. */
+    #identity-export-modal,
+    #identity-import-modal,
+    #identity-locked-modal,
+    #invite-create-modal,
+    #invite-code-modal,
+    #ban-user-modal {
+      z-index: 110;
     }
 
     #whats-new-modal .whats-new-body {
@@ -2671,6 +2838,36 @@
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+    }
+
+    /* A member without CONNECT/ADMIN: connected but restricted (PRD 18.18). */
+    .user-no-access-badge {
+      display: inline-block;
+      background: rgba(255, 167, 38, 0.18);
+      color: var(--warning);
+      border: 1px solid var(--warning);
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: 0.3px;
+      padding: 0 5px;
+      border-radius: 4px;
+      margin-left: 6px;
+      vertical-align: middle;
+    }
+
+    /* A member who holds no roles (PRD 18.17) — muted, unlike BANNED. */
+    .user-no-roles-badge {
+      display: inline-block;
+      background: var(--bg-secondary);
+      color: var(--text-muted);
+      border: 1px solid var(--border);
+      font-size: 9px;
+      font-weight: 600;
+      letter-spacing: 0.3px;
+      padding: 0 5px;
+      border-radius: 4px;
+      margin-left: 6px;
+      vertical-align: middle;
     }
 
     .user-banned-badge {
@@ -3522,6 +3719,43 @@
       gap: 8px;
     }
 
+    /* ── Identity storage, backup and restore (PRD 18.6) ────────────────── */
+    .identity-row-storage {
+      margin-top: 8px;
+      font-size: 11px;
+      color: var(--text-secondary);
+    }
+
+    .identity-row-storage.warn { color: var(--warning); }
+
+    .identity-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .identity-actions .btn { white-space: nowrap; }
+
+    .identity-modal-error {
+      min-height: 16px;
+      margin: -4px 0 8px;
+      font-size: 11px;
+      color: var(--danger);
+    }
+
+    .identity-compare {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 6px 12px;
+      margin: 10px 0;
+      font-size: 12px;
+    }
+
+    .identity-compare dt { color: var(--text-muted); }
+    .identity-compare dd { margin: 0; word-break: break-all; color: var(--text-primary); }
+    .identity-compare code { font-size: 11px; }
+
     .identity-row-value code {
       flex: 1;
       min-width: 0;
@@ -3554,6 +3788,12 @@
       cursor: pointer;
     }
 
+    .btn-reset-key.btn-icon {
+      padding: 4px 6px;
+      display: inline-flex;
+      align-items: center;
+    }
+
     .btn-reset-key:hover {
       border-color: var(--warning);
       color: var(--text-primary);
@@ -3564,6 +3804,396 @@
       background: rgba(239, 83, 80, 0.15);
       color: var(--text-primary);
     }
+
+    /* ── Identity log (PRD 18.4) ───────────────────────────────────────── */
+    .identity-log-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 10px;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .identity-log-bar .btn,
+    .identity-log-head .btn { white-space: nowrap; flex-shrink: 0; }
+
+    .identity-log-head {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 10px;
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+
+    .identity-log-head .identity-log-filter { flex: 1; min-width: 0; }
+
+    .identity-log-row {
+      display: grid;
+      grid-template-columns: 92px 1fr auto;
+      gap: 4px 12px;
+      padding: 8px 10px;
+      margin-bottom: 6px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--bg-input);
+      font-size: 12px;
+    }
+
+    .identity-log-kind {
+      align-self: start;
+      justify-self: start;
+      padding: 1px 6px;
+      border-radius: 3px;
+      border: 1px solid currentColor;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.3px;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+
+    .identity-log-kind.bound { color: var(--success); }
+    .identity-log-kind.reset { color: var(--accent); }
+    .identity-log-kind.refused { color: var(--danger); }
+
+    .identity-log-who { font-weight: 600; word-break: break-word; }
+    .identity-log-who .identity-log-now { font-weight: 400; color: var(--text-muted); }
+
+    .identity-log-privileged {
+      margin-left: 6px;
+      padding: 0 5px;
+      border-radius: 3px;
+      border: 1px solid var(--warning);
+      color: var(--warning);
+      font-size: 9px;
+      font-weight: 700;
+      text-transform: uppercase;
+      vertical-align: middle;
+    }
+
+    .identity-log-time { color: var(--text-muted); font-size: 11px; white-space: nowrap; text-align: right; }
+
+    .identity-log-detail {
+      grid-column: 2 / 4;
+      color: var(--text-secondary);
+      font-size: 11px;
+      line-height: 1.5;
+      word-break: break-word;
+    }
+
+    .identity-log-detail code { font-size: 10px; color: var(--text-muted); }
+
+    .toggle-row-note {
+      display: block;
+      margin-top: 4px;
+      font-size: 11px;
+      color: var(--warning);
+    }
+
+    .toggle-row-note.safe { color: var(--success); }
+
+    /* ── Ban dialog + banned addresses (PRD 18.7) ───────────────────────── */
+    .modal-content fieldset.ban-scope {
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 8px 12px 4px;
+      margin: 0 0 12px;
+    }
+
+    .modal-content fieldset.ban-scope legend {
+      padding: 0 6px;
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    .modal-content fieldset.ban-scope label.ban-scope-option {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 0 0 6px;
+      font-size: 12px;
+      color: var(--text-primary);
+      cursor: pointer;
+    }
+
+    .modal-content fieldset.ban-scope label.ban-scope-option input[type="radio"] {
+      width: auto;
+      margin: 0;
+      padding: 0;
+      flex-shrink: 0;
+    }
+
+    /* ── Approve new users (PRD 18.8) ───────────────────────────────────── */
+    #main { position: relative; }
+
+    #approval-screen {
+      display: none;
+      position: absolute;
+      inset: 0;
+      z-index: 50;
+      align-items: center;
+      justify-content: center;
+      background: var(--bg-primary);
+      padding: 24px;
+    }
+
+    #approval-screen.visible { display: flex; }
+
+    #approval-screen .approval-card {
+      max-width: 460px;
+      width: 100%;
+      padding: 28px 28px 24px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--bg-secondary);
+      text-align: center;
+    }
+
+    #approval-screen .approval-icon { font-size: 34px; margin-bottom: 8px; }
+    #approval-screen h2 { margin: 0 0 8px; font-size: 18px; color: var(--text-primary); }
+    #approval-screen p { margin: 0 0 14px; font-size: 13px; line-height: 1.5; color: var(--text-secondary); }
+
+    #approval-screen .approval-ident {
+      margin: 0 0 18px;
+      padding: 10px 12px;
+      border-radius: var(--radius);
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      text-align: left;
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+
+    #approval-screen .approval-ident code { display: block; margin-top: 4px; word-break: break-all; color: var(--text-primary); }
+
+    .pending-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 16px;
+      height: 16px;
+      padding: 0 4px;
+      margin-left: 6px;
+      border-radius: 8px;
+      background: var(--danger);
+      color: #fff;
+      font-size: 10px;
+      font-weight: 700;
+      line-height: 1;
+      vertical-align: middle;
+    }
+
+    #btn-server-settings .pending-badge {
+      position: absolute;
+      top: -5px;
+      right: -5px;
+      margin: 0;
+    }
+
+    #btn-server-settings { position: relative; }
+
+    .pending-approval-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 10px;
+      margin-bottom: 6px;
+      border: 1px solid var(--warning);
+      border-radius: var(--radius);
+      background: rgba(255, 167, 38, 0.07);
+      font-size: 12px;
+    }
+
+    .pending-approval-row .pending-approval-info { flex: 1; min-width: 0; }
+    .pending-approval-row .pending-approval-name { font-weight: 600; color: var(--text-primary); word-break: break-word; }
+    .pending-approval-row .pending-approval-meta { margin-top: 2px; font-size: 11px; color: var(--text-muted); word-break: break-all; }
+    .pending-approval-row .pending-approval-actions { display: flex; gap: 6px; flex-shrink: 0; }
+    .pending-approval-row button { padding: 4px 8px; font-size: 11px; }
+
+    /* ── Invite codes (PRD 18.9) ─────────────────────────────────────────── */
+    #toolbar input#invite-code {
+      width: 130px;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+    }
+
+    #toolbar input#invite-code.invite-needed {
+      border-color: var(--warning);
+    }
+
+    .invite-row {
+      padding: 7px 10px;
+      margin-bottom: 6px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--bg-input);
+      font-size: 12px;
+    }
+
+    .invite-row .invite-main { display: flex; align-items: center; gap: 10px; }
+    .invite-row .invite-info { flex: 1; min-width: 0; }
+    .invite-row .invite-title { color: var(--text-primary); font-weight: 600; word-break: break-word; }
+    .invite-row .invite-title code { font-weight: 400; color: var(--text-secondary); margin-right: 6px; }
+    .invite-row .invite-meta { margin-top: 2px; font-size: 11px; color: var(--text-muted); word-break: break-word; }
+    .invite-row .invite-actions { display: flex; gap: 6px; flex-shrink: 0; }
+    .invite-row .invite-actions button { padding: 4px 8px; font-size: 11px; }
+    .invite-row.invite-inactive { opacity: 0.6; }
+
+    .invite-status {
+      display: inline-block;
+      padding: 1px 6px;
+      margin-left: 6px;
+      border-radius: 8px;
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+      background: var(--bg-secondary);
+      color: var(--text-secondary);
+    }
+
+    .invite-status.active { background: rgba(76, 175, 80, 0.18); color: #66bb6a; }
+
+    .invite-uses {
+      margin: 8px 0 2px;
+      padding-top: 6px;
+      border-top: 1px solid var(--border);
+      font-size: 11px;
+      color: var(--text-secondary);
+    }
+
+    .invite-uses div { padding: 1px 0; }
+
+    .modal-content .invite-code-display {
+      display: block;
+      margin: 10px 0;
+      padding: 12px;
+      border-radius: var(--radius);
+      border: 1px solid var(--border);
+      background: var(--bg-input);
+      font-family: var(--font-mono, monospace);
+      font-size: 20px;
+      letter-spacing: 2px;
+      text-align: center;
+      color: var(--text-primary);
+      user-select: all;
+    }
+
+    .modal-content .invite-field { display: block; margin: 10px 0 4px; font-size: 12px; color: var(--text-secondary); }
+    .modal-content .invite-field + input,
+    .modal-content .invite-field + select { width: 100%; }
+
+    /* Settings → About (PRD 18.16): the header, tagline and update status are centred
+       together; the Identity rows below are label/value rows and stay left-aligned. */
+    .about-header { text-align: center; padding: 10px 0 18px; }
+    .about-header img { width: 56px; height: 56px; margin-bottom: 8px; }
+    .about-header .about-name { font-size: 15px; font-weight: 600; }
+    .about-header #about-version { font-size: 12px; color: var(--text-muted); }
+    .about-tagline { font-size: 12px; color: var(--text-secondary); margin-bottom: 16px; text-align: center; }
+    #about-update-status { font-size: 12px; color: var(--text-secondary); margin-top: 10px; min-height: 16px; text-align: center; }
+
+    /* Restricted user: connected, but without the Member role (PRD 18.18). */
+    #access-banner {
+      display: none;
+      padding: 8px 14px;
+      font-size: 12px;
+      line-height: 1.4;
+      color: var(--text-primary);
+      background: rgba(255, 167, 38, 0.12);
+      border-bottom: 1px solid var(--warning);
+    }
+
+    body.no-access #access-banner { display: block; }
+
+    /* A visual hint only — the guards in renderer.ts (and the server) are the real check. */
+    body.no-access #chat-composer,
+    body.no-access .btn-dm,
+    body.no-access .btn-nudge {
+      opacity: 0.45;
+      pointer-events: none;
+    }
+
+    .banned-addresses-title {
+      margin: 14px 0 6px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      color: var(--text-muted);
+    }
+
+    .banned-address-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 7px 10px;
+      margin-bottom: 6px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--bg-input);
+      font-size: 12px;
+    }
+
+    .banned-address-row .banned-address-info { flex: 1; min-width: 0; }
+    .banned-address-row code { font-size: 12px; color: var(--text-primary); }
+    .banned-address-row .banned-address-meta { color: var(--text-muted); font-size: 11px; margin-top: 2px; word-break: break-word; }
+
+    /* ── Connection names / relay protection (PRD 18.5) ─────────────────── */
+    .relay-hosts {
+      padding: 10px 12px;
+      border-radius: var(--radius);
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      margin-bottom: 10px;
+    }
+
+    .relay-hosts-title { font-size: 12px; font-weight: 500; color: var(--text-primary); }
+    /* `.modal-content p` would otherwise win on specificity. */
+    .relay-hosts .relay-hosts-desc { font-size: 10px; color: var(--text-muted); line-height: 1.4; margin: 4px 0 8px; }
+    .relay-hosts .relay-hosts-desc strong { color: var(--text-secondary); }
+
+    .relay-hosts-status {
+      font-size: 11px;
+      font-weight: 600;
+      margin-bottom: 8px;
+      color: var(--text-secondary);
+    }
+
+    .relay-hosts-status.on { color: var(--success); }
+
+    /* The settings modal styles every `label` and `input` generically
+       (display:block, width:100%, margins), so the row needs the extra
+       specificity of `.modal-content .relay-hosts …` to stay a flex row. */
+    .modal-content .relay-hosts label.relay-hosts-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 0;
+      padding: 5px 0;
+      font-size: 12px;
+      color: var(--text-primary);
+      cursor: pointer;
+    }
+
+    .modal-content .relay-hosts label.relay-hosts-row input[type="checkbox"] {
+      width: auto;
+      margin: 0;
+      padding: 0;
+      flex-shrink: 0;
+    }
+
+    .relay-hosts-row .relay-hosts-name { flex: 1; min-width: 0; word-break: break-all; }
+    .relay-hosts-row .relay-hosts-meta { color: var(--text-muted); font-size: 10px; white-space: nowrap; }
+    .relay-hosts-empty { color: var(--text-muted); font-size: 11px; padding: 4px 0; }
+
+    .relay-hosts-add { display: flex; gap: 6px; margin-top: 8px; }
+    .relay-hosts-add input { flex: 1; min-width: 0; margin-bottom: 0; }
+
+    .relay-hosts-error { min-height: 14px; margin-top: 4px; font-size: 11px; color: var(--danger); }
+    .relay-hosts-actions { display: flex; justify-content: flex-end; margin-top: 6px; }
 
     /* Message avatars and nicknames open the card (PRD 17.3). */
     .chat-msg .msg-header > .avatar,
@@ -4042,7 +4672,23 @@
       transition: border-color 0.2s;
     }
 
-    .toggle-row:hover {
+    /* One box holding several switches under a single heading (PRD 18.11 follow-up). */
+    .toggle-row.toggle-row-multi {
+      flex-direction: column;
+      align-items: stretch;
+      gap: 10px;
+    }
+
+    .toggle-row-multi .toggle-subrow {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding-top: 10px;
+      border-top: 1px solid var(--border);
+    }
+
+        .toggle-row:hover {
       border-color: var(--accent-dim);
     }
 
@@ -4637,6 +5283,7 @@
     <input type="text" id="server-url" placeholder="Server URL (e.g. server.reson8.com or localhost:9800)">
     <input type="text" id="nickname" placeholder="Nickname" value="User">
     <input type="password" id="server-password" placeholder="Password (optional)">
+    <input type="text" id="invite-code" placeholder="Invite code" autocomplete="off" spellcheck="false" maxlength="32" style="display:none;" title="This server needs an invite code for new users">
     <label id="remember-me-label" style="display:flex; align-items:center; gap:4px; font-size:11px; color:var(--text-secondary); cursor:pointer; user-select:none;">
       <input type="checkbox" id="remember-me">
       Remember
@@ -4645,8 +5292,30 @@
     <button class="btn btn-disconnect" id="btn-disconnect" disabled>Disconnect</button>
   </div>
 
+  <!-- ── Unencrypted-connection warning (PRD 18.3) ───────────────────── -->
+  <div id="tls-warning-banner" role="status">
+    <span class="tls-warning-text" id="tls-warning-text"></span>
+    <button type="button" id="btn-tls-warning-dismiss">Don't warn me again for this server</button>
+    <button type="button" id="btn-tls-warning-close" aria-label="Close this warning">✕</button>
+  </div>
+
   <!-- ── Main Three-Pane Layout ──────────────────────────────────────── -->
   <div id="main">
+    <!-- Waiting for a moderator to approve this (new) identity (PRD 18.8) -->
+    <div id="approval-screen" role="status" aria-live="polite">
+      <div class="approval-card">
+        <div class="approval-icon" aria-hidden="true">⏳</div>
+        <h2 id="approval-title">Waiting for approval</h2>
+        <p id="approval-text">This server asks a moderator to let new people in. You can leave this window open — you'll join automatically as soon as they do.</p>
+        <div class="approval-ident">
+          Requesting as <strong id="approval-nickname"></strong>
+          <code id="approval-fingerprint"></code>
+          <span style="display:block; margin-top:6px; font-size:11px; color:var(--text-muted);">A moderator can match this fingerprint with your request.</span>
+        </div>
+        <button class="btn btn-cancel" id="btn-approval-cancel">Cancel request</button>
+      </div>
+    </div>
+
     <!-- Left Pane: Channel Tree -->
     <div id="left-pane">
       <div id="tree-header">
@@ -4660,7 +5329,7 @@
               <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
               <path d="M16 3.13a4 4 0 0 1 0 7.75" />
             </svg><span class="online-indicator" id="online-dot"></span></button>
-          <button id="btn-server-settings" title="Server Settings"><svg width="14" height="14"
+          <button id="btn-server-settings" title="Server Settings"><span class="pending-badge" id="pending-badge-gear" style="display:none;"></span><svg width="14" height="14"
               viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
               stroke-linejoin="round">
               <circle cx="12" cy="12" r="3" />
@@ -4729,6 +5398,10 @@
 
     <!-- Right Pane: Tabbed Log / Chat -->
     <div id="right-pane">
+      <!-- Shown while this user holds no Member role (PRD 18.18) -->
+      <div id="access-banner" role="status" aria-live="polite">
+        You don't have access to this server's channels and voice right now. A moderator can give it back in User Management.
+      </div>
       <div id="tab-bar">
         <div class="tab active" data-tab-id="server-log">📋 Server Log</div>
       </div>
@@ -4778,6 +5451,7 @@
       <span class="status-dot" id="status-dot"></span>
       <span class="status-text" id="status-text">Disconnected</span>
       <span class="status-latency" id="status-latency"></span>
+      <span class="conn-security" id="conn-security" hidden></span>
     </div>
     <div id="status-instance-area">
       <span id="status-instance"></span>
@@ -4872,6 +5546,182 @@
       <div class="modal-actions">
         <button class="btn btn-cancel" id="btn-nsfw-cancel">Cancel</button>
         <button class="btn btn-disconnect" id="btn-nsfw-confirm">Continue</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Create an invite (PRD 18.9) ─────────────────────────────────────── -->
+  <div id="invite-create-modal" role="dialog" aria-modal="true" aria-labelledby="invite-create-title">
+    <div class="modal-content">
+      <h3 id="invite-create-title">🎟️ Create an invite</h3>
+      <label class="invite-field" for="invite-label">Label (optional — for your own reference)</label>
+      <input type="text" id="invite-label" maxlength="64" placeholder="e.g. Friday game night" autocomplete="off">
+      <label class="invite-field" for="invite-expiry">Expires</label>
+      <select id="invite-expiry">
+        <option value="">Never</option>
+        <option value="1">In 1 hour</option>
+        <option value="24">In 24 hours</option>
+        <option value="168">In 7 days</option>
+        <option value="720">In 30 days</option>
+      </select>
+      <label class="invite-field" for="invite-max-uses">Can be used</label>
+      <select id="invite-max-uses">
+        <option value="">Any number of times</option>
+        <option value="1">Once</option>
+        <option value="5">5 times</option>
+        <option value="10">10 times</option>
+        <option value="25">25 times</option>
+        <option value="custom">A number I choose…</option>
+      </select>
+      <input type="number" id="invite-max-uses-custom" min="1" max="1000" step="1" placeholder="1 – 1000" style="display:none; margin-top:6px;">
+      <div class="identity-modal-error" id="invite-create-error" role="alert"></div>
+      <div class="modal-actions">
+        <button class="btn btn-cancel" id="btn-invite-create-cancel">Cancel</button>
+        <button class="btn btn-create" id="btn-invite-create-confirm">Create</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── The invite code, shown once (PRD 18.9) ──────────────────────────── -->
+  <div id="invite-code-modal" role="dialog" aria-modal="true" aria-labelledby="invite-code-title">
+    <div class="modal-content">
+      <h3 id="invite-code-title">🎟️ Your invite code</h3>
+      <code class="invite-code-display" id="invite-code-value"></code>
+      <p class="tls-modal-warning">This code is shown only once. Copy it now and send it to the person — the server
+        keeps only a fingerprint of it, so it can't be shown again (you would need to create a new invite).</p>
+      <div class="modal-actions">
+        <button class="btn btn-cancel" id="btn-invite-code-copy">Copy</button>
+        <button class="btn btn-create" id="btn-invite-code-close">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Ban a user, optionally with their address (PRD 18.7) ────────────── -->
+  <div id="ban-user-modal" role="dialog" aria-modal="true" aria-labelledby="ban-user-title">
+    <div class="modal-content">
+      <h3 id="ban-user-title">🚫 Ban <span id="ban-user-name"></span>?</h3>
+      <p>They won't be able to connect to this server with this identity any more. You can lift the ban from the same list.</p>
+      <fieldset class="ban-scope">
+        <legend>Also ban their address</legend>
+        <label class="ban-scope-option"><input type="radio" name="ban-address-scope" value="none" checked> No — just this user</label>
+        <label class="ban-scope-option"><input type="radio" name="ban-address-scope" value="exact"> This address only</label>
+        <label class="ban-scope-option"><input type="radio" name="ban-address-scope" value="range"> Their address range</label>
+      </fieldset>
+      <p class="tls-modal-warning" id="ban-scope-warning" style="display:none;">An address ban can block other
+        people on the same network (shared Wi-Fi, a school, a mobile carrier), and a VPN or mobile data gets around
+        it. A fresh install of Reson8 is a new identity, so this is the only thing that stops them coming back from
+        the same place.</p>
+      <div class="modal-actions">
+        <button class="btn btn-cancel" id="btn-ban-user-cancel">Cancel</button>
+        <button class="btn btn-disconnect" id="btn-ban-user-confirm">Ban</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Export identity (PRD 18.6) ──────────────────────────────────────── -->
+  <div id="identity-export-modal" role="dialog" aria-modal="true" aria-labelledby="identity-export-title">
+    <div class="modal-content">
+      <h3 id="identity-export-title">Export identity</h3>
+      <p>Saves your identity — your user ID and the private key that proves it is you — in a file protected by a
+        passphrase. Use it to move to another computer, or to restore it after a reinstall.</p>
+      <label for="identity-export-pass">Passphrase (at least 10 characters)</label>
+      <input type="password" id="identity-export-pass" autocomplete="new-password" maxlength="256" spellcheck="false">
+      <label for="identity-export-pass2">Repeat the passphrase</label>
+      <input type="password" id="identity-export-pass2" autocomplete="new-password" maxlength="256" spellcheck="false">
+      <div class="identity-modal-error" id="identity-export-error" role="alert"></div>
+      <p class="tls-modal-warning">Anyone with this file <strong>and</strong> its passphrase can act as you on every
+        server. Keep it somewhere safe — and don't forget the passphrase: it can't be recovered.</p>
+      <div class="modal-actions">
+        <button class="btn btn-cancel" id="btn-identity-export-cancel">Cancel</button>
+        <button class="btn btn-create" id="btn-identity-export-confirm">Choose where to save…</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Import identity (PRD 18.6) ──────────────────────────────────────── -->
+  <div id="identity-import-modal" role="dialog" aria-modal="true" aria-labelledby="identity-import-title">
+    <div class="modal-content">
+      <h3 id="identity-import-title">Import identity</h3>
+      <div id="identity-import-step-pass">
+        <p>Backup file: <strong id="identity-import-file"></strong></p>
+        <label for="identity-import-pass">Passphrase</label>
+        <input type="password" id="identity-import-pass" autocomplete="off" maxlength="256" spellcheck="false">
+        <div class="identity-modal-error" id="identity-import-error" role="alert"></div>
+        <div class="modal-actions">
+          <button class="btn btn-cancel" id="btn-identity-import-cancel">Cancel</button>
+          <button class="btn btn-create" id="btn-identity-import-unlock">Unlock</button>
+        </div>
+      </div>
+      <div id="identity-import-step-confirm" style="display:none;">
+        <p>This backup holds a different identity from the one this install uses now. Importing replaces it.</p>
+        <dl class="identity-compare">
+          <dt>In the backup</dt><dd><code id="identity-import-new-fp"></code><br><span id="identity-import-new-id"></span></dd>
+          <dt>Used now</dt><dd><code id="identity-import-cur-fp"></code><br><span id="identity-import-cur-id"></span></dd>
+        </dl>
+        <p class="tls-modal-warning">Reson8 will restart. The identity in use now is kept aside, not deleted. Don't use
+          the same identity on two computers at once.</p>
+        <div class="modal-actions">
+          <button class="btn btn-cancel" id="btn-identity-import-back">Cancel</button>
+          <button class="btn btn-disconnect" id="btn-identity-import-apply">Replace and restart</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Identity key locked (PRD 18.6) ──────────────────────────────────── -->
+  <div id="identity-locked-modal" role="alertdialog" aria-modal="true" aria-labelledby="identity-locked-title">
+    <div class="modal-content">
+      <h3 id="identity-locked-title">🔒 Your identity key is locked</h3>
+      <p>Reson8 couldn't unlock this install's identity key — the system keyring may have been reset or changed. The
+        key was <strong>not</strong> replaced, and you can't connect until this is resolved.</p>
+      <p>If you have an identity backup, import it. Otherwise you can create a new identity; a server admin will then
+        have to reset your old one for you to keep your name and roles.</p>
+      <div class="modal-actions">
+        <button class="btn btn-cancel" id="btn-identity-locked-close">Close</button>
+        <button class="btn btn-cancel" id="btn-identity-locked-new">Create new identity</button>
+        <button class="btn btn-create" id="btn-identity-locked-import">Import backup…</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Unknown certificate: trust it? (PRD 18.3) ───────────────────────── -->
+  <div id="tls-trust-modal" role="dialog" aria-modal="true" aria-labelledby="tls-trust-title">
+    <div class="modal-content">
+      <h3 id="tls-trust-title"><svg width="16" height="16" style="vertical-align: middle; margin-right: 6px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>Trust this server's certificate?</h3>
+      <p>The certificate of <strong id="tls-trust-host"></strong> isn't signed by an authority your computer knows
+        (<span id="tls-trust-reason"></span>). That is normal for a server you or a friend set up yourself —
+        but only trust it if you are sure this is the right server.</p>
+      <dl class="tls-detail-grid">
+        <dt>Subject</dt><dd id="tls-trust-subject"></dd>
+        <dt>Names</dt><dd id="tls-trust-names"></dd>
+        <dt>Valid until</dt><dd id="tls-trust-expiry"></dd>
+      </dl>
+      <div>Fingerprint (SHA-256) — compare it with the one the server's owner gave you:</div>
+      <code class="tls-fingerprint" id="tls-trust-fingerprint"></code>
+      <p class="profile-hint">If it changes later, Reson8 will refuse to connect and tell you, instead of trusting the new one automatically.</p>
+      <div class="modal-actions">
+        <button class="btn btn-cancel" id="btn-tls-trust-copy">Copy fingerprint</button>
+        <button class="btn btn-cancel" id="btn-tls-trust-cancel">Cancel</button>
+        <button class="btn btn-create" id="btn-tls-trust-confirm">Trust and connect</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Certificate changed: refuse (PRD 18.3) ──────────────────────────── -->
+  <div id="tls-changed-modal" role="alertdialog" aria-modal="true" aria-labelledby="tls-changed-title">
+    <div class="modal-content">
+      <h3 id="tls-changed-title">⚠️ This server's certificate changed</h3>
+      <p>You trusted a certificate for <strong id="tls-changed-host"></strong>, but the server now presents a
+        <strong>different</strong> one. Reson8 did not connect.</p>
+      <dl class="tls-detail-grid">
+        <dt>You trusted</dt><dd><code id="tls-changed-old"></code></dd>
+        <dt>It now shows</dt><dd><code id="tls-changed-new"></code></dd>
+      </dl>
+      <p class="tls-modal-warning">This can be a legitimate renewal or a re-installed server — or someone intercepting
+        the connection. Check with the server's owner. If you are sure, remove the old certificate in
+        Settings → Application → Trusted certificates and connect again.</p>
+      <div class="modal-actions">
+        <button class="btn btn-cancel" id="btn-tls-changed-close">Close</button>
       </div>
     </div>
   </div>
@@ -5084,7 +5934,7 @@
     <div class="modal-content wide">
       <h3>⚙ Settings</h3>
       <div class="settings-tab-bar">
-        <button class="settings-tab-btn active" data-settings-tab="roles" id="settings-tab-roles">🛡️ User Management</button>
+        <button class="settings-tab-btn active" data-settings-tab="roles" id="settings-tab-roles">🛡️ User Management<span class="pending-badge" id="pending-badge-tab" style="display:none;"></span></button>
         <button class="settings-tab-btn" data-settings-tab="emojis" id="settings-tab-emojis">😀 Emojis</button>
         <button class="settings-tab-btn" data-settings-tab="server" id="settings-tab-server">🔔 Server</button>
         <button class="settings-tab-btn" data-settings-tab="voice">🎤 Voice & Shortcuts</button>
@@ -5095,8 +5945,40 @@
 
       <!-- Roles Tab -->
       <div class="settings-panel active" data-settings-panel="roles">
+        <!-- Identity log (PRD 18.4) — ADMIN only; the server checks it too. -->
+        <div class="identity-log-bar" id="identity-log-bar" style="display:none;">
+          <span>Who bound a key, who reset one, and which sign-ins were refused.</span>
+          <button type="button" class="btn btn-cancel" id="btn-identity-log">Identity log</button>
+        </div>
+        <div id="identity-log-panel" style="display:none;">
+          <div class="identity-log-head">
+            <button type="button" class="btn btn-cancel" id="btn-identity-log-back">← Back to users</button>
+            <span class="identity-log-filter" id="identity-log-filter"></span>
+            <button type="button" class="btn btn-cancel" id="btn-identity-log-clear-filter" style="display:none;">Show everyone</button>
+          </div>
+          <div id="identity-log-list" class="admin-user-list"></div>
+          <button type="button" class="btn btn-cancel" id="btn-identity-log-more" style="display:none; width:100%; margin-top:6px;">Load older</button>
+        </div>
+        <!-- People waiting to be let in (PRD 18.8) -->
+        <div id="pending-approvals-section" style="display:none;">
+          <div class="banned-addresses-title" style="margin-top:0;">Waiting for approval</div>
+          <div id="pending-approvals-list"></div>
+        </div>
+        <!-- Invite codes (PRD 18.9) -->
+        <div id="invites-section" style="display:none;">
+          <div style="display:flex; align-items:center; justify-content:space-between;">
+            <div class="banned-addresses-title" style="margin:6px 0;">Invites</div>
+            <button class="btn btn-create" id="btn-create-invite" style="padding:4px 10px; font-size:11px;">Create invite</button>
+          </div>
+          <div id="invites-list"></div>
+        </div>
         <div id="admin-user-list" class="admin-user-list">
           <div class="admin-empty">Loading users...</div>
+        </div>
+        <!-- Banned addresses (PRD 18.7) — BAN_USER holders; masked unless ADMIN -->
+        <div id="banned-addresses-section" style="display:none;">
+          <div class="banned-addresses-title">Banned addresses</div>
+          <div id="banned-addresses-list"></div>
         </div>
       </div>
 
@@ -5136,6 +6018,62 @@
           <div style="display:flex; gap:6px; align-items:center; flex-shrink:0;">
             <input type="number" id="input-max-message-length" min="1" max="100000" step="1" style="width:90px; margin-bottom:0;">
             <button class="btn btn-connect" id="btn-save-max-message-length">Save</button>
+          </div>
+        </div>
+        <!-- Require signed identity (PRD 18.4) -->
+        <div class="toggle-row">
+          <div class="toggle-row-info">
+            <div class="toggle-row-text">
+              <span class="toggle-row-title">🔒 Require signed identity</span>
+              <span class="toggle-row-desc">Refuse clients older than 2.6.0, which can't prove who they are. People who already connected with 2.6.0 or newer are protected either way.</span>
+              <span class="toggle-row-note" id="require-signed-note" style="display:none;"></span>
+            </div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="chk-require-signed">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+        <!-- Approve new users (PRD 18.8) -->
+        <div class="toggle-row">
+          <div class="toggle-row-info">
+            <div class="toggle-row-text">
+              <span class="toggle-row-title">🚪 Approve new users</span>
+              <span class="toggle-row-desc">People who have joined before aren't affected. New people wait until a moderator approves them in User Management.</span>
+            </div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="chk-require-approval">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+        <!-- Require an invite code (PRD 18.9) -->
+        <div class="toggle-row">
+          <div class="toggle-row-info">
+            <div class="toggle-row-text">
+              <span class="toggle-row-title">🎟️ Require an invite code for new users</span>
+              <span class="toggle-row-desc">People who have joined before aren't affected. New people need a code from User Management → Invites. Works together with "Approve new users".</span>
+            </div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="chk-require-invite">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+        <!-- Connection names / relay protection (PRD 18.5) -->
+        <div class="relay-hosts" id="relay-hosts-section" style="display:none;">
+          <div class="relay-hosts-title">🛡️ Connection names (relay protection)</div>
+          <p class="relay-hosts-desc">Only accept sign-ins made for these addresses. This protects your users if they ever connect to a malicious server that tries to pass this server's sign-in challenge on. List <strong>every</strong> address people use to reach this server.</p>
+          <div class="relay-hosts-status" id="relay-hosts-status"></div>
+          <div id="relay-hosts-list"></div>
+          <div class="relay-hosts-add">
+            <input type="text" id="relay-hosts-input" placeholder="chat.example.com or 192.168.0.10:9800" maxlength="255" spellcheck="false" autocomplete="off">
+            <button type="button" class="btn btn-cancel" id="btn-relay-hosts-add">Add</button>
+          </div>
+          <div class="relay-hosts-error" id="relay-hosts-error" role="alert"></div>
+          <span class="toggle-row-note" id="relay-hosts-lock-note" style="display:none;"></span>
+          <div class="relay-hosts-actions">
+            <button type="button" class="btn btn-connect" id="btn-relay-hosts-save">Save</button>
           </div>
         </div>
       </div>
@@ -5459,6 +6397,60 @@
             <span class="toggle-slider"></span>
           </label>
         </div>
+
+        <!-- Both link-preview blur switches share one box and the crossed-eye icon (PRD 18.11) -->
+        <div class="toggle-row toggle-row-multi">
+          <div class="toggle-row-info">
+            <div class="toggle-row-icon">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+            </div>
+            <div class="toggle-row-text">
+              <span class="toggle-row-title">Blur link previews</span>
+              <span class="toggle-row-desc">Hide a preview's picture or video behind a blur until you click it</span>
+            </div>
+          </div>
+          <div class="toggle-subrow">
+            <div class="toggle-row-text">
+              <span class="toggle-row-title">In NSFW channels</span>
+              <span class="toggle-row-desc">Blur the media of every link preview posted in an NSFW channel</span>
+            </div>
+            <label class="toggle-switch">
+              <input type="checkbox" id="chk-lp-nsfw-blur">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div class="toggle-subrow">
+            <div class="toggle-row-text">
+              <span class="toggle-row-title">Marked as adult content</span>
+              <span class="toggle-row-desc">When a website itself says a page is adult content, blur its preview in any channel and in direct messages</span>
+            </div>
+            <label class="toggle-switch">
+              <input type="checkbox" id="chk-lp-adult-blur">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+        </div>
+
+        <div class="toggle-row">
+          <div class="toggle-row-info">
+            <div class="toggle-row-icon">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+            </div>
+            <div class="toggle-row-text">
+              <span class="toggle-row-title">Show link previews</span>
+              <span class="toggle-row-desc">Each preview makes Reson8 contact the linked website, which can see your IP address.</span>
+            </div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="chk-link-previews">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+
+        <!-- Trusted certificates (PRD 18.3) -->
+        <label style="font-size:11px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px; display:block; margin-bottom:10px; margin-top:16px;">Trusted certificates</label>
+        <p class="profile-hint" style="margin-bottom:10px;">Self-signed servers you chose to trust. Reson8 connects to them only while they present exactly this certificate.</p>
+        <div id="tls-trusted-list"></div>
       </div>
 
       <!-- Audio Tab -->
@@ -5495,16 +6487,16 @@
 
       <!-- About Tab -->
       <div class="settings-panel" data-settings-panel="about">
-        <div style="text-align:center; padding: 10px 0 18px;">
-          <img src="logo.png" alt="Reson8 Logo" style="width:56px; height:56px; margin-bottom:8px;">
-          <div style="font-size:15px; font-weight:600;">Reson8</div>
-          <div id="about-version" style="font-size:12px; color:var(--text-muted);"></div>
+        <div class="about-header">
+          <img src="logo.png" alt="Reson8 Logo">
+          <div class="about-name">Reson8</div>
+          <div id="about-version"></div>
         </div>
-        <p style="font-size:12px; color:var(--text-secondary); margin-bottom:16px;">
+        <p class="about-tagline">
           Self-hosted voice and text communication.
         </p>
         <button class="btn btn-create" id="btn-check-updates" style="width:100%;">Check for Updates</button>
-        <div id="about-update-status" style="font-size:12px; color:var(--text-secondary); margin-top:10px; min-height:16px;"></div>
+        <div id="about-update-status"></div>
 
         <!-- Identity key fingerprint (PRD 17.12) -->
         <div class="identity-row">
@@ -5514,6 +6506,12 @@
             <button type="button" class="btn btn-cancel" id="btn-copy-fingerprint">Copy</button>
           </div>
           <div class="identity-row-hint">Your server admin may ask for this to protect the admin account (<code>ADMIN_KEY_FINGERPRINT</code>).</div>
+          <!-- Where the key is stored, and backup/restore (PRD 18.6) -->
+          <div class="identity-row-storage" id="about-identity-storage"></div>
+          <div class="identity-actions">
+            <button type="button" class="btn btn-cancel" id="btn-identity-export">Export identity…</button>
+            <button type="button" class="btn btn-cancel" id="btn-identity-import">Import identity…</button>
+          </div>
         </div>
       </div>
 

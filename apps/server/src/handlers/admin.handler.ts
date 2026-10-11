@@ -20,6 +20,16 @@ import type {
 import { requirePermission, requireAnyPermission } from "../middleware/permissions.middleware.js";
 import { PermissionFlags } from "@reson8/shared-types";
 import { revokeViewerTickets } from "../services/viewer-ticket.service.js";
+import { keyFingerprint } from "../services/identity.service.js";
+import { syncModeratorRoom } from "./approval.handler.js";
+import { adminUsersWhere, mapAdminUser } from "../services/admin-users.js";
+import { applyAccessChange } from "../services/access-change.js";
+import type { MediasoupService } from "../services/mediasoup.service.js";
+import {
+    fetchIdentityEventsPage,
+    parseIdentityEventsQuery,
+    recordIdentityEvent,
+} from "../services/identity-events.service.js";
 
 type TypedIO = SocketIOServer<
     ClientToServerEvents,
@@ -41,6 +51,7 @@ type TypedSocket = Socket<
 export function registerAdminHandlers(
     io: TypedIO,
     app: FastifyInstance,
+    mediasoup: MediasoupService,
 ): void {
     io.on("connection", (socket: TypedSocket) => {
         // ── RESET_IDENTITY_KEY (PRD 17.12) ─────────────────────────────────
@@ -60,6 +71,11 @@ export function registerAdminHandlers(
                     ack({ success: false, error: "User not found" });
                     return;
                 }
+                // Read what is about to be forgotten, for the identity log (PRD 18.4).
+                const before = await app.prisma.user.findUnique({
+                    where: { id: userId },
+                    select: { nickname: true, publicKey: true },
+                });
                 const result = await app.prisma.user.updateMany({
                     where: { id: userId },
                     data: { publicKey: null, publicKeyBoundAt: null },
@@ -68,6 +84,15 @@ export function registerAdminHandlers(
                     ack({ success: false, error: "User not found" });
                     return;
                 }
+                void recordIdentityEvent(app, {
+                    serverId: socket.data.serverId,
+                    userId,
+                    nickname: before?.nickname ?? "",
+                    kind: "RESET",
+                    fingerprint: before?.publicKey ? keyFingerprint(before.publicKey) : null,
+                    address: socket.data.clientAddress ?? null,
+                    actorId: socket.data.userId,
+                });
                 await revokeViewerTickets(app.redis, userId);
                 let disconnected = 0;
                 for (const [, s] of io.sockets.sockets) {
@@ -87,6 +112,30 @@ export function registerAdminHandlers(
             }
         });
 
+        // ── GET_IDENTITY_EVENTS (PRD 18.4) ─────────────────────────────────
+        // ADMIN only: the log carries client addresses, so the permission is
+        // checked here, not just hidden in the UI.
+        socket.on("GET_IDENTITY_EVENTS", async (payload, ack) => {
+            if (typeof ack !== "function") return;
+            const allowed = await requirePermission(app, socket, BigInt(PermissionFlags.ADMIN));
+            if (!allowed) {
+                ack({ success: false, error: "Permission denied" });
+                return;
+            }
+            const query = parseIdentityEventsQuery(payload);
+            if (!query.ok) {
+                ack({ success: false, error: query.error });
+                return;
+            }
+            try {
+                const page = await fetchIdentityEventsPage(app.prisma, socket.data.serverId, query.value);
+                ack({ success: true, ...page });
+            } catch (err) {
+                app.log.error({ err }, "Error in GET_IDENTITY_EVENTS");
+                ack({ success: false, error: "Failed to load the identity log" });
+            }
+        });
+
         // ── GET_ALL_USERS ──────────────────────────────────────────────────
         socket.on("GET_ALL_USERS", async (payload, ack) => {
             const allowed = await requireAnyPermission(
@@ -103,16 +152,12 @@ export function registerAdminHandlers(
             try {
                 const { serverId } = payload;
 
-                // Get all users that have at least one role on this server
+                // Everyone who is a member of this server, with or without roles
+                // (PRD 18.17): a user whose last role was removed must stay
+                // listed, or nobody could give them one back or ban them.
                 const [users, bannedUsers] = await Promise.all([
                     app.prisma.user.findMany({
-                        where: {
-                            roles: {
-                                some: {
-                                    role: { serverId },
-                                },
-                            },
-                        },
+                        where: adminUsersWhere(serverId),
                         include: {
                             roles: {
                                 include: { role: true },
@@ -128,24 +173,7 @@ export function registerAdminHandlers(
                 ]);
                 const bannedIds = new Set(bannedUsers.map((b) => b.userId));
 
-                const mapped = users.map((u) => ({
-                    id: u.id,
-                    username: u.username,
-                    nickname: u.nickname,
-                    createdAt: u.createdAt.toISOString(),
-                    isBanned: bannedIds.has(u.id),
-                    // Whether a key is bound (PRD 17.12) — never the key itself.
-                    hasIdentityKey: u.publicKey !== null,
-                    roles: u.roles.map((ur) => ({
-                        id: ur.role.id,
-                        serverId: ur.role.serverId,
-                        name: ur.role.name,
-                        permissions: ur.role.permissions.toString(),
-                        powerLevel: ur.role.powerLevel,
-                        color: ur.role.color,
-                        createdAt: ur.role.createdAt.toISOString(),
-                    })),
-                }));
+                const mapped = users.map((u) => mapAdminUser(u, bannedIds));
 
                 ack({ success: true, users: mapped });
             } catch (err) {
@@ -227,6 +255,15 @@ export function registerAdminHandlers(
                         "Role removed from user",
                     );
                 }
+
+                // Gaining or losing BAN_USER changes who hears about the approval queue (PRD 18.8).
+                await syncModeratorRoom(app, io, userId, socket.data.serverId).catch(() => {});
+
+                // Gaining or losing Member changes what they can use RIGHT NOW (PRD 18.18):
+                // their sockets, the content room and any voice session follow.
+                await applyAccessChange(io, app, mediasoup, userId, socket.data.serverId).catch((err) => {
+                    app.log.error({ err }, "Failed to apply an access change");
+                });
 
                 ack({ success: true });
             } catch (err) {

@@ -1,0 +1,13 @@
+# Reson8 behind Caddy: automatic HTTPS (Let's Encrypt), HTTP/2 and HTTP/3.
+#
+# Used by docker-compose.caddy.yml. RESON8_DOMAIN is the public name of the
+# server (its DNS record must already point at this machine, and ports 80 and
+# 443 must be reachable from the internet for the certificate to be issued).
+#
+# Caddy proxies WebSocket upgrades (Socket.io) on its own and sets
+# X-Forwarded-For / X-Forwarded-Proto. Voice and screen-share media never goes
+# through here: mediasoup's UDP/TCP ports stay published on the server itself.
+{$RESON8_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy reson8-server:9800
+}

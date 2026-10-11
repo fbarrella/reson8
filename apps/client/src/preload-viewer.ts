@@ -18,6 +18,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 import { io, Socket } from "socket.io-client";
 import { Device, types as msTypes } from "mediasoup-client";
+import { createHash } from "crypto";
 import type { ClientToServerEvents, ServerToClientEvents } from "@reson8/shared-types";
 
 type TypedSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
@@ -61,7 +62,7 @@ function setStatus(status: ViewerStatus, message?: string): void {
 }
 
 // The video element lives here (preload shares the renderer's DOM — see root
-// CLAUDE.md's Electron gotchas) rather than being passed across
+// AGENTS.md's Electron gotchas) rather than being passed across
 // contextBridge, which cannot carry MediaStream/track objects.
 const videoEl = document.createElement("video");
 videoEl.autoplay = true;
@@ -259,9 +260,22 @@ async function start(): Promise<void> {
     // the command line. Null against a pre-2.6.0 server.
     const ticket: string | null = await ipcRenderer.invoke("viewer-get-ticket");
 
+    // The same pinned certificate the main window's connection uses (PRD 18.3),
+    // when the user trusted a self-signed one for this server.
+    const pin: { ca: string; fingerprint256: string } | null = await ipcRenderer.invoke("viewer-get-tls-options");
+
     socket = io(serverBaseUrl, {
         query: { role: "viewer" },
         transports: ["websocket"],
+        ...(pin
+            ? {
+                  ca: [pin.ca],
+                  checkServerIdentity: (_hostname: string, cert: { raw?: Buffer }): Error | undefined => {
+                      const actual = cert.raw ? createHash("sha256").update(cert.raw).digest("hex") : "";
+                      return actual === pin.fingerprint256 ? undefined : new Error("The server's certificate changed");
+                  },
+              }
+            : {}),
     }) as TypedSocket;
 
     socket.on("connect", async () => {

@@ -22,8 +22,21 @@ services:
       CLOUDINARY_CLOUD_NAME: "${CLOUDINARY_CLOUD_NAME:-}"
       CLOUDINARY_API_KEY: "${CLOUDINARY_API_KEY:-}"
       CLOUDINARY_API_SECRET: "${CLOUDINARY_API_SECRET:-}"
+      # Identity protection (2.6.0+) — see apps/server/.env.example
+      REQUIRE_SIGNED_IDENTITY: "${REQUIRE_SIGNED_IDENTITY:-}"
+      ADMIN_KEY_FINGERPRINT: "${ADMIN_KEY_FINGERPRINT:-}"
+      AUTH_ALLOWED_HOSTS: "${AUTH_ALLOWED_HOSTS:-}"
+      # Encryption and proxies (2.7.0+). Empty = plain HTTP and forwarded
+      # addresses ignored (the previous behavior). Mount the certificate
+      # files below when using TLS_CERT_FILE/TLS_KEY_FILE.
+      TLS_CERT_FILE: "${TLS_CERT_FILE:-}"
+      TLS_KEY_FILE: "${TLS_KEY_FILE:-}"
+      TRUST_PROXY: "${TRUST_PROXY:-}"
     volumes:
       - reson8_uploads:/app/uploads
+      # Native TLS: put the certificate files in ./certs and set
+      # TLS_CERT_FILE=/app/certs/fullchain.pem TLS_KEY_FILE=/app/certs/privkey.pem
+      # - ./certs:/app/certs:ro
     depends_on:
       postgres:
         condition: service_healthy

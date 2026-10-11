@@ -1,0 +1,26 @@
+# Reson8 — Open Items After Phase 18
+
+**Created:** 10/10/2026 (v2.7.0)
+**Source:** what Phase 18's own verification could not cover, and findings made along the way. The nine open risks carried out of Phase 17 (transport encryption, the key's trust-on-first-use window, challenge relay, local key theft, ban evasion, NSFW previews, preview fetching limits, DM unread/truncation, the broken lint script) were all addressed in Phase 18; their rationale lives in `app-planning/archive/Reson8_Phase18_PRD.md` and the progress summary.
+**Purpose:** input for the next phase's planning, and a checklist for the manual test pass of 2.7.0.
+
+---
+
+## To verify by hand (could not be exercised headless)
+
+- **Fullscreen on Windows and Wayland/XWayland** (18.19) — only X11 was exercised; the permission grant is expected to behave the same.
+- **A real reverse proxy in front** for address bans and the identity log (18.2/18.7) — a trusted loopback peer with a forged `X-Forwarded-For` exercised the same code path; IPv6 clients only at unit level.
+- **A Cloudflare-style bot-walled page** through the hidden preview window (18.10) — the hardened window ran, but no walled URL was available.
+- **Age-restricted YouTube and Reddit NSFW signals** (18.11) — only `og:restrictions:age` and `<meta name="rating">` are implemented; a Reddit-specific signal was not observed live, so it is deliberately absent.
+- **A photo-only X post and a Reddit video post** (18.14) — no valid sample was reachable.
+- **The voice media handshake end to end for a restricted user** and **a Viewer window closing when access is lost** (18.18) — events are refused at the gate and the teardown is covered by presence checks; the media path itself wasn't driven.
+- **A real OS-level window blur** for DM read rules (18.13) — simulated by overriding `document.hasFocus`.
+- **Backfill timing on a large production database** (18.17) — set-based and idempotent, verified on a throwaway database.
+
+## Known limitations worth a decision
+
+- **Attachments don't reserve their size** (18.12) — they rely on the scroll keeper; adding stored dimensions needs a server change.
+- **The connected server's own host never previews** (18.10) — deliberate (a LAN server's links are on a private address).
+- **A signed-in socket's cached `hasAccess`** assumes one server process (`io.sockets.sockets` is local). Running more than one instance would need the Socket.io adapter's `fetchSockets()` in `applyAccessChange()`.
+- **`GET_ALL_USERS` / `GET_ROLES` take `serverId` from the payload** (pre-existing; gated by permission, and a deployment has one server today). Using `socket.data.serverId` would be tidier.
+- **Moderators without Member can't exist with the two fixed roles**, so "open" moderator events don't need an extra access check; if custom roles arrive, revisit `EVENT_ACCESS`.

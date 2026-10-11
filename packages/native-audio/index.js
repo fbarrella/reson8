@@ -13,7 +13,6 @@ const { join } = require("node:path");
 const { platform, arch } = process;
 
 function requirePrebuild(fileName) {
-  // eslint-disable-next-line global-require, import/no-dynamic-require
   return require(join(__dirname, "prebuilds", fileName));
 }
 

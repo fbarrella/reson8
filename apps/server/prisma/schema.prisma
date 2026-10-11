@@ -29,6 +29,17 @@ model Server {
   // client. 4000 by default: generous for legitimate long messages
   // (code snippets, detailed explanations) while making abuse impractical.
   maxMessageLength   Int      @default(4000)
+  /// Refuse unsigned (pre-2.6.0) joins (PRD 18.4). The REQUIRE_SIGNED_IDENTITY
+  /// environment variable, when set, takes precedence over this column.
+  requireSignedIdentity Boolean @default(false)
+  /// Host names (host[:port], lower-case) a signed join may be addressed to
+  /// (PRD 18.5). Empty = any. The AUTH_ALLOWED_HOSTS environment variable,
+  /// when set, takes precedence over this column.
+  authAllowedHosts   String[]  @default([])
+  /// New identities must be approved by a moderator before they can use the
+  /// server (PRD 18.8). People who have joined before are never affected.
+  requireApproval    Boolean   @default(false)
+  requireInvite      Boolean   @default(false)
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
@@ -95,6 +106,11 @@ model User {
   /// signed join (PRD 17.12). NULL = not bound yet (legacy / never signed).
   publicKey        String?
   publicKeyBoundAt DateTime?
+  /// The address this user last joined from (PRD 18.7), as resolved with the
+  /// TRUST_PROXY rules — what an "also ban their address" decision uses for a
+  /// user who is offline. Personal data: only shown (masked or full) to moderators.
+  lastAddress      String?
+  lastAddressAt    DateTime?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -348,4 +364,129 @@ model Attachment {
   @@index([messageId])
   @@index([dmId])
   @@map("attachments")
+}
+
+// ---------------------------------------------------------------------------
+// IdentityEvent — audit trail of identity-key binds, resets and refusals
+// (PRD 18.4). Deliberately has no relation to User: refusals can concern ids
+// that never became users, and the trail must outlive a user row. Rows are
+// pruned after 90 days by the hourly maintenance job.
+// ---------------------------------------------------------------------------
+
+enum IdentityEventKind {
+  BOUND
+  RESET
+  REFUSED
+}
+
+model IdentityEvent {
+  id          String            @id @default(uuid())
+  serverId    String
+  userId      String
+  /// Nickname at the time of the event.
+  nickname    String
+  kind        IdentityEventKind
+  /// For REFUSED: the IDENTITY_MESSAGES key (e.g. "otherDevice"), never the message text.
+  reason      String?
+  /// SHA256:… fingerprint of the key involved, when there was one.
+  fingerprint String?
+  /// Client address as resolved with TRUST_PROXY rules (PRD 18.2).
+  address     String?
+  /// The host the proof was signed for.
+  host        String?
+  /// For RESET: the admin who did it.
+  actorId     String?
+  createdAt   DateTime          @default(now())
+
+  @@index([serverId, createdAt(sort: Desc)])
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("identity_events")
+}
+
+// ---------------------------------------------------------------------------
+// BannedAddress — an address or range refused at sign-in (PRD 18.7). Bans are
+// otherwise per identity, and a fresh install is a fresh identity; this is the
+// opt-in counter-measure (easy to dodge with a VPN, and it can hit people
+// sharing a network, so it is never the default).
+// ---------------------------------------------------------------------------
+
+model BannedAddress {
+  id           String   @id @default(uuid())
+  serverId     String
+  /// Canonical CIDR: IPv4 "203.0.113.0/24" or "203.0.113.7/32"; IPv6 as eight
+  /// un-compressed lower-case hextets "2001:db8:1:2:0:0:0:0/64".
+  cidr         String
+  /// The user ban this was created with, when there was one (unbanning that
+  /// user lifts it too).
+  linkedUserId String?
+  nickname     String?
+  createdBy    String
+  createdAt    DateTime @default(now())
+
+  @@unique([serverId, cidr])
+  @@map("banned_addresses")
+}
+
+// ---------------------------------------------------------------------------
+// PendingApproval — a brand-new identity waiting for a moderator (PRD 18.8).
+// Deliberately NOT a User row: a pending person has no presence, no roles and
+// no access to anything; approving creates the user (with the requested key
+// bound) in one transaction. Requests unseen for 7 days are deleted.
+// ---------------------------------------------------------------------------
+
+model PendingApproval {
+  id          String   @id @default(uuid())
+  serverId    String
+  userId      String
+  nickname    String
+  /// The key the request was signed with (an approval binds exactly this one).
+  publicKey   String
+  fingerprint String
+  address     String?
+  host        String?
+  /// The invite this request came in with (PRD 18.9): validated at request time, consumed on approval.
+  inviteId    String?
+  requestedAt DateTime @default(now())
+  lastSeenAt  DateTime @default(now())
+
+  @@unique([serverId, userId])
+  @@index([serverId, requestedAt])
+  @@map("pending_approvals")
+}
+
+// ---------------------------------------------------------------------------
+// Invite codes (PRD 18.9)
+// ---------------------------------------------------------------------------
+
+model Invite {
+  id         String    @id @default(uuid())
+  serverId   String
+  /// SHA-256 of the normalized code — the plain code is shown once, at creation.
+  codeHash   String    @unique
+  /// First four characters, so a moderator can tell invites apart.
+  codePrefix String
+  label      String?
+  createdBy  String
+  createdAt  DateTime  @default(now())
+  expiresAt  DateTime?
+  maxUses    Int?
+  uses       Int       @default(0)
+  revokedAt  DateTime?
+
+  usedBy InviteUse[]
+
+  @@index([serverId, createdAt])
+  @@map("invites")
+}
+
+model InviteUse {
+  id       String   @id @default(uuid())
+  inviteId String
+  userId   String
+  usedAt   DateTime @default(now())
+
+  invite Invite @relation(fields: [inviteId], references: [id], onDelete: Cascade)
+
+  @@index([inviteId])
+  @@map("invite_uses")
 }
