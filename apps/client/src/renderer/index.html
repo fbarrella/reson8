@@ -4672,7 +4672,23 @@
       transition: border-color 0.2s;
     }
 
-    .toggle-row:hover {
+    /* One box holding several switches under a single heading (PRD 18.11 follow-up). */
+    .toggle-row.toggle-row-multi {
+      flex-direction: column;
+      align-items: stretch;
+      gap: 10px;
+    }
+
+    .toggle-row-multi .toggle-subrow {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding-top: 10px;
+      border-top: 1px solid var(--border);
+    }
+
+        .toggle-row:hover {
       border-color: var(--accent-dim);
     }
 
@@ -6382,30 +6398,37 @@
           </label>
         </div>
 
-        <div class="toggle-row">
+        <!-- Both link-preview blur switches share one box and the crossed-eye icon (PRD 18.11) -->
+        <div class="toggle-row toggle-row-multi">
           <div class="toggle-row-info">
+            <div class="toggle-row-icon">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+            </div>
             <div class="toggle-row-text">
-              <span class="toggle-row-title">Blur link previews in NSFW channels</span>
-              <span class="toggle-row-desc">Hide the picture or video of a link preview in NSFW channels until you click it</span>
+              <span class="toggle-row-title">Blur link previews</span>
+              <span class="toggle-row-desc">Hide a preview's picture or video behind a blur until you click it</span>
             </div>
           </div>
-          <label class="toggle-switch">
-            <input type="checkbox" id="chk-lp-nsfw-blur">
-            <span class="toggle-slider"></span>
-          </label>
-        </div>
-
-        <div class="toggle-row">
-          <div class="toggle-row-info">
+          <div class="toggle-subrow">
             <div class="toggle-row-text">
-              <span class="toggle-row-title">Blur link previews marked as adult content</span>
-              <span class="toggle-row-desc">When a website itself says a page is adult content, hide its preview in any channel and in direct messages until you click it</span>
+              <span class="toggle-row-title">In NSFW channels</span>
+              <span class="toggle-row-desc">Blur the media of every link preview posted in an NSFW channel</span>
             </div>
+            <label class="toggle-switch">
+              <input type="checkbox" id="chk-lp-nsfw-blur">
+              <span class="toggle-slider"></span>
+            </label>
           </div>
-          <label class="toggle-switch">
-            <input type="checkbox" id="chk-lp-adult-blur">
-            <span class="toggle-slider"></span>
-          </label>
+          <div class="toggle-subrow">
+            <div class="toggle-row-text">
+              <span class="toggle-row-title">Marked as adult content</span>
+              <span class="toggle-row-desc">When a website itself says a page is adult content, blur its preview in any channel and in direct messages</span>
+            </div>
+            <label class="toggle-switch">
+              <input type="checkbox" id="chk-lp-adult-blur">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
         </div>
 
         <div class="toggle-row">

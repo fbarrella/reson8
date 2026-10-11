@@ -8,7 +8,7 @@ A high-performance desktop communication platform inspired by TeamSpeak 3,
 built with modern technology for low-latency voice, hierarchical channel trees,
 and private server ownership.
 
-[![Version](https://img.shields.io/badge/version-2.6.0-blue.svg)](#)
+[![Version](https://img.shields.io/badge/version-2.7.0-blue.svg)](#)
 [![Electron](https://img.shields.io/badge/Electron-34-47848F?logo=electron&logoColor=white)](https://www.electronjs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D20-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
@@ -401,6 +401,10 @@ reson8/
 │   │   │   ├── identity-proof.ts    # Signs server challenges (pure)
 │   │   │   ├── avatar.ts            # Libravatar/Gravatar hashing + URLs (pure)
 │   │   │   ├── link-fixers.ts       # Social-media embed "fixers" for link previews (pure)
+│   │   │   ├── link-preview-*.ts    # Bounded, private-network-safe preview fetch + adult detection (Electron-free)
+│   │   │   ├── media-proxy.ts       # Range-normalizing proxy rules for preview videos (pure)
+│   │   │   ├── tls-*.ts             # HTTPS-first connect, pinned certificates (pure + main-process stores)
+│   │   │   ├── identity-store.ts / identity-backup.ts   # Key storage rules, passphrase-protected backup
 │   │   │   ├── window-state.ts      # Remembers window size/position between sessions
 │   │   │   ├── renderer/            # Main window UI (HTML + TypeScript)
 │   │   │   │   ├── index.html / renderer.ts    # Main window
@@ -421,10 +425,13 @@ reson8/
 │       │   │   ├── nudge.handler.ts        # Nudge + server-wide settings (screen share toggle, etc.)
 │       │   │   ├── upload.handler.ts       # Upload tokens + discarding unused uploads
 │       │   │   ├── profile.handler.ts      # Avatars + the user profile card
+│       │   │   ├── approval.handler.ts     # "Approve new users" queue
+│       │   │   ├── invite.handler.ts       # Invite codes
 │       │   │   └── moderation.handler.ts   # Kick & ban
 │       │   ├── services/       # mediasoup, presence, permissions, socket ownership, reactions,
 │       │   │                   #   stored-file ledger, attachments, replies, upload sweeper,
-│       │   │                   #   identity, viewer tickets, avatars, profiles, pagination
+│       │   │                   #   identity, viewer tickets, avatars, profiles, pagination,
+│       │   │                   #   identity log, address bans, approvals, invites, access, packet guard
 │       │   ├── config/         # mediasoup, message-length, upload, and version configuration
 │       │   └── plugins/        # Prisma, Redis Fastify plugins
 │       ├── prisma/
@@ -465,6 +472,7 @@ reson8/
 | 15 | **Rich Chat & Sturdier Connections** — Multi-line messages with Discord-style Markdown, a redesigned image viewer (zoom, copy, open in browser, "sent by"), a reaction hover card, bundled Google Noto emoji on every OS, remembered window size/position, a dark-yellow pinned bar and a disabled self-Ban button; plus fixes for users showing offline (and voice dropping a second time) after a quick reconnect, the own voice halo showing while muted, and the Windows re-launch freeze, and richer disconnect diagnostics | ✅ Done |
 | 16 | **Replies, Grouped Chat & Secure Uploads** — Message replies in channels and DMs with jump-to-original snippets, grouped messages with HH:MM times, a floating message toolbar, emoji autocomplete, multi-image messages (up to 10) with persistent previews, a preview viewer and drag & drop, NSFW warning/blur preferences, per-user channel muting and a highlight for the open channel; plus a security fix that stops the server trusting client-supplied file URLs (a stored-file ledger with upload tokens), and automatic cleanup of unused uploads | ✅ Done |
 | 17 | **Avatars, Smarter Tabs & Identity Protection** — Libravatar/Gravatar avatars in chat and a user profile card; preview tabs with "Keep Tab Open" and unread dots; mic volume up to 300% with a soft limiter; a 15-line collapse threshold; social-media videos playing inline; blank lines in messages and emoji autocomplete while editing; plus a fixed pinned-message jump with two-way history paging, and cryptographic identity so nobody can impersonate another user | ✅ Done |
+| 18 | **Encrypted Connections, Admission Control & Safer Previews** — HTTPS-first connections with pinned self-signed certificates and a lock indicator; an identity log, OS-encrypted identity key with a passphrase-protected backup; opt-in address bans, "Approve new users" and invite codes; removing Member genuinely restricts a user; bounded, private-network-safe link previews with NSFW/adult blurring, fullscreen and seekable videos, and a chat that stays put while previews load; DM unread dots; the server can no longer be crashed by a malformed event | ✅ Done |
 
 ---
 

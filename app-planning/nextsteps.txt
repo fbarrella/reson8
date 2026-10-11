@@ -1,60 +1,26 @@
-# Reson8 — Open Risks (carried over from Phase 17)
+# Reson8 — Open Items After Phase 18
 
-**Created:** 08/10/2026
-**Source:** the Phase 17 PRD (`Reson8_Phase17_PRD.md`): PRD 17.12's "Residual Risks" and the audit's "Pre-Existing Issues… Not fixed" list.
-**Purpose:** input for the next phase's planning. Nothing here is being fixed in Phase 17. Each entry says what the risk is, why it was left open, and a suggested direction.
-
----
-
-## Security
-
-### 1. No transport encryption by default
-- **What:** the client builds `http://` / `ws://` URLs (`preload.ts` `connect()`: ``const serverUrl = port ? `http://${host}:${port}` : `http://${host}` ``). Unless a self-hoster puts TLS in front (reverse proxy, Cloudflare Tunnel), messages, DMs, upload tokens and session traffic travel in clear text.
-- **After 17.12:** an attacker on the network path can no longer steal an identity for later use (they only see one-time signatures), but they can still **read everything and hijack a live session** (inject events on the open socket).
-- **Direction:** support `https://`/`wss://` in the connect form (accept a scheme in the URL, default to https when a domain is given), document a reverse-proxy TLS setup, and consider warning in the UI when connected without TLS. Self-signed certificates on LAN servers need a trust story (e.g. pin on first use).
-
-### 2. Trust-on-first-use window for identity keys (PRD 17.12)
-- **What:** every user id was public before 2.6.0, so until a user connects once with a 2.6.0+ client, **someone else can bind their id to their own key** on that server.
-- **Mitigations in place:** `ADMIN_KEY_FINGERPRINT` protects the admin account; a hijacked user sees "registered to another device", and an ADMIN can "Reset key" (which also disconnects the impostor).
-- **Direction:** once most users are on 2.6.0, set `REQUIRE_SIGNED_IDENTITY=true` (the release notes should keep recommending it). Possibly add an admin view of recent binds (who, when, from which address) so suspicious binds of privileged users are noticed.
-
-### 3. Challenge relay by a malicious server (PRD 17.12)
-- **What:** if a user connects to an attacker's server while that attacker is actively connected to another server the user belongs to, the attacker can forward that server's challenge to the user and relay the signature back, getting **one live session** as that user.
-- **Mitigation in place:** optional `AUTH_ALLOWED_HOSTS`: the signed message includes the host the client connected to, and the server refuses hosts outside the list. It's off by default because a server reachable by several names (LAN IP + domain, the hairpin-NAT setup) must list all of them.
-- **Direction:** TLS (risk 1) with channel binding would close this properly. Alternatively, have the server announce a canonical name that the client checks, or derive per-server keys once there's a stable server identity the client can verify.
-
-### 4. Local malware can copy the identity key
-- **What:** the private key is a `0600` PEM file in the Reson8 `userData` folder (OS-keychain encryption was rejected, see PRD 17.12). Anything running as the user can copy it, as it can copy anything else there.
-- **Direction:** revisit `safeStorage` with a safe fallback and migration path (and a recovery story for when the keychain becomes unavailable), or accept it as equal to how SSH keys are stored by default.
-
-### 5. Ban evasion with a fresh install
-- **What:** bans are per identity (user id). Deleting the Reson8 `userData` folder (or reinstalling) creates a new identity that isn't banned.
-- **Direction:** inherent to an account-less design. Options: optional IP/subnet bans, an "approval required for new users" server mode, or invite-only servers.
-
-### 6. Link previews ignore NSFW context
-- **What:** a preview image (including proxied posts from the 17.9 fixers, e.g. Reddit) is shown unblurred in any channel, and isn't covered by the NSFW-channel blur (PRD 13.5/16.2). Fixers make video previews more common.
-- **Direction:** apply the NSFW blur to preview media in NSFW channels; honor `og:restrictions:age`/Reddit's `over_18` where available; maybe a per-user "blur all link-preview media" option.
+**Created:** 10/10/2026 (v2.7.0)
+**Source:** what Phase 18's own verification could not cover, and findings made along the way. The nine open risks carried out of Phase 17 (transport encryption, the key's trust-on-first-use window, challenge relay, local key theft, ban evasion, NSFW previews, preview fetching limits, DM unread/truncation, the broken lint script) were all addressed in Phase 18; their rationale lives in `app-planning/archive/Reson8_Phase18_PRD.md` and the progress summary.
+**Purpose:** input for the next phase's planning, and a checklist for the manual test pass of 2.7.0.
 
 ---
 
-## Robustness
+## To verify by hand (could not be exercised headless)
 
-### 7. Link-preview fetching has no size cap and the cache never expires
-- **What:** `fetchLinkPreviewFast()` (`main.ts`) does `response.text()` on any response, so a huge page is read fully into memory. The in-memory `linkPreviewCache` (main) and the renderer's cache keep every entry, including failures, for the whole session. Signed video URLs from fixers can expire while still cached.
-- **Direction:** stream with a byte cap (e.g. 2 MB, stop at `</head>`), a TTL for both caches (shorter for failures), and an LRU bound.
+- **Fullscreen on Windows and Wayland/XWayland** (18.19) — only X11 was exercised; the permission grant is expected to behave the same.
+- **A real reverse proxy in front** for address bans and the identity log (18.2/18.7) — a trusted loopback peer with a forged `X-Forwarded-For` exercised the same code path; IPv6 clients only at unit level.
+- **A Cloudflare-style bot-walled page** through the hidden preview window (18.10) — the hardened window ran, but no walled URL was available.
+- **Age-restricted YouTube and Reddit NSFW signals** (18.11) — only `og:restrictions:age` and `<meta name="rating">` are implemented; a Reddit-specific signal was not observed live, so it is deliberately absent.
+- **A photo-only X post and a Reddit video post** (18.14) — no valid sample was reachable.
+- **The voice media handshake end to end for a restricted user** and **a Viewer window closing when access is lost** (18.18) — events are refused at the gate and the teardown is covered by presence checks; the media path itself wasn't driven.
+- **A real OS-level window blur** for DM read rules (18.13) — simulated by overriding `document.hasFocus`.
+- **Backfill timing on a large production database** (18.17) — set-based and idempotent, verified on a throwaway database.
 
----
+## Known limitations worth a decision
 
-## UX gaps
-
-### 8. DM tabs have no unread indicator, and DMs are never truncated
-- **What:** a DM is marked read on arrival even when its tab isn't focused, so an open DM tab never shows unread state (17.6 covers channel tabs only). DM messages also never get the "See more" collapse.
-- **Direction:** apply the 17.6 tab indicator and 17.7 truncation to DMs, with "read" set only when the DM tab is actually focused.
-
----
-
-## Tooling
-
-### 9. `npm run lint` is broken
-- **What:** the root script references eslint, which isn't installed anywhere in the repo (documented in the root `AGENTS.md`).
-- **Direction:** install and configure eslint (flat config, typescript-eslint) or remove the script.
+- **Attachments don't reserve their size** (18.12) — they rely on the scroll keeper; adding stored dimensions needs a server change.
+- **The connected server's own host never previews** (18.10) — deliberate (a LAN server's links are on a private address).
+- **A signed-in socket's cached `hasAccess`** assumes one server process (`io.sockets.sockets` is local). Running more than one instance would need the Socket.io adapter's `fetchSockets()` in `applyAccessChange()`.
+- **`GET_ALL_USERS` / `GET_ROLES` take `serverId` from the payload** (pre-existing; gated by permission, and a deployment has one server today). Using `socket.data.serverId` would be tidier.
+- **Moderators without Member can't exist with the two fixed roles**, so "open" moderator events don't need an extra access check; if custom roles arrive, revisit `EVENT_ACCESS`.

@@ -1,0 +1,1456 @@
+================================================================================
+  PHASE 18 — unabridged progress log (archived at v2.7.0)
+  The condensed summary lives in app-planning/progress.txt. Entries are in the
+  order they were built: 18.1 ... 18.19.
+================================================================================
+
+--- Entry: 10/10/2026 ---
+
+Feature/Fix: Working ESLint setup — `npm run lint` (PRD 18.1)
+
+  Problem: The root `lint` script ran `eslint . --ext .ts,.tsx`, but eslint was
+  not installed anywhere in the repo (so the command failed outright) and
+  `--ext` no longer exists in flat-config ESLint. The project had no static
+  check beyond `tsc`, and Prettier had no config at all.
+
+  Solution: ESLint 10 flat config at the repo root, `typescript-eslint`
+  `recommended` (deliberately NOT type-aware: `tsc` is the type check, and a
+  type-aware pass over a ~10k-line renderer.ts is slow) and
+  `eslint-config-prettier` last. `npm run lint` exits 0 on the current code.
+  First run: 25 errors / 76 warnings. Final: 0 errors / 72 warnings.
+
+  Toolchain (root devDependencies only; pinned on 10/10/2026): eslint 10.12.0,
+  @eslint/js 10.0.1, typescript-eslint 8.71.1, globals 17.13.0,
+  eslint-config-prettier 10.1.8. ESLint 10 needs Node >= 20.19 (stated in
+  AGENTS.md and the README). The lock file gained 74 packages, removed none,
+  and bumped two transitive ones (minimatch 10.2.4 -> 10.2.6,
+  brace-expansion 5.0.4 -> 5.0.12).
+
+  Config decisions (eslint.config.mjs):
+    - `defineConfig`/`globalIgnores` from `eslint/config`, NOT the PRD's
+      `tseslint.config()` — typescript-eslint now marks that helper
+      deprecated in favor of ESLint core's `defineConfig`.
+    - Ignores: dist/release/node_modules, apps/client/assets (vendored
+      WASM/fonts/sounds), packages/native-audio/prebuilds and target
+      (NAPI-RS generated), `*.node`, prisma/migrations, and
+      apps/client/.release-vendor (git-ignored staging copies made by
+      scripts/before-pack.mjs — found on the first run, 11 false errors).
+      packages/native-audio/index.js is hand-written and IS linted.
+    - The renderer is a classic script, so `no-unused-vars` uses
+      `vars: "local"` there (top-level functions are called from index.html
+      and from DevTools `Runtime.evaluate` in the headless tests).
+    - `no-explicit-any` and `no-unused-vars` are warnings (the code uses `any`
+      at socket/IPC boundaries on purpose); `no-empty` allows empty `catch`.
+    - `no-undef` is off for .ts files by typescript-eslint's own preset; tsc
+      covers it.
+
+  Fixes made (every one behavior-preserving; no blanket `--fix` was run):
+    - prefer-const x4: apps/client/src/main.ts (`videoType`, `siteName`
+      declared `let` then assigned once -> declared at the assignment),
+      apps/server/src/handlers/voice.handler.ts (destructuring split so
+      `streamName` is const while `isSharingScreen`, which is reassigned,
+      stays let), renderer.ts (`recordingKeys`).
+    - ban-ts-comment x6 (main.ts metascraper imports): the PRD said
+      @ts-ignore -> @ts-expect-error. Tried it: tsc reported all six as
+      "Unused '@ts-expect-error' directive" — the imports raise no error, so
+      the comments were dead and were DELETED instead.
+    - packages/native-audio/index.js: removed an eslint-disable comment for
+      `global-require`/`import/no-dynamic-require`, rules of a plugin this
+      repo doesn't use (ESLint 10 reports an unknown rule in a directive as
+      an error).
+    - packages/shared-types/src/socket-events.ts: the existing directive
+      named the removed rule `no-empty-interface`; updated to
+      `no-empty-object-type`, and one more directive (with a reason) on
+      `USER_BANNED: (payload: {})`. The wire type itself is unchanged.
+    - apps/client/scripts/markdown-smoke.mjs: a literal U+00A0 inside a regex
+      is now written ` ` (same character; `no-irregular-whitespace`).
+
+  Prettier: added `.prettierrc.json` (tabWidth 4, printWidth 120,
+  trailingComma "all", double quotes, semicolons) and `.prettierignore`
+  (package-lock.json, tsbuildinfo, assets, prebuilds, app-planning/archive;
+  `package-lock.json` would otherwise be re-indented by `npm run format`).
+  Measured, not guessed: the code is 4-space, double-quoted, no tabs, but it
+  was never Prettier-formatted — even the best-fitting config leaves 44 of 70
+  .ts files differing. So `npm run format` was NOT run, and AGENTS.md now
+  says not to run it repo-wide.
+
+  Warnings left alone (not fixed on purpose — report, don't delete):
+    - no-explicit-any x67: renderer.ts 20, preload.ts 10, voice.service.ts 9,
+      preload-viewer.ts 8, socket-events.ts 6, main.ts 5, models.ts 4,
+      permissions.middleware.ts 2, viewer.ts 1, channel.handler.ts 1,
+      reaction.handler.ts 1.
+    - no-unused-vars x5, candidates for a later cleanup (nothing deleted):
+        renderer.ts:977   `serverBaseUrl` assigned, never read (PRD 18.3
+                          removes this duplicate anyway)
+        renderer.ts:3156  `channelName` (unused parameter)
+        renderer.ts:3927  `openVideoLightbox` (function never called)
+        renderer.ts:5459  `dayKey` (assigned, never read)
+        connection.handler.ts:754  `userSession` (assigned, never read)
+
+  Key Files Modified:
+    eslint.config.mjs (NEW)
+    .prettierrc.json (NEW)
+    .prettierignore (NEW)
+    package.json — `lint` fixed, `lint:fix` added, 5 devDependencies
+    package-lock.json
+    AGENTS.md — lint is no longer "BROKEN"; part of the verification step
+    README.md — Node >= 20.19 note for linting
+    apps/client/src/main.ts
+    apps/client/src/renderer/renderer.ts
+    apps/server/src/handlers/voice.handler.ts
+    apps/client/scripts/markdown-smoke.mjs
+    packages/native-audio/index.js
+    packages/shared-types/src/socket-events.ts
+    apps/server/tsconfig.tsbuildinfo, packages/shared-types/tsconfig.tsbuildinfo
+      (tracked build caches, updated by `tsc --build` as in earlier commits)
+
+  Verification:
+    - `npx tsc --build` in shared-types, server, client: all exit 0.
+    - `npm run lint`: exit 0 (0 errors, 72 warnings). A probe file with a
+      `let` never reassigned reported the error as expected.
+    - `npm run test` (server): 13 files, 148 tests passed.
+    - Client: test:markdown 63, test:avatar 20, test:soft-clip 22,
+      test:link-fixers 40, test:identity 14 — all PASS, 0 FAIL.
+    - Emitted JavaScript of the four changed TS files, old vs new, compiled
+      with the project's own options: the only differences are `let` ->
+      `const` and the destructuring split; socket-events.ts is identical.
+    - Headless smoke of the real built client under Xvfb against a real
+      server on a throwaway database (reson8_scratch, Redis db 7, port 9811),
+      driven over CDP: 10/10 checks — preload bridge, join, channel tree,
+      open a text channel, send a message, Markdown rendering (bold + code),
+      no console errors; the screenshot was looked at. The scratch database
+      and processes were removed afterwards.
+    - NOT run: `npm run lint:fix` (nothing to autofix that the manual pass
+      didn't cover) and any packaged build.
+
+  Notes for later items:
+    - ESLint 10 removed the `compact` formatter from core; use the default or
+      `-f json`.
+    - The smoke harness (scratch DB/server script + CDP driver) lives in the
+      session scratchpad, not in the repo; the recipe is in
+      apps/server/AGENTS.md ("Booting the real server") and
+      apps/client/AGENTS.md ("Driving the real app headlessly").
+
+  Next Step: PRD 18.2 — server-side TLS, the Caddy setup and TRUST_PROXY.
+
+
+--- Entry: 10/10/2026 ---
+
+Feature/Fix: Server-side TLS, Caddy setup and trusted client addresses (PRD 18.2)
+
+  Problem: The server only spoke plain HTTP/WS, so chat, DMs, upload tokens
+  and the whole Socket.io session were readable on the network path unless a
+  self-hoster happened to put a proxy in front. Separately, the address used
+  in logs came from `cf-connecting-ip`/`x-forwarded-for` taken from ANY
+  client, so it was whatever the client claimed — harmless while it only fed
+  logs, but address bans (18.7), the identity log (18.4) and the approval
+  limits (18.8) all key on it.
+
+  Solution:
+    Trusted client address
+      - services/client-address.ts (pure): `parseTrustProxy()`,
+        `normalizeAddress()` (::ffff:a.b.c.d -> IPv4, zone ids dropped),
+        `resolveClientAddress()` built on @fastify/proxy-addr (now a direct
+        dependency, same major Fastify 5 uses). Unset/false trusts nothing;
+        "true" is REFUSED with a warning (trusting every hop makes the address
+        client-controlled again); an invalid list also trusts nothing. A
+        non-IP header value can never become the address.
+      - index.ts's `io.use()` middleware sets `socket.data.clientAddress`
+        for primary and viewer sockets before any handler runs (deviation
+        from the PRD, which put it in the connection handler: 18.7 needs it
+        at handshake time). `connection.handler.ts` just reads it. Fastify
+        gets the same list via its `trustProxy` option.
+    Native TLS
+      - config/tls.config.ts: `readTlsEnv()` (both or neither; only one is a
+        startup error), `loadTlsMaterial()` (a mismatched key/cert pair is
+        rejected by `createSecureContext`), `watchTlsFiles()` (watches the
+        DIRECTORIES because renewals swap files/symlinks, debounced 1 s,
+        12 h safety reload, a failed reload keeps the previous certificate).
+      - index.ts: `Fastify({ https })` when configured, minVersion TLSv1.2,
+        startup log line states the mode; an unreadable certificate stops
+        the boot — it never falls back to plain HTTP.
+    Deployment
+      - docker-compose.caddy.yml + deploy/caddy/Caddyfile (caddy:2.11-alpine,
+        looked up on Docker Hub, never `latest`): automatic Let's Encrypt,
+        RESON8_DOMAIN required (clear error without it), sets TRUST_PROXY to
+        uniquelocal by default. Port 9800 stays published for pre-2.7.0
+        clients.
+      - docker-compose.yml: passes TLS_CERT_FILE/TLS_KEY_FILE/TRUST_PROXY, a
+        commented ./certs volume. It also passes REQUIRE_SIGNED_IDENTITY,
+        ADMIN_KEY_FINGERPRINT and AUTH_ALLOWED_HOSTS, which 2.6.0 documented
+        but docker-compose.yml never forwarded (so they could not be set in
+        a compose deployment) — empty defaults, same as unset.
+      - README "Encryption (HTTPS)" section (Caddy, native TLS with the
+        openssl recipe, nginx block, TRUST_PROXY), .env.example block.
+
+  Behavior change to call out in the release notes: behind a proxy WITHOUT
+  TRUST_PROXY, logs now show the proxy's address instead of the forwarded one.
+
+  Key Files Modified:
+    apps/server/src/services/client-address.ts (NEW)
+    apps/server/src/config/tls.config.ts (NEW)
+    apps/server/src/__tests__/client-address.test.ts (NEW, 16 tests)
+    apps/server/src/__tests__/tls.config.test.ts (NEW, 7 tests; generates its
+      certificates with openssl at run time, skips if openssl is missing —
+      no private key is committed)
+    apps/server/src/index.ts
+    apps/server/src/handlers/connection.handler.ts
+    packages/shared-types/src/socket-events.ts (SocketData.clientAddress)
+    docker-compose.caddy.yml (NEW), deploy/caddy/Caddyfile (NEW)
+    docker-compose.yml, apps/server/.env.example, README.md
+    AGENTS.md, apps/server/AGENTS.md
+    apps/server/package.json, package-lock.json
+
+  Verification:
+    - tsc --build in shared-types, server, client: exit 0. `npm run lint`:
+      exit 0 (0 errors, 72 warnings, unchanged). Server vitest: 15 files,
+      171 tests passed.
+    - Live against the real server on a scratch DB (join, REQUEST_UPLOAD_TOKEN,
+      POST /api/upload, GET the file back, all over the scheme):
+        A  native TLS, TRUST_PROXY unset, client forges X-Forwarded-For
+           198.51.100.77 -> logged address 127.0.0.1 (forgery ignored)
+        B  native TLS, TRUST_PROXY=loopback -> 198.51.100.77 honored; then
+           the cert files were replaced on disk: openssl s_client showed
+           CN=reson8-test-b with no restart and the reload was logged
+        C  plain HTTP with defaults: identical to before (6/6)
+        D  only TLS_CERT_FILE set -> "must be set together", exit 1
+        E  TLS_KEY_FILE missing on disk -> ENOENT, exit 1 (no HTTP fallback)
+        F  TRUST_PROXY=true -> warned and ignored, server still starts
+    - Real Caddy 2.11 (docker, internal CA, host network) proxying a WSS
+      session + upload to the server with TRUST_PROXY=loopback: 6/6.
+    - `docker compose config` validates the base file and the Caddy override.
+    - NOT run: a real Let's Encrypt issuance (needs a public domain); a
+      packaged server image.
+
+  Notes: engine.io-client sets `rejectUnauthorized: true` explicitly, so
+  NODE_TLS_REJECT_UNAUTHORIZED=0 does NOT disable verification for the
+  Socket.io client — trust a CA with NODE_EXTRA_CA_CERTS (relevant to 18.3).
+
+  Next Step: PRD 18.3 — client HTTPS-first connection, TOFU pins, lock icon.
+
+
+--- Entry: 10/10/2026 ---
+
+Feature/Fix: Encrypted connections in the client — HTTPS first, trusted self-signed certificates, lock indicator (PRD 18.3)
+
+  Problem: The client always built `http://host[:port]`: a typed `https://`
+  was silently stripped and connected over plain HTTP, an IPv6 address could
+  not be entered (the box split on ":"), and an empty address quietly became
+  `localhost`. There was no way to use a server that has a self-signed
+  certificate, and no indication of whether the connection was encrypted.
+
+  Solution:
+    Address + decision (pure, tls-trust.ts)
+      - `parseServerAddress()`: host, host:port, [::1]:port, optional
+        http/https/ws/wss prefix; refuses paths, queries, credentials, bad
+        ports with specific messages; an explicit default port (":80") is
+        kept because the URL class drops it. `identityHostOf()` is
+        byte-identical to what 2.6.0 signed (unit-tested against a copy of
+        the old parser) so bound identities and AUTH_ALLOWED_HOSTS keep
+        matching. `decideScheme()` is the PRD's table, one test per row.
+    Probe + pins (main process)
+      - tls-probe.ts classifies a server: trusted / untrusted (+ the
+        presented certificate) / no-tls (a plain HTTP server, or a TCP
+        server that accepts and never answers) / unreachable. IPC `tls-probe`
+        returns the result, any pin and the HTTPS memory in ONE round trip;
+        the PEM never reaches the renderer.
+      - tls-store.ts (`<userData>/tls-trust.json`, atomic writes, corrupt
+        file -> empty): pins by SHA-256 + the "reached over HTTPS" memory.
+        `tls-trust-certificate` only pins the certificate the LAST probe of
+        that host:port just showed (5-minute window) and never overwrites a
+        different existing pin (the SSH model: remove the old trust first).
+    Two TLS stacks
+      - Socket.io in the preload runs on Node `ws`: a pinned connection is
+        given `ca: [pinned PEM]` plus a SHA-256 `checkServerIdentity`.
+      - Uploads, images, emoji and the Viewer's media use Chromium:
+        `session.defaultSession.setCertificateVerifyProc` accepts a
+        certificate ONLY if its SHA-256 equals a pin for that hostname and it
+        hasn't expired; everything else gets Chromium's verdict (-3).
+      - The Viewer window gets the same pin through `viewer-get-tls-options`
+        (main remembers each Viewer's server by webContents id).
+    UI
+      - Trust modal (fingerprint, subject, names, expiry, reason, Copy;
+        Cancel is the focused default) and a red changed-certificate modal
+        with no override. Status-bar "Encrypted" / "Not encrypted" lock; a
+        per-server dismissible banner for unencrypted connections
+        (`reson8-tls-http-warning-dismissed`); Settings -> Application ->
+        Trusted certificates list with Remove.
+      - A port-less address with nothing speaking TLS on 443 still falls back
+        to plain http on port 80 (the old behavior), unless that host was
+        reached over HTTPS before. The renderer's duplicate `serverBaseUrl`
+        (assigned, never read) is gone; `api.getServerBaseUrl()` replaces it.
+
+  Deviations from the PRD: the probe/store were split into Electron-free
+  modules (tls-probe.ts, tls-store.ts taking a path) so they are tested
+  against real servers in plain Node; the verify hook has no `errorCode === 0`
+  branch (it returns -3 unless pinned, which is the same outcome with less
+  code); one `tls-probe` IPC instead of probe + separate pin/remembered calls.
+
+  Key Files Modified:
+    apps/client/src/tls-trust.ts (NEW), tls-probe.ts (NEW), tls-store.ts (NEW)
+    apps/client/scripts/tls-trust-smoke.mjs (NEW), apps/client/package.json
+      (`test:tls`)
+    apps/client/src/main.ts, preload.ts, preload-viewer.ts
+    apps/client/src/renderer/renderer.ts, renderer/index.html
+    AGENTS.md, apps/client/AGENTS.md, README.md
+
+  Verification:
+    - tsc --build in shared-types, server, client: exit 0; `npm run lint`:
+      exit 0 (0 errors, 71 warnings; one fewer than before — the dead
+      `serverBaseUrl` is gone).
+    - `npm run test:tls`: 73 checks (address table incl. IPv6 and error
+      messages, the 2.6.0 identity-host equality, every decideScheme row,
+      the store incl. corruption and invalid entries, and the probe against a
+      real plain HTTP server, a silent TCP server, a closed port and a
+      self-signed HTTPS server with its fingerprint checked independently).
+      markdown 63, avatar 20, soft-clip 22, link-fixers 40, identity 14 all
+      still pass.
+    - Real client under Xvfb driven over CDP against the real server, 43/43:
+        (a) plain HTTP typed without a scheme -> http, "Not encrypted",
+            banner, dismiss persists per server
+        (e) explicit http:// connects without a probe
+        (b) native TLS + self-signed: modal fields match the certificate,
+            Cancel pins nothing, Trust -> "Encrypted", base URL https, a
+            Chromium fetch of /health = 200, an upload + read-back over TLS,
+            one pin with the right fingerprint, a chat message over wss
+        (g) the Viewer window's own socket connects over the pin
+        (c) a different certificate -> changed modal naming both
+            fingerprints, no connection, old pin untouched, no trust offer
+        (d) the same host back on plain HTTP -> refused with "was encrypted
+            before..."; explicit http:// still works
+        Settings lists and removes the pin; the new certificate can then be
+            trusted
+        (f) [::1]:9811 connects, base URL keeps the brackets
+        (h) "", ftp://x, a path, port 99999 -> refused with a message
+      Screenshots of the trust modal, changed modal and banner were looked at.
+    - NOT run: a real Let's Encrypt/Caddy server through the client; Windows
+      and macOS; a packaged build.
+
+  Next Step: PRD 18.4 — identity log and the "Require signed identity" switch.
+
+
+--- Entry: 10/10/2026 ---
+
+Feature/Fix: Identity log and a "Require signed identity" switch (PRD 18.4)
+
+  Problem: Key binds and refused joins were only written to the server's
+  console, so an admin could not see from the app who bound a key (the
+  trust-on-first-use window) or who was being refused. REQUIRE_SIGNED_IDENTITY
+  was an environment variable only — changing it needed a restart and shell
+  access, and nothing said when turning it on was safe.
+
+  Solution:
+    Database (migration 20261012120000_add_identity_events, additive)
+      - `identity_events` (kind BOUND/RESET/REFUSED, userId, nickname at the
+        time, reason KEY not message text, fingerprint, address, host,
+        actorId, createdAt; indexes on (serverId, createdAt desc) and
+        (userId, createdAt desc)); no relation to User on purpose, so
+        refusals of ids that never became users are kept and rows outlive
+        users. `servers.requireSignedIdentity` (default false).
+    Server
+      - identity-events.service.ts: `recordIdentityEvent()` is fire-and-forget
+        and never throws; refusals are de-duplicated per (server, user,
+        reason, key, address) for 10 min (Redis SET NX) and capped at 10 per
+        address per hour (a flood of bogus ids from one address); stored
+        fields are length-bounded; `pruneIdentityEvents()` hourly, 90 days.
+      - Recorded at every existing log point of the join path (bind, bind on
+        create, both race-lost refusals, the identity refusal, a malformed
+        proof) and in RESET_IDENTITY_KEY (with the fingerprint that was
+        forgotten and the acting admin).
+      - GET_IDENTITY_EVENTS: ADMIN-checked inside the handler; cursor
+        pagination (`before` + limit 1-100), page decorated with current
+        nicknames, actor nicknames and a `privileged` flag (holds ADMIN or
+        MANAGE_ROLES) using two small lookups per page.
+      - identity.config: the effective value is env-over-database
+        (`resolveRequireSigned`); any non-empty env value locks the switch,
+        including `false`, and an EMPTY value (what docker-compose passes) is
+        treated as unset. The stored value is mirrored in memory
+        (`setDbRequireSigned`, loaded at boot and on every update) so a join
+        costs no database read; a change takes effect on the next join.
+      - GET_SERVER_SETTINGS adds requireSignedIdentity, ...LockedByEnv and
+        `unprotectedActiveUsers` (no bound key, joined in the last 30 days)
+        for ADMINs only, via getUserPermissions/isAdmin — not
+        requirePermission, which would emit a PERMISSION_DENIED error to
+        every non-admin on a plain read.
+    Client
+      - User Management: an "Identity log" button (ADMIN only) opens the log
+        in place with Back, "Load older" paging, a per-user "Log" button on
+        each row and a "Show everyone" reset. Each row: kind badge, nickname
+        (+ "now X" when renamed), a "privileged" tag, plain-words reason,
+        address/host, fingerprint, time. All dynamic text via textContent.
+      - Settings -> Server: the switch, a note with the unprotected count
+        ("turning this on locks them out until they update" / "safe to turn
+        on"), disabled with an explanation when the env var locks it, hidden
+        against a pre-2.7.0 server (the field is absent).
+
+  Deviation: SERVER_SETTINGS_UPDATED is NOT extended with the new field (the
+  PRD listed it): it is broadcast to everyone and the policy is admin-only
+  information; the changing admin's own UI already knows the new value.
+
+  Key Files Modified:
+    apps/server/prisma/schema.prisma, migrations/20261012120000_add_identity_events (NEW)
+    apps/server/src/services/identity-events.service.ts (NEW)
+    apps/server/src/__tests__/identity-events.service.test.ts (NEW, 33 tests)
+    apps/server/src/config/identity.config.ts
+    apps/server/src/handlers/connection.handler.ts, admin.handler.ts, nudge.handler.ts
+    apps/server/src/index.ts, apps/server/.env.example
+    packages/shared-types/src/models.ts (IIdentityEvent), socket-events.ts
+    apps/client/src/preload.ts, renderer/renderer.ts, renderer/index.html
+    AGENTS.md, apps/server/AGENTS.md, README.md
+
+  Verification:
+    - Migration applied on a fresh database by `prisma migrate deploy` (the
+      scratch server's setup); SQL generated with `migrate diff` against a
+      throwaway shadow database.
+    - tsc --build x3: exit 0; lint: exit 0 (0 errors, 71 warnings, no
+      change); server vitest 16 files / 204 tests; client smoke suites
+      63/20/22/40/14/73, all pass.
+    - Live, real server + real client under Xvfb, 31/31: Alice binds; five
+      retries with the SAME other key are ONE refusal row (a different key
+      per attempt is a separate row, as designed); an unsigned join of a
+      protected id is refused ("protected") while an unsigned join of a
+      never-bound id is accepted; the admin sees "Key bound" x2 with the
+      admin's row tagged privileged and addresses shown; per-user filter
+      shows only that user's rows; the two-step Reset key writes a "Key
+      reset by Boss" row listed first; a non-admin is refused the log, sees
+      no policy fields, and can't change it; switching ON refuses an
+      unsigned join at once with no restart and OFF accepts it again; with
+      REQUIRE_SIGNED_IDENTITY=false in the environment the switch is
+      disabled with the explanation and the server refuses the update.
+      Screenshots of the log and the locked switch were looked at (and the
+      "Identity log" button wrapping onto two lines was fixed).
+    - NOT run: the 90-day prune against real old rows (unit-tested with a
+      fake clock only).
+
+  Next Step: PRD 18.5 — allowed connection names managed in Settings.
+
+
+--- Entry: 10/10/2026 ---
+
+Feature/Fix: Allowed connection names managed in Settings — relay protection (PRD 18.5)
+
+  Problem: AUTH_ALLOWED_HOSTS (the only defense against a malicious server
+  relaying this server's sign-in challenge to its own visitors) was an
+  environment variable only. It is off by default because a server reachable
+  under several names must list ALL of them, and an admin had no way to learn
+  which names people actually type — so in practice it stayed off.
+
+  Solution:
+    - `servers.authAllowedHosts text[]` (migration
+      20261013120000_add_auth_allowed_hosts, additive, default empty).
+      Effective list = AUTH_ALLOWED_HOSTS when non-empty (locks the setting),
+      else the stored list (mirrored in memory like 18.4's switch, loaded at
+      boot, refreshed on update — takes effect on the next join). Empty = the
+      check is off, as before.
+    - auth-hosts.service.ts: `parseAllowedHostsInput` (array, <= 50, each
+      host or host:port, lower-cased, de-duplicated, bounded error text),
+      `checkAllowedHostsUpdate` (the lock-out guard), observed names in Redis
+      (`HINCRBY` count + last-seen per accepted signed join; distinct names
+      capped at 200 per server because a client picks its own host string;
+      90-day expiry refreshed on use; never throws).
+    - The guard: a non-empty list must contain the host the SAVING admin's own
+      session was signed for (`socket.data.authHost`, set from the accepted
+      proof), else it is refused naming that host, because they'd be refused
+      on their next reconnect and could not undo it from the UI. An empty
+      list is always allowed, and so is an admin on an unsigned session
+      (unsigned joins aren't subject to the host check at all).
+    - GET_SERVER_SETTINGS (ADMIN callers only) adds authAllowedHosts,
+      authAllowedHostsLockedByEnv and observedAuthHosts (top 50 by use);
+      UPDATE_SERVER_SETTINGS accepts authAllowedHosts, refused while the env
+      var is set. Refusals already land in the identity log from 18.4 as
+      `hostNotAllowed`, so an admin who forgot a name sees it immediately.
+    - `npm run identity:clear-hosts [-- --yes]` (plain ESM like uploads:prune,
+      typed by a .d.mts): lists the stored list(s), asks, clears, says to
+      restart the server (the list lives in memory) and notes when the env
+      var still applies. This is the recovery for a list that went stale
+      (domain changed) when nobody can open the Settings tab any more.
+    - Client: Settings -> Server -> "Connection names (relay protection)":
+      the observed names as a checklist with sign-in counts and last-seen, an
+      Add box (same shape as the server accepts; Enter adds), a status line
+      ("Off — any name is accepted" / "On — N names"), Save. A listed name
+      nobody used yet stays visible (saving must not drop it); pending text in
+      the box is added on Save, and invalid pending text blocks the save with
+      the hint instead of being dropped; controls are disabled with an
+      explanation when the env var locks the list.
+
+  Why not something cleverer (recorded in the PRD, re-checked): comparing the
+  signed host to the socket's Host header proves nothing in a relay (the
+  attacker controls their own connection); real channel binding isn't
+  available to the Socket.io stack and breaks behind TLS-terminating proxies;
+  per-server derived keys would invalidate every key bound in 2.6.0.
+
+  Key Files Modified:
+    apps/server/prisma/schema.prisma, migrations/20261013120000_add_auth_allowed_hosts (NEW)
+    apps/server/src/services/auth-hosts.service.ts (NEW)
+    apps/server/src/__tests__/auth-hosts.service.test.ts (NEW, 30 tests)
+    apps/server/scripts/identity-clear-hosts.mjs (NEW) + .d.mts (NEW), package.json
+    apps/server/src/config/identity.config.ts
+    apps/server/src/handlers/connection.handler.ts, nudge.handler.ts
+    apps/server/src/index.ts, apps/server/.env.example
+    packages/shared-types/src/models.ts (IObservedAuthHost), socket-events.ts
+    apps/client/src/preload.ts, renderer/renderer.ts, renderer/index.html
+    AGENTS.md, apps/server/AGENTS.md, README.md
+
+  Verification:
+    - tsc --build x3: exit 0; lint: exit 0 (0 errors, 71 warnings, same as
+      before); server vitest 17 files / 234 tests; client suites unchanged
+      (63/20/22/40/14/73).
+    - Live, real server + real client + a real Postgres/Redis, 28/28:
+      names seen from scripted signed sign-ins (localhost:9811 x2,
+      127.0.0.1:9811) are suggested with counts; saving a list that excludes
+      the admin's own name is refused naming it and stores nothing; saving
+      [127.0.0.1:9811] refuses a sign-in addressed to localhost:9811
+      ("doesn't accept connections addressed to that host") and accepts
+      127.0.0.1:9811, and the refusal appears in the identity log as
+      hostNotAllowed; a typed "Chat.Example.com" is stored lower-cased;
+      invalid entries are rejected with a hint; a listed-but-unseen name
+      survives reopening Settings; an empty list turns the check off; a
+      non-admin sees none of it and can't change it; with AUTH_ALLOWED_HOSTS
+      in the environment the controls are disabled, the effective names are
+      shown, and the server refuses the update; a stale stored list locks
+      everyone out until `identity:clear-hosts --yes` + a restart.
+    - Screenshots looked at; two visual bugs found and fixed that way: the
+      description paragraph was oversized (`.modal-content p` beats a single
+      class) and the host rows collapsed (`.modal-content label`/`input`
+      generic rules) — both need `.modal-content .relay-hosts …` specificity.
+    - NOT run: the script inside the production Docker image.
+
+  Next Step: PRD 18.6 — identity key encrypted at rest + passphrase backup.
+
+
+--- Entry: 10/10/2026 ---
+
+Feature/Fix: Identity key encrypted at rest + passphrase-protected backup (PRD 18.6)
+
+  Problem: The Ed25519 private key was a plain PKCS#8 PEM (0600) in the
+  userData folder, so a copy of that folder — a backup, a synced folder — was
+  a copy of the identity. And if the key was ever lost there was no recovery
+  at all: an unreadable PEM silently minted a NEW key, orphaning every
+  identity bound on servers until an admin reset each one.
+
+  Solution:
+    Storage (identity-store.ts, Electron-free; identity-key.ts is the adapter)
+      - `identity-key.enc` = Electron safeStorage (DPAPI / Keychain /
+        libsecret / KWallet), used only where it is RELIABLE: Windows and
+        macOS, and Linux only when `getSelectedStorageBackend()` isn't
+        "basic_text"/"unknown" (there the "encryption" is a fixed key anyone
+        can read, so the file stays a 0600 PEM instead of pretending).
+      - Migration of a 2.6.0 PEM: encrypt -> write .enc atomically -> read it
+        back, decrypt, compare DER -> only THEN delete the PEM. Any failure
+        leaves the PEM where it was and removes only the .enc that attempt
+        created. A leftover plaintext copy of the SAME key next to a working
+        .enc (interrupted migration) is removed; a DIFFERENT PEM is left alone.
+      - LOCKED state: an .enc that can't be decrypted (keyring reset, moved to
+        another account) never creates a replacement. Public key, signing and
+        export all return null, nothing on disk changes, and the preload stops
+        the connect (emits `identity-locked`) instead of joining unsigned — an
+        unsigned join of a bound id would only fail with a confusing "another
+        device" error.
+    Backup (identity-backup.ts, pure)
+      - `*.reson8-identity`: scrypt N=2^17 r=8 p=1 (128 MiB, async so main
+        stays responsive) + AES-256-GCM, header bound in as AAD, passphrase
+        NFC-normalized, >= 10 characters. A wrong passphrase and a tampered
+        file are indistinguishable by design ("Wrong passphrase or damaged
+        file"). Cost parameters in a file are NEVER trusted: anything but our
+        exact values is "unsupported" before any hashing. The payload (user
+        id + PKCS#8 key) is validated as a UUID + a real Ed25519 key, and a
+        backup that couldn't be restored is never written.
+    Flows (main-process IPC; the renderer only passes passphrases and gets
+    fingerprints back; file dialogs and key bytes stay in main)
+      - Settings -> About: storage line ("Stored encrypted by your operating
+        system" / protected file / temporary dev identity), Export, Import.
+      - Import: pick file (64 KB cap, opaque token) -> passphrase -> a
+        comparison of the backup's identity with the current one ->
+        "Replace and restart". The replaced key and instance-id files are
+        renamed aside (never deleted); then `app.relaunch(); app.quit()` so
+        the graceful-disconnect handler runs. Importing the identity already
+        in use is detected and changes nothing.
+      - Locked dialog: Import backup, or "Create new identity" which needs a
+        second click (it orphans every binding; the old file is kept aside).
+      - Dev builds (ephemeral identity) disable both buttons with a reason.
+
+  Bugs found by actually looking/driving (not by typecheck):
+    - The three new modals open FROM the Settings modal, which has the same
+      z-index and is later in the DOM — they opened invisibly behind it while
+      their `visible` class was set. Fixed with z-index 110, placed AFTER the
+      base modal block (my first attempt sat before it and lost).
+    - instance-id.ts had its own dev check, so under the test flag every
+      `getInstanceId()` call returned a fresh UUID; it now honors
+      RESON8_FORCE_PERSISTENT_IDENTITY too (test-only, documented).
+
+  Key Files Modified:
+    apps/client/src/identity-store.ts (NEW), identity-backup.ts (NEW)
+    apps/client/src/identity-key.ts (rewritten as the adapter)
+    apps/client/src/instance-id.ts (replaceInstanceId; test flag)
+    apps/client/scripts/identity-backup-smoke.mjs (NEW, 56 checks), package.json
+    apps/client/src/main.ts, preload.ts, renderer/renderer.ts, renderer/index.html
+    AGENTS.md, apps/client/AGENTS.md, README.md
+
+  Verification:
+    - tsc --build x3: exit 0; lint exit 0 (0 errors; 71 warnings after
+      removing the two this item introduced); server 234 tests; client
+      markdown 63, avatar 20, soft-clip 22, link-fixers 40, identity 14, tls
+      73, identity-backup 56.
+    - `test:identity-backup`: round trip; wrong passphrase; a flipped
+      ciphertext/tag/salt/IV byte; v:2; a huge or a weakened scrypt cost;
+      another format; non-JSON; an oversized file; NFC; a non-Ed25519 key and
+      a bad id are never written. The store, with a fake cipher that can be
+      unreliable, throw, belong to another "keyring" or return a corrupted
+      read-back: fresh encrypted/plain, migration keeping the SAME key, a
+      failing encrypt, a mismatching read-back, locked (byte-for-byte
+      unchanged, nothing created, intact when the keyring returns), create
+      new, replace (also from locked), an unreadable PEM, ephemeral, and the
+      interrupted-migration leftovers.
+    - Real Electron, real server, 43/43: App 1 (fresh install; on this
+      machine the keyring is real so the ENCRYPTED path ran) export with the
+      modal checks (short, mismatch, valid; file 0600, no id or passphrase in
+      it, fields cleared), the same identity imported = no-op, then bound on
+      the server; App 2 (another install) wrong passphrase -> error and
+      nothing replaced, right one -> the comparison, nothing changes before
+      "Replace and restart", after the relaunch it IS the backup's key and
+      user id, the replaced files kept aside, and the server that had bound
+      the original key ACCEPTS it; App 3 an undecryptable .enc -> locked
+      (nothing created or replaced), connect stopped, About says Locked,
+      Export disabled, then recovered by importing; App 4 locked -> first
+      click arms, second creates a different identity with the old file
+      aside. A 2.6.0-style plaintext PEM was migrated live: same
+      fingerprint, only .enc left, no PEM text inside it, instance id
+      untouched. Screenshots of the About block and the export modal were
+      looked at.
+    - NOT run: macOS and Windows (DPAPI/Keychain); a Linux machine WITHOUT a
+      keyring (covered by the unreliable-cipher store tests only); a
+      packaged build.
+
+  Next Step: PRD 18.7 — address (IP / range) bans.
+
+
+--- Entry: 10/10/2026 ---
+
+Feature/Fix: Address (IP / range) bans (PRD 18.7)
+
+  Problem: Bans were per identity only, and a fresh install is a fresh
+  identity, so a banned user came straight back by deleting the app's data
+  folder.
+
+  Solution (opt-in per ban; never the default):
+    - Ban dialog: Ban now asks first (it used to ban on the spot) so a scope
+      can be chosen: no / "This address only" / "Their address range", with a
+      warning about shared networks and VPNs. Cancel is the focused default.
+    - Data: `banned_addresses` (canonical CIDR, unique per server, optional
+      linked user, creator) and `users.lastAddress/lastAddressAt` recorded on
+      every join so an OFFLINE user can still be address-banned. Migration
+      20261014120000_add_banned_addresses, additive.
+    - address-ban.service.ts (pure): exact = /32 or /128, range = /24 or
+      /64 with the host bits zeroed; IPv6 written as eight un-compressed
+      hextets so one network is always one string; IPv4-mapped IPv6 is
+      treated as IPv4; `net.BlockList` matcher loaded at boot and after every
+      change; malformed rows can never ban anyone.
+    - Enforcement: the handshake only MARKS a socket (the user isn't known
+      yet); USER_JOIN_SERVER refuses it AFTER the identity decision, unless
+      that decision accepted the join as ADMIN_INSTANCE_ID (right id, and the
+      right key when ADMIN_KEY_FINGERPRINT is set) — so the designated admin
+      can always undo a mistaken range ban from the same network. A Viewer
+      socket from a banned address is refused at the handshake.
+    - BAN_USER: the address part never fails the user ban. A `warning` comes
+      back instead when: no address is known; the address is private and the
+      range was asked; the address is private/loopback while TRUST_PROXY is
+      unset (behind an untrusted proxy EVERY client has the proxy's address —
+      banning it would ban everyone; TRUST_PROXY=false stated explicitly
+      says "no proxy" and allows an exact ban); or the network includes the
+      moderator's own address. Everyone else connected from the newly banned
+      network is disconnected, except the moderator and the designated admin.
+    - UNBAN_USER also lifts the address ban made with that user;
+      GET_BANNED_ADDRESSES (BAN_USER) returns full networks to an ADMIN and
+      `203.0.113.x` / `2001:db8:1:2:x` to any other moderator;
+      UNBAN_ADDRESS lifts one row. A "Banned addresses" list sits under the
+      users in User Management.
+    - Also: the per-user identity-log button from 18.4 became a compact icon
+      (the text button squeezed nicknames to "Bystan…" in the user list).
+
+  Key Files Modified:
+    apps/server/prisma/schema.prisma, migrations/20261014120000_add_banned_addresses (NEW)
+    apps/server/src/services/address-ban.service.ts (NEW)
+    apps/server/src/__tests__/address-ban.service.test.ts (NEW, 57 tests)
+    apps/server/src/handlers/moderation.handler.ts, connection.handler.ts
+    apps/server/src/services/client-address.ts (trustProxyExplicitlyOff), index.ts
+    packages/shared-types/src/models.ts (IBannedAddress), socket-events.ts
+    apps/client/src/preload.ts, renderer/renderer.ts, renderer/index.html
+    AGENTS.md, apps/server/AGENTS.md, README.md
+
+  Verification:
+    - tsc --build x3: exit 0; lint exit 0 (0 errors, 71 warnings, unchanged);
+      server vitest 18 files / 291 tests; client suites unchanged (63/20/22/
+      40/14/73/56).
+    - Live, real server + the real client + Postgres/Redis, 37/37 (with
+      TRUST_PROXY=loopback so scripted users get distinct addresses through a
+      forged X-Forwarded-For): from the UI, banning Troll with "Their address
+      range" — the dialog is on top of Settings, defaults to "No", warns only
+      once an address option is picked — disconnects Troll (USER_BANNED) AND
+      his neighbor in the same /24 while a user on another network is
+      untouched; the database holds the canonical /24 and the ADMIN sees it
+      with "Banned with Troll"; a new identity from that range is refused, one
+      from elsewhere joins, a Viewer socket from the range is refused at the
+      handshake; a range of private addresses is refused with a reason while
+      the user ban still happened; an exact ban stores a /32 (the address
+      next to it still joins); an OFFLINE user is banned by their last
+      address; unbanning the user lifts the range; "Unban" on an address row
+      lifts only that one; after a server restart the ban is still enforced
+      (loaded at boot) while the designated admin still gets in from the
+      banned network; a BAN_USER-only holder gets masked networks, the ADMIN
+      real ones, a plain member is refused, an unknown scope is rejected;
+      with TRUST_PROXY unset a private address is NOT banned (warning, user
+      ban succeeds) and everyone behind the proxy can still join.
+    - Real bugs found by running it (not typecheck): my "re-ban a range" test
+      step hit Unban on an already-banned user (test bug); a text "Log"
+      button had squeezed nicknames in the user list (fixed above).
+    - NOT run: a real reverse proxy in front for an address ban (the forged
+      header from a trusted loopback peer exercises the same code path);
+      IPv6 clients end-to-end (unit tests only).
+
+  Next Step: PRD 18.8 — "Approve new users" mode.
+
+--- Entry: 10/10/2026 ---
+
+Feature/Fix: "Approve new users" mode, plus a default-deny gate for every event (PRD 18.8)
+
+  Problem: Anyone who could reach the server and had a fresh install could
+  join at once. There was no way to say "I want to see who comes in first".
+
+  Solution (opt-in; a server-wide ADMIN switch, off by default):
+    - Settings -> Server: "Approve new users" (`servers.requireApproval`,
+      mirrored in memory like requireSignedIdentity; no env override).
+    - A NEW identity (no `users` row) that passes every other check gets
+      `{ success: false, pending: true }` and a `pending_approvals` row. It is
+      not a half-joined user: no users row, roles or presence; the socket has
+      `pendingUserId` with userId/serverId unset. Unsigned new identities are
+      refused (approval has to bind a key); another key asking as the same id
+      is refused; 50 requests per server, 3 per address (both answered "not
+      accepting new users"); requests untouched for 7 days are pruned.
+    - Moderators (BAN_USER or ADMIN) see a badge on the gear and on the User
+      Management tab, a "Waiting for approval" list (addresses masked unless
+      ADMIN) and Approve / Reject / Reject and ban (the existing ban dialog in
+      a "pending" mode, address options included). A sound plays when a new
+      request arrives. Approve = one transaction creating the user with the
+      requested key bound + default role; the waiting client joins by itself.
+    - The waiting client shows a screen with the fingerprint and a Cancel.
+    - The designated ADMIN_INSTANCE_ID is never queued. Existing members join
+      as before.
+    - `ban.service.ts` extracted from BAN_USER so reject-and-ban and a plain
+      ban behave identically (same address-ban guards and warnings).
+
+  Found by the live event fuzz (pre-existing, fixed here):
+    - Any connected socket could CRASH THE SERVER: a handler called
+      `ack(...)` on `undefined` inside an async function when an event was
+      emitted without a callback (e.g. `socket.emit("GET_ONLINE_USERS", {})`),
+      an unhandled rejection that terminated Node. No sign-in was needed.
+    - FETCH_MESSAGES, FETCH_DIRECT_MESSAGES and USER_JOIN_CHANNEL answered
+      sockets that never signed in (history by channel id; joining a
+      channel's room). Several others (GET_APPROVED_EMOJIS,
+      GET_ROUTER_CAPABILITIES ...) relied on later failures rather than a
+      check.
+    - Fix in one place, not forty: `services/packet-guard.ts`, a `socket.use`
+      middleware on every event — default-deny until userId+serverId exist
+      (allowlist: USER_JOIN_SERVER, VIEWER_AUTHENTICATE,
+      REQUEST_AUTH_CHALLENGE, PING_LATENCY) and a normalized packet so
+      `(payload, ack)` / `(ack)` handlers always get a payload and an ack.
+
+  Key Files Modified:
+    apps/server/prisma/schema.prisma, migrations/20261015120000_add_pending_approvals (NEW)
+    apps/server/src/services/approval.service.ts, ban.service.ts, packet-guard.ts (NEW)
+    apps/server/src/handlers/approval.handler.ts (NEW), connection.handler.ts,
+      moderation.handler.ts, admin.handler.ts, nudge.handler.ts, index.ts
+    apps/server/src/config/approval.config.ts (NEW)
+    apps/server/src/__tests__/approval.service.test.ts, packet-guard.test.ts (NEW)
+    packages/shared-types/src/models.ts, socket-events.ts
+    apps/client/src/preload.ts, renderer/renderer.ts, renderer/index.html
+    AGENTS.md, apps/server/AGENTS.md, README.md
+
+  Verification:
+    - tsc x3 exit 0; lint exit 0 (0 errors); server vitest 20 files / 325
+      tests; client suites unchanged and green.
+    - Live, real server + the real client + Postgres/Redis, 65/65: switch
+      persists; a new signed identity is answered pending with a request row
+      and no user/role; the admin's badge and list show nickname, address and
+      fingerprint; a waiting socket fired 62 events x 3 payload shapes and NONE
+      succeeded, nothing was written, the server stayed up; an existing
+      member still joins; an unsigned new identity, and a second key for a
+      queued id, are refused; asking twice keeps one place; Approve from the
+      UI grants, binds the key, assigns Member, clears the badge, logs who
+      approved; Reject disconnects without a ban and the person may ask again;
+      Reject and ban with "range" bans user + /24 and a new identity from that
+      range is refused outright; 3 per address / 50 per server limits (and the
+      UI listing 50); a plain member can't list/approve/reject/flip; a BAN_USER
+      holder gets notified, sees masked addresses, can approve, a second
+      decision fails cleanly, can't flip the switch; the designated admin
+      joins with approval on; switch off -> direct joins; the real client
+      shows the waiting screen, is approved by a scripted moderator and joins
+      by itself; Cancel hides it and leaves the request queued.
+    - Real bugs found by running it: the server crash and the unauthenticated
+      reads above (fixed); my own harness left a stale server bound to the
+      port (test bug) and a range ban made my "queued" user unreachable (test
+      bug); the Settings dialog hid the waiting screen (fixed: it closes).
+    - NOT run: multiple real clients waiting at once (scripted sockets cover
+      the server logic); a reverse proxy in front.
+
+  Next Step: PRD 18.9 — invite links / codes (same opt-in pattern).
+
+--- Entry: 10/10/2026 ---
+
+Feature/Fix: Invite codes for new users (PRD 18.9)
+
+  Problem: With a public address, anyone could join. "Approve new users"
+  (18.8) is one answer; an invite code is the lighter one: hand a code to the
+  people you want.
+
+  Solution (opt-in; its own ADMIN switch in Settings -> Server, off by default):
+    - A NEW identity must present a code while the switch is on; returning
+      members and the designated admin never do. Codes: 12 Crockford Base32
+      characters (~60 bits), shown once as XXXX-XXXX-XXXX, accepted in any
+      case / with or without dashes and spaces (O->0, I/L->1).
+    - Stored only as SHA-256(normalized code) + a 4-character prefix
+      (`invites`, `invite_uses`); never logged or returned after creation.
+    - Join gate (before the approval gate): no code -> INVITE_REQUIRED; any
+      unusable code -> one generic INVITE_INVALID; 10 failures / 15 min per
+      address -> INVITE_THROTTLED (Redis counter; the code isn't looked at).
+    - The use is consumed by an atomic UPDATE ... WHERE uses < maxUses ...
+      RETURNING on the SAME transaction that creates the user, so a failed
+      join costs nothing and a race for the last use has exactly one winner.
+    - With approval on: a valid code is required to enter the queue; the
+      request stores inviteId; the use is consumed on approval and rejecting
+      costs nothing; approving with a dead invite is refused with a reason.
+    - Moderators (BAN_USER/ADMIN): User Management -> Invites: create (label,
+      expiry never/1h/24h/7d/30d, uses unlimited/1/5/10/25/custom), list
+      with status and "who used it", revoke. The code appears once in a
+      dialog with Copy and is wiped from the page when closed.
+    - Connect form: a hidden "Invite code" field, revealed and focused by
+      the server's error code, cleared after joining, never stored.
+    - Wire: USER_JOIN_SERVER.inviteCode, ack.errorCode, CREATE_INVITE /
+      GET_INVITES / REVOKE_INVITE, settings.requireInvite (all additive).
+
+  Key Files Modified:
+    apps/server/prisma/schema.prisma, migrations/20261016120000_add_invites (NEW)
+    apps/server/src/services/invite.service.ts, config/invite.config.ts (NEW)
+    apps/server/src/handlers/invite.handler.ts (NEW), connection.handler.ts,
+      approval.handler.ts, nudge.handler.ts, index.ts
+    apps/server/src/__tests__/invite.service.test.ts (NEW, 28 tests)
+    packages/shared-types/src/models.ts, socket-events.ts
+    apps/client/src/preload.ts, renderer/renderer.ts, renderer/index.html
+    AGENTS.md, apps/server/AGENTS.md, apps/client/AGENTS.md, README.md
+
+  Verification:
+    - tsc x3 exit 0; lint exit 0 (0 errors); server vitest 21 files / 353
+      tests; client suites unchanged and green; migration applied to a fresh
+      scratch database by `prisma migrate deploy`.
+    - Live, real server + the real client + Postgres/Redis, 63/63: the
+      Invites section and switch; creating an invite from the UI (dialog on
+      top of Settings, code format, only hash+prefix stored, plain code
+      nowhere in the table, expiry/max applied, code wiped on close, list
+      shows 0 / 1 uses and active); no code -> INVITE_REQUIRED, wrong or
+      garbage -> INVITE_INVALID and nothing created; a valid code in a
+      different spelling joins and is counted against the user; a single-use
+      code refuses a second new person; returning members need no code; UI
+      shows "used up" and who used it; revoked and expired codes refused;
+      8 joins racing for 3 uses -> exactly 3 win, 3 uses, exactly 3 users;
+      11th attempt from an address throttled even with a valid code, another
+      address unaffected; with approval on: a code is needed to queue, the
+      use is NOT consumed until approval, rejecting keeps it, approval
+      refused when the invite was revoked meanwhile; BAN_USER holders can
+      create/list but not flip the switch, plain members can do none of it,
+      bad expiry/max/label rejected; designated admin joins without a code;
+      the real client reveals + focuses the field on INVITE_REQUIRED, keeps
+      it on a wrong code, joins on the right one, clears/hides it and never
+      stored it.
+    - Real bugs found by running it: none beyond harness mistakes (the first
+      draft of the script left a stray unsigned socket open).
+    - NOT run: an invite claim failing the key-race branch inside the
+      transaction (covered by reasoning and the transaction shape, not by a
+      forced interleaving).
+
+  Next Step: PRD 18.10.
+
+--- Entry: 10/10/2026 ---
+
+Feature/Fix: Link-preview hardening — size cap, deadlines, caches, private networks, direct images, on/off switch (PRD 18.10)
+
+  Problem: The preview fetch cleared its 5 s timer as soon as headers arrived
+  and then read the body without limit or deadline (a 1 GB link was read whole
+  by EVERY client rendering the message); non-HTML links escalated to a real
+  browser window that downloaded them again; both caches were unbounded and
+  kept failures and expiring signed URLs forever; identical concurrent
+  requests each fetched; ANY host was fetched, including localhost, 192.168.x
+  and 169.254.169.254 (a posted link could make every reader's client probe
+  their own network); the hidden window shared the app's cookies; there was
+  no way to switch previews off.
+
+  Solution:
+    - New Electron-free modules: `link-preview-fetch.ts` (the fast path) and
+      `link-preview-guard.ts` (address table, hostnames, redirect rule,
+      guarded DNS lookup, HTML head reader, charset sniffing, TtlLru), so all
+      of it is tested in plain Node. `main.ts` keeps the IPC, caches and the
+      hidden window.
+    - One 8 s deadline over connect+headers+body; redirects by hand (<= 5),
+      each hop re-validated; the body is read only to </head> (<= 1 MB) with
+      charset sniffing and incremental decoding; image/* (not SVG, <= 20 MB)
+      -> a direct-image preview without reading it; any other type ->
+      NOT_HTML, which never escalates to the hidden window.
+    - Private networks: 0/8, 10/8, 100.64/10, 127/8, 169.254/16, 172.16/12,
+      192.0.0/24, 192.168/16, 198.18/15, 224/3, ::, ::1, fc00::/7, fe80::/10,
+      ff00::/8 (+ IPv4-mapped, NAT64 and 6to4 embedded forms); local names
+      (localhost, *.local, *.internal, *.home.arpa, *.lan, single-label); and
+      a `connect.lookup` on an undici Agent that resolves, drops blocked
+      addresses and connects to the address it checked (no rebinding gap).
+      undici is pinned ^7 (Electron 34's Node is 20.19; undici 8 needs 22.19).
+    - Hidden window: URL + DNS validated first; a dedicated in-memory
+      `link-preview` partition; every request checked (names resolving to a
+      private address are cancelled too), downloads cancelled, permissions
+      denied, popups denied, audio muted.
+    - Caches: main LRU 500 (success 6 h, fixer video 30 min, failure 10 min),
+      renderer 300 with the same TTLs; in-flight de-duplication.
+    - Renderer: direct-image card (picture + domain, opens the zoom-only
+      viewer); Settings -> Application "Show link previews" (reson8-link-
+      previews): off = no request at all + cards hidden live.
+
+  Key Files Modified:
+    apps/client/src/link-preview-fetch.ts, link-preview-guard.ts (NEW)
+    apps/client/scripts/link-preview-smoke.mjs (NEW), package.json (undici ^7, test:link-preview)
+    apps/client/src/main.ts, preload.ts (types), renderer/renderer.ts, renderer/index.html
+    AGENTS.md, apps/client/AGENTS.md, README.md, package-lock.json
+
+  Verification:
+    - tsc x3 exit 0; lint exit 0 (0 errors); server vitest 353; all client
+      suites green incl. link-fixers; new `test:link-preview` 106 checks
+      (address table, hostnames, URL/redirect rules, charset sniffing, head
+      reader incl. split multi-byte and caps, LRU/TTL, fetch against local
+      servers: page, direct image, 30 MB image, SVG, zip, relative redirect,
+      loop, 404, endless body stops fast at the cap, stalling body cut by the
+      deadline, and the production guard leaves a local listener untouched).
+    - Live in the real app (IPC -> main -> network), 30/30: example.com,
+      Wikipedia and a GitHub page still preview; a PNG link -> kind "image";
+      a zip link -> null in < 3.5 s (the hidden window was NOT opened); 12
+      private targets (127.0.0.1, localhost, [::1], decimal and hex IPv4,
+      localtest.me and 127.0.0.1.nip.io which are PUBLIC names resolving to
+      loopback, 192.168/10/169.254.169.254, .local, a single-label host) all
+      null, and a local listener saw ZERO requests; a public redirect into the
+      listener was not followed (the hidden window's own session cancelled it:
+      ERR_BLOCKED_BY_CLIENT); the direct-image card is picture + domain and
+      opens the preview-only viewer; switch off -> no request and nothing
+      cached, on -> card, off again -> card hidden live; Settings switch
+      persists.
+    - Real bugs found by running it: none beyond a lint error (a dead
+      assignment) in the new code.
+    - Old-vs-new comparison on the PRD's URL list was only run for the
+      sites reachable here (example.com, Wikipedia, GitHub): same fields.
+    - NOT run: a Cloudflare-walled page (none available), the 1 GB URL (the
+      endless-body test stands in for it), the fixer networks (YouTube/X/...
+      — covered by test:link-fixers and unchanged host rules).
+
+  Next Step: PRD 18.11.
+
+--- Entry: 10/10/2026 ---
+
+Feature/Fix: Blur link previews in NSFW channels and for adult content (PRD 18.11)
+
+  Problem: The NSFW blur covered attachments only. Link-preview images and
+  videos (including fixer-proxied posts) showed unblurred everywhere, and a
+  site's own "adult" flags were ignored.
+
+  Solution:
+    - Every media branch of the card (image, direct video, embed thumbnail,
+      direct image) is wrapped in `.lpc-blur-wrap` + an overlay (eye icon,
+      "NSFW channel - click to reveal" / "Marked as adult content by the site
+      - click to reveal"). Only CSS decides whether it is blurred, so
+      switches and a channel's NSFW flag apply LIVE to rendered cards.
+    - Reasons: the channel tab has `.tab-nsfw` (from the CURRENT tree, kept
+      in step on every tree update) or the card has `.lpc-adult` (site-marked,
+      in any channel and in DMs). Independent switches, both on by default:
+      "Blur link previews in NSFW channels" (reson8-lp-nsfw-blur) and "Blur
+      link previews marked as adult content" (reson8-lp-adult-blur).
+    - Reveal is per card, inline, and does not open the link; a blurred
+      video's controls are unusable until revealed (pointer-events: none).
+    - Adult detection (pure `link-preview-adult.ts`): `og:restrictions:age`
+      >= 18, or `<meta name=rating>` adult / mature / restricted / the RTA
+      label; run in the fast path and in the hidden-window script.
+    - The attachment switch ("Blur images in NSFW channels") is untouched and
+      does not affect previews (separate classes).
+
+  Key Files Modified:
+    apps/client/src/link-preview-adult.ts (NEW), link-preview-fetch.ts, main.ts, preload.ts
+    apps/client/scripts/link-preview-smoke.mjs
+    apps/client/src/renderer/renderer.ts, renderer/index.html
+    AGENTS.md, apps/client/AGENTS.md, README.md
+
+  Verification:
+    - tsc exit 0; lint exit 0; test:link-preview (now with the detector: each
+      signal, case/list variants, negatives, and real fetches of an
+      og:restrictions:age page and a rating=adult page) green.
+    - Live, real client + server, 26/26: ordinary preview clear in a normal
+      channel; site-marked one blurred with the adult label; flagging the
+      channel NSFW via the real UPDATE_CHANNEL blurs open previews live (tab
+      class from the tree update); video controls inert; reveal is per card;
+      NSFW switch off clears ordinary previews but NOT adult-marked ones;
+      adult switch off clears them; preferences persist under their own keys;
+      the attachment switch does not un-blur previews; un-flagging the
+      channel un-blurs live; adult-marked preview blurred in a DM, ordinary
+      one clear; a clear card's click still opens the URL.
+    - Evidence limits (honest): the PRD asked for live research on an
+      age-restricted YouTube video and a Reddit NSFW post through the real
+      pipeline. A normal YouTube video was fetched (not flagged). No
+      age-restricted YouTube URL or Reddit NSFW post was fetched, so ONLY the
+      two standard signals above are implemented — no Reddit-specific one.
+      This is recorded as an open item for the manual pass.
+    - NOT run: 18.12's reserved aspect-ratio box (re-check screenshots after
+      18.12, per the PRD).
+
+  Next Step: PRD 18.12.
+
+--- Entry: 10/10/2026 ---
+
+Feature/Fix: Chat stays put while link previews and images load (PRD 18.12)
+
+  Problem: Opening a busy channel, the text rendered first and previews/images
+  popped in afterwards, pushing content around so the view drifted away from
+  the bottom, or from what the user was reading.
+
+  Step 0 (reproduced BEFORE fixing, on the 18.11 build; instrumented
+  headless run: 40 messages, every 3rd with a link, previews delayed 0.3-2 s,
+  card images served 0.3-1.5 s late, scrollTop/scrollHeight/first-visible
+  sampled every 50 ms):
+    (a) open and don't touch: ended 936 px ABOVE the bottom  -> H2 confirmed
+        (the card is inserted, `onLoaded` sticks, THEN the image loads and the
+        card grows with no reserved box).
+    (b) scroll up 600 px right after opening: later previews moved scrollTop
+        from 1116 to 4049 - the reader was yanked to the bottom -> H1
+        confirmed (`wasNearBottom` captured at message-render time).
+    (c) reading mid-history while previews landed above and below: drift 1 px
+        -> H3 NOT reproduced; Chromium's native scroll anchoring already holds
+        it, so it was left on (the PRD said to prefer the smaller change).
+    (d) jump target: not measurable on that build before the fix (see below).
+
+  Solution:
+    - One `followBottom` per tab (user scrolls + deliberate positioning only,
+      read when a size change happens) replaces the per-message captures.
+    - One ResizeObserver per tab, fed by a MutationObserver on the list (no
+      insertion path to forget), runs `keepScroll()` in the layout phase,
+      before paint: follow -> stick; a held jump target -> re-centre; else
+      restore the reading anchor. Every programmatic scroll goes through
+      `setScroll()` / `smoothScroll()` so the user's scrolls are told apart;
+      the keeper never fights a smooth scroll; hidden tabs are skipped and
+      switchTab() still lands at the bottom (PRD 14.1).
+    - A jump target is held for 10 s (the PRD said 1.5 s; previews and images
+      take longer than that on a slow link) or until wheel/touch/key/pointer.
+    - Reserved media boxes: og:image/video width+height and
+      twitter:player:* (validated ints <= 10 000) -> `aspect-ratio` on the
+      card media; 16:9 for a video without a declared size.
+    - `stickOnImageLoad` and the preview `onLoaded` callbacks now read
+      `tab.followBottom` (kept, as the PRD allows, rather than deleted).
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts, renderer/index.html
+    apps/client/src/link-preview-fetch.ts (parseDimension, mediaSizeFromTags), preload.ts (types)
+    apps/client/scripts/link-preview-smoke.mjs
+    AGENTS.md, apps/client/AGENTS.md
+
+  Verification (same harness, fixed build, run twice, identical):
+    - (a) gap to the bottom 936 px -> 0 px.
+    - (b) the message being read: same message, offset 29 -> 30 px (1 px);
+      scrollTop is no longer pulled to the bottom.
+    - (c) drift 1 px (unchanged, native anchoring).
+    - (d) jump to a far-back pinned message with previews landing in the
+      window: target offset from centre worst 0 px over 6 s (a first version
+      that corrected one frame later showed a transient 89-177 px shift;
+      moving the correction into the ResizeObserver callback fixed it).
+    - 17.8 list on a real server with 150 messages: jump window builds and
+      lands, "Jump to most recent" offered, a live message is NOT rendered
+      into the detached window and the position holds, jump-to-recent
+      rebuilds and lands at the bottom and stays there as previews land,
+      older page prepends moving the reader <= 3 px, returning to a tab lands
+      at the bottom. 15/15 and 6/6; no ResizeObserver loop warnings.
+    - tsc exit 0; lint 0 errors; test:markdown, test:link-preview (now with
+      dimension parsing) green.
+    - NOT run: 18.11 screenshots again with reserved boxes (re-check in the
+      manual pass); own message into a detached window (path unchanged apart
+      from using stickToBottom); real network jitter.
+    - Attachments still rely on the keeper (no stored dimensions: needs a
+      server change, out of scope).
+
+  Next Step: PRD 18.13.
+
+--- Entry: 10/10/2026 ---
+
+Feature/Fix: Unread indicator and "See more" collapse for DM tabs (PRD 18.13)
+
+  Problem: An open DM tab never showed unread state (a DM arriving in an open
+  tab was marked read on arrival, even for a background tab or an unfocused
+  window), tabs auto-opened on connect were marked read as soon as they
+  loaded, and DMs never collapsed behind "See more".
+
+  Solution:
+    - `unreadDmPartners` (the DM counterpart of `unreadChannelIds`);
+      `refreshTabUnread()` now handles DM tabs (same `.has-unread` dot and
+      aria-label; no mute for DMs): shown unless the tab is active AND the
+      window is focused.
+    - One `markDmTabRead(tab)`: only when the tab is active, the window is
+      focused (`document.hasFocus()`, synchronous) and the tab's page has
+      actually been rendered -> one `markDmsRead` call per real view. Called
+      from switchTab, the window `focus` event, after the history page
+      renders, and the `dm-received` handler (partner messages only).
+    - Connect-time auto-open seeds the set first, so background tabs keep
+      their dot, their "Unread Messages" line and their unread rows.
+    - Truncation: `renderDmMessage()` and the DM branch of the prepend path
+      call `attachMessageTruncation()`; hidden tabs defer to switchTab().
+    - Sound alert logic untouched.
+
+  Bug found by running it: the first version marked a seeded partner read the
+  moment its tab was created (the tab is briefly "active" while its history
+  loads), so a background tab lost its unread rows in the database. Fixed by
+  requiring the page to have been rendered (or the load path's own
+  `hadUnreadOnPage` call).
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts
+    apps/client/AGENTS.md, README.md
+
+  Verification:
+    - tsc exit 0; lint 0 errors; test:markdown / test:link-preview green.
+    - Live, real client + real server + scripted friends, 23/23: a DM
+      arriving in an open DM tab you're not on shows the dot and stays
+      unread in the database; switching reads it (dot cleared, readAt set);
+      an unfocused window (document.hasFocus overridden: the headless window
+      keeps real focus) keeps the active DM unread until the window gets
+      focus; focused + active = read at once, as before; your own messages
+      raise no dot; reconnect with two unread partners opens both tabs, the
+      focused one is read, the background one keeps its dot, its unread rows
+      and its "Unread Messages" line, and opening it reads it; a 40-line DM
+      collapses, a 10-line one doesn't; a long DM that arrived in a
+      background tab collapses once shown; a long DM loaded through "older
+      history" collapses.
+    - NOT run: a real OS-level window blur (simulated as described).
+
+  Next Step: PRD 18.14.
+
+--- Entry: 10/10/2026 ---
+
+Feature/Fix: X/Twitter links lose their video (fxtwitter fixer) (PRD 18.14)
+
+  Problem: A link to an x.com / twitter.com post with a video showed no video
+  in the chat preview, although the same post opened through fxtwitter.com by
+  hand shows the media.
+
+  Root cause (re-verified live, 10/10/2026): the host rewrite was already
+  right. The request header was wrong: since 17.9 every fixer request carried
+  a `Discordbot/2.0` token (vxreddit needs it), and fxtwitter treats Discordbot
+  specially — for a video post it answers with NO og:video/og:image (only
+  twitter:card=player and an ActivityPub link), so the strict fixer rule
+  (media required) rejected it and the flow fell back to x.com, which has no
+  media.
+
+  Solution: `FixerRule.userAgent` (optional) and `FixerTarget.userAgent`
+  (always set; defaults to FIXER_USER_AGENT). The X rule uses the new
+  `PLAIN_CRAWLER_USER_AGENT` (exported from link-fixers.ts; the fetch module
+  now imports it so the string exists once). main.ts passes
+  `fixer.userAgent`. No host, strictness or fallback change.
+
+  Per-fixer re-check (curl, both UAs, media tags = og:video*/twitter:player:stream):
+    fixer                 Discordbot UA     plain UA          result
+    fxtwitter (X video)   no media tags     video+image       X rule -> plain
+    koutube (YouTube)     video+image       video+image       unchanged
+    fxtwitch (clip)       video             REDIRECTED away   unchanged (needs Discordbot)
+    vxbsky (Bluesky)      image             image             unchanged
+    vxreddit / oginstagram / imgurez: no valid public sample post was available
+      (the ids in the smoke test are fixtures), so no evidence to change them.
+
+  Key Files Modified:
+    apps/client/src/link-fixers.ts, link-preview-fetch.ts, main.ts
+    apps/client/scripts/link-fixers-smoke.mjs
+    AGENTS.md
+
+  Verification:
+    - test:link-fixers 56 checks (new: X/Twitter/mobile hosts -> plain UA;
+      Reddit/YouTube/Instagram/Twitch/Bluesky/Imgur keep the default; the X
+      rewrite itself unchanged); test:link-preview green; tsc, lint clean.
+    - Live through the real fetchLinkPreview() in the app: x.com,
+      twitter.com and mobile.x.com links to the NASA video post -> site "X",
+      the ORIGINAL url/domain, `video` a direct video.twimg.com MP4 and
+      `videoType` video/mp4, plus the thumbnail; a text post (twitter.com/
+      jack/status/20) -> a card; YouTube still returns its video.
+    - NOT run: a photo-only X post (none could be located: the profile API
+      returned no results from this network); a Reddit video post (no valid
+      sample); the headless "card plays inline" step (the card's <video> path
+      is unchanged since 17.9).
+
+  Next Step: PRD 18.15.
+
+--- Entry: 10/10/2026 ---
+
+Feature/Fix: Same "Category" badge on every parent channel, text and voice (PRD 18.15)
+
+  Problem: A channel that becomes a parent is drawn as a category, but only
+  voice parents carried the "Category" label.
+
+  Step 0 (headless, unfixed build, a real server, top level and nested):
+    TextParent: badge=false          NestedTextParent: badge=false
+    VoiceParent: badge=true          NestedVoiceParent: badge=true
+  So the code reading in the PRD was right and the report is the other way
+  round: it is the TEXT parent that lacked the badge (voice parents showed
+  it). Clicking a text parent's label only collapses/expands it.
+
+  Solution: `renderCategory()` builds one `.category-badge` for every parent
+  (class renamed from `.category-voice-badge`; styling unchanged), with a
+  tooltip by origin (HTML-escaped): voice -> "A voice channel with sub-
+  channels can't be joined directly"; text -> "...works as a category:
+  clicking it expands or collapses it, and its own chat isn't opened from
+  the tree". Drag/context-menu wiring is untouched (attached to the label).
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts, renderer/index.html
+
+  Verification:
+    - Same harness on the fixed build, 22/22: all four parents (text/voice,
+      top level and nested) show the badge with the single class; tooltips
+      per origin; no `.category-voice-badge` left in the code or DOM; label
+      click still collapses/expands both kinds; the context menu (Rename,
+      Delete Channel...) still opens on both; drag handlers still attached.
+    - lint 0 errors; tsc clean.
+    - NOT run: a drag-and-drop gesture itself (only that the handlers are
+      attached, as the label element is unchanged).
+
+  Next Step: PRD 18.16.
+
+--- Entry: 10/10/2026 ---
+
+Feature/Fix: Center the app description in Settings -> About (PRD 18.16)
+
+  Problem: In the About tab the logo, name and version were centred but the
+  description under them was left-aligned.
+
+  Solution: the header block and the tagline moved from inline styles to
+  `.about-header` (+ `img`, `.about-name`, `#about-version`) and
+  `.about-tagline` (same values, plus `text-align: center`). Decision on
+  `#about-update-status`: it IS centred too (it sits under a full-width
+  button and the message text is short, so left-aligned it looked off-
+  centre); the Identity rows below remain left-aligned label/value rows.
+
+  Key Files Modified: apps/client/src/renderer/index.html
+
+  Verification: headless, text centres vs the header: before - tagline 452,
+  status 410, header 545; after - tagline 545, status 545, header 545.
+  Screenshot checked: logo, name, version, button, Identity block and
+  Close unchanged otherwise. (A real "Check for Updates" run was not done;
+  the status line was filled with sample text.)
+
+  Next Step: PRD 18.17.
+
+--- Entry: 10/10/2026 ---
+
+Feature/Fix: Users without any role vanish from User Management (PRD 18.17)
+
+  Problem: GET_ALL_USERS listed only users holding at least one role on the
+  server. Remove a user's last role and they disappeared while offline, so
+  nobody could give them a role back or ban them.
+
+  Solution:
+    - `user_servers` (existing, never written) now records membership: an
+      upsert on every successful join (empty update branch, so joinedAt keeps
+      the first join) and a create inside the 18.8 approval transaction.
+    - Backfill migration 20261017120000_backfill_user_servers: one set-based,
+      idempotent INSERT ... SELECT ... ON CONFLICT DO NOTHING from role
+      holders, message authors, channel read cursors, bans and reactors on the
+      server's messages (joinedAt = earliest sign). Recovers users who had
+      already lost every role.
+    - GET_ALL_USERS: `adminUsersWhere()` = membership OR role on the server;
+      the row mapping is the pure `mapAdminUser()` (admin-users.ts). Gating
+      unchanged.
+    - Client: a muted "No roles" tag on such rows; the row stays in the
+      alphabetical list, with the role toggles and Ban/Unban.
+
+  Key Files Modified:
+    apps/server/prisma/migrations/20261017120000_backfill_user_servers (NEW)
+    apps/server/src/services/admin-users.ts (NEW), __tests__/admin-users.test.ts (NEW)
+    apps/server/src/handlers/admin.handler.ts, connection.handler.ts, approval.handler.ts
+    apps/client/src/renderer/renderer.ts, renderer/index.html
+    apps/server/AGENTS.md
+
+  Verification:
+    - Migration on a throwaway database at the previous schema (all 29
+      earlier migrations applied), seeded with a role holder, a message-only
+      user, a read-cursor-only user, a banned user without a role, a
+      reaction-only user, someone who never joined, and a user on a second
+      server: exactly the six expected (user, server) pairs got a membership,
+      the never-joined user none, and a second run changed nothing (same
+      count, same joinedAt values). `prisma migrate deploy` also applied it on
+      a fresh scratch database in the live runs.
+    - Unit tests (admin-users: roles: [] kept, bigint permissions serialized,
+      ban flag, key never leaked, the OR clause); server vitest all green.
+    - Live, real server + real client, 17/17: membership written on join;
+      removing Ann's Member role while offline leaves her listed with "No
+      roles" and the toggles; giving it back removes the tag; a role-less row
+      can be banned (BANNED badge) and unbanned; a user with neither role nor
+      membership is not listed, and appears once a member; rejoining keeps the
+      first joinedAt.
+    - NOT run: the production-size timing of the backfill (set-based, DISTINCT
+      by grouping; no per-row loop).
+
+  Next Step: PRD 18.18.
+
+--- Entry: 10/10/2026 ---
+
+Feature/Fix: Removing the "Member" role actually restricts the user (PRD 18.18)
+
+  Problem: Only SEND_MESSAGES was enforced (CONNECT and SPEAK were never
+  checked), every join re-added Member, and message events were broadcast to
+  everyone connected — so removing Member changed nothing for long.
+
+  Solution:
+    - Rule: "has access" = aggregated permissions include CONNECT or ADMIN
+      (`hasServerAccess()`).
+    - Member is granted only when the user row is CREATED (`rolesToGrant()`);
+      existing users already hold it, so nobody loses access on upgrade. The
+      designated admin keeps their per-join grant.
+    - ONE central check in the packet gate (index.ts) instead of a guard in
+      every handler: `EVENT_ACCESS` classifies all 67 client->server events
+      (compile-time exhaustive + a test that reads the registered handlers).
+      `socket.data.hasAccess` is computed at join and by
+      `applyAccessChange()`.
+    - Content broadcasts moved from `server:<id>` to `members:<id>`
+      (MESSAGE_RECEIVED/EDITED/DELETED, REACTION_UPDATED, CHANNEL_PIN_UPDATED
+      x3); the room is joined next to `server:` only with access.
+    - A DM to someone without access is refused ("This user can't receive
+      messages right now").
+    - ASSIGN_ROLE -> `applyAccessChange()`: on loss the sockets leave
+      `members:`, the voice session is torn down quietly via the extracted
+      `removeSocketFromChannel()` (shared with KICK_USER; no kick message or
+      sound), viewer tickets revoked and viewer sockets closed,
+      `ACCESS_CHANGED { hasAccess:false }` sent; on gain the room is rejoined
+      and `ACCESS_CHANGED { hasAccess:true }` sent.
+    - Join ack and the client's `connected` event carry `hasAccess`.
+    - Client: banner above the tabs; channel/DM tabs close (`reason:"access"`,
+      kept tabs remembered); guards on channel click, openChatTab/openDmTab,
+      attach/paste/drop and nudge (a toast with the reason); the composer and
+      DM/Nudge buttons are greyed (hint only); kept + unread-DM tabs return
+      live when access does; User Management tags "No access".
+
+  Event classification (EVENT_ACCESS):
+    member (refused without access, 27): USER_JOIN_CHANNEL, SEND_MESSAGE,
+      FETCH_MESSAGES, MARK_CHANNEL_READ, DELETE_MESSAGE, EDIT_MESSAGE,
+      TOGGLE_REACTION, PIN_MESSAGE, UNPIN_MESSAGE, SEND_DIRECT_MESSAGE,
+      FETCH_DIRECT_MESSAGES, DELETE_DIRECT_MESSAGE, MARK_DMS_READ,
+      GET_UNREAD_DM_PARTNERS, GET_ROUTER_CAPABILITIES,
+      CREATE_WEBRTC_TRANSPORT, CONNECT_TRANSPORT, RESTART_ICE, PRODUCE,
+      CONSUME, RESUME_CONSUMER, SET_SCREEN_SHARE_STATE, WATCH_SCREEN_SHARE,
+      REQUEST_VIEWER_TICKET, REQUEST_UPLOAD_TOKEN, CREATE_CUSTOM_EMOJI,
+      NUDGE_USER.
+    open (40): sign-in/session (USER_JOIN_SERVER, REQUEST_AUTH_CHALLENGE,
+      USER_LEAVE_SERVER, PING_LATENCY, VIEWER_AUTHENTICATE,
+      RESET_IDENTITY_KEY, GET_IDENTITY_EVENTS); structural reads and own
+      settings (GET_ONLINE_USERS, GET_USER_PROFILE, GET_SERVER_SETTINGS,
+      GET_APPROVED_EMOJIS, SET_AVATAR, USER_LEAVE_CHANNEL, SET_VOICE_STATE,
+      STOP_WATCHING_SCREEN_SHARE, CLOSE_PRODUCER, DISCARD_UPLOAD); channel
+      management (CHANNEL_MOVED, CREATE_CHANNEL, DELETE_CHANNEL,
+      UPDATE_CHANNEL, REORDER_CHANNELS); moderation/admin with their own
+      checks (GET_ALL_USERS, GET_ROLES, ASSIGN_ROLE, KICK_USER, BAN_USER,
+      UNBAN_USER, GET_BANNED_USERS, GET_BANNED_ADDRESSES, UNBAN_ADDRESS,
+      CREATE_INVITE, GET_INVITES, REVOKE_INVITE, GET_PENDING_APPROVALS,
+      APPROVE_USER, REJECT_USER, GET_PENDING_EMOJIS, REVIEW_CUSTOM_EMOJI,
+      UPDATE_SERVER_SETTINGS).
+    Decision for review: CREATE_CHANNEL/DELETE_CHANNEL/... are "open" (they
+    are gated by MANAGE_CHANNELS/ADMIN and a restricted user holds neither
+    with the fixed roles).
+
+  Key Files Modified:
+    apps/server/src/services/access.service.ts, access-change.ts,
+      voice-session.service.ts (NEW); __tests__/access.service.test.ts (NEW, 14)
+    apps/server/src/index.ts, handlers/connection.handler.ts, admin.handler.ts,
+      moderation.handler.ts, message.handler.ts, channel.handler.ts,
+      reaction.handler.ts, dm.handler.ts
+    packages/shared-types/src/socket-events.ts
+    apps/client/src/preload.ts, renderer/renderer.ts, renderer/index.html
+    AGENTS.md, apps/server/AGENTS.md, apps/client/AGENTS.md, README.md
+
+  Verification:
+    - tsc x3 clean; lint 0 errors; server vitest 372; client suites green.
+    - Live three-user matrix (admin, member, restricted) on a real server,
+      57/57: Member given once on create; removing it while C is in voice ->
+      ACCESS_CHANGED false, C left voice (B sees the channel without C) with
+      NO kick; 18 member events refused with the access message and nothing
+      written; settings / online / profile still work; B's message, edit,
+      reaction, pin and delete reach A and B and NOT C; B's DM to C refused
+      and not stored; C reconnects -> hasAccess false, Member not re-added,
+      still refused, still no content; Member given back -> ACCESS_CHANGED
+      true, C receives the next message with no reconnect, can fetch and be
+      DMed; an admin whose Member is removed keeps full access.
+    - Live client, 25/25: banner, tabs closed with the kept one remembered,
+      channel click / DM open / attach / paste-drop guarded with the reason,
+      composer greyed, reconnect while restricted shows the banner at once
+      and restores nothing, giving Member back removes the banner and brings
+      the kept tab back by itself, "No access" tags correct.
+    - Regression: the 18.8 (65/65), 18.9 (63/63) and 18.17 (17/17) live
+      suites pass unchanged against these changes.
+    - NOT run: the voice media handshake end to end for a restricted user
+      (the events are refused at the gate; teardown covered by presence);
+      a real Viewer window being closed on loss (tickets revoked + sockets
+      disconnected in code, not exercised live).
+
+  Next Step: PRD 18.19.
+
+--- Entry: 10/10/2026 ---
+
+Feature/Fix: Link-preview videos can go fullscreen and seek; preview images open the limited viewer (PRD 18.19)
+
+  Problem: (1) a preview video's fullscreen button did nothing; (2) YouTube
+  preview videos often couldn't seek; (3) a preview image opened the link, not
+  the image viewer.
+
+  Step 0 (headless, unfixed, real app): a koutube video: seekable = [0, 0],
+  setting currentTime to half left it at 0; an X video: seekable = [0, 31.5],
+  seek to 15.7 worked. requestFullscreen() on both: never settled (3 s).
+
+  Root causes:
+    - Fullscreen: Electron asks for a permission named "fullscreen" for an
+      element's requestFullscreen(); the session handler only granted the
+      microphone names, so it never settled.
+    - Seeking: the Invidious host behind the fixer answers Chromium's first
+      request (`Range: bytes=0-`) with `200` + Content-Range, no
+      Accept-Ranges; Chromium reads that as "no range support". An explicit
+      small range (`bytes=0-0`, `0-1`, `1000000-1000099`) gets a proper 206 —
+      so the first design (a 0-0 probe) wrongly judged the host fine; the
+      probe is open-ended, like the request that matters.
+
+  Solution:
+    - "fullscreen" is granted in the permission handler ONLY to the main
+      window and Viewer windows (the hidden preview session denies all).
+    - `media-proxy.ts` (pure) + `reson8-media://v/<id>` protocol: the main
+      process probes each video host once (6 h cache); a host that needs it is
+      re-served through the proxy, which forwards a validated Range upstream
+      via the guarded fetch (18.10 rules, manual redirects, only headers under
+      a deadline), turns a `200`+Content-Range into a `206`, passes only safe
+      headers and streams the body. Only ids main minted are served (else
+      404). Hosts that answer correctly keep the direct URL.
+    - CSP: `reson8-media:` in media-src only (not connect-src).
+    - Preview image click -> `openLightbox(url, { previewOnly: true })` with
+      stopPropagation; text/domain and the embed thumbnail still open the link;
+      with 18.11's blur the first click reveals, the next opens the viewer.
+
+  Key Files Modified:
+    apps/client/src/media-proxy.ts (NEW), link-preview-fetch.ts, main.ts
+    apps/client/scripts/media-proxy-smoke.mjs (NEW), package.json (test:media-proxy)
+    apps/client/src/renderer/renderer.ts, renderer/index.html (CSP)
+    AGENTS.md, apps/client/AGENTS.md, README.md
+
+  Verification:
+    - test:media-proxy 44 checks (Content-Range parsing, Range header
+      validation, the normalize table incl. unsafe headers dropped, probe
+      routing, and local servers that mimic the Invidious host); tsc/lint clean.
+    - Live in the real app: YouTube video -> reson8-media://v/<id>,
+      seekable [0, 213.04], seek to half lands at 106.5, readyState 4; X video
+      keeps its direct URL and seeks; both enter and leave fullscreen
+      (document.fullscreenElement is the video); each IPC answer mints its own
+      id; from the main process: unknown id / malformed id / wrong host /
+      smuggled URL -> 404, a ranged request -> 206 of exactly 1000 bytes with
+      Accept-Ranges and video/mp4, the open-ended first request -> 206; a
+      preview image opens the preview-only viewer and does not open the link,
+      the title still does, the embed thumbnail still does.
+    - NOT run: Windows and Wayland/XWayland fullscreen (headless is X only —
+      for the manual pass); a redirect-into-private through the proxy was only
+      exercised at unit level (guardedFetchRaw refuses it).
+
+  Next Step: all PRD items done — version bump, release notes, docs (waiting for the user's manual testing after that).
