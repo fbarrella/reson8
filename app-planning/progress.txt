@@ -1784,3 +1784,55 @@ Feature/Fix: Unread indicator and "See more" collapse for DM tabs (PRD 18.13)
     - NOT run: a real OS-level window blur (simulated as described).
 
   Next Step: PRD 18.14.
+
+--- Entry: 10/10/2026 ---
+
+Feature/Fix: X/Twitter links lose their video (fxtwitter fixer) (PRD 18.14)
+
+  Problem: A link to an x.com / twitter.com post with a video showed no video
+  in the chat preview, although the same post opened through fxtwitter.com by
+  hand shows the media.
+
+  Root cause (re-verified live, 10/10/2026): the host rewrite was already
+  right. The request header was wrong: since 17.9 every fixer request carried
+  a `Discordbot/2.0` token (vxreddit needs it), and fxtwitter treats Discordbot
+  specially — for a video post it answers with NO og:video/og:image (only
+  twitter:card=player and an ActivityPub link), so the strict fixer rule
+  (media required) rejected it and the flow fell back to x.com, which has no
+  media.
+
+  Solution: `FixerRule.userAgent` (optional) and `FixerTarget.userAgent`
+  (always set; defaults to FIXER_USER_AGENT). The X rule uses the new
+  `PLAIN_CRAWLER_USER_AGENT` (exported from link-fixers.ts; the fetch module
+  now imports it so the string exists once). main.ts passes
+  `fixer.userAgent`. No host, strictness or fallback change.
+
+  Per-fixer re-check (curl, both UAs, media tags = og:video*/twitter:player:stream):
+    fixer                 Discordbot UA     plain UA          result
+    fxtwitter (X video)   no media tags     video+image       X rule -> plain
+    koutube (YouTube)     video+image       video+image       unchanged
+    fxtwitch (clip)       video             REDIRECTED away   unchanged (needs Discordbot)
+    vxbsky (Bluesky)      image             image             unchanged
+    vxreddit / oginstagram / imgurez: no valid public sample post was available
+      (the ids in the smoke test are fixtures), so no evidence to change them.
+
+  Key Files Modified:
+    apps/client/src/link-fixers.ts, link-preview-fetch.ts, main.ts
+    apps/client/scripts/link-fixers-smoke.mjs
+    AGENTS.md
+
+  Verification:
+    - test:link-fixers 56 checks (new: X/Twitter/mobile hosts -> plain UA;
+      Reddit/YouTube/Instagram/Twitch/Bluesky/Imgur keep the default; the X
+      rewrite itself unchanged); test:link-preview green; tsc, lint clean.
+    - Live through the real fetchLinkPreview() in the app: x.com,
+      twitter.com and mobile.x.com links to the NASA video post -> site "X",
+      the ORIGINAL url/domain, `video` a direct video.twimg.com MP4 and
+      `videoType` video/mp4, plus the thumbnail; a text post (twitter.com/
+      jack/status/20) -> a card; YouTube still returns its video.
+    - NOT run: a photo-only X post (none could be located: the profile API
+      returned no results from this network); a Reddit video post (no valid
+      sample); the headless "card plays inline" step (the card's <video> path
+      is unchanged since 17.9).
+
+  Next Step: PRD 18.15.

@@ -15,7 +15,7 @@ import { startCapture, resolvePidForWindowSourceId, listAudioProducingApps, plat
 import type { CaptureHandle } from "@reson8/native-audio";
 import MarkdownIt from "markdown-it";
 import { loadWindowState, trackWindowState } from "./window-state.js";
-import { FIXER_USER_AGENT, displayDomain, toFixerUrl } from "./link-fixers.js";
+import { displayDomain, toFixerUrl } from "./link-fixers.js";
 import {
     createNewIdentityAfterLock,
     exportIdentityPkcs8Der,
@@ -377,7 +377,7 @@ async function fetchLinkPreview(url: string): Promise<LinkPreviewData | null> {
         const fixer = toFixerUrl(url);
         if (fixer) {
             const fixed = await fetchLinkPreviewFast(fixer.fixerUrl, {
-                userAgent: FIXER_USER_AGENT,
+                userAgent: fixer.userAgent,
                 strict: { expectedHost: fixer.fixerHost },
             });
             if (fixed && fixed !== NOT_HTML) {

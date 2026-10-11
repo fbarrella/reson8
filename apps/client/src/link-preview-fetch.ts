@@ -22,7 +22,7 @@ import metascraperDescription from "metascraper-description";
 import metascraperImage from "metascraper-image";
 import metascraperUrl from "metascraper-url";
 import metascraperVideo from "metascraper-video";
-import { decodeHtmlEntities } from "./link-fixers";
+import { PLAIN_CRAWLER_USER_AGENT, decodeHtmlEntities } from "./link-fixers";
 import { detectAdult, extractNamedMeta } from "./link-preview-adult";
 import { checkPreviewUrl, guardedLookup, nextRedirectUrl, readHtmlHead } from "./link-preview-guard";
 
@@ -86,7 +86,7 @@ export const MAX_REDIRECTS = 5;
 const MAX_HEAD_BYTES = 1_048_576;
 const MAX_DIRECT_IMAGE_BYTES = 20 * 1024 * 1024;
 
-const DEFAULT_UA = "Mozilla/5.0 (compatible; Reson8Bot/1.0; +https://github.com/fbarrella/reson8)";
+const DEFAULT_UA = PLAIN_CRAWLER_USER_AGENT;
 
 const previewAgent = new Agent({ connect: { lookup: guardedLookup as never, timeout: 5000 } });
 /** Tests only: reaches loopback servers (the guard refuses them in production). */

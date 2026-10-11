@@ -9,7 +9,7 @@ import { dirname, resolve } from "node:path";
 
 const require = createRequire(import.meta.url);
 const here = dirname(fileURLToPath(import.meta.url));
-const { toFixerUrl, displayDomain, decodeHtmlEntities, FIXER_USER_AGENT } = require(resolve(here, "../dist/link-fixers.js"));
+const { toFixerUrl, displayDomain, decodeHtmlEntities, FIXER_USER_AGENT, PLAIN_CRAWLER_USER_AGENT } = require(resolve(here, "../dist/link-fixers.js"));
 
 let failures = 0;
 const check = (name, ok, detail = "") => {
@@ -70,6 +70,27 @@ check("entities: named", decodeHtmlEntities("Tom &amp; Jerry &lt;3 &quot;hi&quot
 check("entities: hex + decimal, astral", decodeHtmlEntities("&#x1F441;&#xFE0E; &#128077;") === "\u{1F441}\uFE0E \u{1F44D}");
 check("entities: unknown/invalid left alone", decodeHtmlEntities("&bogus; &#xD800; &#0; & plain") === "&bogus; &#xD800; &#0; & plain");
 check("fixer UA carries the Discordbot token", /Discordbot\/2\.0/.test(FIXER_USER_AGENT) && /Reson8Bot/.test(FIXER_USER_AGENT));
+
+// ── Per-fixer User-Agent (PRD 18.14) ──
+const ua = (u) => toFixerUrl(u)?.userAgent;
+check("PLAIN_CRAWLER_USER_AGENT has no Discordbot token", !/Discordbot/i.test(PLAIN_CRAWLER_USER_AGENT));
+check("FIXER_USER_AGENT keeps the Discordbot token", /Discordbot\/2\.0/.test(FIXER_USER_AGENT));
+for (const u of ["https://x.com/a/status/1", "https://twitter.com/a/status/1", "https://mobile.twitter.com/a/status/1", "https://www.x.com/a/status/1", "https://mobile.x.com/a/status/1"]) {
+    check(`${u} asks with the plain crawler UA`, ua(u) === PLAIN_CRAWLER_USER_AGENT, String(ua(u)));
+}
+for (const u of [
+    "https://www.reddit.com/r/a/comments/b/c/",
+    "https://www.youtube.com/watch?v=abc",
+    "https://youtu.be/abc",
+    "https://www.instagram.com/reel/abc/",
+    "https://www.twitch.tv/x/clip/y",
+    "https://clips.twitch.tv/y",
+    "https://bsky.app/profile/a/post/b",
+    "https://imgur.com/gallery/abc",
+]) {
+    check(`${u} keeps the default fixer UA`, ua(u) === FIXER_USER_AGENT, String(ua(u)));
+}
+check("the X rewrite itself is unchanged", toFixerUrl("https://x.com/NASA/status/1914234202700054566")?.fixerUrl === "https://fxtwitter.com/NASA/status/1914234202700054566");
 
 console.log(failures === 0 ? "\nAll link-fixer checks passed." : `\n${failures} link-fixer check(s) FAILED.`);
 process.exit(failures === 0 ? 0 : 1);
