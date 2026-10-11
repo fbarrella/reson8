@@ -708,6 +708,15 @@ export function registerConnectionHandlers(
                     });
                 }
 
+                // Membership (PRD 18.17): User Management lists members, not just
+                // role holders, so a user whose last role is removed stays listed.
+                // `joinedAt` keeps the first join (the update branch is empty).
+                await app.prisma.userServer.upsert({
+                    where: { userId_serverId: { userId: instanceId, serverId } },
+                    update: {},
+                    create: { userId: instanceId, serverId },
+                });
+
                 // Cancel any pending deferred-leave from a recent disconnect —
                 // this instance reconnected within the grace period, so it
                 // never really left (see the `disconnect` handler below).

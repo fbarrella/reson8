@@ -148,6 +148,7 @@ export function registerApprovalHandlers(io: TypedIO, app: FastifyInstance): voi
                         },
                     });
                     await tx.userRole.create({ data: { userId, roleId: "role-default" } });
+                    await tx.userServer.create({ data: { userId, serverId } }); // PRD 18.17
                     // The invite the request came in with is consumed NOW (PRD 18.9), in
                     // the same transaction: rejecting a request never costs a use.
                     if (request.inviteId) {

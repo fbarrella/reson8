@@ -4833,8 +4833,13 @@ function renderAdminUsers(users: any[]): void {
         const keyBadge = user.hasIdentityKey
             ? ' <span class="user-key-badge" title="Identity key bound — only this user\'s device can connect as them" aria-label="Identity key bound">🔒</span>'
             : "";
+        // A member with no roles at all stays listed (PRD 18.17) — the tag makes the state visible.
+        const noRolesBadge =
+            userRoleIds.size === 0
+                ? ' <span class="user-no-roles-badge" title="This user holds no roles on this server">No roles</span>'
+                : "";
         infoEl.innerHTML = `
-            <div class="admin-user-nickname">${escapeHtml(user.nickname)}${keyBadge}${bannedBadge}</div>
+            <div class="admin-user-nickname">${escapeHtml(user.nickname)}${keyBadge}${noRolesBadge}${bannedBadge}</div>
             <div class="admin-user-id">${escapeHtml(user.id)}</div>
         `;
         row.appendChild(infoEl);

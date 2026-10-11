@@ -2840,6 +2840,21 @@
       text-overflow: ellipsis;
     }
 
+    /* A member who holds no roles (PRD 18.17) — muted, unlike BANNED. */
+    .user-no-roles-badge {
+      display: inline-block;
+      background: var(--bg-secondary);
+      color: var(--text-muted);
+      border: 1px solid var(--border);
+      font-size: 9px;
+      font-weight: 600;
+      letter-spacing: 0.3px;
+      padding: 0 5px;
+      border-radius: 4px;
+      margin-left: 6px;
+      vertical-align: middle;
+    }
+
     .user-banned-badge {
       display: inline-block;
       background: #e74c3c;

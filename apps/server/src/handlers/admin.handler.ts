@@ -22,6 +22,7 @@ import { PermissionFlags } from "@reson8/shared-types";
 import { revokeViewerTickets } from "../services/viewer-ticket.service.js";
 import { keyFingerprint } from "../services/identity.service.js";
 import { syncModeratorRoom } from "./approval.handler.js";
+import { adminUsersWhere, mapAdminUser } from "../services/admin-users.js";
 import {
     fetchIdentityEventsPage,
     parseIdentityEventsQuery,
@@ -148,16 +149,12 @@ export function registerAdminHandlers(
             try {
                 const { serverId } = payload;
 
-                // Get all users that have at least one role on this server
+                // Everyone who is a member of this server, with or without roles
+                // (PRD 18.17): a user whose last role was removed must stay
+                // listed, or nobody could give them one back or ban them.
                 const [users, bannedUsers] = await Promise.all([
                     app.prisma.user.findMany({
-                        where: {
-                            roles: {
-                                some: {
-                                    role: { serverId },
-                                },
-                            },
-                        },
+                        where: adminUsersWhere(serverId),
                         include: {
                             roles: {
                                 include: { role: true },
@@ -173,24 +170,7 @@ export function registerAdminHandlers(
                 ]);
                 const bannedIds = new Set(bannedUsers.map((b) => b.userId));
 
-                const mapped = users.map((u) => ({
-                    id: u.id,
-                    username: u.username,
-                    nickname: u.nickname,
-                    createdAt: u.createdAt.toISOString(),
-                    isBanned: bannedIds.has(u.id),
-                    // Whether a key is bound (PRD 17.12) — never the key itself.
-                    hasIdentityKey: u.publicKey !== null,
-                    roles: u.roles.map((ur) => ({
-                        id: ur.role.id,
-                        serverId: ur.role.serverId,
-                        name: ur.role.name,
-                        permissions: ur.role.permissions.toString(),
-                        powerLevel: ur.role.powerLevel,
-                        color: ur.role.color,
-                        createdAt: ur.role.createdAt.toISOString(),
-                    })),
-                }));
+                const mapped = users.map((u) => mapAdminUser(u, bannedIds));
 
                 ack({ success: true, users: mapped });
             } catch (err) {

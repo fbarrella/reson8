@@ -1896,3 +1896,55 @@ Feature/Fix: Center the app description in Settings -> About (PRD 18.16)
   the status line was filled with sample text.)
 
   Next Step: PRD 18.17.
+
+--- Entry: 10/10/2026 ---
+
+Feature/Fix: Users without any role vanish from User Management (PRD 18.17)
+
+  Problem: GET_ALL_USERS listed only users holding at least one role on the
+  server. Remove a user's last role and they disappeared while offline, so
+  nobody could give them a role back or ban them.
+
+  Solution:
+    - `user_servers` (existing, never written) now records membership: an
+      upsert on every successful join (empty update branch, so joinedAt keeps
+      the first join) and a create inside the 18.8 approval transaction.
+    - Backfill migration 20261017120000_backfill_user_servers: one set-based,
+      idempotent INSERT ... SELECT ... ON CONFLICT DO NOTHING from role
+      holders, message authors, channel read cursors, bans and reactors on the
+      server's messages (joinedAt = earliest sign). Recovers users who had
+      already lost every role.
+    - GET_ALL_USERS: `adminUsersWhere()` = membership OR role on the server;
+      the row mapping is the pure `mapAdminUser()` (admin-users.ts). Gating
+      unchanged.
+    - Client: a muted "No roles" tag on such rows; the row stays in the
+      alphabetical list, with the role toggles and Ban/Unban.
+
+  Key Files Modified:
+    apps/server/prisma/migrations/20261017120000_backfill_user_servers (NEW)
+    apps/server/src/services/admin-users.ts (NEW), __tests__/admin-users.test.ts (NEW)
+    apps/server/src/handlers/admin.handler.ts, connection.handler.ts, approval.handler.ts
+    apps/client/src/renderer/renderer.ts, renderer/index.html
+    apps/server/AGENTS.md
+
+  Verification:
+    - Migration on a throwaway database at the previous schema (all 29
+      earlier migrations applied), seeded with a role holder, a message-only
+      user, a read-cursor-only user, a banned user without a role, a
+      reaction-only user, someone who never joined, and a user on a second
+      server: exactly the six expected (user, server) pairs got a membership,
+      the never-joined user none, and a second run changed nothing (same
+      count, same joinedAt values). `prisma migrate deploy` also applied it on
+      a fresh scratch database in the live runs.
+    - Unit tests (admin-users: roles: [] kept, bigint permissions serialized,
+      ban flag, key never leaked, the OR clause); server vitest all green.
+    - Live, real server + real client, 17/17: membership written on join;
+      removing Ann's Member role while offline leaves her listed with "No
+      roles" and the toggles; giving it back removes the tag; a role-less row
+      can be banned (BANNED badge) and unbanned; a user with neither role nor
+      membership is not listed, and appears once a member; rejoining keeps the
+      first joinedAt.
+    - NOT run: the production-size timing of the backfill (set-based, DISTINCT
+      by grouping; no per-row loop).
+
+  Next Step: PRD 18.18.
