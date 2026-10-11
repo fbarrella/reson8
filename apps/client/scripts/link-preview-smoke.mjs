@@ -221,6 +221,18 @@ const ratedPage = await fetcher.fetchLinkPreviewFast(`${base}/rated`, T);
 check("a page with <meta name=rating content=adult> comes back with adult: true", ratedPage && ratedPage.adult === true, JSON.stringify(ratedPage));
 check("a normal page has no adult flag", page && !("adult" in page));
 
+// ── Declared media size (PRD 18.12) ──
+check("parseDimension accepts plain positive integers", fetcher.parseDimension("640") === 640 && fetcher.parseDimension(" 1080 ") === 1080);
+for (const bad of [undefined, "", "0", "-5", "12.5", "10001", "abc", "640px", "99999999"]) {
+    check(`parseDimension rejects ${JSON.stringify(bad)}`, fetcher.parseDimension(bad) === undefined);
+}
+const ms = fetcher.mediaSizeFromTags;
+check("image size comes from og:image:*", JSON.stringify(ms({ "og:image:width": "1200", "og:image:height": "630" }, false)) === JSON.stringify({ mediaWidth: 1200, mediaHeight: 630 }));
+check("video size comes from og:video:* when there is a video", JSON.stringify(ms({ "og:video:width": "1280", "og:video:height": "720", "og:image:width": "1", "og:image:height": "1" }, true)) === JSON.stringify({ mediaWidth: 1280, mediaHeight: 720 }));
+check("twitter:player:* is the video fallback", JSON.stringify(ms({ "twitter:player:width": "480", "twitter:player:height": "270" }, true)) === JSON.stringify({ mediaWidth: 480, mediaHeight: 270 }));
+check("a half-declared size gives nothing", JSON.stringify(ms({ "og:image:width": "1200" }, false)) === "{}");
+check("an absurd size gives nothing", JSON.stringify(ms({ "og:image:width": "50000", "og:image:height": "10" }, false)) === "{}");
+
 server.close();
 console.log(failures === 0 ? "\nAll link-preview checks passed." : `\n${failures} check(s) FAILED.`);
 process.exit(failures === 0 ? 0 : 1);

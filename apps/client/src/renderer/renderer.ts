@@ -116,6 +116,9 @@ interface LinkPreviewData {
     kind?: "page" | "image";
     /** The site marks this as adult content (PRD 18.11). */
     adult?: boolean;
+    /** The media's declared size, to reserve its box before it loads (PRD 18.12). */
+    mediaWidth?: number;
+    mediaHeight?: number;
     title?: string;
     description?: string;
     image?: string;
@@ -2025,6 +2028,23 @@ interface ChatTab {
      *  sentinels' loaders stand down, so a prepend can't cancel the scroll
      *  to the target (PRD 17.8). */
     jumpInProgress: boolean;
+    /** Whether size changes (previews, images, emoji) should keep the view on
+     *  the bottom (PRD 18.12). Updated ONLY by user-driven scrolls and by the
+     *  code that deliberately positions the view; read when a size change
+     *  actually happens, never captured earlier. */
+    followBottom: boolean;
+    /** > 0 while code (not the user) is moving the scroll position, so the
+     *  scroll listener doesn't mistake it for the user leaving the bottom. */
+    programmaticScroll: number;
+    /** > 0 while a smooth scroll runs: the keeper must not fight it. */
+    smoothScrolling: number;
+    /** The first visible message body and its offset from the viewport top,
+     *  restored after layout changes while the user is reading history. */
+    anchor: { el: HTMLElement; top: number } | null;
+    /** A jump target kept centred until the user takes over (PRD 17.8/18.12). */
+    holdTarget: { el: HTMLElement; until: number } | null;
+    resizeObserver?: ResizeObserver;
+    mutationObserver?: MutationObserver;
     /** Text channel vs DM (PRD 17.5). Only channel tabs have a mode. */
     kind: "channel" | "dm";
     /** "preview" = replaced by the next channel opened; "kept" = stays open
@@ -4557,6 +4577,19 @@ function wrapPreviewMedia(card: HTMLElement, media: HTMLElement, adult: boolean)
     return wrap;
 }
 
+/**
+ * Gives a card's media its final box as soon as the card is inserted, when the
+ * page declared the media's size (PRD 18.12) — the card then doesn't grow once
+ * the image/video loads. The existing `max-height: 300px; object-fit: cover`
+ * still caps it, so the look is unchanged.
+ */
+function reserveMediaBox(el: HTMLElement, data: LinkPreviewData): void {
+    if (data.mediaWidth && data.mediaHeight) {
+        el.style.aspectRatio = `${data.mediaWidth} / ${data.mediaHeight}`;
+        el.style.width = "100%";
+    }
+}
+
 function createPreviewCard(data: LinkPreviewData): HTMLDivElement {
     const card = document.createElement("div");
     card.className = "link-preview-card";
@@ -4625,6 +4658,7 @@ function createPreviewCard(data: LinkPreviewData): HTMLDivElement {
         videoEl.controls = true;
         if (data.image) videoEl.poster = data.image;
         videoEl.preload = "metadata";
+        reserveMediaBox(videoEl, data);
         videoEl.addEventListener("click", (e) => e.stopPropagation());
         wrapPreviewMedia(card, videoEl, !!data.adult);
     } else if (isEmbedVideo && data.image) {
@@ -4637,6 +4671,7 @@ function createPreviewCard(data: LinkPreviewData): HTMLDivElement {
         img.src = data.image;
         img.alt = data.title || "Preview";
         img.loading = "lazy";
+        reserveMediaBox(mediaWrap, data);
         img.addEventListener("error", () => { mediaWrap.style.display = "none"; });
         mediaWrap.appendChild(img);
 
@@ -4660,6 +4695,7 @@ function createPreviewCard(data: LinkPreviewData): HTMLDivElement {
         img.src = data.image;
         img.alt = data.title || "Preview";
         img.loading = "lazy";
+        reserveMediaBox(img, data);
         const staticWrap = wrapPreviewMedia(card, img, !!data.adult);
         img.addEventListener("error", () => { staticWrap.style.display = "none"; });
     }
@@ -4938,7 +4974,7 @@ function switchTab(tabId: string): void {
     // its own render loop already lands on the bottom once messages arrive.
     const tab = chatTabs.get(tabId);
     if (tab?.initialLoadDone) {
-        tab.messagesEl.scrollTop = tab.messagesEl.scrollHeight;
+        stickToBottom(tab);
     }
     // A kept tab restored at connect loads its history on first view (PRD 17.5).
     if (tab && !tab.loaded) loadChatHistory(tab);
@@ -5052,12 +5088,18 @@ function openChatTab(
         atTrueLatest: true,
         loadingNewer: false,
         jumpInProgress: false,
+        followBottom: true,
+        programmaticScroll: 0,
+        smoothScrolling: 0,
+        anchor: null,
+        holdTarget: null,
         kind: "channel",
         mode,
     };
     chatTabs.set(channelId, chatTab);
     syncTabNsfwClass(channelId); // PRD 18.11
     setupInfiniteScroll(chatTab);
+    setupScrollKeeper(chatTab); // PRD 18.12
     renderTabMode(chatTab);
     refreshTabUnread(channelId); // e.g. a kept tab restored for a channel with unread messages
 
@@ -5136,10 +5178,16 @@ function openDmTab(userId: string, nickname: string, unreadCountHint?: number): 
         atTrueLatest: true,
         loadingNewer: false,
         jumpInProgress: false,
+        followBottom: true,
+        programmaticScroll: 0,
+        smoothScrolling: 0,
+        anchor: null,
+        holdTarget: null,
         kind: "dm",
     };
     chatTabs.set(tabKey, chatTab);
     setupInfiniteScroll(chatTab);
+    setupScrollKeeper(chatTab); // PRD 18.12
 
     // Switch to the new tab
     switchTab(tabKey);
@@ -5164,6 +5212,8 @@ function closeTab(
     if (!tab) return;
 
     tab.scrollObserver?.disconnect();
+    tab.resizeObserver?.disconnect(); // PRD 18.12
+    tab.mutationObserver?.disconnect();
     tab.tabEl.remove();
     tab.contentEl.remove();
     chatTabs.delete(channelId);
@@ -5381,7 +5431,8 @@ async function scrollToMostRecent(tab: ChatTab): Promise<void> {
     if (!tab.atTrueLatest) {
         await rebuildTabAtLatest(tab);
     }
-    tab.messagesEl.scrollTo({ top: tab.messagesEl.scrollHeight, behavior: "smooth" });
+    tab.followBottom = true;
+    smoothScroll(tab, () => tab.messagesEl.scrollTo({ top: tab.messagesEl.scrollHeight, behavior: "smooth" }));
     // Landing at the bottom clears unread state, same as a natural
     // scroll-to-bottom or tab switch already does.
     markChannelRead(tab.channelId);
@@ -5462,11 +5513,14 @@ async function loadOlderMessages(tab: ChatTab): Promise<void> {
         prependOlderMessages(tab, result.messages as ChatMessage[], false);
     }
 
-    if (anchorBody?.isConnected) {
-        tab.messagesEl.scrollTop += anchorBody.getBoundingClientRect().top - anchorTopBefore;
-    } else {
-        tab.messagesEl.scrollTop = oldScrollTop + (tab.messagesEl.scrollHeight - oldScrollHeight);
-    }
+    setScroll(tab, () => {
+        if (anchorBody?.isConnected) {
+            tab.messagesEl.scrollTop += anchorBody.getBoundingClientRect().top - anchorTopBefore;
+        } else {
+            tab.messagesEl.scrollTop = oldScrollTop + (tab.messagesEl.scrollHeight - oldScrollHeight);
+        }
+    });
+    recordAnchor(tab); // before the keeper's next frame, so it doesn't undo this correction
     ensureHistoryFilled(tab); // a short page can still leave the sentinel in view
 }
 
@@ -5526,7 +5580,7 @@ async function loadNewerMessages(tab: ChatTab): Promise<void> {
         // page; appending it would leave a hidden gap. Fall back to the old
         // behavior: rebuild the tab at the present.
         await rebuildTabAtLatest(tab);
-        tab.messagesEl.scrollTop = tab.messagesEl.scrollHeight;
+        stickToBottom(tab);
         return;
     }
 
@@ -5570,7 +5624,11 @@ function ensureHistoryFilled(tab: ChatTab): void {
  * content growing above the viewport; this is belt and braces. Stops at once
  * when the user takes over (wheel, touch, keys, pointer).
  */
-function holdJumpTarget(tab: ChatTab, el: HTMLElement, ms = 1500): void {
+function holdJumpTarget(tab: ChatTab, el: HTMLElement, ms = 10_000): void {
+    // The scroll keeper re-centres it on any size change (previews, images),
+    // until the user takes over or the window passes (PRD 18.12).
+    tab.holdTarget = { el, until: performance.now() + ms };
+    tab.followBottom = false;
     const scroller = tab.messagesEl;
     const recenter = (): void => {
         if (el.isConnected) el.scrollIntoView({ behavior: "instant", block: "center" });
@@ -5645,8 +5703,128 @@ function isNearBottom(el: HTMLElement, thresholdPx = 60): boolean {
     return el.scrollHeight - el.scrollTop - el.clientHeight <= thresholdPx;
 }
 
+// ── Scroll keeper (PRD 18.12) ───────────────────────────────────────────────
+// Reproduced on the 18.11 build with delayed previews and slow images: (a) a
+// card's image grows it AFTER the stick that ran when the card was inserted,
+// so the view ended ~900px above the bottom; (b) a preview arriving after the
+// user scrolled up yanked them to the bottom, because `wasNearBottom` had been
+// captured at message-render time. (Content growing above the reading position
+// was already handled by Chromium's native scroll anchoring.)
+// One state per tab (`followBottom`, read when a size change really happens)
+// and one ResizeObserver per tab replace those per-message captures.
+
+/** Runs a programmatic scroll change so the scroll listener ignores it. */
+function setScroll(tab: ChatTab, fn: () => void): void {
+    tab.programmaticScroll++;
+    try {
+        fn();
+    } finally {
+        // The scroll event fires during the next frame's update, BEFORE rAF callbacks.
+        requestAnimationFrame(() => {
+            tab.programmaticScroll = Math.max(0, tab.programmaticScroll - 1);
+            recordAnchor(tab);
+        });
+    }
+}
+
+/** Records the first message whose text is in view, for restoring after layout shifts. */
+function recordAnchor(tab: ChatTab): void {
+    const el = tab.messagesEl;
+    if (el.clientHeight === 0) return; // hidden tab
+    const viewTop = el.getBoundingClientRect().top;
+    const bodies = el.querySelectorAll<HTMLElement>(".chat-msg .msg-body");
+    for (const b of bodies) {
+        const r = b.getBoundingClientRect();
+        if (r.bottom > viewTop) {
+            tab.anchor = { el: b, top: r.top - viewTop };
+            return;
+        }
+    }
+    tab.anchor = null;
+}
+
+/** Applied after every batch of message-size changes. */
+function keepScroll(tab: ChatTab): void {
+    const el = tab.messagesEl;
+    if (el.clientHeight === 0) return; // hidden tab: re-applied by switchTab()
+    if (tab.smoothScrolling > 0) return; // never fight a smooth scroll
+
+    if (tab.followBottom) {
+        if (el.scrollHeight - el.scrollTop - el.clientHeight > 0.5) stickToBottom(tab);
+        return;
+    }
+    if (tab.holdTarget && performance.now() < tab.holdTarget.until && tab.holdTarget.el.isConnected) {
+        const target = tab.holdTarget.el;
+        setScroll(tab, () => target.scrollIntoView({ behavior: "instant", block: "center" }));
+        return;
+    }
+    if (tab.anchor?.el.isConnected) {
+        const viewTop = el.getBoundingClientRect().top;
+        const delta = tab.anchor.el.getBoundingClientRect().top - viewTop - tab.anchor.top;
+        if (Math.abs(delta) >= 1) setScroll(tab, () => { el.scrollTop += delta; });
+    }
+}
+
+/** A smooth scroll that the keeper must not fight: programmatic until it ends. */
+function smoothScroll(tab: ChatTab, start: () => void): void {
+    tab.programmaticScroll++;
+    tab.smoothScrolling++;
+    let done = false;
+    const finish = (): void => {
+        if (done) return;
+        done = true;
+        tab.programmaticScroll = Math.max(0, tab.programmaticScroll - 1);
+        tab.smoothScrolling = Math.max(0, tab.smoothScrolling - 1);
+        tab.followBottom = isNearBottom(tab.messagesEl);
+        recordAnchor(tab);
+    };
+    tab.messagesEl.addEventListener("scrollend", finish, { once: true });
+    setTimeout(finish, 1200); // never leave it stuck if no scroll happens
+    start();
+}
+
+function setupScrollKeeper(tab: ChatTab): void {
+    const el = tab.messagesEl;
+    // Runs in the frame's layout phase, before paint: correcting here means the
+    // shifted frame is never shown. Only the scroll position changes in here,
+    // never an element size, so it cannot feed the observer a loop.
+    const ro = new ResizeObserver(() => keepScroll(tab));
+    const track = (n: Node): void => {
+        if (n instanceof HTMLElement && n.classList.contains("chat-msg")) ro.observe(n);
+    };
+    el.querySelectorAll(".chat-msg").forEach(track);
+    // Every insertion path (live, prepend, jump window, rebuild) adds `.chat-msg`
+    // children of the list; observing them here means no path can forget to.
+    const mo = new MutationObserver((records) => {
+        for (const rec of records) {
+            rec.addedNodes.forEach(track);
+            rec.removedNodes.forEach((n) => {
+                if (n instanceof HTMLElement) ro.unobserve(n);
+            });
+        }
+    });
+    mo.observe(el, { childList: true });
+    tab.resizeObserver = ro;
+    tab.mutationObserver = mo;
+
+    el.addEventListener(
+        "scroll",
+        () => {
+            if (tab.programmaticScroll > 0) return;
+            tab.followBottom = isNearBottom(el);
+            recordAnchor(tab);
+        },
+        { passive: true },
+    );
+    // The user taking over ends a held jump target.
+    for (const type of ["wheel", "touchstart", "keydown", "pointerdown"]) {
+        el.addEventListener(type, () => { tab.holdTarget = null; }, { passive: true });
+    }
+}
+
 function stickToBottom(tab: ChatTab): void {
-    tab.messagesEl.scrollTop = tab.messagesEl.scrollHeight;
+    tab.followBottom = true;
+    setScroll(tab, () => { tab.messagesEl.scrollTop = tab.messagesEl.scrollHeight; });
 }
 
 /** Records the oldest-loaded cursor/date-key the very first time a tab
@@ -5970,10 +6148,11 @@ function buildAttachmentsElement(attachments: { url: string }[], meta: LightboxM
 }
 
 /** Re-sticks the scroll to the bottom as each of a message's images finishes loading (PRD 14.1), if the user was already there. */
-function stickOnImageLoad(el: HTMLElement, tab: ChatTab, wasNearBottom: boolean): void {
+function stickOnImageLoad(el: HTMLElement, tab: ChatTab): void {
     el.querySelectorAll<HTMLImageElement>(".msg-image").forEach((img) => {
         img.addEventListener("load", () => {
-            if (wasNearBottom) stickToBottom(tab);
+            // Read NOW, not at render time: the user may have scrolled away since (PRD 18.12).
+            if (tab.followBottom) stickToBottom(tab);
         });
     });
 }
@@ -6054,7 +6233,7 @@ function renderChatMessage(tab: ChatTab, msg: ChatMessage, opts: { stick?: boole
     // ends up visually short of the true bottom (PRD 14.1). Only re-stick
     // if the user was already at the bottom when this message arrived —
     // never yank someone reading older history.
-    stickOnImageLoad(el, tab, wasNearBottom);
+    stickOnImageLoad(el, tab);
 
     // Long-message truncation (Phase 12 sub-phase item 5) — must run after
     // appendChild, since scrollHeight/clientHeight need the element to
@@ -6069,7 +6248,8 @@ function renderChatMessage(tab: ChatTab, msg: ChatMessage, opts: { stick?: boole
         const url = extractFirstUrl(msg.content);
         if (url) {
             injectLinkPreview(el, url, () => {
-                if (wasNearBottom) stickToBottom(tab);
+                // Read when the card lands, not when the message rendered (PRD 18.12).
+                if (tab.followBottom) stickToBottom(tab);
             });
         }
     }
@@ -6763,7 +6943,7 @@ api.on("message", (msg: ChatMessage) => {
             // You sent it while reading older history: go to the present so
             // you see it (PRD 17.8), as other chat apps do.
             rebuildTabAtLatest(tab).then(() => {
-                tab.messagesEl.scrollTop = tab.messagesEl.scrollHeight;
+                stickToBottom(tab);
             });
         }
         // Otherwise the tab shows a detached window (after a jump): rendering
@@ -6874,14 +7054,15 @@ function renderDmMessage(tab: ChatTab, msg: DirectMessage, opts: { stick?: boole
 
     if (wasNearBottom) stickToBottom(tab);
 
-    stickOnImageLoad(el, tab, wasNearBottom);
+    stickOnImageLoad(el, tab);
 
     // Async link preview injection
     if (msg.content) {
         const url = extractFirstUrl(msg.content);
         if (url) {
             injectLinkPreview(el, url, () => {
-                if (wasNearBottom) stickToBottom(tab);
+                // Read when the card lands, not when the message rendered (PRD 18.12).
+                if (tab.followBottom) stickToBottom(tab);
             });
         }
     }
@@ -6911,7 +7092,7 @@ api.on("dm-received", async (msg: DirectMessage) => {
             renderDmMessage(tab, msg);
         } else if (msg.senderId === myId) {
             rebuildTabAtLatest(tab).then(() => {
-                tab.messagesEl.scrollTop = tab.messagesEl.scrollHeight;
+                stickToBottom(tab);
             });
         }
         // Mark as read immediately if the message is from someone else
@@ -9996,7 +10177,9 @@ async function jumpToMessage(tabId: string, messageId: string): Promise<void> {
     let el = tab.messagesEl.querySelector(selector) as HTMLDivElement | null;
     if (el) {
         // Already loaded: a smooth scroll reads well over a short distance.
-        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        tab.followBottom = false;
+        const target = el;
+        smoothScroll(tab, () => target.scrollIntoView({ behavior: "smooth", block: "center" }));
         highlightMessage(el);
         return;
     }
@@ -10005,6 +10188,8 @@ async function jumpToMessage(tabId: string, messageId: string): Promise<void> {
     // this runs, neither sentinel may load pages — a prepend's scroll
     // correction would cancel the landing (the bug's H1 path).
     tab.jumpInProgress = true;
+    tab.followBottom = false; // a jump window is not the live bottom (PRD 18.12)
+    tab.holdTarget = null;
     const result = isDm
         ? await api.fetchDirectMessages(tabId.slice(3), undefined, JUMP_WINDOW_SIZE, messageId)
         : await api.fetchMessages(tabId, undefined, JUMP_WINDOW_SIZE, messageId);
@@ -10044,7 +10229,8 @@ async function jumpToMessage(tabId: string, messageId: string): Promise<void> {
     if (el) {
         // Instant: there's nothing meaningful to animate across in a list
         // that was just rebuilt.
-        el.scrollIntoView({ behavior: "instant", block: "center" });
+        const landed = el;
+        setScroll(tab, () => landed.scrollIntoView({ behavior: "instant", block: "center" }));
         holdJumpTarget(tab, el);
         highlightMessage(el);
     }

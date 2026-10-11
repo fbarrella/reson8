@@ -1634,6 +1634,8 @@ const api = {
         domain?: string;
         siteName?: string;
         adult?: boolean;
+        mediaWidth?: number;
+        mediaHeight?: number;
     } | null> {
         return ipcRenderer.invoke("fetch-link-preview", url);
     },

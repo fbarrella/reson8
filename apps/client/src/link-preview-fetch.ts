@@ -47,6 +47,35 @@ export interface LinkPreviewData {
     siteName?: string;
     /** The site itself marks this as adult content (PRD 18.11). Client-only, not on the wire. */
     adult?: boolean;
+    /** The media's declared size (PRD 18.12), so the card can reserve its box before it loads. */
+    mediaWidth?: number;
+    mediaHeight?: number;
+}
+
+/** A declared pixel size: a positive whole number, at most 10 000. */
+export function parseDimension(raw: string | undefined): number | undefined {
+    if (!raw || !/^\s*\d{1,5}\s*$/.test(raw)) return undefined;
+    const n = parseInt(raw, 10);
+    return n > 0 && n <= 10000 ? n : undefined;
+}
+
+/** The declared size of the media the card will show (the video when there is one, else the image). */
+export function mediaSizeFromTags(
+    ogTags: Record<string, string>,
+    hasVideo: boolean,
+): { mediaWidth?: number; mediaHeight?: number } {
+    const pairs = hasVideo
+        ? [
+              ["og:video:width", "og:video:height"],
+              ["twitter:player:width", "twitter:player:height"],
+          ]
+        : [["og:image:width", "og:image:height"]];
+    for (const [w, h] of pairs) {
+        const width = parseDimension(ogTags[w]);
+        const height = parseDimension(ogTags[h]);
+        if (width && height) return { mediaWidth: width, mediaHeight: height };
+    }
+    return {};
 }
 
 /** The link answered, but not with HTML or an image — never worth a browser window. */
@@ -231,6 +260,7 @@ export async function fetchLinkPreviewFast(
             domain: domainOf(url),
             siteName,
             ...(detectAdult({ ogTags, metaByName: extractNamedMeta(html, ["rating"]) }) ? { adult: true } : {}),
+            ...mediaSizeFromTags(ogTags, !!video),
         };
 
         // A fixer must deliver media — that's its whole point (PRD 17.9).

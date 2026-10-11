@@ -1659,3 +1659,75 @@ Feature/Fix: Blur link previews in NSFW channels and for adult content (PRD 18.1
       18.12, per the PRD).
 
   Next Step: PRD 18.12.
+
+--- Entry: 10/10/2026 ---
+
+Feature/Fix: Chat stays put while link previews and images load (PRD 18.12)
+
+  Problem: Opening a busy channel, the text rendered first and previews/images
+  popped in afterwards, pushing content around so the view drifted away from
+  the bottom, or from what the user was reading.
+
+  Step 0 (reproduced BEFORE fixing, on the 18.11 build; instrumented
+  headless run: 40 messages, every 3rd with a link, previews delayed 0.3-2 s,
+  card images served 0.3-1.5 s late, scrollTop/scrollHeight/first-visible
+  sampled every 50 ms):
+    (a) open and don't touch: ended 936 px ABOVE the bottom  -> H2 confirmed
+        (the card is inserted, `onLoaded` sticks, THEN the image loads and the
+        card grows with no reserved box).
+    (b) scroll up 600 px right after opening: later previews moved scrollTop
+        from 1116 to 4049 - the reader was yanked to the bottom -> H1
+        confirmed (`wasNearBottom` captured at message-render time).
+    (c) reading mid-history while previews landed above and below: drift 1 px
+        -> H3 NOT reproduced; Chromium's native scroll anchoring already holds
+        it, so it was left on (the PRD said to prefer the smaller change).
+    (d) jump target: not measurable on that build before the fix (see below).
+
+  Solution:
+    - One `followBottom` per tab (user scrolls + deliberate positioning only,
+      read when a size change happens) replaces the per-message captures.
+    - One ResizeObserver per tab, fed by a MutationObserver on the list (no
+      insertion path to forget), runs `keepScroll()` in the layout phase,
+      before paint: follow -> stick; a held jump target -> re-centre; else
+      restore the reading anchor. Every programmatic scroll goes through
+      `setScroll()` / `smoothScroll()` so the user's scrolls are told apart;
+      the keeper never fights a smooth scroll; hidden tabs are skipped and
+      switchTab() still lands at the bottom (PRD 14.1).
+    - A jump target is held for 10 s (the PRD said 1.5 s; previews and images
+      take longer than that on a slow link) or until wheel/touch/key/pointer.
+    - Reserved media boxes: og:image/video width+height and
+      twitter:player:* (validated ints <= 10 000) -> `aspect-ratio` on the
+      card media; 16:9 for a video without a declared size.
+    - `stickOnImageLoad` and the preview `onLoaded` callbacks now read
+      `tab.followBottom` (kept, as the PRD allows, rather than deleted).
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts, renderer/index.html
+    apps/client/src/link-preview-fetch.ts (parseDimension, mediaSizeFromTags), preload.ts (types)
+    apps/client/scripts/link-preview-smoke.mjs
+    AGENTS.md, apps/client/AGENTS.md
+
+  Verification (same harness, fixed build, run twice, identical):
+    - (a) gap to the bottom 936 px -> 0 px.
+    - (b) the message being read: same message, offset 29 -> 30 px (1 px);
+      scrollTop is no longer pulled to the bottom.
+    - (c) drift 1 px (unchanged, native anchoring).
+    - (d) jump to a far-back pinned message with previews landing in the
+      window: target offset from centre worst 0 px over 6 s (a first version
+      that corrected one frame later showed a transient 89-177 px shift;
+      moving the correction into the ResizeObserver callback fixed it).
+    - 17.8 list on a real server with 150 messages: jump window builds and
+      lands, "Jump to most recent" offered, a live message is NOT rendered
+      into the detached window and the position holds, jump-to-recent
+      rebuilds and lands at the bottom and stays there as previews land,
+      older page prepends moving the reader <= 3 px, returning to a tab lands
+      at the bottom. 15/15 and 6/6; no ResizeObserver loop warnings.
+    - tsc exit 0; lint 0 errors; test:markdown, test:link-preview (now with
+      dimension parsing) green.
+    - NOT run: 18.11 screenshots again with reserved boxes (re-check in the
+      manual pass); own message into a detached window (path unchanged apart
+      from using stickToBottom); real network jitter.
+    - Attachments still rely on the keeper (no stored dimensions: needs a
+      server change, out of scope).
+
+  Next Step: PRD 18.13.
