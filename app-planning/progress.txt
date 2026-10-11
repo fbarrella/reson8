@@ -1872,3 +1872,27 @@ Feature/Fix: Same "Category" badge on every parent channel, text and voice (PRD 
       attached, as the label element is unchanged).
 
   Next Step: PRD 18.16.
+
+--- Entry: 10/10/2026 ---
+
+Feature/Fix: Center the app description in Settings -> About (PRD 18.16)
+
+  Problem: In the About tab the logo, name and version were centred but the
+  description under them was left-aligned.
+
+  Solution: the header block and the tagline moved from inline styles to
+  `.about-header` (+ `img`, `.about-name`, `#about-version`) and
+  `.about-tagline` (same values, plus `text-align: center`). Decision on
+  `#about-update-status`: it IS centred too (it sits under a full-width
+  button and the message text is short, so left-aligned it looked off-
+  centre); the Identity rows below remain left-aligned label/value rows.
+
+  Key Files Modified: apps/client/src/renderer/index.html
+
+  Verification: headless, text centres vs the header: before - tagline 452,
+  status 410, header 545; after - tagline 545, status 545, header 545.
+  Screenshot checked: logo, name, version, button, Identity block and
+  Close unchanged otherwise. (A real "Check for Updates" run was not done;
+  the status line was filled with sample text.)
+
+  Next Step: PRD 18.17.

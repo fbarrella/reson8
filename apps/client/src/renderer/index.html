@@ -4056,6 +4056,15 @@
     .modal-content .invite-field + input,
     .modal-content .invite-field + select { width: 100%; }
 
+    /* Settings → About (PRD 18.16): the header, tagline and update status are centred
+       together; the Identity rows below are label/value rows and stay left-aligned. */
+    .about-header { text-align: center; padding: 10px 0 18px; }
+    .about-header img { width: 56px; height: 56px; margin-bottom: 8px; }
+    .about-header .about-name { font-size: 15px; font-weight: 600; }
+    .about-header #about-version { font-size: 12px; color: var(--text-muted); }
+    .about-tagline { font-size: 12px; color: var(--text-secondary); margin-bottom: 16px; text-align: center; }
+    #about-update-status { font-size: 12px; color: var(--text-secondary); margin-top: 10px; min-height: 16px; text-align: center; }
+
     .banned-addresses-title {
       margin: 14px 0 6px;
       font-size: 11px;
@@ -6400,16 +6409,16 @@
 
       <!-- About Tab -->
       <div class="settings-panel" data-settings-panel="about">
-        <div style="text-align:center; padding: 10px 0 18px;">
-          <img src="logo.png" alt="Reson8 Logo" style="width:56px; height:56px; margin-bottom:8px;">
-          <div style="font-size:15px; font-weight:600;">Reson8</div>
-          <div id="about-version" style="font-size:12px; color:var(--text-muted);"></div>
+        <div class="about-header">
+          <img src="logo.png" alt="Reson8 Logo">
+          <div class="about-name">Reson8</div>
+          <div id="about-version"></div>
         </div>
-        <p style="font-size:12px; color:var(--text-secondary); margin-bottom:16px;">
+        <p class="about-tagline">
           Self-hosted voice and text communication.
         </p>
         <button class="btn btn-create" id="btn-check-updates" style="width:100%;">Check for Updates</button>
-        <div id="about-update-status" style="font-size:12px; color:var(--text-secondary); margin-top:10px; min-height:16px;"></div>
+        <div id="about-update-status"></div>
 
         <!-- Identity key fingerprint (PRD 17.12) -->
         <div class="identity-row">
