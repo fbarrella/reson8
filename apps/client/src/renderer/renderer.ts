@@ -2667,17 +2667,19 @@ function renderCategory(node: TreeNode, siblings: TreeNode[]): HTMLDivElement {
     const category = document.createElement("div");
     category.className = "tree-category";
 
-    // A voice channel that gains a child stays non-joinable (its own
-    // occupant/join affordance never applied once it became a parent) —
-    // previously silent about this, so this badge makes it explicit
-    // instead of the join button just quietly disappearing (PRD 14.6).
-    const voiceBadge = node.type === "VOICE"
-        ? `<span class="category-voice-badge" title="Voice channels with sub-channels can't be joined directly">Category</span>`
-        : "";
+    // Every parent shows the same "Category" badge, whatever it started as
+    // (PRD 18.15). A voice channel that gains a child stays non-joinable (PRD
+    // 14.6) and a text parent's label only toggles collapse — the tooltip says
+    // which of the two it is.
+    const badgeTitle =
+        node.type === "VOICE"
+            ? "A voice channel with sub-channels can't be joined directly"
+            : "A text channel with sub-channels works as a category: clicking it expands or collapses it, and its own chat isn't opened from the tree";
+    const badge = `<span class="category-badge" title="${escapeHtml(badgeTitle)}">Category</span>`;
 
     const label = document.createElement("div");
     label.className = "tree-category-label";
-    label.innerHTML = `<span class="arrow">▾</span> ${escapeHtml(node.name)}${voiceBadge}`;
+    label.innerHTML = `<span class="arrow">▾</span> ${escapeHtml(node.name)}${badge}`;
     label.addEventListener("click", () => {
         category.classList.toggle("collapsed");
     });

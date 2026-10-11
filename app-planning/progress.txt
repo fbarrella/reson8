@@ -1836,3 +1836,39 @@ Feature/Fix: X/Twitter links lose their video (fxtwitter fixer) (PRD 18.14)
       is unchanged since 17.9).
 
   Next Step: PRD 18.15.
+
+--- Entry: 10/10/2026 ---
+
+Feature/Fix: Same "Category" badge on every parent channel, text and voice (PRD 18.15)
+
+  Problem: A channel that becomes a parent is drawn as a category, but only
+  voice parents carried the "Category" label.
+
+  Step 0 (headless, unfixed build, a real server, top level and nested):
+    TextParent: badge=false          NestedTextParent: badge=false
+    VoiceParent: badge=true          NestedVoiceParent: badge=true
+  So the code reading in the PRD was right and the report is the other way
+  round: it is the TEXT parent that lacked the badge (voice parents showed
+  it). Clicking a text parent's label only collapses/expands it.
+
+  Solution: `renderCategory()` builds one `.category-badge` for every parent
+  (class renamed from `.category-voice-badge`; styling unchanged), with a
+  tooltip by origin (HTML-escaped): voice -> "A voice channel with sub-
+  channels can't be joined directly"; text -> "...works as a category:
+  clicking it expands or collapses it, and its own chat isn't opened from
+  the tree". Drag/context-menu wiring is untouched (attached to the label).
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts, renderer/index.html
+
+  Verification:
+    - Same harness on the fixed build, 22/22: all four parents (text/voice,
+      top level and nested) show the badge with the single class; tooltips
+      per origin; no `.category-voice-badge` left in the code or DOM; label
+      click still collapses/expands both kinds; the context menu (Rename,
+      Delete Channel...) still opens on both; drag handlers still attached.
+    - lint 0 errors; tsc clean.
+    - NOT run: a drag-and-drop gesture itself (only that the handlers are
+      attached, as the label element is unchanged).
+
+  Next Step: PRD 18.16.
