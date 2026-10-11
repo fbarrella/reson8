@@ -1213,6 +1213,10 @@ const sessionTimers = new Map<string, string>();
 // server-wide regardless of which tabs are open); opening a channel's tab
 // clears it and persists the read cursor via MARK_CHANNEL_READ.
 const unreadChannelIds = new Set<string>();
+/** Partner ids of DM conversations with messages you haven't actually seen (PRD 18.13) —
+ *  the DM counterpart of `unreadChannelIds`. A DM counts as read only when its tab is
+ *  active AND the window is focused. */
+const unreadDmPartners = new Set<string>();
 
 // Approved custom server emoji, cached for the picker's "+" tab and for
 // resolving :name: tokens in message content / reaction pills. Refreshed on
@@ -2128,11 +2132,42 @@ function fillTabElement(tabEl: HTMLElement, icon: string, name: string): void {
  */
 function refreshTabUnread(channelId: string): void {
     const tab = chatTabs.get(channelId);
-    if (!tab || tab.kind !== "channel") return;
+    if (!tab) return;
+    if (tab.kind === "dm") {
+        // PRD 18.13. No mute for DMs. A tab you're looking at in a focused window is read.
+        const partnerId = channelId.slice(3);
+        const showDm = unreadDmPartners.has(partnerId) && !(activeTabId === channelId && document.hasFocus());
+        tab.tabEl.classList.toggle("has-unread", showDm);
+        if (showDm) tab.tabEl.setAttribute("aria-label", `${tab.channelName} (unread)`);
+        else tab.tabEl.removeAttribute("aria-label");
+        return;
+    }
+    if (tab.kind !== "channel") return;
     const show = unreadChannelIds.has(channelId) && !isChannelMuted(channelId) && activeTabId !== channelId;
     tab.tabEl.classList.toggle("has-unread", show);
     if (show) tab.tabEl.setAttribute("aria-label", `${tab.channelName} (unread)`);
     else tab.tabEl.removeAttribute("aria-label");
+}
+
+/**
+ * Marks a DM conversation read — but only when it is really being looked at:
+ * its tab is active and the window has focus (PRD 18.13). `document.hasFocus()`
+ * is synchronous and correct here (the async `api.isWindowFocused()` would
+ * reintroduce ordering bugs). One server call per actual view.
+ */
+function markDmTabRead(tab: ChatTab, opts: { hadUnreadOnPage?: boolean } = {}): void {
+    if (tab.kind !== "dm") return;
+    if (activeTabId !== tab.channelId || !document.hasFocus()) return;
+    // Not seen yet: a tab that is active only because it was just created (its
+    // history is still loading) hasn't shown anything — reading it now would
+    // mark messages read that were never rendered. The load path calls with
+    // `hadUnreadOnPage` once the page IS rendered.
+    if (!tab.initialLoadDone && !opts.hadUnreadOnPage) return;
+    const partnerId = tab.channelId.slice(3);
+    if (!unreadDmPartners.has(partnerId) && !opts.hadUnreadOnPage) return;
+    unreadDmPartners.delete(partnerId);
+    refreshTabUnread(tab.channelId);
+    api.markDmsRead(partnerId);
 }
 
 /** Applies a channel tab's mode to its element (classes + tooltip). */
@@ -3894,6 +3929,9 @@ api.on("connected", (data: { serverId: string; instanceId: string; secure?: bool
     api.getUnreadDmPartners().then((res) => {
         if (res.success && res.partners && res.partners.length > 0) {
             for (const p of res.partners) {
+                // Seeded first, so the tabs that end up in the background keep
+                // their dot and their "Unread Messages" line (PRD 18.13).
+                unreadDmPartners.add(p.partnerId);
                 openDmTab(p.partnerId, p.partnerNickname, p.unreadCount);
             }
         }
@@ -3972,6 +4010,7 @@ api.on("disconnected", (data?: { reason?: string }) => {
     setPendingBadges(0);
     invites = [];
     invitesSection.style.display = "none";
+    unreadDmPartners.clear(); // PRD 18.13
     statusDot.classList.remove("connected");
     statusText.textContent = "Disconnected";
     statusText.classList.remove("connected");
@@ -4976,6 +5015,11 @@ function switchTab(tabId: string): void {
     if (tab?.initialLoadDone) {
         stickToBottom(tab);
     }
+    // Looking at a DM tab (in a focused window) reads it (PRD 18.13).
+    if (tab?.kind === "dm") {
+        markDmTabRead(tab);
+        refreshTabUnread(tabId);
+    }
     // A kept tab restored at connect loads its history on first view (PRD 17.5).
     if (tab && !tab.loaded) loadChatHistory(tab);
 
@@ -5377,9 +5421,13 @@ async function fetchAndRenderLatestPage(tab: ChatTab, unreadCountHint?: number):
                 renderDmMessage(tab, result.messages[i]);
             }
 
-            // Mark messages as read now that the tab is open
+            // Unread until the tab is actually viewed with the window focused
+            // (PRD 18.13): a tab opened in the background on connect keeps its
+            // dot, and its messages stay unread on the server.
             if (firstUnreadIndex !== -1) {
-                api.markDmsRead(partnerId);
+                unreadDmPartners.add(partnerId);
+                refreshTabUnread(tab.channelId);
+                markDmTabRead(tab, { hadUnreadOnPage: true });
             }
 
             // The server says for sure since 2.6.0 (PRD 17.8); guess for older ones.
@@ -6294,7 +6342,7 @@ function prependOlderMessages(tab: ChatTab, messages: ChatMessage[] | DirectMess
             : buildChatMessageElement(tab, msg as ChatMessage);
         tab.topSentinelEl.insertAdjacentElement("afterend", el);
 
-        if (!isDm && msg.content) {
+        if (msg.content) {
             const textEl = el.querySelector(".msg-text") as HTMLElement | null;
             if (textEl) attachMessageTruncation(el, textEl);
         }
@@ -7011,8 +7059,8 @@ function markChannelRead(channelId: string): void {
 /** Builds a DM's DOM element without appending it or touching scroll state —
  *  shared by the forward-append path (`renderDmMessage`) and the
  *  backward-prepend path (`prependOlderMessages`, PRD 14.2). Note: DMs have
- *  never had long-message truncation (unlike channel messages) — preserved
- *  as-is here, not a gap introduced by this refactor. */
+ *  gets the same long-message collapse as channel messages (PRD 18.13) —
+ *  attached by the render/prepend paths, which measure after insertion. */
 function buildDmMessageElement(tab: ChatTab, msg: DirectMessage): HTMLDivElement {
     const el = buildMessageShell({
         kind: "dm",
@@ -7056,6 +7104,13 @@ function renderDmMessage(tab: ChatTab, msg: DirectMessage, opts: { stick?: boole
 
     stickOnImageLoad(el, tab);
 
+    // Long-message collapse, same as channel messages (PRD 18.13). Must run
+    // after insertion: it measures. A hidden tab defers to switchTab().
+    if (msg.content) {
+        const textEl = el.querySelector(".msg-text") as HTMLElement | null;
+        if (textEl) attachMessageTruncation(el, textEl);
+    }
+
     // Async link preview injection
     if (msg.content) {
         const url = extractFirstUrl(msg.content);
@@ -7095,9 +7150,12 @@ api.on("dm-received", async (msg: DirectMessage) => {
                 stickToBottom(tab);
             });
         }
-        // Mark as read immediately if the message is from someone else
+        // A message from the partner is unread until you're really looking at
+        // this tab (PRD 18.13); markDmTabRead() clears it at once if you are.
         if (msg.senderId !== myId) {
-            api.markDmsRead(partnerId);
+            unreadDmPartners.add(partnerId);
+            refreshTabUnread(tabKey);
+            markDmTabRead(tab);
         }
     } else {
         // Auto-open a DM tab for incoming messages from others
@@ -9852,6 +9910,17 @@ document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") hideReactionCard();
 });
 window.addEventListener("blur", hideReactionCard);
+
+// Coming back to the window reads the DM conversation you were left looking at (PRD 18.13).
+window.addEventListener("focus", () => {
+    const tab = chatTabs.get(activeTabId);
+    if (tab?.kind === "dm") markDmTabRead(tab);
+    for (const [id, t] of chatTabs) if (t.kind === "dm") refreshTabUnread(id);
+});
+window.addEventListener("blur", () => {
+    // The active DM tab is no longer "looked at": a message arriving now shows its dot.
+    for (const [id, t] of chatTabs) if (t.kind === "dm") refreshTabUnread(id);
+});
 
 const REACT_ICON_SVG = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>`;
 

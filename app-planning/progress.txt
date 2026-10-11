@@ -1731,3 +1731,56 @@ Feature/Fix: Chat stays put while link previews and images load (PRD 18.12)
       server change, out of scope).
 
   Next Step: PRD 18.13.
+
+--- Entry: 10/10/2026 ---
+
+Feature/Fix: Unread indicator and "See more" collapse for DM tabs (PRD 18.13)
+
+  Problem: An open DM tab never showed unread state (a DM arriving in an open
+  tab was marked read on arrival, even for a background tab or an unfocused
+  window), tabs auto-opened on connect were marked read as soon as they
+  loaded, and DMs never collapsed behind "See more".
+
+  Solution:
+    - `unreadDmPartners` (the DM counterpart of `unreadChannelIds`);
+      `refreshTabUnread()` now handles DM tabs (same `.has-unread` dot and
+      aria-label; no mute for DMs): shown unless the tab is active AND the
+      window is focused.
+    - One `markDmTabRead(tab)`: only when the tab is active, the window is
+      focused (`document.hasFocus()`, synchronous) and the tab's page has
+      actually been rendered -> one `markDmsRead` call per real view. Called
+      from switchTab, the window `focus` event, after the history page
+      renders, and the `dm-received` handler (partner messages only).
+    - Connect-time auto-open seeds the set first, so background tabs keep
+      their dot, their "Unread Messages" line and their unread rows.
+    - Truncation: `renderDmMessage()` and the DM branch of the prepend path
+      call `attachMessageTruncation()`; hidden tabs defer to switchTab().
+    - Sound alert logic untouched.
+
+  Bug found by running it: the first version marked a seeded partner read the
+  moment its tab was created (the tab is briefly "active" while its history
+  loads), so a background tab lost its unread rows in the database. Fixed by
+  requiring the page to have been rendered (or the load path's own
+  `hadUnreadOnPage` call).
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts
+    apps/client/AGENTS.md, README.md
+
+  Verification:
+    - tsc exit 0; lint 0 errors; test:markdown / test:link-preview green.
+    - Live, real client + real server + scripted friends, 23/23: a DM
+      arriving in an open DM tab you're not on shows the dot and stays
+      unread in the database; switching reads it (dot cleared, readAt set);
+      an unfocused window (document.hasFocus overridden: the headless window
+      keeps real focus) keeps the active DM unread until the window gets
+      focus; focused + active = read at once, as before; your own messages
+      raise no dot; reconnect with two unread partners opens both tabs, the
+      focused one is read, the background one keeps its dot, its unread rows
+      and its "Unread Messages" line, and opening it reads it; a 40-line DM
+      collapses, a 10-line one doesn't; a long DM that arrived in a
+      background tab collapses once shown; a long DM loaded through "older
+      history" collapses.
+    - NOT run: a real OS-level window blur (simulated as described).
+
+  Next Step: PRD 18.14.
