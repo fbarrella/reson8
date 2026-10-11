@@ -36,6 +36,7 @@ import { registerUploadHandlers } from "./handlers/upload.handler.js";
 import { registerProfileHandlers } from "./handlers/profile.handler.js";
 import { registerApprovalHandlers } from "./handlers/approval.handler.js";
 import { describeHandler, normalizePacket, requiresSignIn } from "./services/packet-guard.js";
+import { NO_ACCESS_MESSAGE, requiresAccess } from "./services/access.service.js";
 import { registerUploadRoute } from "./routes/upload.route.js";
 import { MediasoupService } from "./services/mediasoup.service.js";
 import { startUploadSweeper } from "./services/upload-sweeper.js";
@@ -218,6 +219,15 @@ async function main(): Promise<void> {
                 if (typeof ack === "function") (ack as (r: unknown) => void)({ success: false, error: "Not signed in" });
                 return; // dropped: never reaches a handler
             }
+            // Access to channels, DMs and voice (PRD 18.18): a signed-in user who
+            // holds neither CONNECT nor ADMIN can't reach any "member" event. One
+            // central check (services/access.service.ts classifies every event),
+            // so no handler can forget it.
+            if (requiresAccess(event) && !socket.data.hasAccess) {
+                const ack = packet[packet.length - 1];
+                if (typeof ack === "function") (ack as (r: unknown) => void)({ success: false, error: NO_ACCESS_MESSAGE });
+                return;
+            }
             next();
         });
     });
@@ -227,7 +237,7 @@ async function main(): Promise<void> {
     registerVoiceHandlers(io, app, mediasoupService);
     registerChannelHandlers(io, app);
     registerMessageHandlers(io, app);
-    registerAdminHandlers(io, app);
+    registerAdminHandlers(io, app, mediasoupService);
     registerDMHandlers(io, app);
     registerModerationHandlers(io, app, mediasoupService);
     registerReactionHandlers(io, app);

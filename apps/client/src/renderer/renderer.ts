@@ -3167,6 +3167,79 @@ function addParentOptions(nodes: TreeNode[], depth: number): void {
     }
 }
 
+// ── Server access (PRD 18.18) ─────────────────────────────────────────────
+// A user without the Member role is connected but restricted: no text channels,
+// DMs or voice, until a moderator gives it back. The server enforces this on
+// every event; the client mirrors it so nothing looks usable that isn't, and
+// every entry point says why instead of failing silently.
+let hasServerAccess = true;
+const ACCESS_BANNER_TEXT =
+    "You don't have access to this server's channels and voice right now. A moderator can give it back in User Management.";
+
+/** True when the user may use channels/DMs/voice; otherwise explains why (a toast) and returns false. */
+function requireServerAccess(): boolean {
+    if (hasServerAccess) return true;
+    showToast(escapeHtml(ACCESS_BANNER_TEXT), 5000);
+    return false;
+}
+
+/** Autopens DM tabs for partners with unread messages (connect time, and when access returns). */
+function autoOpenUnreadDmTabs(): void {
+    api.getUnreadDmPartners().then((res) => {
+        if (res.success && res.partners && res.partners.length > 0) {
+            for (const p of res.partners) {
+                // Seeded first, so the tabs that end up in the background keep
+                // their dot and their "Unread Messages" line (PRD 18.13).
+                unreadDmPartners.add(p.partnerId);
+                openDmTab(p.partnerId, p.partnerNickname, p.unreadCount);
+            }
+        }
+    });
+}
+
+/**
+ * Applies the server's answer to "may this user use channels, DMs and voice?"
+ * `restore` is true when access has just come BACK on a live connection: kept
+ * tabs and unread DM tabs return without a reconnect.
+ */
+function applyAccessState(hasAccess: boolean, opts: { restore?: boolean } = {}): void {
+    const changed = hasServerAccess !== hasAccess;
+    hasServerAccess = hasAccess;
+    document.body.classList.toggle("no-access", !hasAccess);
+    if (!changed) return;
+
+    if (!hasAccess) {
+        // Everything the user had open goes away; kept tabs stay remembered.
+        for (const [tabId] of chatTabs) closeTab(tabId, { reason: "access" });
+        previewTabId = null;
+        keptTabsRestored = false;
+        unreadDmPartners.clear();
+        // The server already removed them from voice; mirror it locally.
+        if (isInVoice) {
+            api.leaveVoiceChannel();
+            isInVoice = false;
+            currentChannelId = null;
+            previousOccupantIds = new Set();
+            previousSharingIds = new Set();
+            voiceChannelName.textContent = "";
+            voicePanel.classList.remove("in-voice");
+        }
+        switchTab("server-log");
+        log("You no longer have access to this server's channels and voice", "error");
+        showToast(escapeHtml(ACCESS_BANNER_TEXT), 7000);
+    } else if (opts.restore) {
+        log("Your access to this server's channels and voice was restored", "success");
+        keptTabsRestored = false;
+        if (currentTree.length > 0 && currentServerId) restoreKeptTabs(currentTree as TreeNode[], currentServerId);
+        autoOpenUnreadDmTabs();
+        if (currentTree.length > 0) renderTree(currentTree as TreeNode[]);
+    }
+}
+
+api.on("access-changed", (data: { hasAccess: boolean }) => {
+    applyAccessState(data.hasAccess, { restore: true });
+});
+
 // ── Channel Interaction ───────────────────────────────────────────────────
 
 let isJoiningChannel = false;
@@ -3174,6 +3247,7 @@ let isJoiningChannel = false;
 async function handleChannelClick(node: TreeNode): Promise<void> {
     if (!isConnected) return;
     if (isJoiningChannel) return; // prevent rapid double-clicks
+    if (!requireServerAccess()) return; // PRD 18.18
 
     if (node.type === "VOICE") {
         // If already in this voice channel, do nothing
@@ -3883,8 +3957,9 @@ api.on("dm-deleted", (payload: { dmId: string }) => {
 
 // ── Event Listeners ───────────────────────────────────────────────────────
 
-api.on("connected", (data: { serverId: string; instanceId: string; secure?: boolean; pinned?: boolean }) => {
+api.on("connected", (data: { serverId: string; instanceId: string; secure?: boolean; pinned?: boolean; hasAccess?: boolean }) => {
     isConnected = true;
+    applyAccessState(data.hasAccess !== false); // PRD 18.18
     currentServerId = data.serverId;
     btnConnect.disabled = true;
     btnDisconnect.disabled = false;
@@ -3927,17 +4002,8 @@ api.on("connected", (data: { serverId: string; instanceId: string; secure?: bool
         if (canBanUsers) void refreshPendingApprovals(); // PRD 18.8: the badge is right from the first paint
     });
 
-    // Auto-open DM tabs for partners with unread messages
-    api.getUnreadDmPartners().then((res) => {
-        if (res.success && res.partners && res.partners.length > 0) {
-            for (const p of res.partners) {
-                // Seeded first, so the tabs that end up in the background keep
-                // their dot and their "Unread Messages" line (PRD 18.13).
-                unreadDmPartners.add(p.partnerId);
-                openDmTab(p.partnerId, p.partnerNickname, p.unreadCount);
-            }
-        }
-    });
+    // Auto-open DM tabs for partners with unread messages (not while restricted — PRD 18.18)
+    if (hasServerAccess) autoOpenUnreadDmTabs();
 
     // Load approved custom emojis for the picker's "+" tab
     api.getApprovedEmojis().then((res) => {
@@ -4034,6 +4100,8 @@ api.on("disconnected", (data?: { reason?: string }) => {
     previewTabId = null;
     keptTabsRestored = false;
     keptTabsServerId = null;
+    hasServerAccess = true; // the next connect says otherwise if it must (PRD 18.18)
+    document.body.classList.remove("no-access");
     switchTab("server-log");
     log(`Disconnected from server (${disconnectReason})`, "error");
     SoundAlert.play("disconnected.mp3");
@@ -4833,11 +4901,23 @@ function renderAdminUsers(users: any[]): void {
         const keyBadge = user.hasIdentityKey
             ? ' <span class="user-key-badge" title="Identity key bound — only this user\'s device can connect as them" aria-label="Identity key bound">🔒</span>'
             : "";
-        // A member with no roles at all stays listed (PRD 18.17) — the tag makes the state visible.
-        const noRolesBadge =
-            userRoleIds.size === 0
-                ? ' <span class="user-no-roles-badge" title="This user holds no roles on this server">No roles</span>'
-                : "";
+        // Who can't use channels, DMs and voice (PRD 18.18): neither CONNECT nor ADMIN in
+        // any of their roles. That includes a member with no roles at all (PRD 18.17).
+        const CONNECT_BIT = 1n << 0n;
+        const ADMIN_BIT = 1n << 8n;
+        const userHasAccess = (user.roles ?? []).some((r: any) => {
+            try {
+                const p = BigInt(r.permissions);
+                return (p & CONNECT_BIT) !== 0n || (p & ADMIN_BIT) !== 0n;
+            } catch {
+                return false;
+            }
+        });
+        const noRolesBadge = !userHasAccess
+            ? userRoleIds.size === 0
+                ? ' <span class="user-no-access-badge" title="This user holds no roles, so they can\'t use channels, DMs or voice until given one">No access</span>'
+                : ' <span class="user-no-access-badge" title="Their roles don\'t include Member (or Server Admin): they can\'t use channels, DMs or voice">No access</span>'
+            : "";
         infoEl.innerHTML = `
             <div class="admin-user-nickname">${escapeHtml(user.nickname)}${keyBadge}${noRolesBadge}${bannedBadge}</div>
             <div class="admin-user-id">${escapeHtml(user.id)}</div>
@@ -5056,6 +5136,12 @@ function openChatTab(
 ): void {
     const focus = opts.focus !== false;
 
+    // No access (PRD 18.18): nothing opens. A background restore stays silent.
+    if (!hasServerAccess) {
+        if (focus) requireServerAccess();
+        return;
+    }
+
     // Already open: focus it; "Keep Tab Open" on a preview tab keeps it in place.
     const existing = chatTabs.get(channelId);
     if (existing) {
@@ -5169,6 +5255,7 @@ function openChatTab(
 // ── DM Tab Management ─────────────────────────────────────────────────────
 
 function openDmTab(userId: string, nickname: string, unreadCountHint?: number): void {
+    if (!requireServerAccess()) return; // PRD 18.18
     const tabKey = `dm:${userId}`;
 
     // If tab already exists, just switch to it
@@ -5256,7 +5343,7 @@ function openDmTab(userId: string, nickname: string, unreadCountHint?: number): 
  */
 function closeTab(
     channelId: string,
-    opts: { reason?: "user" | "replaced" | "disconnect" | "deleted" } = {},
+    opts: { reason?: "user" | "replaced" | "disconnect" | "deleted" | "access" } = {},
 ): void {
     const reason = opts.reason ?? "user";
     const tab = chatTabs.get(channelId);
@@ -5360,6 +5447,9 @@ function showChannelTabContextMenu(e: MouseEvent, channelId: string): void {
  */
 function restoreKeptTabs(tree: TreeNode[], serverId: string): void {
     keptTabsServerId = serverId;
+    // Restricted: nothing opens now, and the flag stays unset so the tabs come
+    // back when access does (PRD 18.18).
+    if (!hasServerAccess) return;
     if (keptTabsRestored || tree.length === 0) return;
     keptTabsRestored = true;
     const saved = readKeptTabsStore()[serverId] ?? [];
@@ -7325,6 +7415,7 @@ function buildNudgeButton(userId: string, nickname: string): HTMLButtonElement {
     }
 
     nudgeBtn.addEventListener("click", async () => {
+        if (!requireServerAccess()) return; // PRD 18.18
         nudgeBtn.disabled = true;
         const res = await api.nudgeUser(userId);
         if (res.success) {
@@ -9114,6 +9205,7 @@ let nextAttachmentId = 1;
 const attachmentCardEls = new Map<string, HTMLDivElement>();
 
 btnAttach.addEventListener("click", () => {
+    if (!requireServerAccess()) return; // PRD 18.18
     fileInput.click();
 });
 
@@ -9140,6 +9232,7 @@ chatInput.addEventListener("paste", (e) => {
 /** Validates the picked files, adds a card for each acceptable one, and starts uploading. */
 function addFiles(files: File[]): void {
     if (files.length === 0) return;
+    if (!requireServerAccess()) return; // PRD 18.18 (paste and drag-and-drop arrive here too)
     if (!isConnected) {
         log("Not connected — cannot upload", "error");
         return;

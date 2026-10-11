@@ -248,7 +248,7 @@ export function registerMessageHandlers(
 
                 // Broadcast to all clients in the server
                 // (they may have the channel's tab open)
-                io.to(`server:${socket.data.serverId}`).emit(
+                io.to(`members:${socket.data.serverId}`).emit(
                     "MESSAGE_RECEIVED",
                     messageDto,
                 );
@@ -447,13 +447,13 @@ export function registerMessageHandlers(
                     );
                 }
 
-                io.to(`server:${socket.data.serverId}`).emit("MESSAGE_DELETED", {
+                io.to(`members:${socket.data.serverId}`).emit("MESSAGE_DELETED", {
                     channelId: message.channelId,
                     messageId,
                 });
 
                 if (wasPinned && channel) {
-                    io.to(`server:${socket.data.serverId}`).emit("CHANNEL_PIN_UPDATED", {
+                    io.to(`members:${socket.data.serverId}`).emit("CHANNEL_PIN_UPDATED", {
                         channelId: message.channelId,
                         channelName: channel.name,
                         pinnedMessage: null,
@@ -541,7 +541,7 @@ export function registerMessageHandlers(
 
                 ack({ success: true });
 
-                io.to(`server:${socket.data.serverId}`).emit("MESSAGE_EDITED", messageDto);
+                io.to(`members:${socket.data.serverId}`).emit("MESSAGE_EDITED", messageDto);
 
                 app.log.info(
                     { socketId: socket.id, messageId },

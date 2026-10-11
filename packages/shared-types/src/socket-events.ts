@@ -73,6 +73,13 @@ export interface ClientToServerEvents {
             /** PRD 18.9: why the join was refused, when the client should react to it. */
             errorCode?: JoinErrorCode;
             /**
+             * PRD 18.18: whether this user may use the server's channels, DMs and
+             * voice. `false` = they hold neither `CONNECT` nor `ADMIN` (the Member
+             * role was removed): connected, but restricted. Absent from an older
+             * server — treat as `true`.
+             */
+            hasAccess?: boolean;
+            /**
              * PRD 18.8: the join was NOT completed — this identity is new and the
              * server approves new users first. The socket stays connected and is
              * sent APPROVAL_GRANTED / APPROVAL_REJECTED; it can do nothing else.
@@ -935,6 +942,13 @@ export interface ServerToClientEvents {
     // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- the event carries no data
     APPROVAL_REJECTED: (payload: {}) => void;
 
+    /**
+     * This user's access to the server's channels, DMs and voice changed (PRD
+     * 18.18) — their Member role was removed or given back. Sent to each of
+     * their primary sockets; not sent by a server older than 2.7.0.
+     */
+    ACCESS_CHANGED: (payload: { hasAccess: boolean }) => void;
+
     /** To moderators (BAN_USER/ADMIN): the approval queue changed (PRD 18.8). */
     PENDING_APPROVALS_CHANGED: (payload: { count: number; added?: boolean }) => void;
 
@@ -993,6 +1007,12 @@ export interface InterServerEvents { }
 export interface SocketData {
     /** Database user ID, set after authentication. */
     userId: string;
+    /**
+     * Whether this user holds `CONNECT` or `ADMIN` (PRD 18.18), computed at join
+     * and recomputed when their roles change. Gates every event classified
+     * "member" in the server's access table without a database read.
+     */
+    hasAccess?: boolean;
     /** Display name for this session. */
     nickname: string;
     /** The server instance the socket is connected to. */

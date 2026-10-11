@@ -612,6 +612,8 @@ const api = {
                         }
                         emit("connected", {
                             serverId: res.serverId,
+                            // An older server doesn't send it: treat as "has access" (PRD 18.18).
+                            hasAccess: res.hasAccess !== false,
                             instanceId,
                             secure: address.scheme === "https",
                             pinned: address.scheme === "https" && !!address.pinned,
@@ -654,6 +656,13 @@ const api = {
             );
         };
         socket.on("connect", () => void joinServer());
+
+        // Member role removed / given back (PRD 18.18). Losing access also ended
+        // the voice session on the server; end the local media side too.
+        socket.on("ACCESS_CHANGED", (payload) => {
+            if (!payload.hasAccess) voiceService?.cleanup();
+            emit("access-changed", payload);
+        });
 
         socket.on("APPROVAL_GRANTED", () => {
             emit("approval-granted", null);

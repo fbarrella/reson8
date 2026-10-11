@@ -1948,3 +1948,103 @@ Feature/Fix: Users without any role vanish from User Management (PRD 18.17)
       by grouping; no per-row loop).
 
   Next Step: PRD 18.18.
+
+--- Entry: 10/10/2026 ---
+
+Feature/Fix: Removing the "Member" role actually restricts the user (PRD 18.18)
+
+  Problem: Only SEND_MESSAGES was enforced (CONNECT and SPEAK were never
+  checked), every join re-added Member, and message events were broadcast to
+  everyone connected — so removing Member changed nothing for long.
+
+  Solution:
+    - Rule: "has access" = aggregated permissions include CONNECT or ADMIN
+      (`hasServerAccess()`).
+    - Member is granted only when the user row is CREATED (`rolesToGrant()`);
+      existing users already hold it, so nobody loses access on upgrade. The
+      designated admin keeps their per-join grant.
+    - ONE central check in the packet gate (index.ts) instead of a guard in
+      every handler: `EVENT_ACCESS` classifies all 67 client->server events
+      (compile-time exhaustive + a test that reads the registered handlers).
+      `socket.data.hasAccess` is computed at join and by
+      `applyAccessChange()`.
+    - Content broadcasts moved from `server:<id>` to `members:<id>`
+      (MESSAGE_RECEIVED/EDITED/DELETED, REACTION_UPDATED, CHANNEL_PIN_UPDATED
+      x3); the room is joined next to `server:` only with access.
+    - A DM to someone without access is refused ("This user can't receive
+      messages right now").
+    - ASSIGN_ROLE -> `applyAccessChange()`: on loss the sockets leave
+      `members:`, the voice session is torn down quietly via the extracted
+      `removeSocketFromChannel()` (shared with KICK_USER; no kick message or
+      sound), viewer tickets revoked and viewer sockets closed,
+      `ACCESS_CHANGED { hasAccess:false }` sent; on gain the room is rejoined
+      and `ACCESS_CHANGED { hasAccess:true }` sent.
+    - Join ack and the client's `connected` event carry `hasAccess`.
+    - Client: banner above the tabs; channel/DM tabs close (`reason:"access"`,
+      kept tabs remembered); guards on channel click, openChatTab/openDmTab,
+      attach/paste/drop and nudge (a toast with the reason); the composer and
+      DM/Nudge buttons are greyed (hint only); kept + unread-DM tabs return
+      live when access does; User Management tags "No access".
+
+  Event classification (EVENT_ACCESS):
+    member (refused without access, 27): USER_JOIN_CHANNEL, SEND_MESSAGE,
+      FETCH_MESSAGES, MARK_CHANNEL_READ, DELETE_MESSAGE, EDIT_MESSAGE,
+      TOGGLE_REACTION, PIN_MESSAGE, UNPIN_MESSAGE, SEND_DIRECT_MESSAGE,
+      FETCH_DIRECT_MESSAGES, DELETE_DIRECT_MESSAGE, MARK_DMS_READ,
+      GET_UNREAD_DM_PARTNERS, GET_ROUTER_CAPABILITIES,
+      CREATE_WEBRTC_TRANSPORT, CONNECT_TRANSPORT, RESTART_ICE, PRODUCE,
+      CONSUME, RESUME_CONSUMER, SET_SCREEN_SHARE_STATE, WATCH_SCREEN_SHARE,
+      REQUEST_VIEWER_TICKET, REQUEST_UPLOAD_TOKEN, CREATE_CUSTOM_EMOJI,
+      NUDGE_USER.
+    open (40): sign-in/session (USER_JOIN_SERVER, REQUEST_AUTH_CHALLENGE,
+      USER_LEAVE_SERVER, PING_LATENCY, VIEWER_AUTHENTICATE,
+      RESET_IDENTITY_KEY, GET_IDENTITY_EVENTS); structural reads and own
+      settings (GET_ONLINE_USERS, GET_USER_PROFILE, GET_SERVER_SETTINGS,
+      GET_APPROVED_EMOJIS, SET_AVATAR, USER_LEAVE_CHANNEL, SET_VOICE_STATE,
+      STOP_WATCHING_SCREEN_SHARE, CLOSE_PRODUCER, DISCARD_UPLOAD); channel
+      management (CHANNEL_MOVED, CREATE_CHANNEL, DELETE_CHANNEL,
+      UPDATE_CHANNEL, REORDER_CHANNELS); moderation/admin with their own
+      checks (GET_ALL_USERS, GET_ROLES, ASSIGN_ROLE, KICK_USER, BAN_USER,
+      UNBAN_USER, GET_BANNED_USERS, GET_BANNED_ADDRESSES, UNBAN_ADDRESS,
+      CREATE_INVITE, GET_INVITES, REVOKE_INVITE, GET_PENDING_APPROVALS,
+      APPROVE_USER, REJECT_USER, GET_PENDING_EMOJIS, REVIEW_CUSTOM_EMOJI,
+      UPDATE_SERVER_SETTINGS).
+    Decision for review: CREATE_CHANNEL/DELETE_CHANNEL/... are "open" (they
+    are gated by MANAGE_CHANNELS/ADMIN and a restricted user holds neither
+    with the fixed roles).
+
+  Key Files Modified:
+    apps/server/src/services/access.service.ts, access-change.ts,
+      voice-session.service.ts (NEW); __tests__/access.service.test.ts (NEW, 14)
+    apps/server/src/index.ts, handlers/connection.handler.ts, admin.handler.ts,
+      moderation.handler.ts, message.handler.ts, channel.handler.ts,
+      reaction.handler.ts, dm.handler.ts
+    packages/shared-types/src/socket-events.ts
+    apps/client/src/preload.ts, renderer/renderer.ts, renderer/index.html
+    AGENTS.md, apps/server/AGENTS.md, apps/client/AGENTS.md, README.md
+
+  Verification:
+    - tsc x3 clean; lint 0 errors; server vitest 372; client suites green.
+    - Live three-user matrix (admin, member, restricted) on a real server,
+      57/57: Member given once on create; removing it while C is in voice ->
+      ACCESS_CHANGED false, C left voice (B sees the channel without C) with
+      NO kick; 18 member events refused with the access message and nothing
+      written; settings / online / profile still work; B's message, edit,
+      reaction, pin and delete reach A and B and NOT C; B's DM to C refused
+      and not stored; C reconnects -> hasAccess false, Member not re-added,
+      still refused, still no content; Member given back -> ACCESS_CHANGED
+      true, C receives the next message with no reconnect, can fetch and be
+      DMed; an admin whose Member is removed keeps full access.
+    - Live client, 25/25: banner, tabs closed with the kept one remembered,
+      channel click / DM open / attach / paste-drop guarded with the reason,
+      composer greyed, reconnect while restricted shows the banner at once
+      and restores nothing, giving Member back removes the banner and brings
+      the kept tab back by itself, "No access" tags correct.
+    - Regression: the 18.8 (65/65), 18.9 (63/63) and 18.17 (17/17) live
+      suites pass unchanged against these changes.
+    - NOT run: the voice media handshake end to end for a restricted user
+      (the events are refused at the gate; teardown covered by presence);
+      a real Viewer window being closed on loss (tickets revoked + sockets
+      disconnected in code, not exercised live).
+
+  Next Step: PRD 18.19.

@@ -2840,6 +2840,21 @@
       text-overflow: ellipsis;
     }
 
+    /* A member without CONNECT/ADMIN: connected but restricted (PRD 18.18). */
+    .user-no-access-badge {
+      display: inline-block;
+      background: rgba(255, 167, 38, 0.18);
+      color: var(--warning);
+      border: 1px solid var(--warning);
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: 0.3px;
+      padding: 0 5px;
+      border-radius: 4px;
+      margin-left: 6px;
+      vertical-align: middle;
+    }
+
     /* A member who holds no roles (PRD 18.17) — muted, unlike BANNED. */
     .user-no-roles-badge {
       display: inline-block;
@@ -4079,6 +4094,27 @@
     .about-header #about-version { font-size: 12px; color: var(--text-muted); }
     .about-tagline { font-size: 12px; color: var(--text-secondary); margin-bottom: 16px; text-align: center; }
     #about-update-status { font-size: 12px; color: var(--text-secondary); margin-top: 10px; min-height: 16px; text-align: center; }
+
+    /* Restricted user: connected, but without the Member role (PRD 18.18). */
+    #access-banner {
+      display: none;
+      padding: 8px 14px;
+      font-size: 12px;
+      line-height: 1.4;
+      color: var(--text-primary);
+      background: rgba(255, 167, 38, 0.12);
+      border-bottom: 1px solid var(--warning);
+    }
+
+    body.no-access #access-banner { display: block; }
+
+    /* A visual hint only — the guards in renderer.ts (and the server) are the real check. */
+    body.no-access #chat-composer,
+    body.no-access .btn-dm,
+    body.no-access .btn-nudge {
+      opacity: 0.45;
+      pointer-events: none;
+    }
 
     .banned-addresses-title {
       margin: 14px 0 6px;
@@ -5346,6 +5382,10 @@
 
     <!-- Right Pane: Tabbed Log / Chat -->
     <div id="right-pane">
+      <!-- Shown while this user holds no Member role (PRD 18.18) -->
+      <div id="access-banner" role="status" aria-live="polite">
+        You don't have access to this server's channels and voice right now. A moderator can give it back in User Management.
+      </div>
       <div id="tab-bar">
         <div class="tab active" data-tab-id="server-log">📋 Server Log</div>
       </div>

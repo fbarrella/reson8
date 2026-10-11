@@ -87,7 +87,7 @@ export function registerReactionHandlers(
 
                 // Aggregate and broadcast
                 const reactions = await aggregateReactionsForMessage(app.prisma, messageId, isDm);
-                io.to(`server:${socket.data.serverId}`).emit("REACTION_UPDATED", {
+                io.to(`members:${socket.data.serverId}`).emit("REACTION_UPDATED", {
                     messageId,
                     isDm,
                     reactions,

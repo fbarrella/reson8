@@ -23,6 +23,8 @@ import { revokeViewerTickets } from "../services/viewer-ticket.service.js";
 import { keyFingerprint } from "../services/identity.service.js";
 import { syncModeratorRoom } from "./approval.handler.js";
 import { adminUsersWhere, mapAdminUser } from "../services/admin-users.js";
+import { applyAccessChange } from "../services/access-change.js";
+import type { MediasoupService } from "../services/mediasoup.service.js";
 import {
     fetchIdentityEventsPage,
     parseIdentityEventsQuery,
@@ -49,6 +51,7 @@ type TypedSocket = Socket<
 export function registerAdminHandlers(
     io: TypedIO,
     app: FastifyInstance,
+    mediasoup: MediasoupService,
 ): void {
     io.on("connection", (socket: TypedSocket) => {
         // ── RESET_IDENTITY_KEY (PRD 17.12) ─────────────────────────────────
@@ -255,6 +258,12 @@ export function registerAdminHandlers(
 
                 // Gaining or losing BAN_USER changes who hears about the approval queue (PRD 18.8).
                 await syncModeratorRoom(app, io, userId, socket.data.serverId).catch(() => {});
+
+                // Gaining or losing Member changes what they can use RIGHT NOW (PRD 18.18):
+                // their sockets, the content room and any voice session follow.
+                await applyAccessChange(io, app, mediasoup, userId, socket.data.serverId).catch((err) => {
+                    app.log.error({ err }, "Failed to apply an access change");
+                });
 
                 ack({ success: true });
             } catch (err) {

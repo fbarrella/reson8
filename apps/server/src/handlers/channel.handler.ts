@@ -500,7 +500,7 @@ export function registerChannelHandlers(
 
                 ack({ success: true });
 
-                io.to(`server:${channel.serverId}`).emit("CHANNEL_PIN_UPDATED", {
+                io.to(`members:${channel.serverId}`).emit("CHANNEL_PIN_UPDATED", {
                     channelId,
                     channelName: channel.name,
                     pinnedMessage: {
@@ -539,7 +539,7 @@ export function registerChannelHandlers(
 
                 ack({ success: true });
 
-                io.to(`server:${channel.serverId}`).emit("CHANNEL_PIN_UPDATED", {
+                io.to(`members:${channel.serverId}`).emit("CHANNEL_PIN_UPDATED", {
                     channelId,
                     channelName: channel.name,
                     pinnedMessage: null,

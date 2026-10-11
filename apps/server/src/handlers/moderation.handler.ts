@@ -21,6 +21,7 @@ import type { MediasoupService } from "../services/mediasoup.service.js";
 import { buildOccupant } from "./connection.handler.js";
 import { getUserPermissions, isAdmin } from "../services/permissions.service.js";
 import { executeBan } from "../services/ban.service.js";
+import { removeSocketFromChannel } from "../services/voice-session.service.js";
 import { maskCidr, reloadAddressBans } from "../services/address-ban.service.js";
 
 type TypedIO = SocketIOServer<
@@ -69,20 +70,9 @@ export function registerModerationHandlers(
                         s.data.serverId === serverId &&
                         s.data.currentChannelId === channelId
                     ) {
-                        // Clean up mediasoup voice session
-                        const producerId = mediasoup.getSession(channelId, userId)?.producer?.id;
-                        if (producerId) {
-                            s.to(`channel:${channelId}`).emit("PRODUCER_CLOSED", {
-                                userId,
-                                producerId,
-                            });
-                        }
-                        mediasoup.cleanupUserSession(channelId, userId);
-
-                        // Leave channel presence + room
-                        await presence.leaveChannel(userId, channelId);
-                        await s.leave(`channel:${channelId}`);
-                        s.data.currentChannelId = null;
+                        // Voice session, presence and room — the same teardown
+                        // losing access uses (PRD 18.18).
+                        await removeSocketFromChannel({ mediasoup, presence }, s, channelId);
 
                         // Notify the kicked user
                         s.emit("USER_KICKED", { channelId });

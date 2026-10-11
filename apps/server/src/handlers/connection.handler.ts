@@ -39,6 +39,9 @@ import { requireApproval } from "../config/approval.config.js";
 import { APPROVAL_MESSAGES, decideApprovalGate, pendingRoom } from "../services/approval.service.js";
 import { notifyPendingChanged, syncModeratorRoom } from "./approval.handler.js";
 import { requireInvite } from "../config/invite.config.js";
+import { getUserPermissions } from "../services/permissions.service.js";
+import { hasServerAccess, rolesToGrant } from "../services/access.service.js";
+import { membersRoom } from "../services/access-change.js";
 import {
     INVITE_FAIL_WINDOW_SECONDS,
     INVITE_MESSAGES,
@@ -683,14 +686,14 @@ export function registerConnectionHandlers(
                     app.log.info(identityLog, "Identity key bound (new user)");
                 }
 
-                // Assign the default Member role
-                const rolesToAssign = ["role-default"];
-
-                // The designated server admin (ADMIN_INSTANCE_ID) — only with the
-                // right key when ADMIN_KEY_FINGERPRINT is set (PRD 17.12).
-                if (decision.grantAdmin) {
-                    rolesToAssign.push("role-admin");
-                }
+                // The Member role is given when the user is CREATED, not on every
+                // join (PRD 18.18): re-granting it each time made removing it last
+                // only until the next connect. Existing users already hold it (the
+                // old per-join upsert guaranteed that), so nobody loses access when
+                // this ships. The designated server admin (ADMIN_INSTANCE_ID) keeps
+                // their per-join grant — only with the right key when
+                // ADMIN_KEY_FINGERPRINT is set (PRD 17.12).
+                const rolesToAssign = rolesToGrant({ isNewUser: !existingUser, grantAdmin: decision.grantAdmin });
 
                 for (const roleId of rolesToAssign) {
                     await app.prisma.userRole.upsert({
@@ -734,8 +737,15 @@ export function registerConnectionHandlers(
                     await supersedeSocket(displacedSocketId, instanceId);
                 }
 
+                // Access to channels, DMs and voice (PRD 18.18): computed once here
+                // and kept current by applyAccessChange() when roles change.
+                socket.data.hasAccess = hasServerAccess(await getUserPermissions(app.prisma, instanceId, serverId));
+
                 // Join the Socket.io room for this server
                 await socket.join(`server:${serverId}`);
+                // Content events (messages, edits, reactions, pins) go to this room
+                // only — a user without access must not receive them live either.
+                if (socket.data.hasAccess) await socket.join(membersRoom(serverId));
                 // Moderators (BAN_USER/ADMIN) are told when the approval queue changes (PRD 18.8).
                 await syncModeratorRoom(app, io, instanceId, serverId).catch(() => {});
 
@@ -820,7 +830,7 @@ export function registerConnectionHandlers(
 
                 socket.emit("CHANNEL_TREE_UPDATE", { serverId, tree });
 
-                ack({ success: true, serverId });
+                ack({ success: true, serverId, hasAccess: socket.data.hasAccess });
                 app.log.info(
                     { socketId: socket.id, nickname, serverId, instanceId },
                     "User joined server",
@@ -873,6 +883,9 @@ export function registerConnectionHandlers(
                 socket.data.userId = userId;
                 socket.data.nickname = "";
                 socket.data.currentChannelId = null;
+                // The ticket/session this socket authenticated with belongs to a
+                // member; losing access disconnects the viewer (PRD 18.18).
+                socket.data.hasAccess = true;
                 ack({ success: true });
                 app.log.info(
                     { socketId: socket.id, role: "viewer", userId, viaTicket: payload?.ticket !== undefined },
