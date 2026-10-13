@@ -200,20 +200,21 @@ export async function claimUploads(
     return orderClaimed(rows, urls, "url");
 }
 
-/** How many message/DM/emoji/icon rows still reference this file (local files match by name, so relative and legacy absolute forms both count). */
+/** How many message/DM/emoji/icon/server-icon rows still reference this file (local files match by name, so relative and legacy absolute forms both count). */
 export async function countFileReferences(prisma: PrismaClient, url: string): Promise<number> {
     const base = localUploadBasename(url);
     const cond: Prisma.StringFilter = base ? { endsWith: `/uploads/${base}` } : { equals: url };
     // `attachments` is the source of truth since PRD 16.10; the deprecated
     // message/DM columns still hold pre-migration values, so they count too.
-    const [attachments, messages, dms, emojis, icons] = await Promise.all([
+    const [attachments, messages, dms, emojis, icons, serverIcons] = await Promise.all([
         prisma.attachment.count({ where: { url: cond } }),
         prisma.message.count({ where: { attachmentUrl: cond } }),
         prisma.directMessage.count({ where: { attachmentUrl: cond } }),
         prisma.customEmoji.count({ where: { imageUrl: cond } }),
         prisma.channel.count({ where: { iconUrl: cond } }),
+        prisma.server.count({ where: { iconUrl: cond } }), // PRD 19 A2
     ]);
-    return attachments + messages + dms + emojis + icons;
+    return attachments + messages + dms + emojis + icons + serverIcons;
 }
 
 /**

@@ -23,6 +23,8 @@ import { PermissionFlags } from "@reson8/shared-types";
 import { requirePermission } from "../middleware/permissions.middleware.js";
 import { aggregatePermissions, getUserPermissions, isAdmin } from "../services/permissions.service.js";
 import { buildServerSummary } from "../services/server-summary.js";
+import { iconToRelease, parseIconChange } from "../services/server-icon.js";
+import { UploadClaimError, claimUploads, releaseStoredFile } from "../services/stored-file.service.js";
 import {
     authAllowedHosts,
     authAllowedHostsLockedByEnv,
@@ -83,6 +85,7 @@ export function registerNudgeHandlers(
                         nudgeEnabled: true,
                         screenShareEnabled: true,
                         maxMessageLength: true,
+                        iconUrl: true,
                     },
                 });
                 // Identity-policy details are for ADMINs only (PRD 18.4). Checked
@@ -122,6 +125,7 @@ export function registerNudgeHandlers(
                     name: server?.name,
                     maxMessageLength: server?.maxMessageLength ?? DEFAULT_MAX_MESSAGE_LENGTH,
                     version: SERVER_VERSION,
+                    iconUrl: server?.iconUrl ?? null, // PRD 19 A2: for everyone
                     ...adminOnly,
                 });
             } catch (err) {
@@ -145,7 +149,7 @@ export function registerNudgeHandlers(
                 const [server, users, banned, onlineIds] = await Promise.all([
                     app.prisma.server.findUnique({
                         where: { id: serverId },
-                        select: { name: true, nudgeEnabled: true, screenShareEnabled: true },
+                        select: { name: true, nudgeEnabled: true, screenShareEnabled: true, iconUrl: true },
                     }),
                     app.prisma.user.findMany({
                         where: { servers: { some: { serverId } } },
@@ -186,6 +190,7 @@ export function registerNudgeHandlers(
                         })),
                         bannedIds: new Set(banned.map((b) => b.userId)),
                         onlineIds: new Set(onlineIds),
+                        iconUrl: server.iconUrl ?? null,
                         // The values in effect — environment overrides included.
                         features: {
                             nudge: server.nudgeEnabled,
@@ -226,6 +231,7 @@ export function registerNudgeHandlers(
                     authAllowedHosts: allowedHostsInput,
                     requireApproval: requireApprovalInput,
                     requireInvite: requireInviteInput,
+                    iconUploadId: iconUploadIdInput,
                 } = payload;
                 const data: {
                     nudgeEnabled?: boolean;
@@ -235,7 +241,20 @@ export function registerNudgeHandlers(
                     authAllowedHosts?: string[];
                     requireApproval?: boolean;
                     requireInvite?: boolean;
+                    iconUrl?: string | null;
+                    iconPublicId?: string | null;
                 } = {};
+                // PRD 19 A2: the icon is only ever the id of an upload in the
+                // ledger; its url/public_id are filled in from the claimed row.
+                const iconChange = parseIconChange(iconUploadIdInput);
+                if ("error" in iconChange) {
+                    ack({ success: false, error: iconChange.error });
+                    return;
+                }
+                if (iconChange.kind === "remove") {
+                    data.iconUrl = null;
+                    data.iconPublicId = null;
+                }
                 if (requireInviteInput !== undefined) {
                     if (typeof requireInviteInput !== "boolean") {
                         ack({ success: false, error: "Invalid value" });
@@ -307,18 +326,41 @@ export function registerNudgeHandlers(
                     data.maxMessageLength = maxMessageLength;
                 }
 
-                const updated = await app.prisma.server.update({
-                    where: { id: socket.data.serverId },
-                    data,
-                    select: {
-                        nudgeEnabled: true,
-                        screenShareEnabled: true,
-                        maxMessageLength: true,
-                        requireSignedIdentity: true,
-                        authAllowedHosts: true,
-                        requireApproval: true,
-                        requireInvite: true,
-                    },
+                // Claim the icon (if one is being set) and update the row in ONE
+                // transaction, so a failed claim changes nothing. The previous
+                // icon is read first so it can be released after the commit.
+                let previousIconUrl: string | null = null;
+                if (iconChange.kind !== "unchanged") {
+                    const current = await app.prisma.server.findUnique({
+                        where: { id: socket.data.serverId },
+                        select: { iconUrl: true },
+                    });
+                    previousIconUrl = current?.iconUrl ?? null;
+                }
+                const updated = await app.prisma.$transaction(async (tx) => {
+                    if (iconChange.kind === "set") {
+                        const [file] = await claimUploads(tx, {
+                            ids: [iconChange.uploadId],
+                            kind: "SERVER_ICON",
+                            userId: socket.data.userId,
+                        });
+                        data.iconUrl = file.url;
+                        data.iconPublicId = file.publicId;
+                    }
+                    return tx.server.update({
+                        where: { id: socket.data.serverId },
+                        data,
+                        select: {
+                            nudgeEnabled: true,
+                            screenShareEnabled: true,
+                            maxMessageLength: true,
+                            requireSignedIdentity: true,
+                            authAllowedHosts: true,
+                            requireApproval: true,
+                            requireInvite: true,
+                            iconUrl: true,
+                        },
+                    });
                 });
                 setDbRequireApproval(updated.requireApproval); // PRD 18.8: applies to the next join
                 setDbRequireInvite(updated.requireInvite); // PRD 18.9
@@ -337,13 +379,23 @@ export function registerNudgeHandlers(
                     requireApproval: requireApproval(),
                     requireInvite: requireInvite(),
                     requireSignedIdentity: isSignedIdentityRequired(),
+                    iconUrl: updated.iconUrl ?? null,
                 });
+
+                // Release the replaced/removed icon only now that the new row
+                // is committed (a failed update must not lose the old one).
+                const toRelease = iconToRelease(previousIconUrl, updated.iconUrl ?? null);
+                if (toRelease) await releaseStoredFile(app.prisma, toRelease).catch(() => {});
 
                 app.log.info(
                     { socketId: socket.id, ...data },
                     "Server settings updated",
                 );
             } catch (err) {
+                if (err instanceof UploadClaimError) {
+                    ack({ success: false, error: err.message });
+                    return;
+                }
                 app.log.error({ err }, "Error in UPDATE_SERVER_SETTINGS");
                 ack({ success: false, error: "Failed to update settings" });
             }

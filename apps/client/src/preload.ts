@@ -719,7 +719,11 @@ const api = {
         });
         socket.on("NUDGE_RECEIVED", (payload) => emit("nudge-received", payload));
         socket.on("USER_AVATAR_UPDATED", (payload) => emit("user-avatar-updated", payload));
-        socket.on("SERVER_SETTINGS_UPDATED", (payload) => emit("server-settings-updated", payload));
+        socket.on("SERVER_SETTINGS_UPDATED", (payload) => {
+            // PRD 19 A2: the icon is a server-relative path on local disk.
+            if (payload.iconUrl) payload.iconUrl = resolveMediaUrl(payload.iconUrl);
+            emit("server-settings-updated", payload);
+        });
         socket.on("CHANNEL_PIN_UPDATED", (payload) => emit("channel-pin-updated", payload));
 
         // Voice-specific events
@@ -1415,6 +1419,15 @@ const api = {
         return uploadTo("/api/upload/channel-icon", fileBuffer, fileName, mimeType);
     },
 
+    /** The server icon (PRD 19 A2). Admin-only on the server, which also checks the real bytes. */
+    async uploadServerIcon(
+        fileBuffer: ArrayBuffer,
+        fileName: string,
+        mimeType: string,
+    ): Promise<{ url: string; publicId?: string; uploadId?: string }> {
+        return uploadTo("/api/upload/server-icon", fileBuffer, fileName, mimeType);
+    },
+
     /**
      * Throws away an upload that was never attached to anything (PRD 16.9) —
      * best effort: a pre-v2.5.0 server never answers, so this times out, and
@@ -2020,6 +2033,8 @@ const api = {
         name?: string;
         maxMessageLength?: number;
         version?: string;
+        /** The server icon (PRD 19 A2); null = none, absent = an older server. */
+        iconUrl?: string | null;
         /** ADMIN callers only (PRD 18.4). */
         requireSignedIdentity?: boolean;
         requireSignedIdentityLockedByEnv?: boolean;
@@ -2035,7 +2050,10 @@ const api = {
                 resolve({ success: false, error: "Not connected" });
                 return;
             }
-            socket.emit("GET_SERVER_SETTINGS", resolve);
+            socket.emit("GET_SERVER_SETTINGS", (res) => {
+                if (res?.iconUrl) res.iconUrl = resolveMediaUrl(res.iconUrl);
+                resolve(res);
+            });
         });
     },
 
@@ -2071,6 +2089,8 @@ const api = {
             authAllowedHosts?: string[];
             requireApproval?: boolean;
             requireInvite?: boolean;
+            /** PRD 19 A2: an upload id sets/replaces the icon, null removes it. */
+            iconUploadId?: string | null;
         },
     ): Promise<{ success: boolean; error?: string }> {
         return new Promise((resolve) => {

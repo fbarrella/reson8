@@ -40,6 +40,11 @@ model Server {
   /// server (PRD 18.8). People who have joined before are never affected.
   requireApproval    Boolean   @default(false)
   requireInvite      Boolean   @default(false)
+  /// Server icon (PRD 19 A2): the stored file's URL ("/uploads/<file>" for local
+  /// disk, absolute https for Cloudinary) and its Cloudinary public_id. Both come
+  /// from the upload ledger, never from a client.
+  iconUrl            String?
+  iconPublicId       String?
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
@@ -326,6 +331,7 @@ enum StoredFileKind {
   MESSAGE_ATTACHMENT
   CUSTOM_EMOJI
   CHANNEL_ICON
+  SERVER_ICON
 }
 
 model StoredFile {

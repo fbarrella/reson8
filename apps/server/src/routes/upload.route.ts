@@ -11,7 +11,10 @@
  * POST /api/upload/channel-icon   — custom text-channel tree icons (PRD
  *                                   14.7), already cropped client-side to
  *                                   128x128, up to 512KB.
- * All four accept multipart form data with a single image file and support
+ * POST /api/upload/server-icon   — the server's icon (PRD 19 A2), up to 1MB.
+ *                                   Admin-only, token required, and the file
+ *                                   is validated by its real bytes.
+ * All five accept multipart form data with a single image file and support
  * the same dual storage backend:
  *   1. Local filesystem (default) — saves to ./uploads/
  *   2. Cloudinary CDN — activated when CLOUDINARY_* env vars are present.
@@ -38,6 +41,8 @@ import { v2 as cloudinary } from "cloudinary";
 import { ALLOW_TOKENLESS_UPLOADS } from "../config/upload.config.js";
 import { extractBearerToken, recordStoredFile, resolveUploadTokenOwner } from "../services/stored-file.service.js";
 import { deleteAttachment } from "../services/storage.service.js";
+import { getUserPermissions, isAdmin } from "../services/permissions.service.js";
+import { validateServerIcon } from "../services/image-sniff.js";
 
 const ALLOWED_MIME_TYPES = new Set([
     "image/jpeg",
@@ -50,6 +55,19 @@ const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
 const MAX_EMOJI_FILE_SIZE = 512 * 1024; // 512KB — generous for a 128x128 PNG
 const MAX_ANIMATED_EMOJI_FILE_SIZE = 2 * 1024 * 1024; // 2MB (PRD 13.13) — uploaded as-is, no crop/resize
 const ANIMATED_EMOJI_MIME_TYPES = new Set(["image/gif"]);
+
+const MAX_SERVER_ICON_FILE_SIZE = 1024 * 1024; // 1MB (PRD 19 A2)
+
+/** Opt-in extras for one route; the other routes pass none and behave exactly as before. */
+interface UploadOptions {
+    allowedMimeTypes?: Set<string>;
+    /** The upload must be attributed to a user (a bearer token); a tokenless request is a 401. */
+    requireToken?: boolean;
+    /** Runs right after authentication, BEFORE the body is read. A returned refusal ends the request. */
+    authorize?: (ownerId: string) => Promise<{ status: number; error: string } | null>;
+    /** Runs on the buffered bytes. `fileName` replaces the client's file name for storage. */
+    validate?: (buffer: Buffer, declaredMime: string) => { ok: true; fileName: string } | { ok: false; error: string };
+}
 
 const UPLOADS_DIR = path.resolve(process.cwd(), "uploads");
 
@@ -153,10 +171,23 @@ async function handleUpload(
     reply: FastifyReply,
     maxSize: number,
     kind: StoredFileKind,
-    allowedMimeTypes: Set<string> = ALLOWED_MIME_TYPES,
+    options: UploadOptions = {},
 ): Promise<void> {
+    const allowedMimeTypes = options.allowedMimeTypes ?? ALLOWED_MIME_TYPES;
     const auth = await authenticateUpload(app, request, reply);
     if (!auth) return;
+
+    if (options.requireToken && !auth.ownerId) {
+        reply.status(401).send({ error: "Upload token required" });
+        return;
+    }
+    if (options.authorize && auth.ownerId) {
+        const refusal = await options.authorize(auth.ownerId);
+        if (refusal) {
+            reply.status(refusal.status).send({ error: refusal.error });
+            return;
+        }
+    }
 
     const data = await request.file();
     if (!data) {
@@ -186,7 +217,15 @@ async function handleUpload(
     }
 
     const buffer = Buffer.concat(chunks);
-    const originalName = data.filename || "image";
+    let originalName = data.filename || "image";
+    if (options.validate) {
+        const verdict = options.validate(buffer, data.mimetype);
+        if (!verdict.ok) {
+            reply.status(400).send({ error: verdict.error });
+            return;
+        }
+        originalName = verdict.fileName;
+    }
 
     let url: string;
     let publicId: string | undefined;
@@ -241,7 +280,9 @@ export async function registerUploadRoute(app: FastifyInstance): Promise<void> {
     // client-side crop/resize, so it gets its own (larger) size cap.
     app.post("/api/upload/emoji-animated", async (request, reply) => {
         try {
-            await handleUpload(app, request, reply, MAX_ANIMATED_EMOJI_FILE_SIZE, "CUSTOM_EMOJI", ANIMATED_EMOJI_MIME_TYPES);
+            await handleUpload(app, request, reply, MAX_ANIMATED_EMOJI_FILE_SIZE, "CUSTOM_EMOJI", {
+                allowedMimeTypes: ANIMATED_EMOJI_MIME_TYPES,
+            });
         } catch (err) {
             app.log.error({ err }, "Error in /api/upload/emoji-animated");
             reply.status(500).send({ error: "Upload failed" });
@@ -258,6 +299,27 @@ export async function registerUploadRoute(app: FastifyInstance): Promise<void> {
             await handleUpload(app, request, reply, MAX_EMOJI_FILE_SIZE, "CHANNEL_ICON");
         } catch (err) {
             app.log.error({ err }, "Error in /api/upload/channel-icon");
+            reply.status(500).send({ error: "Upload failed" });
+        }
+    });
+
+    // Server icon (PRD 19 A2). Unlike the routes above this one checks WHO is
+    // uploading before reading the body (ADMIN only, token required) and the
+    // file's real bytes after it; the stored name is built from the sniffed
+    // type, never from the client's file name. The claim in
+    // UPDATE_SERVER_SETTINGS checks the owner again.
+    app.post("/api/upload/server-icon", async (request, reply) => {
+        try {
+            await handleUpload(app, request, reply, MAX_SERVER_ICON_FILE_SIZE, "SERVER_ICON", {
+                requireToken: true,
+                authorize: async (ownerId) => {
+                    const perms = await getUserPermissions(app.prisma, ownerId, app.serverId);
+                    return isAdmin(perms) ? null : { status: 403, error: "Only a server admin can change the server icon" };
+                },
+                validate: (buffer, declaredMime) => validateServerIcon(buffer, declaredMime),
+            });
+        } catch (err) {
+            app.log.error({ err }, "Error in /api/upload/server-icon");
             reply.status(500).send({ error: "Upload failed" });
         }
     });

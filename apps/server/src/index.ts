@@ -49,6 +49,7 @@ import { startApprovalPruner } from "./services/approval.service.js";
 import { getTrustProxy, resolveClientAddress } from "./services/client-address.js";
 import { addressBans, reloadAddressBans } from "./services/address-ban.service.js";
 import { loadTlsMaterial, readTlsEnv, watchTlsFiles } from "./config/tls.config.js";
+import { isServerIconFileName } from "./services/image-sniff.js";
 
 // Augment Fastify with the resolved server ID
 declare module "fastify" {
@@ -107,6 +108,19 @@ async function main(): Promise<void> {
         root: path.resolve(process.cwd(), "uploads"),
         prefix: "/uploads/",
         decorateReply: false,
+        // The plugin applies its own Cache-Control AFTER setHeaders runs, so it
+        // is switched off and set here instead: a server icon never changes
+        // under its name (a new upload gets a new uuid) and is cached for good
+        // (PRD 19 A2); every other file keeps the plugin's former default.
+        cacheControl: false,
+        setHeaders(res, filePath) {
+            res.setHeader(
+                "Cache-Control",
+                isServerIconFileName(path.basename(filePath))
+                    ? "public, max-age=31536000, immutable"
+                    : "public, max-age=0",
+            );
+        },
     });
 
     // ── Server Bootstrap ──────────────────────────────────────────────────

@@ -1021,6 +1021,7 @@ interface Reson8Api {
     uploadEmojiFile(fileBuffer: ArrayBuffer, fileName: string, mimeType: string): Promise<UploadResult>;
     uploadAnimatedEmojiFile(fileBuffer: ArrayBuffer, fileName: string, mimeType: string): Promise<UploadResult>;
     uploadChannelIcon(fileBuffer: ArrayBuffer, fileName: string, mimeType: string): Promise<UploadResult>;
+    uploadServerIcon(fileBuffer: ArrayBuffer, fileName: string, mimeType: string): Promise<UploadResult>;
     discardUpload(uploadId: string): Promise<{ success: boolean; error?: string }>;
     createCustomEmoji(name: string, image: UploadResult, isAnimated?: boolean): Promise<{ success: boolean; emojiId?: string; error?: string }>;
     getApprovedEmojis(): Promise<{ success: boolean; emojis?: CustomEmoji[]; error?: string }>;
@@ -1034,6 +1035,8 @@ interface Reson8Api {
         name?: string;
         maxMessageLength?: number;
         version?: string;
+        /** The server icon (PRD 19 A2); null = none, absent = an older server. */
+        iconUrl?: string | null;
         /** ADMIN callers only (PRD 18.4). */
         requireSignedIdentity?: boolean;
         requireSignedIdentityLockedByEnv?: boolean;
@@ -1059,6 +1062,8 @@ interface Reson8Api {
             authAllowedHosts?: string[];
             requireApproval?: boolean;
             requireInvite?: boolean;
+            /** PRD 19 A2: an upload id sets/replaces the icon, null removes it. */
+            iconUploadId?: string | null;
         },
     ): Promise<{ success: boolean; error?: string }>;
     getIdentityEvents(payload: {
@@ -10874,6 +10879,8 @@ api.on("server-settings-updated", (data: {
     requireApproval?: boolean;
     requireInvite?: boolean;
     requireSignedIdentity?: boolean;
+    // PRD 19 A2 — null = icon removed, undefined = unchanged / older server.
+    iconUrl?: string | null;
 }) => {
     serverNudgeEnabled = data.nudgeEnabled;
     refreshServerSummary();

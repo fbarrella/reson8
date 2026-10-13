@@ -762,6 +762,8 @@ export interface ClientToServerEvents {
             maxMessageLength?: number;
             /** The running server build's version (from apps/server/package.json), for client/server version-mismatch warnings. */
             version?: string;
+            /** The server icon (PRD 19 A2): server-relative for local disk. null = none; absent = an older server. */
+            iconUrl?: string | null;
             /**
              * ADMIN callers only (PRD 18.4): refuse unsigned (pre-2.6.0) joins,
              * whether the environment variable locks it, and how many users
@@ -822,6 +824,12 @@ export interface ClientToServerEvents {
             requireApproval?: boolean;
             /** PRD 18.9. */
             requireInvite?: boolean;
+            /**
+             * PRD 19 A2: the server icon. A string is the `uploadId` of a file
+             * uploaded to `/api/upload/server-icon` (the server never accepts a
+             * URL); `null` removes the icon. Omitted = unchanged.
+             */
+            iconUploadId?: string | null;
         },
         ack: (response: { success: boolean; error?: string }) => void,
     ) => void;
@@ -990,6 +998,8 @@ export interface ServerToClientEvents {
         requireApproval?: boolean;
         requireInvite?: boolean;
         requireSignedIdentity?: boolean;
+        /** PRD 19 A2 — the server icon; null = removed, absent = unchanged (an older server). */
+        iconUrl?: string | null;
     }) => void;
 
     /**

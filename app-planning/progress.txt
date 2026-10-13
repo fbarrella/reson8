@@ -964,3 +964,111 @@ Feature/Fix: Member-visible server summary — GET_SERVER_SUMMARY (PRD 19 A1)
       should probably clear those fields — worth a look in a later item.
 
   Next Step: PRD 19 A2 — server icon.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Server icon — upload route with byte validation, claim/replace/remove (PRD 19 A2)
+
+  Problem: A server had no icon. The only upload validation anywhere was the
+  MIME type the client DECLARES, and the stored extension came from the
+  client's file name, so the new route could not just reuse the old ones.
+
+  Solution:
+    Database: Server.iconUrl / Server.iconPublicId (mirroring Channel) and
+    StoredFileKind.SERVER_ICON; migration 20261018120000_add_server_icon
+    (generated with `prisma migrate diff`, nothing in it uses the new enum
+    value in the same transaction).
+    Server:
+      - services/image-sniff.ts (NEW, pure, no dependency): sniffImage() reads
+        PNG / GIF / WebP (VP8, VP8L, VP8X) / JPEG (bounded 64-segment SOF walk)
+        headers and the pixel size, null for anything truncated, unknown, zero-
+        sized or SVG; validateServerIcon() requires sniffed type == declared
+        MIME and each side 256–4096 and builds the stored name
+        `server-icon.<sniffed ext>`; isServerIconFileName().
+      - routes/upload.route.ts: handleUpload()'s 7th parameter is now an
+        UploadOptions object (allowedMimeTypes, requireToken, authorize,
+        validate); the existing routes pass nothing new (the animated-emoji
+        route's Set moved into the object). POST /api/upload/server-icon: 1 MB,
+        token required (401), ADMIN on app.serverId (403, checked before the
+        body is read), validation failure → 400 with the PRD's message.
+      - index.ts: @fastify/static applies its own Cache-Control AFTER
+        setHeaders, so a plain setHeaders override has no effect (found by
+        testing). cacheControl is switched off and setHeaders sets
+        `public, max-age=31536000, immutable` for <uuid>-server-icon.<ext> and
+        `public, max-age=0` (the former default) for everything else.
+      - UPDATE_SERVER_SETTINGS gains iconUploadId (string = set/replace,
+        null = remove, omitted = unchanged; parsed by the pure
+        server-icon.ts parseIconChange — a URL or a non-string is refused).
+        claimUploads(kind SERVER_ICON) and servers.update run in ONE
+        transaction; the previous file is released AFTER the commit
+        (iconToRelease()). UploadClaimError is answered with its message.
+      - GET_SERVER_SETTINGS (everyone), SERVER_SETTINGS_UPDATED and
+        IServerSummary.iconUrl carry the icon (null = none).
+      - countFileReferences() counts servers.iconUrl, so a shared file is never
+        deleted from under the icon.
+    Client:
+      - preload: resolveMediaUrl() on iconUrl at the three entry points
+        (getServerSettings, the server-settings-updated forwarder, the
+        summary), uploadServerIcon() on uploadTo(), updateServerSettings
+        accepts iconUploadId; renderer API types mirrored. No UI (C5).
+    Not done here, by design: sniffing the OTHER upload routes (A10), the
+    client re-encode/cache of the icon (C1/C5), the discardUpload-on-cancel
+    call (needs the icon UI in C5).
+
+  Key Files Modified:
+    apps/server/prisma/schema.prisma
+    apps/server/prisma/migrations/20261018120000_add_server_icon/migration.sql (NEW)
+    apps/server/src/services/image-sniff.ts (NEW)
+    apps/server/src/services/server-icon.ts (NEW)
+    apps/server/src/services/stored-file.service.ts
+    apps/server/src/routes/upload.route.ts
+    apps/server/src/index.ts
+    apps/server/src/handlers/nudge.handler.ts
+    apps/server/src/__tests__/image-sniff.test.ts (NEW)
+    apps/server/src/__tests__/server-icon.test.ts (NEW)
+    packages/shared-types/src/socket-events.ts
+    apps/client/src/preload.ts
+    apps/client/src/renderer/renderer.ts
+    apps/server/AGENTS.md
+
+  Verification:
+    - Migration: `migrate diff` SQL read; applied from scratch with
+      `migrate deploy` on a throwaway database (columns + enum value present,
+      a second `migrate diff` against the schema empty); applied to the dev DB
+      with `migrate deploy`; throwaway databases dropped.
+    - npx tsc --noEmit: shared-types (build), apps/server, apps/client clean.
+      npm run lint: exit 0, 73 warnings (unchanged from A1).
+    - apps/server tests: 371 pass (22 sniffer cases incl. every format at
+      512 and 100 px, truncation, noise, SVG/HTML, APP1-before-SOF0, the
+      64-segment bound, mismatch refusal; parseIconChange/iconToRelease).
+      The same 2 suites that cannot load on this CRLF checkout (see the A1
+      entry) still fail to load; unrelated.
+    - Real server + real HTTP uploads (scratch Redis db 5):
+        member token → 403; no token → 401; real PNG declared image/jpeg →
+        400 with the message; 200×200 → 400; HTML declared image/png → 400;
+        SVG → 400; 1.5 MB → 413;
+        admin upload of a real 512×512 PNG named "My Evil Name.php.png" →
+        200, stored as /uploads/<uuid>-server-icon.png;
+        logged-out GET → 200, image/png, `Cache-Control: public,
+        max-age=31536000, immutable`, no cookie; a normal attachment keeps
+        `public, max-age=0`;
+        member UPDATE_SERVER_SETTINGS → "Permission denied"; iconUploadId 12
+        → "Invalid icon"; a URL as the id → refused; admin sets the icon →
+        SERVER_SETTINGS_UPDATED carries iconUrl, GET_SERVER_SETTINGS (as a
+        member) and GET_SERVER_SUMMARY return it; claiming the same id twice
+        and claiming an attachment's id (wrong kind) are refused;
+        replacing → the old file answers 404 and the new one 200; sending
+        null → the broadcast carries iconUrl:null, settings return null, and
+        the file is gone. The ledger holds no SERVER_ICON row afterwards
+        (the one left over was from an aborted first run).
+    - NOT run: Cloudinary mode (no credentials; the public_id path is the
+      ledger's own and unchanged), a JPEG/WebP/GIF real upload over HTTP
+      (covered by the sniffer unit tests with hand-built headers).
+    - Quirk noted: Node's fetch (undici) reuses a connection after the
+      server's early 413 reply and then hangs/ECONNRESETs; harmless for real
+      clients (Chromium) but keep a 413 case last in any Node test script.
+
+  Environment: WSL containers reson8-postgres / reson8-redis still running;
+  test server on 9801 stopped (by PID).
+
+  Next Step: PRD 19 A3 — complete the per-channel voice session timer.
