@@ -405,6 +405,25 @@ export class MediasoupService extends EventEmitter {
 
     // ── Producer-to-User mapping ──────────────────────────────────────────
 
+    /**
+     * Finds a producer in a channel (PRD 19 A9): which session owns it (the
+     * session key — the sharer's userId for a primary socket) and what kind of
+     * media it is. null = unknown to this channel.
+     */
+    findProducer(
+        channelId: string,
+        producerId: string,
+    ): { ownerKey: string; mediaType: "mic" | "screen-video" | "screen-audio" } | null {
+        const channelSessions = this.sessions.get(channelId);
+        if (!channelSessions) return null;
+        for (const [ownerKey, session] of channelSessions) {
+            if (session.producer?.id === producerId) return { ownerKey, mediaType: "mic" };
+            if (session.screenVideoProducer?.id === producerId) return { ownerKey, mediaType: "screen-video" };
+            if (session.screenAudioProducer?.id === producerId) return { ownerKey, mediaType: "screen-audio" };
+        }
+        return null;
+    }
+
     /** Finds the userId that owns a given producer in a channel. */
     getUserIdByProducerId(channelId: string, producerId: string): string | undefined {
         const channelSessions = this.sessions.get(channelId);

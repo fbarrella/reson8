@@ -25,6 +25,8 @@ import type { MediasoupService } from "../services/mediasoup.service.js";
 import { PresenceService } from "../services/presence.service.js";
 import { buildOccupant, voiceSessionStartedAt, getMediasoupSessionKey } from "./connection.handler.js";
 import { withChannelLock } from "../services/channel-lock.js";
+import { screenShareEnabled } from "../config/screen-share.config.js";
+import { screenConsumeDecision } from "../services/screen-consume.js";
 import {
     SCREEN_SHARE_LIMIT_CODE,
     SCREEN_SHARE_LIMIT_MESSAGE,
@@ -255,14 +257,32 @@ export function registerVoiceHandlers(
                 }
                 const sendTransport = session.sendTransport;
 
+                // PRD 19 A9: with sharing switched off nobody produces screen
+                // media (a modified client could otherwise still do it).
+                const isScreenMedia = mediaType === "screen-video" || mediaType === "screen-audio";
+                if (isScreenMedia && !screenShareEnabled()) {
+                    ack({
+                        success: false,
+                        error: "Screen sharing is disabled on this server",
+                        errorCode: "SCREEN_SHARE_DISABLED",
+                    });
+                    return;
+                }
+
                 let producer;
                 if (mediaType === "screen-video") {
                     // PRD 19 A4: at most MAX_SCREEN_SHARES_PER_ROOM live shares.
                     // The count, produce() and the slot assignment run under one
                     // per-channel lock, or two simultaneous last-slot requests
                     // would both pass the check. Mic and screen-audio never
-                    // take the lock.
+                    // take the lock. The switch is re-checked INSIDE the lock
+                    // (A9), before the cap, so a flip while queued is honoured.
+                    let disabled = false;
                     const created = await withChannelLock(channelId, async () => {
+                        if (!screenShareEnabled()) {
+                            disabled = true;
+                            return null;
+                        }
                         const others = mediasoup.countScreenVideoProducers(channelId, sessionKey);
                         if (!screenShareSlotAvailable(others)) return null;
                         const p = await sendTransport.produce({ kind, rtpParameters, appData });
@@ -270,7 +290,15 @@ export function registerVoiceHandlers(
                         return p;
                     });
                     if (!created) {
-                        ack({ success: false, error: SCREEN_SHARE_LIMIT_MESSAGE, errorCode: SCREEN_SHARE_LIMIT_CODE });
+                        if (disabled) {
+                            ack({
+                                success: false,
+                                error: "Screen sharing is disabled on this server",
+                                errorCode: "SCREEN_SHARE_DISABLED",
+                            });
+                        } else {
+                            ack({ success: false, error: SCREEN_SHARE_LIMIT_MESSAGE, errorCode: SCREEN_SHARE_LIMIT_CODE });
+                        }
                         return;
                     }
                     producer = created;
@@ -372,6 +400,22 @@ export function registerVoiceHandlers(
                 const session = mediasoup.getSession(channelId, getMediasoupSessionKey(socket));
                 if (!router || !session?.recvTransport) {
                     ack({ success: false, error: "Recv transport not ready" });
+                    return;
+                }
+
+                // PRD 19 A9: screen media is received ONLY through the viewer
+                // path (WATCH_SCREEN_SHARE sets watchingUserId on a viewer
+                // socket), and only while sharing is on. Mic is never refused.
+                const found = mediasoup.findProducer(channelId, producerId);
+                const decision = screenConsumeDecision({
+                    mediaType: found?.mediaType ?? null,
+                    enabled: screenShareEnabled(),
+                    role: socket.data.role,
+                    watchingUserId: socket.data.watchingUserId,
+                    ownerKey: found?.ownerKey ?? null,
+                });
+                if (!decision.allowed) {
+                    ack({ success: false, error: decision.error, errorCode: decision.errorCode });
                     return;
                 }
 

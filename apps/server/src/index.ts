@@ -43,6 +43,7 @@ import { startUploadSweeper } from "./services/upload-sweeper.js";
 import { startIdentityEventPruner } from "./services/identity-events.service.js";
 import { setDbAllowedHosts, setDbRequireSigned } from "./config/identity.config.js";
 import { setDbRequireApproval } from "./config/approval.config.js";
+import { setScreenShareEnabled } from "./config/screen-share.config.js";
 import { setDbRequireInvite } from "./config/invite.config.js";
 import { registerInviteHandlers } from "./handlers/invite.handler.js";
 import { startApprovalPruner } from "./services/approval.service.js";
@@ -150,6 +151,7 @@ async function main(): Promise<void> {
     setDbAllowedHosts(server.authAllowedHosts);
     await reloadAddressBans(app.prisma, server.id);
     setDbRequireApproval(server.requireApproval);
+    setScreenShareEnabled(server.screenShareEnabled); // PRD 19 A9
     setDbRequireInvite(server.requireInvite);
 
     // ── mediasoup SFU ──────────────────────────────────────────────────────

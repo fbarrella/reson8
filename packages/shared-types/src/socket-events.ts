@@ -543,8 +543,12 @@ export interface ClientToServerEvents {
             success: boolean;
             producerId?: string;
             error?: string;
-            /** PRD 19 A4: a screen-video produce refused because the room has MAX_SCREEN_SHARES_PER_ROOM live shares. */
-            errorCode?: "SCREEN_SHARE_LIMIT";
+            /**
+             * PRD 19 A4: a screen-video produce refused because the room has
+             * MAX_SCREEN_SHARES_PER_ROOM live shares. PRD 19 A9: screen media
+             * refused because the server-wide sharing switch is off.
+             */
+            errorCode?: "SCREEN_SHARE_LIMIT" | "SCREEN_SHARE_DISABLED";
         }) => void,
     ) => void;
 
@@ -555,6 +559,11 @@ export interface ClientToServerEvents {
             success: boolean;
             consumer?: IConsumerInfo;
             error?: string;
+            /**
+             * PRD 19 A9: a screen producer can only be consumed by a Viewer
+             * socket that is watching its sharer, and only while sharing is on.
+             */
+            errorCode?: "SCREEN_SHARE_DISABLED" | "NOT_WATCHING";
         }) => void,
     ) => void;
 

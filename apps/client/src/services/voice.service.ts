@@ -163,7 +163,7 @@ export interface VoiceSignaling {
         kind: "audio" | "video",
         rtpParameters: any,
         appData?: { mediaType?: "screen-audio" | "screen-video" },
-    ): Promise<{ success: boolean; producerId?: string; error?: string; errorCode?: "SCREEN_SHARE_LIMIT" }>;
+    ): Promise<{ success: boolean; producerId?: string; error?: string; errorCode?: "SCREEN_SHARE_LIMIT" | "SCREEN_SHARE_DISABLED" }>;
 
     consume(
         producerId: string,

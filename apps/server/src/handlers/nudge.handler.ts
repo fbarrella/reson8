@@ -34,6 +34,7 @@ import {
     setDbRequireSigned,
 } from "../config/identity.config.js";
 import { requireApproval, setDbRequireApproval } from "../config/approval.config.js";
+import { setScreenShareEnabled } from "../config/screen-share.config.js";
 import { requireInvite, setDbRequireInvite } from "../config/invite.config.js";
 import {
     checkAllowedHostsUpdate,
@@ -339,6 +340,7 @@ export function registerNudgeHandlers(
                     });
                 });
                 setDbRequireApproval(updated.requireApproval); // PRD 18.8: applies to the next join
+                setScreenShareEnabled(updated.screenShareEnabled); // PRD 19 A9: PRODUCE/CONSUME read the mirror
                 setDbRequireInvite(updated.requireInvite); // PRD 18.9
                 // Both take effect on the very next join, no restart (PRD 18.4/18.5).
                 setDbRequireSigned(updated.requireSignedIdentity);

@@ -1477,3 +1477,65 @@ Feature/Fix: The client learns its own permissions (PRD 19 A8)
 
   Next Step: PRD 19 A9 — screen-share server hardening.
   Reminder: P11 / P12 still need a decision.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Screen-share switch enforced at PRODUCE and CONSUME (PRD 19 A9, security)
+
+  Problem: servers.screenShareEnabled was checked only by SET_SCREEN_SHARE_STATE
+  (the presence flag) and WATCH_SCREEN_SHARE. PRODUCE created screen-video and
+  screen-audio producers with the switch off, and CONSUME accepted ANY producer
+  in the router, so a socket in the room could receive a screen producer
+  directly and skip WATCH_SCREEN_SHARE's checks. Only a modified client could.
+
+  Solution:
+    Shared types: PRODUCE ack errorCode also allows "SCREEN_SHARE_DISABLED";
+    CONSUME ack gains errorCode "SCREEN_SHARE_DISABLED" | "NOT_WATCHING".
+    Server:
+      - config/screen-share.config.ts (NEW): in-memory mirror of the switch
+        (same pattern as approval.config); loaded at boot in index.ts, updated
+        by UPDATE_SERVER_SETTINGS. WATCH_SCREEN_SHARE and SET_SCREEN_SHARE_STATE
+        KEEP their own DB reads (non-regression rule); the new checks read the
+        mirror. The two cannot disagree for longer than the update itself.
+      - MediasoupService.findProducer(channelId, producerId) -> { ownerKey,
+        mediaType: mic | screen-video | screen-audio } | null.
+      - services/screen-consume.ts (NEW, pure): screenConsumeDecision(): unknown
+        producer -> allowed (canConsume decides, as before); mic -> always
+        allowed; screen + switch off -> SCREEN_SHARE_DISABLED; screen + not a
+        viewer socket watching that very sharer -> NOT_WATCHING.
+      - voice.handler PRODUCE: screen-audio/video refused with
+        SCREEN_SHARE_DISABLED when off; for screen-video the switch is
+        re-checked INSIDE A4's channel lock, before the cap. CONSUME: the
+        decision runs before router.canConsume.
+    Compatibility: the v2.7.0 Viewer window (and C10's stage) consume through a
+    viewer socket after WATCH_SCREEN_SHARE, which sets watchingUserId, so they
+    pass unchanged. Out of scope (as the PRD says): switching sharing off while
+    someone is already sharing does not stop that share; it just can no longer
+    be received.
+
+  Key Files Modified:
+    packages/shared-types/src/socket-events.ts
+    apps/server/src/config/screen-share.config.ts (NEW)
+    apps/server/src/services/screen-consume.ts (NEW)
+    apps/server/src/services/mediasoup.service.ts
+    apps/server/src/handlers/voice.handler.ts, nudge.handler.ts
+    apps/server/src/index.ts
+    apps/server/src/__tests__/screen-consume.test.ts (NEW)
+
+  Verification:
+    - tsc server/client clean; lint exit 0; server tests pass (10 new: every
+      row of the decision table, findProducer with fake sessions, the config).
+    - Real server + mediasoup (sharer, watcher, a real viewer socket with a
+      ticket, WATCH_SCREEN_SHARE, a recv transport):
+        sharing ON: produce mic and screen OK; a PRIMARY socket consuming the
+        screen producer -> NOT_WATCHING; the same socket consuming the MIC ->
+        OK; the viewer socket watching that sharer consumes the share OK; a
+        viewer watching ANOTHER sharer consuming it -> NOT_WATCHING.
+        sharing OFF: screen-video PRODUCE and screen-audio PRODUCE ->
+        SCREEN_SHARE_DISABLED; mic PRODUCE OK; the watching viewer's CONSUME ->
+        SCREEN_SHARE_DISABLED; a primary's mic CONSUME OK.
+    - NOT run: the Electron Viewer window itself (the socket protocol it uses
+      is exactly the sequence above).
+
+  Next Step: PRD 19 A10 — validate every upload by its real bytes.
+  Reminder: P11 / P12 still need a decision.
