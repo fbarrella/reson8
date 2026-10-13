@@ -1361,3 +1361,63 @@ Feature/Fix: Category delete with children, server-side voice teardown (PRD 19 A
 
   Next Step: PRD 19 A7 — DM directory.
   Reminder: P11 / P12 still need a decision.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: DM directory, GET_DM_DIRECTORY (PRD 19 A7)
+
+  Problem: GET_ONLINE_USERS lists only people who are online plus existing DM
+  partners, so a member who is offline and was never messaged cannot be found,
+  and there is no last-message or unread data per conversation for the new DM
+  sidebar (C7).
+
+  Solution:
+    Shared types: IDmDirectoryEntry { userId, nickname, avatarUrl, isOnline,
+    lastMessage?{ text(raw, <=300), hasAttachments, at, fromMe }, unreadCount }
+    and the GET_DM_DIRECTORY ack.
+    Server:
+      - services/server-summary.ts gains loadServerMembers(): the ONE loader of
+        "members + this server's aggregated permissions + banned ids"; A1's
+        GET_SERVER_SUMMARY now uses it too (refactor, same behaviour).
+      - services/dm-directory.ts (NEW): buildDmDirectory() (pure: members with
+        access, not banned, not the caller; unsorted), truncatePreview()
+        (300 UTF-16 units, never splits a surrogate pair) and
+        loadLastDmByPartner() (the DISTINCT ON query as a tagged template over
+        direct_messages, only pairs that include the caller).
+      - dm.handler.ts GET_DM_DIRECTORY: members + online ids + last-by-partner
+        + the existing unread groupBy + one attachment groupBy over the last
+        message ids; errors ack "Failed to load the DM directory".
+      - EVENT_ACCESS.GET_DM_DIRECTORY = "member".
+    Client: preload.getDmDirectory() (5 s timeout, null on error/timeout = an
+    older server); the renderer API type and a DmDirectoryEntry mirror. No UI
+    (C7 builds it and the GET_ONLINE_USERS fallback).
+
+  Key Files Modified:
+    packages/shared-types/src/models.ts, socket-events.ts
+    apps/server/src/services/dm-directory.ts (NEW)
+    apps/server/src/services/server-summary.ts
+    apps/server/src/services/access.service.ts
+    apps/server/src/handlers/dm.handler.ts, nudge.handler.ts
+    apps/server/src/__tests__/dm-directory.test.ts (NEW)
+    apps/client/src/preload.ts, renderer/renderer.ts
+
+  Verification:
+    - tsc server/client clean; lint exit 0; server tests 31 files pass (10 new:
+      caller/banned/restricted excluded, no-DM member, fromMe both ways,
+      attachments + ISO time, online + unread default 0, 300-char cut,
+      surrogate-safe cut, the SQL binds the caller as a parameter).
+    - Real server (admin, me, Bob, banned Eve, restricted Rex, an offline
+      never-messaged member): the directory lists Bob, the offline member and
+      the admin, and NOT me, Eve or Rex; the offline member has isOnline false
+      and no lastMessage; Bob wrote twice -> last "second from bob", fromMe
+      false, unread 2; after my reply -> last "my reply", fromMe true; Bob's
+      own view of the same chat has fromMe false and unread 1; the admin's
+      directory carries no lastMessage for chats it is not part of; Rex is
+      refused by the packet gate; a 1000-char message arrives cut to 300.
+      The DISTINCT ON query therefore ran against real rows in both
+      directions (the dev database, not a mock).
+    - NOT run: hasAttachments=true on a real upload (the lookup is one
+      attachment.groupBy by dmId, covered by the pure test only).
+
+  Next Step: PRD 19 A8 — the client learns its own permissions.
+  Reminder: P11 / P12 still need a decision.

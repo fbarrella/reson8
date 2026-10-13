@@ -21,8 +21,8 @@ import type {
 } from "@reson8/shared-types";
 import { PermissionFlags } from "@reson8/shared-types";
 import { requirePermission } from "../middleware/permissions.middleware.js";
-import { aggregatePermissions, getUserPermissions, isAdmin } from "../services/permissions.service.js";
-import { buildServerSummary } from "../services/server-summary.js";
+import { getUserPermissions, isAdmin } from "../services/permissions.service.js";
+import { buildServerSummary, loadServerMembers } from "../services/server-summary.js";
 import { iconToRelease, parseIconChange } from "../services/server-icon.js";
 import { UploadClaimError, claimUploads, releaseStoredFile } from "../services/stored-file.service.js";
 import {
@@ -146,28 +146,12 @@ export function registerNudgeHandlers(
                     ack({ success: false, error: "Not signed in" });
                     return;
                 }
-                const [server, users, banned, onlineIds] = await Promise.all([
+                const [server, { members, bannedIds }, onlineIds] = await Promise.all([
                     app.prisma.server.findUnique({
                         where: { id: serverId },
                         select: { name: true, nudgeEnabled: true, screenShareEnabled: true, iconUrl: true },
                     }),
-                    app.prisma.user.findMany({
-                        where: { servers: { some: { serverId } } },
-                        select: {
-                            id: true,
-                            nickname: true,
-                            avatarUrl: true,
-                            roles: {
-                                select: {
-                                    role: { select: { serverId: true, permissions: true } },
-                                },
-                            },
-                        },
-                    }),
-                    app.prisma.bannedUser.findMany({
-                        where: { serverId },
-                        select: { userId: true },
-                    }),
+                    loadServerMembers(app.prisma, serverId),
                     presence.getOnlineUsers(serverId),
                 ]);
                 if (!server) {
@@ -179,16 +163,8 @@ export function registerNudgeHandlers(
                     success: true,
                     summary: buildServerSummary({
                         name: server.name,
-                        members: users.map((u) => ({
-                            id: u.id,
-                            nickname: u.nickname,
-                            avatarUrl: u.avatarUrl,
-                            perms: aggregatePermissions(
-                                u.roles.map((r) => r.role),
-                                serverId,
-                            ),
-                        })),
-                        bannedIds: new Set(banned.map((b) => b.userId)),
+                        members,
+                        bannedIds,
                         onlineIds: new Set(onlineIds),
                         iconUrl: server.iconUrl ?? null,
                         // The values in effect — environment overrides included.

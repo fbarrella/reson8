@@ -25,6 +25,7 @@ import type {
     IAvatarSelection,
     IUserProfile,
     IServerSummary,
+    IDmDirectoryEntry,
     IIdentityEvent,
     IObservedAuthHost,
     IBannedAddress,
@@ -820,6 +821,16 @@ export interface ClientToServerEvents {
      */
     GET_SERVER_SUMMARY: (
         ack: (response: { success: boolean; summary?: IServerSummary; error?: string }) => void,
+    ) => void;
+
+    /**
+     * Every member the caller could DM, with the latest message and unread
+     * count per conversation (PRD 19 A7). Members only: restricted users are
+     * refused. An older server does not know the event; the client falls back
+     * to GET_ONLINE_USERS.
+     */
+    GET_DM_DIRECTORY: (
+        ack: (response: { success: boolean; members?: IDmDirectoryEntry[]; error?: string }) => void,
     ) => void;
 
     /**

@@ -29,6 +29,7 @@ import type {
     IIdentityEvent,
     IInvite,
     IServerSummary,
+    IDmDirectoryEntry,
 } from "@reson8/shared-types";
 import { VoiceService, VoiceSignaling } from "./services/voice.service";
 import { createHash } from "crypto";
@@ -2087,6 +2088,23 @@ const api = {
                 const summary = res.summary;
                 if (summary.iconUrl) summary.iconUrl = resolveMediaUrl(summary.iconUrl);
                 resolve(summary);
+            });
+        });
+    },
+
+    /**
+     * Every member the caller could DM, with the latest message and unread
+     * count (PRD 19 A7). Resolves null on an error or timeout: a v2.7.0 server
+     * has no such event, and C7 then falls back to GET_ONLINE_USERS.
+     */
+    getDmDirectory(): Promise<IDmDirectoryEntry[] | null> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve(null);
+                return;
+            }
+            socket.timeout(5000).emit("GET_DM_DIRECTORY", (err, res) => {
+                resolve(err || !res?.success || !res.members ? null : res.members);
             });
         });
     },

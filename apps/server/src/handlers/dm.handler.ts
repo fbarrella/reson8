@@ -2,7 +2,7 @@
  * DM Handler — Socket.io events for direct messaging.
  *
  * Handles: SEND_DIRECT_MESSAGE, FETCH_DIRECT_MESSAGES, GET_ONLINE_USERS,
- *          MARK_DMS_READ, GET_UNREAD_DM_PARTNERS.
+ *          MARK_DMS_READ, GET_UNREAD_DM_PARTNERS, GET_DM_DIRECTORY.
  * Messages are persisted in PostgreSQL and delivered in real-time
  * to the recipient's socket(s).
  */
@@ -39,6 +39,8 @@ import { RECIPIENT_NO_ACCESS_MESSAGE, hasServerAccess } from "../services/access
 import { normalizeNewlines } from "../services/message-text.js";
 import { aggregateReactionRows, loadReactorNicknames } from "../services/reaction.service.js";
 import { parseHistoryQuery, trimExtra, windowHalves } from "../services/pagination.service.js";
+import { buildDmDirectory, loadLastDmByPartner } from "../services/dm-directory.js";
+import { loadServerMembers } from "../services/server-summary.js";
 
 type TypedIO = SocketIOServer<
     ClientToServerEvents,
@@ -409,6 +411,54 @@ export function registerDMHandlers(
             } catch (err) {
                 app.log.error({ err }, "Error in MARK_DMS_READ");
                 ack({ success: false, error: "Failed to mark DMs as read" });
+            }
+        });
+
+        // ── GET_DM_DIRECTORY (PRD 19 A7) ────────────────────────────────────
+        // Members with access (not banned, not the caller) + the latest DM and
+        // unread count of each conversation. Only pairs that include the caller
+        // are read. EVENT_ACCESS "member": restricted users are refused by the
+        // packet gate.
+        socket.on("GET_DM_DIRECTORY", async (ack) => {
+            try {
+                const { userId, serverId } = socket.data;
+                const [{ members, bannedIds }, onlineIds, lastByPartner, unreadGroups] = await Promise.all([
+                    loadServerMembers(app.prisma, serverId),
+                    presence.getOnlineUsers(serverId),
+                    loadLastDmByPartner(app.prisma, userId),
+                    app.prisma.directMessage.groupBy({
+                        by: ["senderId"],
+                        where: { receiverId: userId, readAt: null },
+                        _count: { id: true },
+                    }),
+                ]);
+
+                const lastIds = [...lastByPartner.values()].map((r) => r.id);
+                const withAttachments =
+                    lastIds.length === 0
+                        ? []
+                        : await app.prisma.attachment.groupBy({
+                              by: ["dmId"],
+                              where: { dmId: { in: lastIds } },
+                          });
+
+                ack({
+                    success: true,
+                    members: buildDmDirectory({
+                        callerId: userId,
+                        members,
+                        bannedIds,
+                        onlineIds: new Set(onlineIds),
+                        lastByPartner,
+                        dmIdsWithAttachments: new Set(
+                            withAttachments.map((a) => a.dmId).filter((id): id is string => id !== null),
+                        ),
+                        unreadByPartner: new Map(unreadGroups.map((g) => [g.senderId, g._count.id])),
+                    }),
+                });
+            } catch (err) {
+                app.log.error({ err }, "Error in GET_DM_DIRECTORY");
+                ack({ success: false, error: "Failed to load the DM directory" });
             }
         });
 

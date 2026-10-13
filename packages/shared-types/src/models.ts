@@ -157,6 +157,24 @@ export interface IUserProfile {
 }
 
 /**
+ * One row of the DM directory (PRD 19 A7): a member the caller could message.
+ * The list is not sorted by the server (the client re-sorts it live).
+ */
+export interface IDmDirectoryEntry {
+    userId: string;
+    nickname: string;
+    avatarUrl: string | null;
+    isOnline: boolean;
+    /**
+     * The latest DM between the caller and this member; absent = never
+     * messaged. `text` is RAW message text (at most 300 characters): render it
+     * with markdownToPlainText, never as HTML.
+     */
+    lastMessage?: { text: string; hasAttachments: boolean; at: string; fromMe: boolean };
+    unreadCount: number;
+}
+
+/**
  * How many screen shares one voice room can carry at once (PRD 19 A4). The
  * server enforces it at PRODUCE; the renderer mirrors the number (it is a
  * classic script and cannot import this) to label the Share button.

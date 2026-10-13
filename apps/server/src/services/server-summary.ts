@@ -8,8 +8,10 @@
  */
 
 import type { IServerSummary } from "@reson8/shared-types";
+import type { PrismaClient } from "@prisma/client";
 import { PermissionFlags } from "@reson8/shared-types";
 import { hasServerAccess } from "./access.service.js";
+import { aggregatePermissions } from "./permissions.service.js";
 
 export interface SummaryMemberRow {
     id: string;
@@ -26,6 +28,41 @@ export interface ServerSummaryInput {
     onlineIds: ReadonlySet<string>;
     features: IServerSummary["features"];
     iconUrl?: string | null;
+}
+
+/**
+ * Loads a server's members with their aggregated permissions FOR THIS SERVER
+ * and the banned ids — the one loader behind the server summary (A1) and the
+ * DM directory (A7), so "who is a member" is decided in exactly one place.
+ */
+export async function loadServerMembers(
+    prisma: PrismaClient,
+    serverId: string,
+): Promise<{ members: SummaryMemberRow[]; bannedIds: Set<string> }> {
+    const [users, banned] = await Promise.all([
+        prisma.user.findMany({
+            where: { servers: { some: { serverId } } },
+            select: {
+                id: true,
+                nickname: true,
+                avatarUrl: true,
+                roles: { select: { role: { select: { serverId: true, permissions: true } } } },
+            },
+        }),
+        prisma.bannedUser.findMany({ where: { serverId }, select: { userId: true } }),
+    ]);
+    return {
+        members: users.map((u) => ({
+            id: u.id,
+            nickname: u.nickname,
+            avatarUrl: u.avatarUrl,
+            perms: aggregatePermissions(
+                u.roles.map((r) => r.role),
+                serverId,
+            ),
+        })),
+        bannedIds: new Set(banned.map((b) => b.userId)),
+    };
 }
 
 export function buildServerSummary(input: ServerSummaryInput): IServerSummary {

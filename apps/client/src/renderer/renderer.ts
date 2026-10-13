@@ -80,6 +80,17 @@ interface UserProfile {
     isOnline: boolean;
 }
 
+/** One row of the DM directory (PRD 19 A7) — mirrors shared-types' IDmDirectoryEntry. */
+interface DmDirectoryEntry {
+    userId: string;
+    nickname: string;
+    avatarUrl: string | null;
+    isOnline: boolean;
+    /** `text` is RAW message text: render with markdownToPlainText, never as HTML. */
+    lastMessage?: { text: string; hasAttachments: boolean; at: string; fromMe: boolean };
+    unreadCount: number;
+}
+
 /** Member-visible server facts (PRD 19 A1) — mirrors shared-types' IServerSummary. */
 interface ServerSummary {
     name: string;
@@ -1053,6 +1064,8 @@ interface Reson8Api {
     }>;
     /** null on an error/timeout (a v2.7.0 server doesn't know the event) — PRD 19 A1. */
     getServerSummary(): Promise<ServerSummary | null>;
+    /** null on an error/timeout (an older server) — PRD 19 A7. */
+    getDmDirectory(): Promise<DmDirectoryEntry[] | null>;
     updateServerSettings(
         settings: {
             nudgeEnabled?: boolean;

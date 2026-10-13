@@ -60,6 +60,7 @@ export const EVENT_ACCESS: Record<keyof ClientToServerEvents, "open" | "member">
     GET_ONLINE_USERS: "open",
     GET_USER_PROFILE: "open",
     GET_SERVER_SETTINGS: "open",
+    GET_DM_DIRECTORY: "member", // PRD 19 A7 — a restricted user cannot DM
     GET_SERVER_SUMMARY: "open", // PRD 19 A1 — About and the header; restricted users may read it
     GET_APPROVED_EMOJIS: "open",
     SET_AVATAR: "open",
