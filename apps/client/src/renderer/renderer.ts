@@ -1126,7 +1126,19 @@ interface Reson8Api {
         targetUserId: string,
         nickname: string,
         channelId: string,
-    ): Promise<{ success: boolean; error?: string }>;
+        roomName?: string,
+    ): Promise<{ success: boolean; windowId?: number; error?: string }>;
+    focusViewerWindow(windowId: number): Promise<boolean>;
+    closeViewerWindow(windowId: number): Promise<boolean>;
+    /** The in-app stream stage (PRD 19 C10): one viewer socket in the preload, video placed into a container by id. */
+    stage: {
+        watch(targetUserId: string, channelId: string, containerId: string): Promise<{ success: boolean; streamName?: string; error?: string }>;
+        stop(): Promise<void>;
+        isWatching(): boolean;
+        setVolume(percent: number): void;
+        setMuted(muted: boolean): void;
+        qualityHeight(): number | null;
+    };
     on(event: string, callback: (...args: any[]) => void): void;
 }
 
@@ -5071,6 +5083,7 @@ function applyAccessState(hasAccess: boolean, opts: { restore?: boolean } = {}):
     if (!changed) return;
 
     if (!hasAccess) {
+        void stopStageWatch(); // PRD 19 C10: the stage and any popped Viewer end with the access
         // Everything the user had open goes away; kept tabs stay remembered.
         for (const [tabId] of chatTabs) closeTab(tabId, { reason: "access" });
         previewTabId = null;
@@ -5330,6 +5343,23 @@ function createVoiceTab(): VoiceTab {
         `<button type="button" data-layout="mosaic">Mosaic</button>` +
         `<button type="button" data-layout="featured">Featured</button>` +
         `</div></div>` +
+        `<div class="voice-stream" id="voice-stream">` +
+        `<div class="voice-stream-video" id="voice-stream-video"></div>` +
+        `<div class="voice-stream-info"><span class="sharing-badge">LIVE</span>` +
+        `<span class="voice-stream-quality"></span><span class="voice-stream-title"></span></div>` +
+        `<div class="voice-stream-controls">` +
+        `<i class="ph ph-speaker-high" aria-hidden="true"></i>` +
+        `<input type="range" class="voice-stream-volume" min="0" max="200" step="5" value="100" title="Stream volume" aria-label="Stream volume">` +
+        `<span class="voice-stream-volume-readout">100%</span>` +
+        `<button type="button" class="voice-stream-popout" title="Pop out" aria-label="Pop out"><i class="ph ph-arrow-square-out" aria-hidden="true"></i></button>` +
+        `<button type="button" class="voice-stream-fullscreen" title="Fullscreen" aria-label="Fullscreen"><i class="ph ph-corners-out" aria-hidden="true"></i></button>` +
+        `</div>` +
+        `<div class="voice-stream-note"><div class="voice-stream-note-text"></div>` +
+        `<div class="voice-stream-note-actions">` +
+        `<button type="button" class="btn btn-primary voice-stream-bringback">Bring it back</button>` +
+        `<button type="button" class="btn btn-secondary voice-stream-showwindow">Show window</button>` +
+        `</div></div>` +
+        `</div>` +
         `<div class="voice-room-stage"><div class="voice-grid"></div></div>` +
         `</div>`;
     tabContentArea.appendChild(contentEl);
@@ -5380,6 +5410,7 @@ function openVoiceTab(opts: { focus?: boolean } = {}): void {
 function closeVoiceTab(): void {
     closeVoiceMoreMenu();
     if (!voiceTab) return;
+    if (stageState !== "idle") void stopStageWatch(); // its container goes with the tab (PRD 19 C10)
     const vt = voiceTab;
     voiceTab = null;
     vt.observer.disconnect();
@@ -5498,6 +5529,10 @@ function renderVoiceRoom(): void {
     }
 
     const sharing = anyoneSharingInRoom(node);
+    // The sharer stopped, or left the room: the stage has nothing to show (PRD 19 C10).
+    if (stageTarget && stageState !== "idle" && !node.occupants.some((o) => o.userId === stageTarget!.userId && o.isSharingScreen)) {
+        void stopStageWatch("The stream ended");
+    }
     const layout = effectiveVoiceLayout(node);
     vt.btnMosaic.classList.toggle("active", layout === "mosaic");
     vt.btnFeatured.classList.toggle("active", layout === "featured");
@@ -5516,9 +5551,12 @@ function layoutVoiceTiles(): void {
     const layout = effectiveVoiceLayout(node);
 
     // Featured: five tiles then a "…and n more" block (everyone, when it would
-    // only hide one person). Mosaic: everyone.
-    const overflowing = layout === "featured" && people.length > VOICE_FEATURED_SLOTS + 1;
-    const shown = overflowing ? people.slice(0, VOICE_FEATURED_SLOTS) : people;
+    // only hide one person). Mosaic: everyone. With a stream on stage the people
+    // are a strip: two tiles plus the block (PRD 19 C10).
+    const inStrip = stageState !== "idle";
+    const featuredSlots = inStrip ? 2 : VOICE_FEATURED_SLOTS;
+    const overflowing = (inStrip || layout === "featured") && people.length > featuredSlots + 1;
+    const shown = overflowing ? people.slice(0, featuredSlots) : people;
     const hiddenCount = people.length - shown.length;
     const slots = shown.length + (hiddenCount > 0 ? 1 : 0);
 
@@ -5570,7 +5608,7 @@ function buildVoiceMoreMenu(): void {
     menu.replaceChildren();
     if (!node) return;
     const myId = api.getInstanceId();
-    for (const occ of node.occupants.slice(VOICE_FEATURED_SLOTS)) {
+    for (const occ of node.occupants.slice(stageState !== "idle" ? 2 : VOICE_FEATURED_SLOTS)) {
         const row = document.createElement("div");
         row.className = "voice-more-row";
         row.dataset.userId = occ.userId;
@@ -5618,6 +5656,218 @@ document.addEventListener("keydown", (e) => {
 });
 document.getElementById("btn-expand-voice")?.addEventListener("click", () => openVoiceTab());
 
+// ── In-app stream stage (PRD 19 C10) ──────────────────────────────────────────
+// One state machine: idle → starting → stage ⇄ popping → popped → returning →
+// stage. Clicks are ignored while a transition runs, and every transition waits
+// for the previous side to close — there is never a moment with two consumers.
+
+type StageState = "idle" | "starting" | "stage" | "popping" | "popped" | "returning";
+let stageState: StageState = "idle";
+let stageTarget: { userId: string; channelId: string; nickname: string } | null = null;
+let stageStreamName = "";
+let stageViewerWindowId: number | null = null;
+let stageQualityTimer: ReturnType<typeof setInterval> | null = null;
+
+function stageEl<T extends HTMLElement>(selector: string): T | null {
+    return (voiceTab?.contentEl.querySelector(selector) as T | null) ?? null;
+}
+
+function roomNameForStage(): string {
+    return voiceRoomNode()?.name ?? "";
+}
+
+/** Paints the stage region and the people strip for the current state. */
+function renderStage(): void {
+    const room = voiceTab?.contentEl.querySelector(".voice-room");
+    const stream = stageEl<HTMLElement>(".voice-stream");
+    if (!room || !stream) return;
+    const active = stageState !== "idle";
+    room.classList.toggle("has-stream", active);
+    stream.classList.toggle("is-popped", stageState === "popped" || stageState === "returning" || stageState === "popping");
+    stream.classList.toggle("is-busy", stageState === "starting");
+
+    const note = stageEl<HTMLElement>(".voice-stream-note-text");
+    const actions = stageEl<HTMLElement>(".voice-stream-note-actions");
+    const who = stageTarget?.nickname ?? "";
+    if (note) {
+        note.textContent =
+            stageState === "starting"
+                ? `Connecting to ${who}'s stream…`
+                : stageState === "returning"
+                  ? `Bringing ${who}'s stream back…`
+                  : stageState === "popping"
+                    ? `Opening ${who}'s stream in its own window…`
+                    : `${who}'s stream is in its own window`;
+    }
+    if (actions) actions.style.display = stageState === "popped" ? "" : "none";
+
+    const title = stageEl<HTMLElement>(".voice-stream-title");
+    if (title) title.textContent = stageStreamName ? `${who} · ${stageStreamName}` : who;
+    layoutVoiceTiles();
+}
+
+function paintStageQuality(): void {
+    const el = stageEl<HTMLElement>(".voice-stream-quality");
+    if (!el) return;
+    const h = api.stage.qualityHeight();
+    el.textContent = h ? `${h}p` : "";
+}
+
+function stopStageQualityPoll(): void {
+    if (stageQualityTimer) clearInterval(stageQualityTimer);
+    stageQualityTimer = null;
+}
+
+/** Starts (or switches) the in-app watch of `target`, opening the room tab. */
+async function startStageWatch(target: { userId: string; nickname: string; channelId: string }): Promise<void> {
+    if (!requireServerAccess()) return; // PRD 18.18
+    if (!isInVoice || currentChannelId !== target.channelId) {
+        showToast("Join the voice channel to watch its stream.");
+        return;
+    }
+    if (stageState === "starting" || stageState === "popping" || stageState === "returning") return;
+    if (stageState !== "idle") await stopStageWatch(); // switching to another sharer
+
+    openVoiceTab({ focus: true });
+    if (!voiceTab) return;
+    stageTarget = { ...target };
+    stageStreamName = "";
+    stageState = "starting";
+    renderStage();
+
+    const res = await api.stage.watch(target.userId, target.channelId, "voice-stream-video");
+    // Closed or switched while connecting: the preload already dropped its side if it could.
+    if (stageState !== "starting" || stageTarget?.userId !== target.userId) {
+        if (res.success) await api.stage.stop();
+        return;
+    }
+    if (!res.success) {
+        stageState = "idle";
+        stageTarget = null;
+        renderStage();
+        showToast(escapeHtml(res.error ?? "Couldn't start the stream"));
+        return;
+    }
+    stageStreamName = res.streamName ?? "";
+    stageState = "stage";
+    renderStage();
+    paintStageQuality();
+    stopStageQualityPoll();
+    let tries = 0;
+    stageQualityTimer = setInterval(() => {
+        paintStageQuality();
+        if (++tries >= 10 || api.stage.qualityHeight()) stopStageQualityPoll();
+    }, 500);
+}
+
+/** Ends the stage watch and any popped Viewer; always lands in `idle`. */
+async function stopStageWatch(message?: string): Promise<void> {
+    if (stageState === "idle" && !stageViewerWindowId && !api.stage.isWatching()) return;
+    const windowId = stageViewerWindowId;
+    stageViewerWindowId = null;
+    stageState = "idle";
+    stageTarget = null;
+    stageStreamName = "";
+    stopStageQualityPoll();
+    if (windowId !== null) await api.closeViewerWindow(windowId);
+    await api.stage.stop();
+    renderStage();
+    if (message) showToast(escapeHtml(message));
+}
+
+/** Moves the stream from the stage into the Viewer window. */
+async function popOutStage(): Promise<void> {
+    if (stageState !== "stage" || !stageTarget) return;
+    const target = stageTarget;
+    stageState = "popping";
+    renderStage();
+    await api.stage.stop();
+    const res = await api.openScreenShareViewer(target.userId, target.nickname, target.channelId, roomNameForStage());
+    if (stageState !== "popping") {
+        // Torn down while opening (left voice, access lost): don't leave the window behind.
+        if (res.success && typeof res.windowId === "number") void api.closeViewerWindow(res.windowId);
+        return;
+    }
+    if (!res.success || typeof res.windowId !== "number") {
+        stageState = "idle";
+        stageTarget = null;
+        renderStage();
+        showToast(escapeHtml(res.error ?? "Couldn't open the stream window"));
+        return;
+    }
+    stageViewerWindowId = res.windowId;
+    stageState = "popped";
+    renderStage();
+}
+
+/** The Viewer is gone: put the stream back on the stage. */
+async function returnToStage(): Promise<void> {
+    if (!stageTarget || (stageState !== "popped" && stageState !== "returning")) return;
+    const target = stageTarget;
+    stageViewerWindowId = null;
+    stageState = "returning";
+    renderStage();
+    const res = await api.stage.watch(target.userId, target.channelId, "voice-stream-video");
+    if (stageState !== "returning") {
+        if (res.success) await api.stage.stop();
+        return;
+    }
+    if (!res.success) {
+        stageState = "idle";
+        stageTarget = null;
+        renderStage();
+        showToast(escapeHtml(res.error ?? "The stream couldn't come back"));
+        return;
+    }
+    stageStreamName = res.streamName ?? stageStreamName;
+    stageState = "stage";
+    renderStage();
+    paintStageQuality();
+}
+
+/** "Bring it back": close the Viewer; its closing returns the stream (viewer-closed). */
+async function bringBackStage(): Promise<void> {
+    if (stageState !== "popped" || stageViewerWindowId === null) return;
+    const windowId = stageViewerWindowId;
+    stageState = "returning";
+    renderStage();
+    const closed = await api.closeViewerWindow(windowId);
+    if (!closed) await returnToStage(); // the window was already gone: no event will come
+}
+
+api.on("viewer-closed", (data: { windowId: number }) => {
+    // The user closed the Viewer (its ✕, Exit Stream or Return): the stream comes home.
+    if (data.windowId === stageViewerWindowId && stageState === "popped") void returnToStage();
+    else if (data.windowId === stageViewerWindowId && stageState === "returning") void returnToStage();
+});
+
+api.on("stage-ended", (data: { reason: string; kind: "ended" | "lost" }) => {
+    if (stageState !== "stage") return;
+    void stopStageWatch(data.kind === "ended" ? "The stream ended" : "Lost the connection to the stream");
+});
+
+// Stage controls (the buttons live in the room tab, built once per tab).
+document.addEventListener("click", (e) => {
+    const t = e.target as HTMLElement;
+    if (t.closest(".voice-stream-popout")) void popOutStage();
+    else if (t.closest(".voice-stream-bringback")) void bringBackStage();
+    else if (t.closest(".voice-stream-showwindow")) {
+        if (stageViewerWindowId !== null) void api.focusViewerWindow(stageViewerWindowId);
+    } else if (t.closest(".voice-stream-fullscreen")) {
+        const stream = stageEl<HTMLElement>(".voice-stream");
+        if (!stream) return;
+        if (document.fullscreenElement) void document.exitFullscreen();
+        else void stream.requestFullscreen().catch(() => showToast("Fullscreen isn't available here."));
+    }
+});
+document.addEventListener("input", (e) => {
+    const t = e.target as HTMLInputElement;
+    if (!t.classList?.contains("voice-stream-volume")) return;
+    api.stage.setVolume(Number(t.value));
+    const readout = stageEl<HTMLElement>(".voice-stream-volume-readout");
+    if (readout) readout.textContent = `${t.value}%`;
+});
+
 // ── Voice Controls ────────────────────────────────────────────────────────
 
 function updateVoiceUI(channelName?: string): void {
@@ -5636,6 +5886,7 @@ function updateVoiceUI(channelName?: string): void {
         btnDeafen.classList.toggle("active", isDeafened);
         updateShareScreenButton();
     } else {
+        if (stageState !== "idle") void stopStageWatch(); // PRD 19 C10 (also covers a popped Viewer)
         closeVoiceTab(); // PRD 19 C9: leaving voice, a kick or a deleted channel closes the room tab
         voicePanel.classList.remove("visible");
         isSharingScreen = false;
@@ -6370,6 +6621,7 @@ api.on("connected", (data: { serverId: string; instanceId: string; secure?: bool
 let lastDisconnectAt: number | null = null;
 
 api.on("disconnected", (data?: { reason?: string }) => {
+    void stopStageWatch(); // PRD 19 C10
     const disconnectReason = data?.reason ?? "unknown";
     // "io client disconnect" = the user/app closed it on purpose; anything
     // else (ping timeout, transport close/error…) is an unintended drop.
@@ -13133,10 +13385,7 @@ btnWatchShareConfirm.addEventListener("click", async () => {
     pendingWatchShare = null;
     if (!target) return;
 
-    const res = await api.openScreenShareViewer(target.userId, target.nickname, target.channelId);
-    if (!res.success) {
-        log(`Failed to open viewer: ${res.error}`, "error");
-    }
+    await startStageWatch(target); // PRD 19 C10: the stream plays in the voice room tab
 });
 
 // ── Screen Share Selection Modal (PRD 12.10) ────────────────────────────────
@@ -13519,12 +13768,27 @@ api.on("nudge-received", async (data: { fromUserId: string; fromNickname: string
 
 // A viewer opened/closed the Viewer window on this client's own screen
 // share (PRD 13.16) — sound-cue only, no visible UI.
+//
+// A viewer who pops the stream out (or brings it back) leaves and rejoins within
+// moments; that is not two events worth hearing (PRD 19 C10). The leave sound is
+// held for 3 s; a join inside that window cancels both.
+let pendingViewerLeaveSound: ReturnType<typeof setTimeout> | null = null;
+
 api.on("viewer-joined-your-stream", () => {
+    if (pendingViewerLeaveSound) {
+        clearTimeout(pendingViewerLeaveSound);
+        pendingViewerLeaveSound = null;
+        return;
+    }
     SoundAlert.play("user_joined_your_stream.mp3");
 });
 
 api.on("viewer-left-your-stream", () => {
-    SoundAlert.play("user_exited_your_stream.mp3");
+    if (pendingViewerLeaveSound) clearTimeout(pendingViewerLeaveSound);
+    pendingViewerLeaveSound = setTimeout(() => {
+        pendingViewerLeaveSound = null;
+        SoundAlert.play("user_exited_your_stream.mp3");
+    }, 3000);
 });
 
 // ── Emoji Picker ──────────────────────────────────────────────────────────

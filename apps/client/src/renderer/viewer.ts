@@ -16,13 +16,15 @@
     type ViewerStatus = "connecting" | "watching" | "ended" | "error";
 
     interface Reson8ViewerApi {
-        info: { nickname: string; targetUserId: string; channelId: string };
+        info: { nickname: string; targetUserId: string; channelId: string; roomName: string };
         getStreamName(): string;
         onStatus(cb: (status: ViewerStatus, message?: string) => void): void;
         setVolume(percent: number): void;
         toggleMute(): boolean;
         isMuted(): boolean;
         toggleFullscreen(): Promise<boolean>;
+        setAlwaysOnTop(flag: boolean): Promise<boolean>;
+        returnToMain(): void;
     }
 
     const api = (window as any).reson8ViewerApi as Reson8ViewerApi;
@@ -42,10 +44,12 @@
         // Only meaningful once watching has actually started —
         // `getStreamName()` reads back what WATCH_SCREEN_SHARE's ack
         // resolved to, which happens well after this script first runs.
+        // "{sharer} · {stream name} — {room}" (PRD 19 C10), degrading to what is known.
         const streamName = api.getStreamName();
-        document.title = streamName
-            ? `Watching ${api.info.nickname}'s screen share: ${streamName}`
-            : `Watching ${api.info.nickname}'s screen share`;
+        let title = api.info.nickname;
+        if (streamName) title += ` · ${streamName}`;
+        if (api.info.roomName) title += ` — ${api.info.roomName}`;
+        document.title = title;
     }
 
     setWindowTitle();
@@ -71,9 +75,39 @@
         btnMute.classList.toggle("muted", muted);
     });
 
+    const volumeReadout = document.getElementById("volume-readout") as HTMLSpanElement;
     volumeSlider.addEventListener("input", () => {
         api.setVolume(Number(volumeSlider.value));
+        volumeReadout.textContent = `${volumeSlider.value}%`;
     });
+
+    // Always on top: on by default, remembered in this window's own storage.
+    const btnOnTop = document.getElementById("btn-always-on-top") as HTMLButtonElement;
+    const ON_TOP_KEY = "reson8-viewer-on-top";
+    let onTop = true;
+    try {
+        onTop = localStorage.getItem(ON_TOP_KEY) !== "0";
+    } catch {
+        /* storage unavailable — the default stands */
+    }
+    const paintOnTop = (): void => {
+        btnOnTop.classList.toggle("active", onTop);
+        btnOnTop.setAttribute("aria-pressed", String(onTop));
+    };
+    paintOnTop();
+    void api.setAlwaysOnTop(onTop);
+    btnOnTop.addEventListener("click", async () => {
+        onTop = !onTop;
+        try {
+            localStorage.setItem(ON_TOP_KEY, onTop ? "1" : "0");
+        } catch {
+            /* not remembered */
+        }
+        await api.setAlwaysOnTop(onTop);
+        paintOnTop();
+    });
+
+    (document.getElementById("btn-return") as HTMLButtonElement).addEventListener("click", () => api.returnToMain());
 
     btnFullscreen.addEventListener("click", async () => {
         const isFullscreen = await api.toggleFullscreen();

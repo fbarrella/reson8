@@ -2994,6 +2994,135 @@
       overflow: hidden;
     }
 
+    /* The in-app stream stage (PRD 19 C10): the stream above, people as a strip below. */
+    .voice-stream {
+      display: none;
+      position: relative;
+      flex: 1;
+      min-height: 0;
+      background: #000;
+    }
+
+    .voice-room.has-stream .voice-stream {
+      display: block;
+    }
+
+    .voice-room.has-stream .voice-room-stage {
+      flex: 0 0 150px;
+      border-top: 1px solid var(--color-divider);
+    }
+
+    .voice-stream-video {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .voice-stream-video video {
+      max-width: 100%;
+      max-height: 100%;
+    }
+
+    .voice-stream-info {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 4px 8px;
+      border-radius: var(--radius-md);
+      background: rgba(0, 0, 0, 0.55);
+      font-size: 12px;
+      color: #fff;
+      max-width: 60%;
+    }
+
+    .voice-stream-info .sharing-badge {
+      position: static;
+    }
+
+    .voice-stream-title {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .voice-stream-controls {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 6px;
+      border-radius: var(--radius-md);
+      background: rgba(0, 0, 0, 0.55);
+      color: #fff;
+    }
+
+    .voice-stream-controls button {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 28px;
+      height: 28px;
+      border: none;
+      border-radius: var(--radius-md);
+      background: none;
+      color: inherit;
+      font-size: 16px;
+      cursor: pointer;
+    }
+
+    .voice-stream-controls button:hover {
+      background: rgba(255, 255, 255, 0.15);
+    }
+
+    .voice-stream-controls input[type="range"] {
+      width: 90px;
+      accent-color: var(--color-accent);
+    }
+
+    .voice-stream-volume-readout {
+      min-width: 34px;
+      font-size: 11px;
+      text-align: right;
+    }
+
+    .voice-stream-note {
+      position: absolute;
+      inset: 0;
+      display: none;
+      flex-direction: column;
+      align-items: flex-start;
+      justify-content: flex-start;
+      gap: 12px;
+      padding: 24px;
+      background: var(--color-bg);
+      color: var(--color-neutral-300);
+      font-size: 14px;
+    }
+
+    .voice-stream.is-popped .voice-stream-note,
+    .voice-stream.is-busy .voice-stream-note {
+      display: flex;
+    }
+
+    .voice-stream-note-actions {
+      display: flex;
+      gap: 8px;
+    }
+
+    .voice-stream.is-popped .voice-stream-info,
+    .voice-stream.is-popped .voice-stream-controls,
+    .voice-stream.is-busy .voice-stream-info,
+    .voice-stream.is-busy .voice-stream-controls {
+      display: none;
+    }
+
     .voice-grid {
       position: absolute;
       inset: 16px;
@@ -7271,7 +7400,7 @@
   <div id="watch-share-confirm-modal">
     <div class="modal-content">
       <h3>🖥️ Watch Screen Share</h3>
-      <p>Do you want to watch <strong id="watch-share-confirm-nickname"></strong>'s stream?</p>
+      <p>Do you want to watch <strong id="watch-share-confirm-nickname"></strong>'s stream? It plays in the voice room tab; you can pop it out into its own window from there.</p>
       <div class="modal-actions">
         <button class="btn btn-cancel" id="btn-watch-share-cancel">Cancel</button>
         <button class="btn btn-connect" id="btn-watch-share-confirm">Watch</button>

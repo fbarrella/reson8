@@ -455,6 +455,8 @@ async function fetchLinkPreview(url: string): Promise<LinkPreviewData | null> {
 let mainWindow: BrowserWindow | null = null;
 /** webContents id of a Viewer window → its viewer ticket (PRD 17.12). */
 const viewerTickets = new Map<number, string>();
+/** BrowserWindow id of an open Viewer window → the share it shows (PRD 19 C10). */
+const viewerWindows = new Map<number, { targetUserId: string; channelId: string }>();
 let pttKey: string | null = null;
 
 // Set by `setDisplayMediaRequestHandler` (Linux/Wayland screen-share
@@ -1490,15 +1492,26 @@ app.whenReady().then(() => {
     ipcMain.handle(
         "open-screen-share-viewer",
         (
-            _event,
-            args: { targetUserId: string; nickname: string; channelId: string; serverBaseUrl: string; viewerTicket?: string },
+            event,
+            args: {
+                targetUserId: string;
+                nickname: string;
+                channelId: string;
+                serverBaseUrl: string;
+                viewerTicket?: string;
+                roomName?: string;
+            },
         ) => {
+            // Only the main window opens Viewers, and only with plain strings.
+            if (!mainWindow || event.sender !== mainWindow.webContents) return { success: false };
+            const str = (v: unknown, max: number): string => (typeof v === "string" ? v.slice(0, max) : "");
+            const roomName = str(args.roomName, 100);
             const viewerWindow = new BrowserWindow({
                 width: 960,
                 height: 600,
                 minWidth: 480,
                 minHeight: 320,
-                title: `Watching ${args.nickname}'s screen share`,
+                title: `${str(args.nickname, 100)}${roomName ? ` — ${roomName}` : ""}`,
                 webPreferences: {
                     preload: path.join(__dirname, "preload-viewer.js"),
                     contextIsolation: true,
@@ -1511,6 +1524,8 @@ app.whenReady().then(() => {
                         `--viewer-channel-id=${args.channelId}`,
                         `--viewer-nickname=${encodeURIComponent(args.nickname)}`,
                         `--viewer-server-base-url=${encodeURIComponent(args.serverBaseUrl)}`,
+                        // Not a secret (the room is visible to every member), so the command line is fine.
+                        `--viewer-room-name=${encodeURIComponent(roomName)}`,
                     ],
                 },
             });
@@ -1527,14 +1542,63 @@ app.whenReady().then(() => {
             } catch {
                 /* a malformed base URL just means no pin for this window */
             }
+            const windowId = viewerWindow.id;
+            viewerWindows.set(windowId, { targetUserId: args.targetUserId, channelId: args.channelId });
             viewerWindow.on("closed", () => {
                 viewerTickets.delete(contentsId);
                 viewerServers.delete(contentsId);
+                viewerWindows.delete(windowId);
+                // The stage returns the stream to itself when this arrives (PRD 19 C10).
+                if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("viewer-closed", { windowId });
             });
             viewerWindow.loadFile(path.join(__dirname, "renderer", "viewer.html"));
-            return { success: true };
+            return { success: true, windowId };
         },
     );
+
+    // The main window's controls over a Viewer it opened (PRD 19 C10). Both only
+    // accept ids this process recorded — never an arbitrary window.
+    const knownViewer = (id: unknown): BrowserWindow | null => {
+        if (typeof id !== "number" || !viewerWindows.has(id)) return null;
+        const win = BrowserWindow.fromId(id);
+        return win && !win.isDestroyed() ? win : null;
+    };
+    ipcMain.handle("viewer-focus", (event, id: unknown) => {
+        if (!fromMainWindow(event)) return false;
+        const win = knownViewer(id);
+        if (!win) return false;
+        if (win.isMinimized()) win.restore();
+        win.show();
+        win.focus();
+        win.flashFrame(true);
+        win.once("focus", () => win.flashFrame(false));
+        return true;
+    });
+    ipcMain.handle("viewer-close", (event, id: unknown) => {
+        if (!fromMainWindow(event)) return false;
+        const win = knownViewer(id);
+        if (!win) return false;
+        win.close();
+        return true;
+    });
+    // From the Viewer window itself, resolved from the invoking sender.
+    const senderViewer = (event: Electron.IpcMainInvokeEvent): BrowserWindow | null => {
+        const win = BrowserWindow.fromWebContents(event.sender);
+        return win && viewerWindows.has(win.id) ? win : null;
+    };
+    ipcMain.handle("viewer-set-always-on-top", (event, flag: unknown) => {
+        const win = senderViewer(event);
+        if (!win || typeof flag !== "boolean") return false;
+        win.setAlwaysOnTop(flag, "floating");
+        return win.isAlwaysOnTop();
+    });
+    ipcMain.handle("viewer-return", (event) => {
+        const win = senderViewer(event);
+        if (!win) return false;
+        win.close();
+        showMainWindow("viewer-return");
+        return true;
+    });
 
     // The Fullscreen button in the Viewer window (`preload-viewer.ts`)
     // toggles this instead of calling the HTML5 `videoEl.requestFullscreen()`

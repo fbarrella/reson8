@@ -3,6 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <title>Reson8 — Screen Share Viewer</title>
+  <link href="../../assets/fonts/inter/inter.css" rel="stylesheet">
+  <link href="../../assets/icons/phosphor/regular/style.css" rel="stylesheet">
   <style>
     :root {
       --bg-primary: #1a1a2e;
@@ -27,7 +29,7 @@
       height: 100%;
       background: #000;
       color: var(--text-primary);
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       overflow: hidden;
     }
 
@@ -152,8 +154,28 @@
     }
 
     #volume-slider {
-      width: 90px;
+      width: 110px;
       accent-color: var(--accent);
+    }
+
+    #volume-readout {
+      min-width: 38px;
+      font-size: 12px;
+      color: var(--text-secondary);
+      text-align: right;
+    }
+
+    #controls-bar button .ph {
+      font-size: 17px;
+    }
+
+    #controls-bar #btn-return {
+      width: auto;
+      gap: 6px;
+      padding: 6px 10px;
+      border: 1px solid var(--border);
+      color: var(--text-primary);
+      font-size: 12px;
     }
 
     /* `#controls-bar #btn-exit-stream` (two IDs), not just `#btn-exit-
@@ -199,7 +221,9 @@
           <line x1="3" y1="21" x2="21" y2="3" />
         </svg>
       </button>
-      <input type="range" id="volume-slider" min="0" max="100" value="100" title="Volume" />
+      <input type="range" id="volume-slider" min="0" max="200" step="5" value="100" title="Volume" />
+      <span id="volume-readout">100%</span>
+      <button id="btn-always-on-top" title="Always on top" aria-pressed="false"><i class="ph ph-push-pin" aria-hidden="true"></i></button>
       <button id="btn-fullscreen" title="Fullscreen">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
           stroke-linecap="round" stroke-linejoin="round">
@@ -209,6 +233,7 @@
           <path d="M16 21h3a2 2 0 0 0 2-2v-3" />
         </svg>
       </button>
+      <button id="btn-return" title="Return to Reson8"><i class="ph ph-arrow-u-down-left" aria-hidden="true"></i><span>Return to Reson8</span></button>
       <button id="btn-exit-stream" title="Exit Stream">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
           stroke-linecap="round" stroke-linejoin="round">

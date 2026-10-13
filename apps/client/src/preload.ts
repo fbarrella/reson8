@@ -32,6 +32,7 @@ import type {
     IDmDirectoryEntry,
 } from "@reson8/shared-types";
 import { VoiceService, VoiceSignaling } from "./services/voice.service";
+import { startScreenWatch, WatchHandle } from "./screen-watch";
 import { createHash } from "crypto";
 import {
     decideScheme,
@@ -252,6 +253,13 @@ async function buildIdentityProof(
         return undefined;
     }
 }
+
+/** The pinned certificate the current connection uses (null for a publicly trusted one) — PRD 19 C10. */
+let activePin: { ca: string; fingerprint256: string } | null = null;
+/** The in-app stage's watch, if any (PRD 19 C10). One at a time; owned here because MediaStreams can't cross contextBridge. */
+let stageHandle: WatchHandle | null = null;
+let stageStarting = false;
+let stageVolume = 100;
 
 /** A viewer ticket from the server (PRD 17.12), or null (older server / not joined). */
 function requestViewerTicket(): Promise<string | null> {
@@ -515,6 +523,7 @@ const api = {
         let pinnedTls:
             | { ca: string[]; checkServerIdentity: (hostname: string, cert: { raw?: Buffer }) => Error | undefined }
             | undefined;
+        activePin = null;
         if (address.scheme === "https" && address.pinned) {
             const opts: { ca: string; fingerprint256: string } | null = await ipcRenderer.invoke(
                 "tls-get-connect-options",
@@ -529,6 +538,7 @@ const api = {
                 return;
             }
             const wanted = opts.fingerprint256;
+            activePin = { ca: opts.ca, fingerprint256: opts.fingerprint256 }; // the in-app stage reuses it (PRD 19 C10)
             pinnedTls = {
                 ca: [opts.ca],
                 checkServerIdentity: (_hostname, cert) => {
@@ -1881,7 +1891,8 @@ const api = {
         targetUserId: string,
         nickname: string,
         channelId: string,
-    ): Promise<{ success: boolean; error?: string }> {
+        roomName?: string,
+    ): Promise<{ success: boolean; windowId?: number; error?: string }> {
         if (!serverBaseUrl) {
             return { success: false, error: "Not connected to a server" };
         }
@@ -1894,7 +1905,97 @@ const api = {
             channelId,
             serverBaseUrl,
             viewerTicket,
+            roomName,
         });
+    },
+
+    /** Brings a Viewer window this client opened to the front (PRD 19 C10). */
+    focusViewerWindow(windowId: number): Promise<boolean> {
+        return ipcRenderer.invoke("viewer-focus", windowId);
+    },
+
+    /** Closes a Viewer window this client opened (PRD 19 C10). */
+    closeViewerWindow(windowId: number): Promise<boolean> {
+        return ipcRenderer.invoke("viewer-close", windowId);
+    },
+
+    // ── In-app stream stage (PRD 19 C10) ─────────────────────────────────
+
+    stage: {
+        /**
+         * Watches `targetUserId`'s share with a viewer socket of its own and
+         * puts the video into the element named `containerId`. The ticket is
+         * requested here and never reaches the renderer. Resolves once playing.
+         */
+        async watch(
+            targetUserId: string,
+            channelId: string,
+            containerId: string,
+        ): Promise<{ success: boolean; streamName?: string; error?: string }> {
+            if (!serverBaseUrl) return { success: false, error: "Not connected to a server" };
+            if (stageHandle || stageStarting) return { success: false, error: "Already watching" };
+            const container = document.getElementById(containerId);
+            if (!container) return { success: false, error: "The stage is not open" };
+            stageStarting = true;
+            try {
+                const ticket = await requestViewerTicket();
+                const handle = await startScreenWatch({
+                    serverBaseUrl,
+                    pin: activePin,
+                    ticket,
+                    instanceId,
+                    targetUserId,
+                    channelId,
+                    onEnded: (reason, kind) => {
+                        // Tear down our side first, then tell the renderer why.
+                        const h = stageHandle;
+                        stageHandle = null;
+                        void h?.close();
+                        emit("stage-ended", { reason, kind });
+                    },
+                });
+                // The container may have gone while connecting (the tab was closed).
+                const target = document.getElementById(containerId);
+                if (!target) {
+                    await handle.close();
+                    return { success: false, error: "The stage was closed" };
+                }
+                handle.setVolume(stageVolume);
+                target.replaceChildren(handle.videoEl);
+                stageHandle = handle;
+                return { success: true, streamName: handle.streamName };
+            } catch (err: any) {
+                return { success: false, error: err?.message ?? "Couldn't start watching" };
+            } finally {
+                stageStarting = false;
+            }
+        },
+
+        /** Stops the stage watch (server-side too) and removes its media; resolves once it is gone. */
+        async stop(): Promise<void> {
+            const h = stageHandle;
+            stageHandle = null;
+            await h?.close();
+        },
+
+        isWatching(): boolean {
+            return !!stageHandle || stageStarting;
+        },
+
+        /** 0–200, remembered for the next watch. */
+        setVolume(percent: number): void {
+            stageVolume = Math.max(0, Math.min(200, Number(percent) || 0));
+            stageHandle?.setVolume(stageVolume);
+        },
+
+        setMuted(muted: boolean): void {
+            stageHandle?.setMuted(!!muted);
+        },
+
+        /** Received video height (e.g. 1080) once known, else null. */
+        qualityHeight(): number | null {
+            return stageHandle?.qualityHeight() ?? null;
+        },
     },
 
     // ── Auto-Updater (PRD 10.1) ─────────────────────────────────────────────
@@ -2244,6 +2345,7 @@ ipcRenderer.on(
 );
 
 // ── Auto-Updater IPC from main process (PRD 10.1) ──────────────────────────
+ipcRenderer.on("viewer-closed", (_event, data: { windowId: number }) => emit("viewer-closed", data)); // PRD 19 C10
 ipcRenderer.on("update-available", (_event, data: { version: string }) => emit("update-available", data));
 ipcRenderer.on("download-progress", (_event, data: { percent: number }) => emit("download-progress", data));
 ipcRenderer.on("update-downloaded", () => emit("update-downloaded", null));

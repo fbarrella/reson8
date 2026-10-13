@@ -2777,3 +2777,73 @@ Feature/Fix: Voice room tab — people (PRD 19 C9)
       the forced-Featured state while someone shares (C10/C11 own the stage).
 
   Next Step: PRD 19 C10 — in-app stream stage with an optional pop-out.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: In-app stream stage with an optional pop-out (PRD 19 C10)
+
+  Problem: watching a screen share always opened a separate Viewer window,
+  and the Viewer had no always-on-top, no way back to the main window and no
+  boost above 100 %.
+
+  Solution:
+    - src/screen-watch.ts: the Viewer's receive pipeline extracted into one
+      module (viewer socket with role "viewer", the same TLS pin, ticket auth,
+      WATCH_SCREEN_SHARE, device/recv transport, consume + resume, reconnect
+      re-establish, PRODUCER_CLOSED -> onEnded). Sound goes through a Web
+      Audio gain 0–200 % fed by a muted, DOM-attached <audio>; close() sends
+      STOP_WATCHING_SCREEN_SHARE and removes every media element.
+    - preload-viewer.ts rewritten on top of it (same status flow); the
+      Viewer window gained volume 0–200 with a readout, an Always on top
+      toggle (default on, remembered in reson8-viewer-on-top) and a "Return to
+      Reson8" button; its title is "{sharer} · {stream} — {room}".
+    - preload.ts: api.stage.{watch,stop,isWatching,setVolume,setMuted,
+      qualityHeight} (a viewer ticket requested in the preload, the pin the
+      main socket used, the video placed into a container the renderer names
+      by id), focusViewerWindow/closeViewerWindow, openScreenShareViewer takes
+      the room name and returns { windowId }, "viewer-closed" is forwarded.
+    - main.ts: viewerWindows map (only ids it recorded are accepted),
+      open-screen-share-viewer is main-window-only and returns windowId,
+      "viewer-closed" is sent when a Viewer closes, viewer-focus/viewer-close
+      (main window only) and viewer-set-always-on-top/viewer-return (the
+      Viewer itself), the room name travels as a plain argument.
+    - Renderer: one state machine idle -> starting -> stage <-> popping ->
+      popped -> returning -> stage; transitions wait for the previous side to
+      close (no two consumers). The LIVE badge (confirm prompt kept) opens the
+      stage in the voice tab: LIVE badge, quality ("1080p" once known),
+      "{sharer} · {title}", volume, Pop out, Fullscreen; the people become a
+      strip of two tiles plus the "…and n more" block. Popped: the stage says
+      "{sharer}'s stream is in its own window" with Bring it back and Show
+      window; closing the Viewer by any route returns the stream. Teardown on
+      access loss, leaving/switching rooms, the sharer stopping, closing the
+      tab and disconnecting. While anyone shares, Featured is forced and
+      Mosaic is disabled with the SPEC tooltip.
+    - Sharer side: a viewer leaving then joining within 3 s plays neither
+      sound (the leave sound is held for 3 s).
+
+  Key Files Modified:
+    apps/client/src/screen-watch.ts (new)
+    apps/client/src/preload-viewer.ts, preload.ts, main.ts
+    apps/client/src/renderer/renderer.ts, index.html, viewer.html, viewer.ts
+
+  Verification:
+    - tsc client clean; lint exit 0.
+    - Two real Electron clients on the local server: the sharer shared a
+      screen; the watcher saw the LIVE badge, Featured forced with Mosaic
+      disabled and its tooltip, the confirm modal, the stage reaching "stage"
+      with the sharer · title, a two-tile strip, then Pop out -> a Viewer
+      window titled "Sharer · Test stream — Lobby" (volume max 200, always on
+      top on) with the stage showing the popped placeholder state; Bring it
+      back and the Viewer's Return both returned the stream; the sharer
+      stopping returned the room to idle and re-enabled Mosaic.
+    - NOT verified here: video frames. In this environment the received track
+      stayed muted at 0x0 with the transport "connected" — and the previous
+      Viewer code, restored temporarily for comparison, showed exactly the
+      same, so it is the screen capture/ICE of this machine, not the
+      refactor. The user's live test must confirm picture and sound on both
+      the stage and the Viewer. Also not driven: fullscreen on Windows/Wayland,
+      the sharer-side sound debounce, and the "no two consumers" check against
+      the server log.
+
+  Next Step: PRD 19 C11 — multiple streams: Focus and Grid (Step 0 asks the
+  owner about live previews).
