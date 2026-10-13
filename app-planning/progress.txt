@@ -2479,3 +2479,54 @@ Feature/Fix: Server header and dropdown (PRD 19 C3)
       Screenshot taken (c3-header.png).
 
   Next Step: PRD 19 C4 — About {server}.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: About {server} (PRD 19 C4)
+
+  Problem: no place showed a member what the server is, who runs it and which
+  features are on.
+
+  Solution:
+    - preload.measureLatency(samples = 3): PING_LATENCY sent in sequence, 3 s
+      timeout each, returns the median round trip or null (the status bar keeps
+      its own periodic poll).
+    - A 560 px read-only dialog (#about-server-modal, the shared .dialog look),
+      opened from the header menu's first item "About {server}" (restricted
+      users can open it too — GET_SERVER_SUMMARY is "open"):
+        header: avatar/initials (serverAvatarElement), name, the address in
+        monospace with a copy button (toast "Server address copied"), ×;
+        three cards: Connection ("Encrypted"/"Not encrypted" from the scheme
+        resolveConnectionTarget chose), Latency (median ms, 4 bars:
+        <40 Excellent, <90 Good, <160 Slow, else 1; ↻ spins while it measures),
+        People ("{online} online of {total}" with a thin green bar, online
+        through getOnlineCountForDisplay() so it equals the header);
+        Admins as chips (avatar, name, online dot, "(you)"); a chip opens the
+        profile card (openUserProfile);
+        Features: Nudge, Screen sharing, Approval to join, Invite code required,
+        Signed identity required, each On/Off, "{n} of 5 on".
+    - It fetches a fresh summary every time it opens and re-renders when the
+      summary is refreshed (the 2 s-debounced refresh also runs on
+      server-settings-updated), so the feature list updates live.
+    - Older server (summary null): People and Admins are hidden, "Some details
+      need a newer server." shows, Nudge/Screen sharing come from
+      GET_SERVER_SETTINGS and the three join gates read "Unknown".
+    - All text via textContent.
+
+  Key Files Modified:
+    apps/client/src/preload.ts
+    apps/client/src/renderer/renderer.ts, index.html
+
+  Verification:
+    - tsc client clean; lint exit 0.
+    - Real client: the menu lists About / Copy server address / Online users;
+      the dialog showed name, 127.0.0.1:9800, "Not encrypted", "0 ms
+      Excellent" with 4 bars, "2 online of 98" (header said "2 online" too),
+      the two admins, "2 of 5 on" with the five rows; an admin turning
+      Approval on moved it to "3 of 5 on" without reopening; ↻ spun and
+      re-measured ("1 ms"); with the summary removed the old-server rendering
+      hid People/Admins, showed the note and "Unknown" for the three gates; an
+      admin chip closed the dialog and opened that person's profile card.
+      Screenshot reviewed.
+
+  Next Step: PRD 19 C5 — server icon UI.

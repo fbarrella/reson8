@@ -1072,6 +1072,8 @@ interface Reson8Api {
     }>;
     /** null on an error/timeout (a v2.7.0 server doesn't know the event) — PRD 19 A1. */
     getServerSummary(): Promise<ServerSummary | null>;
+    /** Median round trip of `samples` pings, or null (PRD 19 C4). */
+    measureLatency(samples?: number): Promise<number | null>;
     /** null on an error/timeout (an older server) — PRD 19 A7. */
     getDmDirectory(): Promise<DmDirectoryEntry[] | null>;
     updateServerSettings(
@@ -1412,6 +1414,7 @@ function refreshServerSummary(): void {
         if (!isConnected || currentServerId !== serverIdAtRequest) return;
         serverSummary = summary;
         renderServerHeader(); // PRD 19 C3: the online count and the icon
+        if (aboutModal.classList.contains("visible")) renderAboutServer(); // PRD 19 C4: stays live while open
     }, 2000);
 }
 
@@ -3211,7 +3214,11 @@ function openServerHeaderMenu(): void {
     const caret = document.getElementById("header-caret") as HTMLElement;
     const rect = caret.getBoundingClientRect();
     const items: MenuItem[] = [];
-    // (About {server} joins this list with C4.)
+    items.push({
+        label: `About ${connectedServerName ?? "server"}`,
+        icon: "ph-info",
+        onClick: () => void openAboutServer(),
+    });
     items.push({
         label: "Copy server address",
         icon: "ph-copy",
@@ -3239,6 +3246,166 @@ function openServerHeaderMenu(): void {
     }
     openMenu(items, Math.max(8, rect.right - 220), rect.bottom + 6, { anchor: caret });
 }
+
+// ── About {server} (PRD 19 C4) ───────────────────────────────────────────────
+
+const aboutModal = document.getElementById("about-server-modal") as HTMLDivElement;
+/** The old-server fallback: what GET_SERVER_SETTINGS says (name, Nudge, Screen sharing). */
+let aboutFallback: { name?: string; nudge?: boolean; screenShare?: boolean } | null = null;
+
+/** Bars for a latency: < 40 ms Excellent (4), < 90 Good (3), < 160 Slow (2), otherwise 1. */
+function latencyBars(ms: number): { bars: number; label: string } {
+    if (ms < 40) return { bars: 4, label: "Excellent" };
+    if (ms < 90) return { bars: 3, label: "Good" };
+    if (ms < 160) return { bars: 2, label: "Slow" };
+    return { bars: 1, label: "Poor" };
+}
+
+function renderAboutLatency(ms: number | null): void {
+    const text = document.getElementById("about-latency") as HTMLElement;
+    const note = document.getElementById("about-latency-note") as HTMLElement;
+    const bars = Array.from(document.querySelectorAll<HTMLElement>("#about-bars i"));
+    if (ms === null) {
+        text.textContent = "—";
+        note.textContent = "No answer";
+        bars.forEach((b) => b.classList.remove("on"));
+        return;
+    }
+    const q = latencyBars(ms);
+    text.textContent = `${ms} ms`;
+    note.textContent = q.label;
+    bars.forEach((b, i) => b.classList.toggle("on", i < q.bars));
+}
+
+async function measureAboutLatency(): Promise<void> {
+    const btn = document.getElementById("btn-about-latency") as HTMLButtonElement;
+    if (btn.classList.contains("spinning")) return;
+    btn.classList.add("spinning");
+    btn.disabled = true;
+    try {
+        renderAboutLatency(await api.measureLatency(3));
+    } finally {
+        btn.classList.remove("spinning");
+        btn.disabled = false;
+    }
+}
+
+/** Builds the dialog's content from the current summary (or the old-server fallback). Text only. */
+function renderAboutServer(): void {
+    const sum = serverSummary;
+    const saved = activeSavedServerId ? savedServerById(activeSavedServerId) : undefined;
+    const name = sum?.name ?? aboutFallback?.name ?? connectedServerName ?? saved?.name ?? "Server";
+    (document.getElementById("about-server-name") as HTMLElement).textContent = name;
+    (document.getElementById("about-server-avatar") as HTMLElement).replaceChildren(
+        serverAvatarElement(name, currentServerIcon(), 48),
+    );
+    const address = saved?.address ?? serverUrlInput.value.trim();
+    (document.getElementById("about-server-address") as HTMLElement).textContent = address;
+
+    (document.getElementById("about-connection") as HTMLElement).textContent =
+        currentConnection?.scheme === "https" ? "Encrypted" : "Not encrypted";
+
+    // People + Admins need the summary; an older server only gets the notice.
+    const peopleCard = document.getElementById("about-people-card") as HTMLElement;
+    const adminsSection = document.getElementById("about-admins-section") as HTMLElement;
+    const oldNote = document.getElementById("about-old-note") as HTMLElement;
+    if (sum) {
+        peopleCard.style.display = "";
+        adminsSection.style.display = "";
+        oldNote.style.display = "none";
+        const online = getOnlineCountForDisplay();
+        (document.getElementById("about-people") as HTMLElement).textContent = `${online} online of ${sum.memberCount}`;
+        (document.getElementById("about-people-fill") as HTMLElement).style.width =
+            `${sum.memberCount > 0 ? Math.min(100, Math.round((online / sum.memberCount) * 100)) : 0}%`;
+
+        const chips = document.getElementById("about-admins") as HTMLElement;
+        chips.textContent = "";
+        const myId = api.getInstanceId();
+        for (const admin of sum.admins) {
+            const chip = document.createElement("button");
+            chip.type = "button";
+            chip.className = "about-chip";
+            chip.appendChild(createAvatarElement(admin.userId, admin.nickname, 26));
+            const label = document.createElement("span");
+            label.textContent = admin.userId === myId ? `${admin.nickname} (you)` : admin.nickname;
+            const dot = document.createElement("span");
+            dot.className = "about-online-dot" + (admin.isOnline ? " on" : "");
+            chip.append(label, dot);
+            chip.addEventListener("click", () => {
+                closeAboutServer();
+                openUserProfile(admin.userId, admin.nickname, null);
+            });
+            chips.appendChild(chip);
+        }
+        if (sum.admins.length === 0) chips.textContent = "No admins listed";
+    } else {
+        peopleCard.style.display = "none";
+        adminsSection.style.display = "none";
+        oldNote.style.display = "";
+    }
+
+    // Features: always five rows; an older server cannot say the join gates.
+    const f = sum?.features;
+    const rows: [string, boolean | null][] = [
+        ["Nudge", f ? f.nudge : aboutFallback?.nudge ?? null],
+        ["Screen sharing", f ? f.screenShare : aboutFallback?.screenShare ?? null],
+        ["Approval to join", f ? f.requireApproval : null],
+        ["Invite code required", f ? f.requireInvite : null],
+        ["Signed identity required", f ? f.requireSignedIdentity : null],
+    ];
+    const list = document.getElementById("about-features") as HTMLElement;
+    list.textContent = "";
+    let on = 0;
+    for (const [label, value] of rows) {
+        const row = document.createElement("div");
+        row.className = "about-feature-row";
+        const l = document.createElement("span");
+        l.textContent = label;
+        const st = document.createElement("span");
+        st.className = "state" + (value ? " on" : "");
+        st.textContent = value === null ? "Unknown" : value ? "On" : "Off";
+        row.append(l, st);
+        list.appendChild(row);
+        if (value) on++;
+    }
+    (document.getElementById("about-features-count") as HTMLElement).textContent = `${on} of ${rows.length} on`;
+}
+
+function closeAboutServer(): void {
+    aboutModal.classList.remove("visible");
+}
+
+async function openAboutServer(): Promise<void> {
+    if (!isConnected) return;
+    aboutModal.classList.add("visible");
+    renderAboutLatency(null);
+    (document.getElementById("about-latency") as HTMLElement).textContent = "…";
+    renderAboutServer();
+    // Fresh data every time it opens (the 2 s debounce must not make About stale).
+    const fresh = await api.getServerSummary();
+    if (fresh) serverSummary = fresh;
+    if (!fresh) {
+        const settings = await api.getServerSettings();
+        if (settings.success) {
+            aboutFallback = { name: settings.name, nudge: settings.nudgeEnabled, screenShare: settings.screenShareEnabled };
+        }
+    }
+    if (aboutModal.classList.contains("visible")) renderAboutServer();
+    void measureAboutLatency();
+}
+
+document.getElementById("btn-about-close")?.addEventListener("click", closeAboutServer);
+aboutModal.addEventListener("click", (e) => {
+    if (e.target === aboutModal) closeAboutServer();
+});
+document.getElementById("btn-about-latency")?.addEventListener("click", () => void measureAboutLatency());
+document.getElementById("btn-about-copy")?.addEventListener("click", () => {
+    const address = (document.getElementById("about-server-address") as HTMLElement).textContent ?? "";
+    void api.copyText(address).then((ok) => showToast(ok ? "Server address copied" : "Couldn't copy the address"));
+});
+document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && aboutModal.classList.contains("visible") && !openMenuState) closeAboutServer();
+});
 
 /** One-time move of the single remembered server (v2.7.0 and older) into the list. */
 function migrateLegacyRememberedServer(): void {

@@ -2816,6 +2816,199 @@
       box-shadow: 0 4px 40px rgba(0, 0, 0, 0.5);
     }
 
+    /* ── About {server} (PRD 19 C4) ───────────────────────────────────── */
+    #about-server-modal {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0, 0, 0, 0.6);
+      -webkit-app-region: no-drag;
+    }
+
+    #about-server-modal.visible {
+      display: flex;
+    }
+
+    .about-server-card {
+      width: 560px;
+      max-width: calc(100vw - 32px);
+      max-height: calc(100vh - 48px);
+      overflow-y: auto;
+    }
+
+    .about-head {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      margin-bottom: var(--space-6);
+    }
+
+    .about-head-text {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .about-head .dialog-title {
+      margin: 0;
+      font-size: 20px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .about-address {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+      font-size: 12px;
+      color: var(--color-neutral-400);
+    }
+
+    .about-cards {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      margin-bottom: var(--space-6);
+    }
+
+    .about-stat {
+      padding: 12px;
+      border: 1px solid var(--color-divider);
+      border-radius: var(--radius-md);
+      background: var(--color-bg);
+      min-width: 0;
+    }
+
+    .about-stat-value {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 6px;
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--color-text);
+    }
+
+    .about-stat-note {
+      margin-top: 2px;
+      font-size: 11px;
+      color: var(--color-neutral-500);
+    }
+
+    .about-bars {
+      display: inline-flex;
+      align-items: flex-end;
+      gap: 2px;
+      height: 14px;
+    }
+
+    .about-bars i {
+      width: 3px;
+      border-radius: 1px;
+      background: var(--color-neutral-700);
+    }
+
+    .about-bars i:nth-child(1) { height: 4px; }
+    .about-bars i:nth-child(2) { height: 7px; }
+    .about-bars i:nth-child(3) { height: 10px; }
+    .about-bars i:nth-child(4) { height: 14px; }
+    .about-bars i.on { background: var(--color-success); }
+
+    #btn-about-latency.spinning i {
+      animation: about-spin 0.8s linear infinite;
+    }
+
+    @keyframes about-spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .about-people-bar {
+      height: 4px;
+      margin-top: 8px;
+      border-radius: 2px;
+      background: var(--color-neutral-800);
+      overflow: hidden;
+    }
+
+    .about-people-bar span {
+      display: block;
+      height: 100%;
+      background: var(--color-success);
+    }
+
+    .about-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: var(--space-2) 0 var(--space-6);
+    }
+
+    .about-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 4px 10px 4px 4px;
+      border: 1px solid var(--color-divider);
+      border-radius: 999px;
+      background: var(--color-neutral-900);
+      color: var(--color-text);
+      font-size: 12.5px;
+      cursor: pointer;
+    }
+
+    .about-chip:hover {
+      border-color: var(--color-accent-700);
+    }
+
+    .about-chip .about-online-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--color-neutral-600);
+    }
+
+    .about-chip .about-online-dot.on {
+      background: var(--color-success);
+    }
+
+    .about-features-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      margin-bottom: var(--space-2);
+    }
+
+    .about-features-count {
+      font-size: 11.5px;
+      color: var(--color-neutral-500);
+    }
+
+    .about-feature-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 8px 2px;
+      border-bottom: 1px solid var(--color-divider);
+      font-size: 13px;
+    }
+
+    .about-feature-row .state {
+      color: var(--color-neutral-500);
+    }
+
+    .about-feature-row .state.on {
+      color: var(--color-success);
+    }
+
+    .about-old-note {
+      margin-top: var(--space-4);
+      font-size: 12px;
+      color: var(--color-warning-text);
+    }
+
     /* ── Status Bar ───────────────────────────────────────────────────── */
     #status-bar {
       display: flex;
@@ -6105,6 +6298,40 @@
   </div>
 
   </div><!-- /#shell -->
+
+  <!-- ── About {server} (PRD 19 C4) ────────────────────────────────────── -->
+  <div id="about-server-modal" role="dialog" aria-modal="true" aria-labelledby="about-server-name">
+    <div class="about-server-card dialog">
+      <div class="about-head">
+        <span id="about-server-avatar"></span>
+        <div class="about-head-text">
+          <h2 class="dialog-title" id="about-server-name"></h2>
+          <div class="about-address"><span id="about-server-address"></span><button type="button" class="btn btn-ghost btn-icon" id="btn-about-copy" title="Copy server address" aria-label="Copy server address"><i class="ph ph-copy" aria-hidden="true"></i></button></div>
+        </div>
+        <button type="button" class="btn btn-ghost btn-icon" id="btn-about-close" title="Close" aria-label="Close"><i class="ph ph-x" aria-hidden="true"></i></button>
+      </div>
+      <div class="about-cards">
+        <div class="about-stat"><div class="section-label">Connection</div><div class="about-stat-value" id="about-connection"></div></div>
+        <div class="about-stat"><div class="section-label">Latency</div>
+          <div class="about-stat-value"><span id="about-latency">…</span>
+            <span class="about-bars" id="about-bars" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+            <button type="button" class="btn btn-ghost btn-icon" id="btn-about-latency" title="Measure again" aria-label="Measure latency again"><i class="ph ph-arrows-clockwise" aria-hidden="true"></i></button>
+          </div>
+          <div class="about-stat-note" id="about-latency-note"></div>
+        </div>
+        <div class="about-stat" id="about-people-card"><div class="section-label">People</div><div class="about-stat-value" id="about-people"></div><div class="about-people-bar"><span id="about-people-fill"></span></div></div>
+      </div>
+      <div id="about-admins-section">
+        <div class="section-label">Admins</div>
+        <div id="about-admins" class="about-chips"></div>
+      </div>
+      <div id="about-features-section">
+        <div class="about-features-head"><span class="section-label">Features</span><span class="about-features-count" id="about-features-count"></span></div>
+        <div id="about-features"></div>
+      </div>
+      <div class="about-old-note" id="about-old-note" style="display:none;">Some details need a newer server.</div>
+    </div>
+  </div>
 
   <!-- ── Status Bar ────────────────────────────────────────────────────── -->
   <div id="status-bar">

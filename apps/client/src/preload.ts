@@ -2107,6 +2107,27 @@ const api = {
      * Resolves null on an error or timeout — a v2.7.0 server doesn't know the
      * event and never answers — so callers fall back to GET_ONLINE_USERS.
      */
+    /**
+     * The median round-trip time of `samples` PING_LATENCY calls sent one after
+     * the other, 3 s timeout each (PRD 19 C4). null when none answered. This is
+     * a deliberate measurement for the About dialog; the status bar keeps its own
+     * periodic poll.
+     */
+    async measureLatency(samples = 3): Promise<number | null> {
+        const times: number[] = [];
+        for (let i = 0; i < Math.min(Math.max(1, samples), 7); i++) {
+            if (!socket?.connected) break;
+            const started = Date.now();
+            const ok = await new Promise<boolean>((resolve) => {
+                socket!.timeout(3000).emit("PING_LATENCY", (err) => resolve(!err));
+            });
+            if (ok) times.push(Date.now() - started);
+        }
+        if (times.length === 0) return null;
+        times.sort((a, b) => a - b);
+        return times[Math.floor(times.length / 2)];
+    },
+
     getServerSummary(): Promise<IServerSummary | null> {
         return new Promise((resolve) => {
             if (!socket?.connected) {
