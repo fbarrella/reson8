@@ -1768,3 +1768,54 @@ Feature/Fix: One "mark channel read" rule for tree and tab (PRD 19 B3)
       (the headless window really has OS focus), then restored.
 
   Next Step: PRD 19 B4 — DM tabs follow the preview/kept rules.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: DM tabs follow the preview/kept rules (PRD 19 B4)
+
+  Problem: openDmTab() always made a permanent tab AND switched to it, so an
+  incoming DM (or connect-time unread partners) stole the view, DM tabs had no
+  preview/kept modes and were never remembered.
+
+  Solution (renderer only):
+    - Shared helpers: replaceablePreview(mode), insertTabElement(),
+      placeTab(tab, replaced, mode, focus) (mode styling, unread state, the
+      replaced preview closed through closeTab(..., "replaced") so observers and
+      reply drafts are disposed, previewTabId / persist, optional focus) and
+      wireTabKeepGesture(); openChatTab() and openDmTab() both use them.
+    - openDmTab(userId, nickname, { mode?, focus?, unreadCountHint? }),
+      defaults preview + focus (a click on a person). Incoming DM without a tab
+      and connect/access-restore auto-open pass { mode:"kept", focus:false }
+      (decision Q5). An already-open tab is kept when asked and focused only
+      when asked. No access: nothing opens (silent when unfocused).
+    - Double-click keeps a tab (channel and DM); right-click menu (Keep Tab Open
+      / Close) now also on DM tabs; setTabKept(tabId, ...) works for both kinds.
+    - Persistence: persistKeptTabs() stores channel ids and dm:<id>s in the
+      same store/shape. restoreKeptTabs() opens channel entries only and moves
+      dm: entries to pendingKeptDmIds (kept in the store meanwhile);
+      restoreKeptDmTabs() opens those whose person is in the directory (A7) or,
+      on an older server, GET_ONLINE_USERS, as kept + unfocused; people not
+      listed stay in the store. Also called when access returns. A user closing
+      a kept DM forgets it (pending set + store).
+    - Found while testing: the first channel tree arrives before the connected
+      event, so the guard in restoreKeptDmTabs identifies the server by
+      keptTabsServerId, not currentServerId (the first version silently skipped
+      the restore on reconnect).
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts
+
+  Verification:
+    - tsc client clean; lint exit 0.
+    - Real client over CDP: open DM A -> one preview tab; open DM B -> it
+      replaces A in the same slot; double-click B -> [kept]; open + keep
+      channel C -> both stay and the store holds both ids; a DM from D while C
+      is active -> a kept background tab "Dee" with count (2) and C stays
+      active; disconnect + reconnect -> C, D and B restored (B after the DM
+      directory arrives); access removed -> all tabs close; access restored ->
+      they return.
+    - NOT checked: the DM sound on a background-opened tab (unchanged code:
+      wasTabActive is still captured before openDmTab); the preview DM italic
+      style is renderTabMode's existing .preview class.
+
+  Next Step: PRD 19 B5.

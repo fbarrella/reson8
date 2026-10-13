@@ -2212,10 +2212,11 @@ interface ChatTab {
     holdTarget: { el: HTMLElement; until: number } | null;
     resizeObserver?: ResizeObserver;
     mutationObserver?: MutationObserver;
-    /** Text channel vs DM (PRD 17.5). Only channel tabs have a mode. */
+    /** Text channel vs DM (PRD 17.5). */
     kind: "channel" | "dm";
-    /** "preview" = replaced by the next channel opened; "kept" = stays open
-     *  and is remembered across restarts (PRD 17.5). Channel tabs only. */
+    /** "preview" = replaced by the next conversation opened; "kept" = stays
+     *  open and is remembered across restarts (PRD 17.5; DM tabs too since
+     *  PRD 19 B4). */
     mode?: "preview" | "kept";
 }
 const chatTabs = new Map<string, ChatTab>();
@@ -2224,12 +2225,20 @@ const chatTabs = new Map<string, ChatTab>();
 // Clicking a text channel opens it in THE preview tab (at most one), which the
 // next channel replaces in place. "Keep Tab Open" makes a tab permanent and
 // remembers it per server (`reson8-kept-tabs`, same shape and try/catch
-// discipline as `reson8-muted-channels`). DM tabs are unaffected.
+// discipline as `reson8-muted-channels`). Since PRD 19 B4 DM tabs follow the
+// same rules (ids `dm:<userId>` in the same store).
 
 /** The single preview tab, if any. */
 let previewTabId: string | null = null;
 /** Kept tabs are restored once per connection, after the first channel tree. */
 let keptTabsRestored = false;
+/**
+ * Kept DM tab ids read from the store that have not been opened yet (PRD 19
+ * B4): they can only be restored once DM data (the directory) has arrived, and
+ * until then — or for a person who is currently not listed — they must stay in
+ * the store, so persistKeptTabs() writes them back.
+ */
+let pendingKeptDmIds = new Set<string>();
 /**
  * The server the kept list belongs to — taken from the channel tree's own
  * payload, because the first CHANNEL_TREE_UPDATE arrives DURING the join,
@@ -2259,7 +2268,9 @@ function persistKeptTabs(): void {
     if (!keptTabsServerId) return;
     const ids = Array.from(tabBar.querySelectorAll<HTMLElement>(".tab.kept"))
         .map((el) => el.dataset.tabId ?? "")
-        .filter((id) => chatTabs.get(id)?.kind === "channel");
+        .filter((id) => chatTabs.has(id));
+    // Kept DMs not restored yet stay remembered (PRD 19 B4).
+    for (const pending of pendingKeptDmIds) if (!ids.includes(pending)) ids.push(pending);
     try {
         const store = readKeptTabsStore();
         if (ids.length > 0) store[keptTabsServerId] = ids;
@@ -2379,7 +2390,7 @@ function renderTabMode(tab: ChatTab): void {
     tab.tabEl.classList.toggle("preview", tab.mode === "preview");
     tab.tabEl.title = kept
         ? `${tab.channelName} — kept open`
-        : `${tab.channelName} — preview: opening another channel replaces this tab. Right-click → Keep Tab Open to keep it.`;
+        : `${tab.channelName} — preview: opening another conversation replaces this tab. Double-click or right-click → Keep Tab Open to keep it.`;
 }
 /** Initial + "load older" page size for both channel and DM history (PRD 14.2). */
 const CHAT_PAGE_SIZE = 20;
@@ -3400,7 +3411,8 @@ function autoOpenUnreadDmTabs(): void {
                 // Seeded first, so the tabs that end up in the background keep
                 // their dot and their "Unread Messages" line (PRD 18.13).
                 if (!hasDmUnread(p.partnerId)) unreadDmCounts.set(p.partnerId, p.unreadCount > 0 ? p.unreadCount : -1);
-                openDmTab(p.partnerId, p.partnerNickname, p.unreadCount);
+                // A background tab: an incoming conversation never steals the view (PRD 19 B4).
+                openDmTab(p.partnerId, p.partnerNickname, { mode: "kept", focus: false, unreadCountHint: p.unreadCount });
             }
         }
     });
@@ -3441,6 +3453,7 @@ function applyAccessState(hasAccess: boolean, opts: { restore?: boolean } = {}):
         keptTabsRestored = false;
         if (currentTree.length > 0 && currentServerId) restoreKeptTabs(currentTree as TreeNode[], currentServerId);
         autoOpenUnreadDmTabs();
+        void restoreKeptDmTabs(); // PRD 19 B4: remembered DM tabs come back too
         if (currentTree.length > 0) renderTree(currentTree as TreeNode[]);
     }
 }
@@ -5418,6 +5431,45 @@ function switchTab(tabId: string): void {
  * kept tabs at connect without stealing focus or fetching N histories (the
  * history loads when the tab is first activated — see switchTab()).
  */
+/**
+ * The preview tab a NEW preview tab will replace (PRD 19 B4: shared by channel
+ * and DM tabs). Only a new PREVIEW replaces; a kept tab never does.
+ */
+function replaceablePreview(mode: "preview" | "kept"): ChatTab | null {
+    return mode === "preview" && previewTabId ? chatTabs.get(previewTabId) ?? null : null;
+}
+
+/** Puts a new tab's element in the bar: in the replaced preview's slot, else at the end. */
+function insertTabElement(tabEl: HTMLElement, replaced: ChatTab | null): void {
+    if (replaced) tabBar.insertBefore(tabEl, replaced.tabEl);
+    else tabBar.appendChild(tabEl);
+}
+
+/**
+ * The shared tail of opening a tab (PRD 19 B4), once its state is registered:
+ * mode styling, unread state, replacing the old preview (through closeTab, so
+ * its observers and reply draft are disposed — never a bare .remove()),
+ * remembering a kept tab, and optionally focusing it.
+ */
+function placeTab(tab: ChatTab, replaced: ChatTab | null, mode: "preview" | "kept", focus: boolean): void {
+    renderTabMode(tab);
+    refreshTabUnread(tab.channelId); // e.g. a restored tab for a conversation with unread messages
+    // Dispose of the replaced preview AFTER the new tab exists, without the
+    // usual fall-back to the Server Log in between (no flicker).
+    if (replaced) closeTab(replaced.channelId, { reason: "replaced" });
+    if (mode === "preview") previewTabId = tab.channelId;
+    else persistKeptTabs();
+    if (focus) switchTab(tab.channelId);
+}
+
+/** Double-click keeps a tab (PRD 19 B4 for DMs; the same gesture on channel tabs). */
+function wireTabKeepGesture(tabEl: HTMLElement, tabId: string): void {
+    tabEl.addEventListener("dblclick", (e) => {
+        if ((e.target as HTMLElement).classList.contains("tab-close")) return;
+        setTabKept(tabId, true);
+    });
+}
+
 function openChatTab(
     channelId: string,
     channelName: string,
@@ -5441,7 +5493,7 @@ function openChatTab(
 
     const mode = opts.mode ?? "preview";
     // The preview tab this one replaces, if any (only a new PREVIEW replaces).
-    const replaced = mode === "preview" && previewTabId ? chatTabs.get(previewTabId) ?? null : null;
+    const replaced = replaceablePreview(mode);
 
     // Create tab button
     const tabEl = document.createElement("div");
@@ -5458,10 +5510,10 @@ function openChatTab(
         }
     });
     tabEl.addEventListener("contextmenu", (e) => showChannelTabContextMenu(e, channelId));
+    wireTabKeepGesture(tabEl, channelId);
 
     // A replacement takes the replaced tab's slot in the bar.
-    if (replaced) tabBar.insertBefore(tabEl, replaced.tabEl);
-    else tabBar.appendChild(tabEl);
+    insertTabElement(tabEl, replaced);
 
     // Create tab content
     const contentEl = document.createElement("div");
@@ -5526,16 +5578,7 @@ function openChatTab(
     syncTabNsfwClass(channelId); // PRD 18.11
     setupInfiniteScroll(chatTab);
     setupScrollKeeper(chatTab); // PRD 18.12
-    renderTabMode(chatTab);
-    refreshTabUnread(channelId); // e.g. a kept tab restored for a channel with unread messages
-
-    // Dispose of the replaced preview AFTER the new tab exists, without the
-    // usual fall-back to the Server Log in between (no flicker).
-    if (replaced) closeTab(replaced.channelId, { reason: "replaced" });
-    if (mode === "preview") previewTabId = channelId;
-    else persistKeptTabs();
-
-    if (focus) switchTab(channelId);
+    placeTab(chatTab, replaced, mode, focus);
 
     // Fetch message history (a deferred tab loads on first activation).
     if (!opts.deferLoad) loadChatHistory(chatTab);
@@ -5543,15 +5586,37 @@ function openChatTab(
 
 // ── DM Tab Management ─────────────────────────────────────────────────────
 
-function openDmTab(userId: string, nickname: string, unreadCountHint?: number): void {
-    if (!requireServerAccess()) return; // PRD 18.18
-    const tabKey = `dm:${userId}`;
-
-    // If tab already exists, just switch to it
-    if (chatTabs.has(tabKey)) {
-        switchTab(tabKey);
+/**
+ * Opens (or finds) a DM tab (PRD 19 B4). Defaults: `mode: "preview"`,
+ * `focus: true` — what a click on a person does. Incoming DMs and the connect
+ * -time auto-open pass `{ mode: "kept", focus: false }` so they never steal the
+ * view. `unreadCountHint` widens the first history fetch past one page.
+ */
+function openDmTab(
+    userId: string,
+    nickname: string,
+    opts: { mode?: "preview" | "kept"; focus?: boolean; unreadCountHint?: number } = {},
+): void {
+    const focus = opts.focus !== false;
+    const mode = opts.mode ?? "preview";
+    const unreadCountHint = opts.unreadCountHint;
+    // No access: nothing opens. A background open stays silent.
+    if (!hasServerAccess) {
+        if (focus) requireServerAccess(); // PRD 18.18
         return;
     }
+    const tabKey = `dm:${userId}`;
+
+    // Already open: keep it when asked, and focus only when asked.
+    const existing = chatTabs.get(tabKey);
+    if (existing) {
+        if (mode === "kept" && existing.mode !== "kept") setTabKept(tabKey, true);
+        if (focus) switchTab(tabKey);
+        return;
+    }
+
+    // The preview tab this one replaces, if any.
+    const replaced = replaceablePreview(mode);
 
     // Create tab button
     const tabEl = document.createElement("div");
@@ -5566,8 +5631,10 @@ function openDmTab(userId: string, nickname: string, unreadCountHint?: number): 
             switchTab(tabKey);
         }
     });
+    tabEl.addEventListener("contextmenu", (e) => showChannelTabContextMenu(e, tabKey)); // Keep Tab Open / Close (PRD 19 B4)
+    wireTabKeepGesture(tabEl, tabKey);
 
-    tabBar.appendChild(tabEl);
+    insertTabElement(tabEl, replaced);
 
     // Create tab content
     const contentEl = document.createElement("div");
@@ -5611,13 +5678,12 @@ function openDmTab(userId: string, nickname: string, unreadCountHint?: number): 
         anchor: null,
         holdTarget: null,
         kind: "dm",
+        mode,
     };
     chatTabs.set(tabKey, chatTab);
     setupInfiniteScroll(chatTab);
     setupScrollKeeper(chatTab); // PRD 18.12
-
-    // Switch to the new tab
-    switchTab(tabKey);
+    placeTab(chatTab, replaced, mode, focus);
 
     // Fetch DM history
     loadChatHistory(chatTab, unreadCountHint);
@@ -5647,6 +5713,7 @@ function closeTab(
     replyTargets.delete(channelId); // a draft reply dies with its conversation's tab (PRD 16.11)
 
     if (previewTabId === channelId) previewTabId = null;
+    if (reason === "user" || reason === "deleted") pendingKeptDmIds.delete(channelId);
     if (tab.mode === "kept" && (reason === "user" || reason === "deleted")) persistKeptTabs();
 
     // If this was the active tab, switch to server log
@@ -5661,32 +5728,32 @@ function closeTab(
  * THE preview tab; if another preview tab is open, the one the user is
  * looking at survives and the other closes.
  */
-function setTabKept(channelId: string, kept: boolean): void {
-    const tab = chatTabs.get(channelId);
+function setTabKept(tabId: string, kept: boolean): void {
+    const tab = chatTabs.get(tabId);
     if (kept) {
         if (!tab) {
-            const node = findChannelNodeById(currentTree, channelId);
+            const node = findChannelNodeById(currentTree, tabId);
             if (node) openChatTab(node.id, node.name, { mode: "kept" });
             return;
         }
-        if (tab.kind !== "channel" || tab.mode === "kept") return;
+        if (tab.mode === "kept") return;
         tab.mode = "kept";
-        if (previewTabId === channelId) previewTabId = null;
+        if (previewTabId === tabId) previewTabId = null;
         renderTabMode(tab);
         persistKeptTabs();
         return;
     }
 
-    if (!tab || tab.kind !== "channel" || tab.mode !== "kept") return;
-    const otherPreview = previewTabId && previewTabId !== channelId ? chatTabs.get(previewTabId) : undefined;
+    if (!tab || tab.mode !== "kept") return;
+    const otherPreview = previewTabId && previewTabId !== tabId ? chatTabs.get(previewTabId) : undefined;
     tab.mode = "preview";
     renderTabMode(tab);
     if (otherPreview && activeTabId === otherPreview.channelId) {
         // The user is looking at the other preview: this one gives way.
-        closeTab(channelId, { reason: "user" });
+        closeTab(tabId, { reason: "user" });
     } else {
         if (otherPreview) closeTab(otherPreview.channelId, { reason: "user" });
-        previewTabId = channelId;
+        previewTabId = tabId;
     }
     persistKeptTabs();
 }
@@ -5742,11 +5809,45 @@ function restoreKeptTabs(tree: TreeNode[], serverId: string): void {
     if (keptTabsRestored || tree.length === 0) return;
     keptTabsRestored = true;
     const saved = readKeptTabsStore()[serverId] ?? [];
+    // DM entries wait for DM data (restoreKeptDmTabs); they stay in the store meanwhile.
+    pendingKeptDmIds = new Set(saved.filter((id) => id.startsWith("dm:")));
     for (const id of saved) {
+        if (id.startsWith("dm:")) continue;
         const node = findChannelNodeById(tree, id);
         if (node && node.type === "TEXT") openChatTab(node.id, node.name, { mode: "kept", focus: false, deferLoad: true });
     }
-    persistKeptTabs(); // drops ids that weren't restored
+    persistKeptTabs(); // drops channel ids that weren't restored; keeps the pending DMs
+    if (pendingKeptDmIds.size > 0) void restoreKeptDmTabs();
+}
+
+/**
+ * Re-opens remembered DM tabs once DM data exists (PRD 19 B4): the directory
+ * (A7), or the online-users list on an older server. Entries for people who
+ * are not listed stay in the store (they may only be without access for now).
+ * Opened as kept and unfocused; history loads on first view.
+ */
+async function restoreKeptDmTabs(): Promise<void> {
+    if (!hasServerAccess || pendingKeptDmIds.size === 0) return;
+    // The first tree arrives before the `connected` event (currentServerId is
+    // not set yet), so the server is identified by the kept-tabs key.
+    const serverAtStart = keptTabsServerId;
+    let people: { userId: string; nickname: string }[] | null = null;
+    const directory = await api.getDmDirectory();
+    if (directory) {
+        people = directory;
+    } else {
+        const online = await api.getOnlineUsers();
+        if (online.success && online.users) people = online.users;
+    }
+    // A disconnect or server switch while waiting must not open tabs on the wrong server.
+    if (!people || keptTabsServerId !== serverAtStart || !hasServerAccess) return;
+    for (const id of [...pendingKeptDmIds]) {
+        const person = people.find((p) => `dm:${p.userId}` === id);
+        if (!person) continue;
+        pendingKeptDmIds.delete(id);
+        openDmTab(person.userId, person.nickname, { mode: "kept", focus: false });
+    }
+    persistKeptTabs();
 }
 
 /** Closes kept/preview channel tabs whose channel vanished from the tree (PRD 17.5). */
@@ -7565,7 +7666,8 @@ api.on("dm-received", async (msg: DirectMessage) => {
     } else {
         // Auto-open a DM tab for incoming messages from others
         if (msg.senderId !== myId) {
-            openDmTab(partnerId, partnerNick);
+            // Kept and unfocused (PRD 19 B4): it must not steal the view.
+            openDmTab(partnerId, partnerNick, { mode: "kept", focus: false });
             // The tab's history will load via loadChatHistory, which includes this message
         }
     }
