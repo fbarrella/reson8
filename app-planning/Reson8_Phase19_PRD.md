@@ -2827,6 +2827,9 @@ None of these are fixed silently. Each is either assigned to an item or left for
 **P11. A failed `USER_JOIN_SERVER` leaves the socket signed in** (`connection.handler.ts`, found during A1 on 13/10/2026). `socket.data.userId`/`serverId` are set before the role upsert; when that step throws (for example an unseeded database), the ack is `{ success: false }` but the packet gate lets the socket call every event it allows for a signed-in user. Only reachable when a join fails on a database error.
 - **TO-DO, not assigned yet:** clear `userId`, `serverId` and the other join-derived `socket.data` fields on any failed join (or set them only after the last fallible step), and add a test that a failed join leaves the socket default-denied. Decide the item at the next planning pass.
 
+**P12. A channel-tree broadcast drops every room's occupants** (`channel.handler.ts` `broadcastTreeUpdate()`, found during A3 on 13/10/2026). The broadcast tree is built from the database with `occupants: []`, and the client replaces `currentTree` with it, so after any channel create, rename, move, reorder or delete everyone's tree shows empty voice rooms until the next presence update. Seen in the real client (occupant row and count pill vanish after a rename; the A3 timer correctly stays).
+- **TO-DO, not assigned yet:** hydrate occupants in `broadcastTreeUpdate()` the way the join-time tree does (`hydrateOccupants()` in `connection.handler.ts`; extract it to a shared helper), or make the client keep its known occupants across a tree broadcast. Candidate for the P2 bundle (B7/B10 touch the same tree); decide at the next planning pass.
+
 ---
 
 ## Open Decisions

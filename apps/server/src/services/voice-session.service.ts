@@ -19,6 +19,56 @@ import type { PresenceService } from "./presence.service.js";
 import type { MediasoupService } from "./mediasoup.service.js";
 import { buildOccupant } from "../handlers/connection.handler.js";
 
+/**
+ * In-memory voice session start times (channelId → Date): set when the first
+ * occupant joins a voice room, deleted when its occupant set is empty. Kept in
+ * memory on purpose (PRD 19 decision D5): after a server restart a still-
+ * occupied room is re-seeded with "now" at the next join, so its timer
+ * restarts. `connection.handler.ts` re-exports it — there is ONE map.
+ */
+export const voiceSessionStartedAt = new Map<string, Date>();
+
+/**
+ * The PRESENCE_UPDATE payload for a channel. Clears the session start when the
+ * room is empty (PRD 19 A3). It reads the occupant set from Redis presence, so
+ * a room is only ever cleared once the ownership-checked paths have actually
+ * removed its last occupant — never call it from a raw disconnect path.
+ */
+export async function presencePayload(
+    app: Pick<FastifyInstance, "prisma">,
+    presence: Pick<PresenceService, "getChannelOccupants" | "getUserPresence">,
+    channelId: string,
+): Promise<{ channelId: string; occupants: IUserPresence[]; sessionStartedAt?: string }> {
+    const occupantIds = await presence.getChannelOccupants(channelId);
+    if (occupantIds.length === 0) voiceSessionStartedAt.delete(channelId);
+    const occupants = await Promise.all(
+        occupantIds.map((uid) => buildOccupant(uid, presence as PresenceService, app.prisma)),
+    );
+    const startedAt = voiceSessionStartedAt.get(channelId);
+    return startedAt
+        ? { channelId, occupants, sessionStartedAt: startedAt.toISOString() }
+        : { channelId, occupants };
+}
+
+/**
+ * Sets `sessionStartedAt` on every voice node whose room has a running
+ * session (recursively). `requireOccupants` is for trees that carry occupants
+ * (the join-time tree): a stale map entry for an empty room is then ignored.
+ * Broadcast trees carry no occupants, so they rely on the map alone.
+ */
+export function annotateSessionStarts(
+    nodes: { id: string; type: string; occupants: unknown[]; sessionStartedAt?: string; children: unknown[] }[],
+    requireOccupants = false,
+): void {
+    for (const node of nodes) {
+        if (node.type === "VOICE" && (!requireOccupants || node.occupants.length > 0)) {
+            const startedAt = voiceSessionStartedAt.get(node.id);
+            if (startedAt) node.sessionStartedAt = startedAt.toISOString();
+        }
+        if (node.children.length > 0) annotateSessionStarts(node.children as typeof nodes, requireOccupants);
+    }
+}
+
 type TypedIO = SocketIOServer<ClientToServerEvents, ServerToClientEvents, InterServerEvents, SocketData>;
 type TypedSocket = Socket<ClientToServerEvents, ServerToClientEvents, InterServerEvents, SocketData>;
 
@@ -54,9 +104,5 @@ export async function broadcastChannelOccupants(
     serverId: string,
     channelId: string,
 ): Promise<void> {
-    const occupantIds = await presence.getChannelOccupants(channelId);
-    const occupants: IUserPresence[] = await Promise.all(
-        occupantIds.map((uid) => buildOccupant(uid, presence, app.prisma)),
-    );
-    io.to(`server:${serverId}`).emit("PRESENCE_UPDATE", { channelId, occupants });
+    io.to(`server:${serverId}`).emit("PRESENCE_UPDATE", await presencePayload(app, presence, channelId));
 }

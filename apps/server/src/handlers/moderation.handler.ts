@@ -12,16 +12,14 @@ import type {
     ServerToClientEvents,
     InterServerEvents,
     SocketData,
-    IUserPresence,
 } from "@reson8/shared-types";
 import { PermissionFlags } from "@reson8/shared-types";
 import { PresenceService } from "../services/presence.service.js";
 import { requirePermission } from "../middleware/permissions.middleware.js";
 import type { MediasoupService } from "../services/mediasoup.service.js";
-import { buildOccupant } from "./connection.handler.js";
 import { getUserPermissions, isAdmin } from "../services/permissions.service.js";
 import { executeBan } from "../services/ban.service.js";
-import { removeSocketFromChannel } from "../services/voice-session.service.js";
+import { presencePayload, removeSocketFromChannel } from "../services/voice-session.service.js";
 import { maskCidr, reloadAddressBans } from "../services/address-ban.service.js";
 
 type TypedIO = SocketIOServer<
@@ -79,11 +77,9 @@ export function registerModerationHandlers(
                     }
                 }
 
-                // Broadcast updated occupants for the channel
-                const occupantIds = await presence.getChannelOccupants(channelId);
-                const occupants: IUserPresence[] = await Promise.all(
-                    occupantIds.map((uid) => buildOccupant(uid, presence, app.prisma)),
-                );
+                // Updated occupants for the channel — with the session start
+                // (and clearing it if the kick emptied the room), PRD 19 A3.
+                const presenceUpdate = await presencePayload(app, presence, channelId);
 
                 // Notify all remaining channel occupants that a user was kicked
                 // (so they can suppress the presence-based leave sound)
@@ -92,10 +88,7 @@ export function registerModerationHandlers(
                     userId,
                 });
 
-                io.to(`server:${serverId}`).emit("PRESENCE_UPDATE", {
-                    channelId,
-                    occupants,
-                });
+                io.to(`server:${serverId}`).emit("PRESENCE_UPDATE", presenceUpdate);
 
                 ack({ success: true });
                 app.log.info(

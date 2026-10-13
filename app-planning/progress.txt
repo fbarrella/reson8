@@ -1072,3 +1072,101 @@ Feature/Fix: Server icon — upload route with byte validation, claim/replace/re
   test server on 9801 stopped (by PID).
 
   Next Step: PRD 19 A3 — complete the per-channel voice session timer.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Two test suites that could not load — *.mjs kept LF (chore)
+
+  Problem: auth-hosts.service.test.ts and prune-orphan-uploads.test.ts failed
+  with "SyntaxError: Invalid or unexpected token" on this Windows checkout.
+  The index holds LF; core.autocrlf=true wrote CRLF to the working tree, so
+  the scripts they import started with "#!/usr/bin/env node\r", which the
+  module transform cannot parse. Not a product bug, but it hid 38 tests.
+
+  Solution: a repo-level .gitattributes with `*.mjs text eol=lf`, so every
+  checkout (any autocrlf setting) gets LF for the scripts; the working-tree
+  .mjs files were re-checked-out. Git config untouched.
+
+  Verification: apps/server `npm run test`: 26 files / 409 tests pass (was
+  24 files / 371, two suites unloadable). git status shows no .mjs changes.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Voice session timer completed — tree carries the start, kick and
+access-change keep it (PRD 19 A3)
+
+  Problem: the per-room voice timer (Phase 8) had three gaps: (a) the
+  join-time tree carried no start time, so a client connecting mid-session
+  showed no timer until the next PRESENCE_UPDATE; (b) KICK_USER and the
+  PRD 18.18 access-change broadcast sent PRESENCE_UPDATE WITHOUT
+  sessionStartedAt (clients then DELETED the timer of a still-occupied room)
+  and never cleared the map when the room emptied; (c) a restart re-seeds.
+
+  Solution:
+    Shared types: IChannelTreeNode.sessionStartedAt? (ISO, voice rooms,
+    occupied only; the same value PRESENCE_UPDATE carries — the field name is
+    kept, the handoff's `occupiedSince` would have duplicated it).
+    Server:
+      - services/voice-session.service.ts now OWNS voiceSessionStartedAt (one
+        Map; connection.handler.ts re-exports it, voice.handler.ts' import is
+        unchanged). New presencePayload(app, presence, channelId): reads the
+        occupant set, deletes the start when empty, returns
+        { channelId, occupants, sessionStartedAt? } (the key is absent for an
+        empty room). New annotateSessionStarts(tree, requireOccupants).
+      - Used ONLY in the two broken paths (broadcastChannelOccupants() and
+        KICK_USER); the six emitters that already sent the right value are
+        untouched. The map is never cleared in a raw disconnect path.
+      - hydrateOccupants' tree (join) is annotated with requireOccupants=true;
+        channel.handler.ts' broadcastTreeUpdate() is annotated from the map
+        alone (it carries no occupants).
+      - Gap (c) stays by decision D5: in memory, doc-commented on the map.
+    Client: seedSessionTimersFromTree() on every channel-tree event (before
+    the render): a voice node's own value wins; a voice node with neither a
+    start nor occupants has no session (delete); a node with occupants but no
+    value (an older server) is left to presence updates.
+    One deviation from the PRD wording: it says to delete timers for "nodes
+    with no occupants", but broadcast trees ALWAYS have empty occupants (see
+    below), so the delete is applied only when the node ALSO has no start.
+
+  Key Files Modified:
+    packages/shared-types/src/models.ts
+    apps/server/src/services/voice-session.service.ts
+    apps/server/src/handlers/connection.handler.ts
+    apps/server/src/handlers/moderation.handler.ts
+    apps/server/src/handlers/channel.handler.ts
+    apps/server/src/__tests__/voice-session.test.ts (NEW)
+    apps/client/src/renderer/renderer.ts
+    app-planning/Reson8_Phase19_PRD.md (P12 added)
+
+  Verification:
+    - tsc --noEmit server/client clean (shared-types built); lint exit 0, 73
+      warnings (unchanged). Server tests: 27 files / 417 pass (8 new: shared
+      map identity, empty room clears + omits the key, occupied keeps it, kick
+      leaving someone keeps / last one out clears, annotate recursion, TEXT
+      never annotated, requireOccupants ignores a stale entry).
+    - Real server, socket.io clients (admin, A, B, a late C):
+        * C connects 1+ s after the room started: its join-time tree node has
+          the same sessionStartedAt as the presence updates; an empty room has
+          none;
+        * renaming a text channel: the broadcast tree's voice node still
+          carries it;
+        * kick B (A remains): PRESENCE_UPDATE to A and C carries the same
+          sessionStartedAt (v2.7.0 dropped it);
+        * removing Member from A, the last occupant (access loss): PRESENCE_
+          UPDATE has no sessionStartedAt, a fresh join tree has none for the
+          room, and A rejoining starts a later one;
+        * transport dropped without a clean disconnect (2.5 s) and a same-id
+          reconnect: the start is unchanged (grace period).
+    - Real built client over CDP: connecting mid-session shows "00:38" next to
+      the occupied room at once; after a rename broadcast the timer remains.
+      Screenshots inspected.
+    - NOT run: a v2.7.0 client against this server (it ignores the tree
+      field, additive); the 10 s grace boundary itself (only a 2.5 s blip).
+
+  Noticed, not changed (PRD P12): every CHANNEL_TREE_UPDATE built by
+  broadcastTreeUpdate() has occupants:[] and the client replaces its tree with
+  it, so after a rename/create/move all voice rooms look empty (occupant rows
+  and the count pill vanish; seen in the screenshots) until the next presence
+  update. Pre-existing; logged as a TO-DO in the PRD, not fixed here.
+
+  Next Step: PRD 19 A4 — cap of 5 concurrent screen shares per room.

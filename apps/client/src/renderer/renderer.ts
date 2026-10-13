@@ -2628,6 +2628,8 @@ interface TreeNode {
     iconUrl?: string | null;
     children: TreeNode[];
     occupants: { userId: string; nickname: string; isMuted?: boolean; isDeafened?: boolean; isSharingScreen?: boolean }[];
+    /** Voice rooms (PRD 19 A3): when the running session began (ISO); absent for an empty room or an older server. */
+    sessionStartedAt?: string;
 }
 
 function findChannelNodeById(nodes: TreeNode[], id: string): TreeNode | null {
@@ -4278,8 +4280,29 @@ api.on("user-banned", () => {
     api.disconnect();
 });
 
+/**
+ * Seeds the voice-room session timers from a tree (PRD 19 A3), so a client that
+ * connects mid-session shows the running timer at once. A node's own value wins;
+ * a voice node with no start time AND no occupants has no running session. A
+ * node with occupants but no value (an older server's tree) is left alone —
+ * the presence updates keep those timers.
+ */
+function seedSessionTimersFromTree(nodes: TreeNode[]): void {
+    for (const node of nodes) {
+        if (node.type === "VOICE") {
+            if (node.sessionStartedAt) {
+                sessionTimers.set(node.id, node.sessionStartedAt);
+            } else if (node.occupants.length === 0) {
+                sessionTimers.delete(node.id);
+            }
+        }
+        if (node.children.length > 0) seedSessionTimersFromTree(node.children);
+    }
+}
+
 api.on("channel-tree", (data: { serverId: string; tree: TreeNode[] }) => {
     ensureMutedChannelsLoaded(data.serverId);
+    seedSessionTimersFromTree(data.tree); // PRD 19 A3 (before the render that shows the timers)
     pruneMutedChannels(data.tree);
     renderTree(data.tree);
     syncOpenTabNames(data.tree);

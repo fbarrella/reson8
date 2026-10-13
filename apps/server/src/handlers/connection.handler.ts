@@ -42,6 +42,7 @@ import { requireInvite } from "../config/invite.config.js";
 import { getUserPermissions } from "../services/permissions.service.js";
 import { hasServerAccess, rolesToGrant } from "../services/access.service.js";
 import { membersRoom } from "../services/access-change.js";
+import { annotateSessionStarts, voiceSessionStartedAt } from "../services/voice-session.service.js";
 import {
     INVITE_FAIL_WINDOW_SECONDS,
     INVITE_MESSAGES,
@@ -110,8 +111,8 @@ export async function buildOccupant(
     };
 }
 
-/** In-memory voice session start times (channelId → Date). */
-export const voiceSessionStartedAt = new Map<string, Date>();
+/** In-memory voice session start times (channelId → Date) — defined in voice-session.service.ts (PRD 19 A3), re-exported for existing imports. */
+export { voiceSessionStartedAt };
 
 /**
  * Resolves the key `MediasoupService`'s per-channel session map should use
@@ -826,6 +827,9 @@ export function registerConnectionHandlers(
                     }
                 }
                 await hydrateOccupants(tree);
+                // PRD 19 A3: occupied voice rooms carry their session start so a
+                // client that connects mid-session shows the running timer at once.
+                annotateSessionStarts(tree, true);
                 await annotateUnreadChannels(tree, channelDtos, instanceId, app);
 
                 socket.emit("CHANNEL_TREE_UPDATE", { serverId, tree });

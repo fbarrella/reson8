@@ -98,6 +98,13 @@ export interface IChannelTreeNode extends IChannel {
      * recipient and can't carry a different value per user.
      */
     hasUnread?: boolean;
+    /**
+     * Voice channels only (PRD 19 A3): when the room's current session began
+     * (ISO), set while the room is occupied — the same value PRESENCE_UPDATE
+     * carries as `sessionStartedAt`. Absent for an empty room, and from an
+     * older server. Global (not per user), so it is valid on broadcast trees.
+     */
+    sessionStartedAt?: string;
 }
 
 // ---------------------------------------------------------------------------
