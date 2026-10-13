@@ -2623,3 +2623,59 @@ Feature/Fix: Category menu, rename and delete dialogs (PRD 19 C6)
       (A6's server tests cover that branch).
 
   Next Step: PRD 19 C7 — DM sidebar.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: DM sidebar (PRD 19 C7)
+
+  Problem: direct messages were reachable only through a modal list of online
+  users, with no previews, no grouping of offline members and no total.
+
+  Solution:
+    - The rail's DM button swaps #left-pane between the channel tree and a new
+      #dm-list (a class on the pane — the tree's DOM and collapsed state are
+      never rebuilt; the main area is untouched). The Servers button swaps back.
+    - Header "Direct messages" with "On {server name}" and a server glyph with
+      an explanatory tooltip; no compose button.
+    - Data: api.getDmDirectory() on connect and after user-joined/left
+      (2 s debounce); dm-received updates the row's last message and
+      user-joined/left flip its online dot at once; an older server falls back
+      to the online-users list with a "Message previews need a newer server."
+      note.
+    - sortDmDirectory(entries) (pure): Online / Offline groups, each with the
+      SPEC notes; people you've messaged first (newest first), then the rest
+      alphabetically.
+    - Rows: avatar, nickname, "You: …"/text preview (markdownToPlainText,
+      80 chars, "Image" for attachment-only) or the italic "No messages yet —
+      start a conversation"; a count pill from unreadDmCounts; the nudge button
+      (canNudge/buildNudgeButton, shown over the row's edge on hover or while
+      cooling down). Click -> openDmTab(…, { mode: "preview", focus: true }).
+    - Rail badge = sum of unreadDmCounts excluding the conversation you are
+      reading now (active tab + window focus); the DM button is disabled when
+      not connected or without server access (the access text as its title).
+    - Removed: #online-users-modal, its button and dot, renderOnlineUsers/
+      createUserRow, the header menu's "Online users" item and the CSS only
+      they used (the profile card keeps .btn-dm/.btn-nudge). updateOnlineDot
+      became refreshOnlineCount (the header's fallback count).
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts, index.html
+
+  Verification:
+    - tsc client clean; lint exit 0.
+    - Real client with two bot members: the DM button was enabled on connect;
+      a DM from Alice put "1" on the rail badge before the sidebar was open;
+      the sidebar showed Online — 2 / Offline — 103 with both notes, Alice
+      first with "hello there from alice" and a "1" pill, never-messaged people
+      with the italic text; the tree was hidden then intact (same category
+      count) after returning; a live DM from Bob moved him to the top with his
+      preview; clicking Alice opened her conversation and cleared her pill
+      (rail total fell to Bob's 1); my reply showed "You: my reply"; Bob
+      leaving moved him to Offline; disconnect disabled the DM button with its
+      "connect first" title; applyAccessState(false) disabled it with the
+      access text and returned it to the tree, and restoring access re-enabled
+      it. Screenshot reviewed (nudge button compacted after it).
+    - Not driven: the old-server fallback against a real v2.7.0 server (the
+      path is the same getOnlineUsers call restoreKeptDmTabs already uses).
+
+  Next Step: PRD 19 C8 — tab bar overflow.

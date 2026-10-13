@@ -1640,11 +1640,6 @@ const audioOutputSelect = document.getElementById("audio-output-select") as HTML
 const btnSaveDevices = document.getElementById("btn-save-devices") as HTMLButtonElement;
 
 // Online Users modal
-const btnOnlineUsers = document.getElementById("btn-online-users") as HTMLButtonElement;
-const onlineUsersModal = document.getElementById("online-users-modal") as HTMLDivElement;
-const onlineUserList = document.getElementById("online-user-list") as HTMLDivElement;
-const btnOnlineClose = document.getElementById("btn-online-close") as HTMLButtonElement;
-const onlineDot = document.getElementById("online-dot") as HTMLSpanElement;
 const toastContainer = document.getElementById("toast-container") as HTMLDivElement;
 
 // System tray checkboxes
@@ -2442,6 +2437,7 @@ function refreshTabUnread(channelId: string): void {
         const partnerId = channelId.slice(3);
         const showDm = hasDmUnread(partnerId) && !(activeTabId === channelId && document.hasFocus());
         paintTabUnread(tab, showDm ? dmUnread(partnerId) : 0);
+        scheduleDmSidebarRender(); // PRD 19 C7: the row's pill and the rail total
         return;
     }
     if (tab.kind !== "channel") return;
@@ -3352,7 +3348,6 @@ function openServerHeaderMenu(): void {
             void api.copyText(address).then((ok) => showToast(ok ? "Server address copied" : "Couldn't copy the address"));
         },
     });
-    items.push({ label: "Online users", icon: "ph-users", onClick: () => btnOnlineUsers.click() });
 
     const canCreate = hasPerm(PERM.CREATE_CHANNEL);
     const showSettings = canSeeServerSettings();
@@ -4841,6 +4836,7 @@ function autoOpenUnreadDmTabs(): void {
                 // Seeded first, so the tabs that end up in the background keep
                 // their dot and their "Unread Messages" line (PRD 18.13).
                 if (!hasDmUnread(p.partnerId)) unreadDmCounts.set(p.partnerId, p.unreadCount > 0 ? p.unreadCount : -1);
+                scheduleDmSidebarRender();
                 // A background tab: an incoming conversation never steals the view (PRD 19 B4).
                 openDmTab(p.partnerId, p.partnerNickname, { mode: "kept", focus: false, unreadCountHint: p.unreadCount });
             }
@@ -4865,6 +4861,7 @@ function applyAccessState(hasAccess: boolean, opts: { restore?: boolean } = {}):
         previewTabId = null;
         keptTabsRestored = false;
         unreadDmCounts.clear();
+        updateDmRailState(); // PRD 19 C7: the DM button is disabled without access
         // The server already removed them from voice; mirror it locally.
         if (isInVoice) {
             api.leaveVoiceChannel();
@@ -4884,6 +4881,8 @@ function applyAccessState(hasAccess: boolean, opts: { restore?: boolean } = {}):
         if (currentTree.length > 0 && currentServerId) restoreKeptTabs(currentTree as TreeNode[], currentServerId);
         autoOpenUnreadDmTabs();
         void restoreKeptDmTabs(); // PRD 19 B4: remembered DM tabs come back too
+        updateDmRailState(); // PRD 19 C7
+        void loadDmDirectory();
         if (currentTree.length > 0) renderTree(currentTree as TreeNode[]);
     }
 }
@@ -5703,9 +5702,9 @@ api.on("connected", (data: { serverId: string; instanceId: string; secure?: bool
     }
     SoundAlert.play("connected.mp3");
 
-    // Always show the online users button when connected
-    btnOnlineUsers.style.display = "";
-    updateOnlineDot();
+    refreshOnlineCount();
+    updateDmRailState(); // PRD 19 C7
+    void loadDmDirectory();
 
     // Check admin/emoji-management status on connect (not just when the
     // Settings modal opens) so openSettingsPanel() already knows the answer
@@ -5812,8 +5811,7 @@ api.on("disconnected", (data?: { reason?: string }) => {
     statusText.classList.remove("connected");
     statusLatency.textContent = "";
     statusLatency.className = "status-latency";
-    btnOnlineUsers.style.display = "none";
-    onlineDot.classList.remove("active");
+    resetDmSidebar(); // PRD 19 C7
     updateVoiceUI();
     channelTree.innerHTML = `
         <div style="padding: 20px 12px; color: var(--text-muted); font-size: 12px; text-align: center;">
@@ -6053,14 +6051,16 @@ api.on("presence", (data: { channelId: string; occupants: any[]; sessionStartedA
 
 api.on("user-joined", (data: { userId: string; nickname: string }) => {
     log(`${data.nickname} joined the server`, "info");
-    updateOnlineDot();
+    refreshOnlineCount();
+    onDmPresenceChange(data.userId, true); // PRD 19 C7
     refreshServerSummary(); // PRD 19 A1
     if (data.userId === profileUserId && profileIsOnline !== null) setProfilePresence(true); // PRD 17.3
 });
 
 api.on("user-left", (data: { userId: string }) => {
     log(`A user left the server`, "info");
-    updateOnlineDot();
+    refreshOnlineCount();
+    onDmPresenceChange(data.userId, false); // PRD 19 C7
     refreshServerSummary(); // PRD 19 A1
     if (data.userId === profileUserId && profileIsOnline !== null) setProfilePresence(false); // PRD 17.3
 });
@@ -6833,6 +6833,7 @@ function renderAdminUsers(users: any[]): void {
 
 function switchTab(tabId: string): void {
     activeTabId = tabId;
+    scheduleDmSidebarRender(); // PRD 19 C7: the open conversation is excluded from the rail total
 
     // Close emoji picker on tab switch
     closeEmojiPicker();
@@ -9114,6 +9115,7 @@ api.on("dm-received", async (msg: DirectMessage) => {
     const partnerId = msg.senderId === myId ? msg.receiverId : msg.senderId;
     const partnerNick = msg.senderNickname; // sender nickname for display purposes
     const tabKey = `dm:${partnerId}`;
+    onDmMessageForSidebar(partnerId, msg, msg.senderId === myId); // PRD 19 C7
 
     // Captured before any auto-open side effect below (PRD 14.4) — when the
     // tab doesn't exist yet, openDmTab() calls switchTab() synchronously,
@@ -9161,103 +9163,279 @@ api.on("dm-received", async (msg: DirectMessage) => {
     }
 });
 
-// ── Online Users Modal ────────────────────────────────────────────────────
+// ── DM sidebar (PRD 19 C7) ───────────────────────────────────────────────────
+// The rail's DM button swaps what #left-pane shows: the channel tree or this
+// list of every member. The tree is hidden by a class, never rebuilt, so its
+// DOM and collapsed state survive. Nothing opens until a person is clicked.
 
-btnOnlineUsers.addEventListener("click", async () => {
-    if (!isConnected) return;
-    onlineUsersModal.classList.add("visible");
-    onlineUserList.innerHTML = '<div class="admin-empty">Loading users...</div>';
+/** The two groups of the sidebar, each already in display order. Pure. */
+function sortDmDirectory(entries: DmDirectoryEntry[]): { online: DmDirectoryEntry[]; offline: DmDirectoryEntry[] } {
+    const order = (a: DmDirectoryEntry, b: DmDirectoryEntry): number => {
+        const am = a.lastMessage ? Date.parse(a.lastMessage.at) : NaN;
+        const bm = b.lastMessage ? Date.parse(b.lastMessage.at) : NaN;
+        const aHas = Number.isFinite(am);
+        const bHas = Number.isFinite(bm);
+        if (aHas !== bHas) return aHas ? -1 : 1; // people you've messaged first
+        if (aHas && bHas && am !== bm) return bm - am; // newest first
+        return a.nickname.localeCompare(b.nickname);
+    };
+    const sorted = [...entries].sort(order);
+    return { online: sorted.filter((e) => e.isOnline), offline: sorted.filter((e) => !e.isOnline) };
+}
 
-    const result = await api.getOnlineUsers();
-    if (result.success && result.users) {
-        renderOnlineUsers(result.users);
-    } else {
-        onlineUserList.innerHTML = '<div class="admin-empty">Failed to load users.</div>';
+/** The one-line preview of a row's last message (plain text, never HTML). */
+function dmPreviewText(entry: DmDirectoryEntry): string | null {
+    const last = entry.lastMessage;
+    if (!last) return null;
+    const plain = api.markdownToPlainText(last.text ?? "").replace(/\s+/g, " ").trim();
+    let body = plain || (last.hasAttachments ? "Image" : "");
+    if (body.length > 80) body = body.slice(0, 79).trimEnd() + "…";
+    return last.fromMe ? `You: ${body}` : body;
+}
+
+let dmDirectory: DmDirectoryEntry[] = [];
+/** True when the server has no directory (v2.7.0): the list is the online-users answer, without previews. */
+let dmDirectoryLegacy = false;
+let dmDirectoryLoaded = false;
+let dmDirectoryRequest = 0;
+let dmDirectoryTimer: ReturnType<typeof setTimeout> | null = null;
+let dmRenderQueued = false;
+type SidebarMode = "servers" | "dms";
+let sidebarMode: SidebarMode = "servers";
+
+const railServersBtn = document.getElementById("rail-servers") as HTMLButtonElement;
+const railDmsBtn = document.getElementById("rail-dms") as HTMLButtonElement;
+const railDmBadge = document.getElementById("rail-dm-badge") as HTMLSpanElement;
+const dmListBody = document.getElementById("dm-list-body") as HTMLDivElement;
+const leftPaneEl = document.getElementById("left-pane") as HTMLDivElement;
+
+function setSidebarMode(mode: SidebarMode): void {
+    if (mode === "dms" && railDmsBtn.disabled) return;
+    sidebarMode = mode;
+    leftPaneEl.classList.toggle("show-dms", mode === "dms");
+    railServersBtn.classList.toggle("active", mode === "servers");
+    railDmsBtn.classList.toggle("active", mode === "dms");
+    if (mode === "dms") {
+        renderDmSidebar();
+        void loadDmDirectory();
     }
-});
+}
 
-btnOnlineClose.addEventListener("click", () => {
-    onlineUsersModal.classList.remove("visible");
-});
+/** Enabled only with a connection and server access (GET_DM_DIRECTORY is a member event). */
+function updateDmRailState(): void {
+    const usable = isConnected && hasServerAccess;
+    railDmsBtn.disabled = !usable;
+    railDmsBtn.title = !isConnected
+        ? "Direct messages — connect to a server first"
+        : !hasServerAccess
+          ? ACCESS_BANNER_TEXT
+          : "Direct messages";
+    if (!usable && sidebarMode === "dms") setSidebarMode("servers");
+    renderDmRailBadge();
+}
 
-onlineUsersModal.addEventListener("click", (e) => {
-    if (e.target === onlineUsersModal) {
-        onlineUsersModal.classList.remove("visible");
+/** Everything unread in DMs, except the conversation you are reading right now. */
+function renderDmRailBadge(): void {
+    let total = 0;
+    const reading = document.hasFocus() && activeTabId.startsWith("dm:") ? activeTabId.slice(3) : null;
+    for (const [partnerId, count] of unreadDmCounts) {
+        if (partnerId === reading) continue;
+        total += count < 0 ? 1 : count;
     }
-});
+    railDmBadge.textContent = total > 99 ? "99+" : String(total);
+    railDmBadge.style.display = total > 0 && isConnected && hasServerAccess ? "" : "none";
+}
 
-function renderOnlineUsers(users: { userId: string; nickname: string; isOnline: boolean }[]): void {
-    onlineUserList.innerHTML = "";
+/** Coalesces the many triggers (unread changes, tab switches, presence) into one render per frame. */
+function scheduleDmSidebarRender(): void {
+    if (dmRenderQueued) return;
+    dmRenderQueued = true;
+    requestAnimationFrame(() => {
+        dmRenderQueued = false;
+        renderDmSidebar();
+    });
+}
 
-    if (users.length === 0) {
-        onlineUserList.innerHTML = '<div class="admin-empty">No users available.</div>';
+function renderDmSidebar(): void {
+    renderDmRailBadge();
+    const serverLabel = document.getElementById("dm-list-server");
+    if (serverLabel) {
+        const saved = activeSavedServerId ? savedServerById(activeSavedServerId) : undefined;
+        const name = connectedServerName || saved?.name || "this server";
+        serverLabel.textContent = `On ${name}`;
+    }
+    if (sidebarMode !== "dms") return;
+
+    const myId = api.getInstanceId();
+    const people = dmDirectory.filter((e) => e.userId !== myId);
+    dmListBody.replaceChildren();
+
+    if (dmDirectoryLegacy) {
+        const note = document.createElement("div");
+        note.className = "dm-legacy-note";
+        note.textContent = "Message previews need a newer server.";
+        dmListBody.appendChild(note);
+    }
+    if (!dmDirectoryLoaded) {
+        const loading = document.createElement("div");
+        loading.className = "dm-empty";
+        loading.textContent = "Loading…";
+        dmListBody.appendChild(loading);
+        return;
+    }
+    if (people.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "dm-empty";
+        empty.textContent = "No one else is on this server yet.";
+        dmListBody.appendChild(empty);
         return;
     }
 
-    // Sort: online first, then offline; alphabetical within each group
-    const sorted = [...users].sort((a, b) => {
-        if (a.isOnline !== b.isOnline) return a.isOnline ? -1 : 1;
-        return a.nickname.localeCompare(b.nickname);
-    });
-
-    const onlineUsers = sorted.filter((u) => u.isOnline);
-    const offlineUsers = sorted.filter((u) => !u.isOnline);
-
-    // Render online users
-    for (const user of onlineUsers) {
-        onlineUserList.appendChild(createUserRow(user));
-    }
-
-    // Render offline separator + offline users
-    if (offlineUsers.length > 0) {
-        if (onlineUsers.length > 0) {
-            const separator = document.createElement("div");
-            separator.className = "online-users-separator";
-            separator.textContent = "Offline";
-            onlineUserList.appendChild(separator);
-        }
-        for (const user of offlineUsers) {
-            onlineUserList.appendChild(createUserRow(user));
-        }
-    }
+    const { online, offline } = sortDmDirectory(people);
+    const addGroup = (title: string, note: string, list: DmDirectoryEntry[]): void => {
+        if (list.length === 0) return;
+        const head = document.createElement("div");
+        head.className = "dm-group-head section-label";
+        head.textContent = `${title} — ${list.length}`;
+        const sub = document.createElement("div");
+        sub.className = "dm-group-note";
+        sub.textContent = note;
+        dmListBody.append(head, sub);
+        for (const entry of list) dmListBody.appendChild(buildDmRow(entry));
+    };
+    addGroup("Online", "Everyone on this server · message or nudge", online);
+    addGroup("Offline", "Everyone on this server · they'll get your message when they sign in", offline);
 }
 
-function createUserRow(user: { userId: string; nickname: string; isOnline: boolean }): HTMLDivElement {
+function buildDmRow(entry: DmDirectoryEntry): HTMLDivElement {
     const row = document.createElement("div");
-    row.className = "online-user-row";
+    row.className = "dm-row" + (entry.isOnline ? "" : " is-offline");
+    row.tabIndex = 0;
+    row.setAttribute("role", "button");
+    row.dataset.userId = entry.userId;
+    if (activeTabId === `dm:${entry.userId}`) row.classList.add("is-active");
 
-    const info = document.createElement("div");
-    info.className = "online-user-info";
-    const dotClass = user.isOnline ? "online-user-dot" : "online-user-dot offline";
-    const nickClass = user.isOnline ? "online-user-nick" : "online-user-nick offline";
-    info.innerHTML = `<span class="${dotClass}"></span><span class="${nickClass}">${escapeHtml(user.nickname)}</span>`;
-    row.appendChild(info);
+    row.appendChild(createAvatarElement(entry.userId, entry.nickname, 32));
 
-    const btnGroup = document.createElement("div");
-    btnGroup.className = "online-user-btns";
+    const main = document.createElement("div");
+    main.className = "dm-row-main";
+    const name = document.createElement("div");
+    name.className = "dm-row-name";
+    name.textContent = entry.nickname;
+    const preview = document.createElement("div");
+    const text = dmPreviewText(entry);
+    preview.className = "dm-row-preview" + (text === null ? " is-empty" : "");
+    preview.textContent = text ?? "No messages yet — start a conversation";
+    main.append(name, preview);
+    row.appendChild(main);
 
-    const dmBtn = document.createElement("button");
-    dmBtn.className = "btn-dm";
-    dmBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg> DM';
-    dmBtn.addEventListener("click", () => {
-        onlineUsersModal.classList.remove("visible");
-        openDmTab(user.userId, user.nickname);
-    });
-    btnGroup.appendChild(dmBtn);
-
-    // Nudge — online users only, never yourself, only when the server allows it
-    if (canNudge(user.userId, user.isOnline)) {
-        btnGroup.appendChild(buildNudgeButton(user.userId, user.nickname));
+    const unread = dmUnread(entry.userId);
+    if (hasDmUnread(entry.userId) && activeTabId !== `dm:${entry.userId}`) {
+        const pill = document.createElement("span");
+        pill.className = "count-pill";
+        pill.textContent = unread > 99 ? "99+" : unread > 0 ? String(unread) : "•";
+        row.appendChild(pill);
     }
 
-    // Ban moved to the User Management settings tab (PRD 13.17) — it
-    // now also works for offline users, which this modal never could.
+    if (canNudge(entry.userId, entry.isOnline)) row.appendChild(buildNudgeButton(entry.userId, entry.nickname));
 
-    row.appendChild(btnGroup);
+    const open = (): void => {
+        if (!requireServerAccess()) return;
+        openDmTab(entry.userId, entry.nickname, { mode: "preview", focus: true });
+    };
+    row.addEventListener("click", (e) => {
+        if ((e.target as HTMLElement).closest(".btn-nudge")) return;
+        open();
+    });
+    row.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            open();
+        }
+    });
     return row;
 }
 
-/** The Nudge rules shared by the Online Users modal and the profile card (PRD 17.3). */
+/** Fetches the directory (or, on an older server, the online-users list). */
+async function loadDmDirectory(): Promise<void> {
+    if (!isConnected || !hasServerAccess) return;
+    const request = ++dmDirectoryRequest;
+    let entries: DmDirectoryEntry[] | null = null;
+    let legacy = false;
+    const directory = await api.getDmDirectory();
+    if (directory) {
+        entries = directory;
+    } else {
+        const online = await api.getOnlineUsers();
+        if (online.success && online.users) {
+            legacy = true;
+            entries = online.users.map((u) => ({
+                userId: u.userId,
+                nickname: u.nickname,
+                avatarUrl: null,
+                isOnline: u.isOnline,
+                unreadCount: 0,
+            }));
+        }
+    }
+    // A newer request, a disconnect, or a lost access while waiting: drop this answer.
+    if (request !== dmDirectoryRequest || !entries || !isConnected || !hasServerAccess) return;
+    for (const e of entries) if (e.avatarUrl) avatarUrlCache.set(e.userId, e.avatarUrl);
+    dmDirectory = entries;
+    dmDirectoryLegacy = legacy;
+    dmDirectoryLoaded = true;
+    scheduleDmSidebarRender();
+}
+
+/** Someone came online or went offline: the dot moves at once, the directory is re-read after 2 s. */
+function onDmPresenceChange(userId: string, online: boolean): void {
+    const entry = dmDirectory.find((e) => e.userId === userId);
+    if (entry) {
+        entry.isOnline = online;
+        scheduleDmSidebarRender();
+    }
+    if (dmDirectoryTimer) clearTimeout(dmDirectoryTimer);
+    dmDirectoryTimer = setTimeout(() => {
+        dmDirectoryTimer = null;
+        void loadDmDirectory();
+    }, 2000);
+}
+
+/** A DM arrived or was sent: the row's preview follows without a refetch. */
+function onDmMessageForSidebar(partnerId: string, msg: DirectMessage, fromMe: boolean): void {
+    const entry = dmDirectory.find((e) => e.userId === partnerId);
+    if (!entry) {
+        void loadDmDirectory(); // someone the list doesn't know yet
+        return;
+    }
+    entry.lastMessage = {
+        text: msg.content,
+        hasAttachments: (msg.attachments?.length ?? 0) > 0 || !!msg.attachmentUrl,
+        at: msg.createdAt,
+        fromMe,
+    };
+    scheduleDmSidebarRender();
+}
+
+/** Back to a clean slate on disconnect. */
+function resetDmSidebar(): void {
+    dmDirectoryRequest++;
+    dmDirectory = [];
+    dmDirectoryLoaded = false;
+    dmDirectoryLegacy = false;
+    if (dmDirectoryTimer) {
+        clearTimeout(dmDirectoryTimer);
+        dmDirectoryTimer = null;
+    }
+    setSidebarMode("servers");
+    dmListBody.replaceChildren();
+    updateDmRailState();
+}
+
+railServersBtn.addEventListener("click", () => setSidebarMode("servers"));
+railDmsBtn.addEventListener("click", () => setSidebarMode("dms"));
+
+/** The Nudge rules shared by the DM sidebar and the profile card (PRD 17.3). */
 function canNudge(userId: string, isOnline: boolean): boolean {
     return isOnline && userId !== api.getInstanceId() && serverNudgeEnabled;
 }
@@ -9579,20 +9757,12 @@ tabContentArea.addEventListener("keydown", (e) => {
     openUserProfile(hit.userId, hit.nickname, hit.el);
 });
 
-/** Checks online user count and toggles the green dot on the Online Users button. */
-async function updateOnlineDot(): Promise<void> {
-    if (!isConnected) {
-        onlineDot.classList.remove("active");
-        return;
-    }
+/** Refreshes the fallback online count (an older server has no summary) and the header. */
+async function refreshOnlineCount(): Promise<void> {
+    if (!isConnected) return;
     const result = await api.getOnlineUsers();
     if (result.success && result.users) lastOnlineUsersCount = result.users.filter((u) => u.isOnline).length;
     renderServerHeader(); // PRD 19 C3 (the fallback count for an older server)
-    if (result.success && result.users && result.users.some((u) => u.isOnline)) {
-        onlineDot.classList.add("active");
-    } else {
-        onlineDot.classList.remove("active");
-    }
 }
 
 // ── Unified Settings Modal (Tabs) ─────────────────────────────────────
@@ -11907,12 +12077,14 @@ window.addEventListener("blur", hideReactionCard);
 
 // Coming back to the window reads the DM conversation you were left looking at (PRD 18.13).
 window.addEventListener("focus", () => {
+    scheduleDmSidebarRender(); // PRD 19 C7
     const tab = chatTabs.get(activeTabId);
     if (tab?.kind === "dm") markDmTabRead(tab);
     if (tab?.kind === "channel") markChannelTabRead(tab); // PRD 19 B3
     for (const [id, t] of chatTabs) if (t.kind === "dm") refreshTabUnread(id);
 });
 window.addEventListener("blur", () => {
+    scheduleDmSidebarRender(); // PRD 19 C7
     // The active DM tab is no longer "looked at": a message arriving now shows its dot.
     for (const [id, t] of chatTabs) if (t.kind === "dm") refreshTabUnread(id);
 });
@@ -12713,12 +12885,7 @@ api.on("server-settings-updated", (data: {
         renderServerIconRow();
     }
     refreshServerSummary();
-    // If the Online Users modal is open, re-render so Nudge buttons appear/disappear live.
-    if (onlineUsersModal.classList.contains("visible")) {
-        api.getOnlineUsers().then((res) => {
-            if (res.success && res.users) renderOnlineUsers(res.users);
-        });
-    }
+    scheduleDmSidebarRender(); // PRD 19 C7: Nudge buttons appear/disappear live
 
     // PRD 12.14 — live-disable the Share Screen button for everyone the
     // moment an admin flips the server-wide toggle, same push path Nudge
