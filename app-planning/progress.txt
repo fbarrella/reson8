@@ -1288,3 +1288,76 @@ Feature/Fix: Unread counts for channels (PRD 19 A5)
 
   Next Step: PRD 19 A6 — category delete with children.
   Reminder: P11 / P12 still need a decision.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Category delete with children, server-side voice teardown (PRD 19 A6)
+
+  Problem: DELETE_CHANNEL always re-parented a deleted channel's children
+  through the foreign key (ON DELETE SET NULL), leaving them with stale
+  positions that interleave with the top level, offered no way to delete a
+  subtree, and never tore a deleted VOICE room down on the server: occupants'
+  mediasoup sessions and presence were left to each client's channel-deleted
+  handler (and a client that missed it stayed in presence forever).
+
+  Solution:
+    Shared types: DELETE_CHANNEL payload gains children?: "keep" | "delete";
+    the ack gains deletedChannelIds?: string[].
+    Server:
+      - services/channel-delete.ts (NEW, pure): planChannelDelete(channels,
+        targetId, mode) returns { deleteIds, reparent, voiceIds } for legacy
+        (target only, FK re-parents as before), keep (target only; direct
+        children to the top level at maxTopLevelPosition(excluding the target)
+        + 1 + i in their current order) and delete (target + descendants,
+        breadth-first, visited set); parseDeleteMode().
+      - channel.handler.ts DELETE_CHANNEL rewritten in the PRD order: validate
+        the option ("Invalid option"), load the channel (it must also belong to
+        the caller's server: a tightening), plan, collect the orphaned files of
+        EVERY deleted id, ONE $transaction (re-parent each moved child, then
+        deleteMany), then voice teardown, ack, background file release, one
+        CHANNEL_TREE_UPDATE and one CHANNEL_DELETED per id.
+      - Voice teardown (every mode, only after the commit): for each deleted
+        VOICE id, primary sockets (not superseded) go through
+        removeSocketFromChannel() (quiet, PRODUCER_CLOSED to the room, no
+        USER_KICKED); viewer sockets get cleanupUserSession() + disconnect;
+        leftover presence members (grace period) are removed; the session
+        start is deleted.
+      - registerChannelHandlers() now takes the MediasoupService (index.ts).
+    Legacy mode keeps today observable behaviour: same ack shape plus the new
+    optional field, one tree broadcast and one CHANNEL_DELETED, same order.
+    Client: nothing (C6 builds the dialog, B7 the voice text).
+
+  Key Files Modified:
+    packages/shared-types/src/socket-events.ts
+    apps/server/src/services/channel-delete.ts (NEW)
+    apps/server/src/handlers/channel.handler.ts
+    apps/server/src/index.ts
+    apps/server/src/__tests__/channel-delete.test.ts (NEW)
+
+  Verification:
+    - tsc server clean; lint exit 0; server tests 30 files pass (11 new:
+      legacy, keep with a nested target, keep orders by position, empty top
+      level, delete breadth-first on a nested subtree, voiceIds, childless
+      target in every mode, cycle terminates, option parsing).
+    - Real server, an admin and an occupant sitting in a voice room under a
+      category that also holds a text channel and a sub-category with a text
+      channel:
+        legacy: only the category goes; children land on TOP with their OLD
+        positions 0/1/2 (the stale-position behaviour of v2.7.0, kept); one
+        tree broadcast, one CHANNEL_DELETED; the voice room survives with its
+        occupant.
+        keep: children land on TOP at 2/3/4 in their old order, the nested
+        text channel stays under its sub-category; the voice room survives.
+        delete: all five ids in deletedChannelIds, one tree broadcast and five
+        CHANNEL_DELETED; the occupant received CHANNEL_DELETED for its room,
+        no USER_KICKED, and a fresh tree lists no such room.
+        A standalone occupied voice room deleted: presence:channel:<id> is
+        gone from Redis.
+        Refusals: children:"everything" → "Invalid option"; unknown id →
+        "Channel not found"; a plain member → "Permission denied".
+    - NOT run: a v2.7.0 CLIENT (the payload without `children` is exactly the
+      legacy branch above), file release of a deleted subtree on Cloudinary,
+      the client UI (C6).
+
+  Next Step: PRD 19 A7 — DM directory.
+  Reminder: P11 / P12 still need a decision.

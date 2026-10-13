@@ -16,7 +16,15 @@ import type {
 } from "@reson8/shared-types";
 import { PermissionFlags } from "@reson8/shared-types";
 import { buildChannelTree } from "../services/channel-tree.service.js";
-import { annotateSessionStarts } from "../services/voice-session.service.js";
+import {
+    annotateSessionStarts,
+    removeSocketFromChannel,
+    voiceSessionStartedAt,
+} from "../services/voice-session.service.js";
+import { parseDeleteMode, planChannelDelete } from "../services/channel-delete.js";
+import { PresenceService } from "../services/presence.service.js";
+import type { MediasoupService } from "../services/mediasoup.service.js";
+import { getMediasoupSessionKey } from "./connection.handler.js";
 import { requirePermission } from "../middleware/permissions.middleware.js";
 import {
     claimUploads,
@@ -86,7 +94,10 @@ async function broadcastTreeUpdate(
 export function registerChannelHandlers(
     io: TypedIO,
     app: FastifyInstance,
+    mediasoup: MediasoupService,
 ): void {
+    const presence = new PresenceService(app.redis);
+
     io.on("connection", (socket: TypedSocket) => {
         // ── CREATE_CHANNEL ──────────────────────────────────────────────────
         socket.on("CREATE_CHANNEL", async (payload, ack) => {
@@ -134,6 +145,10 @@ export function registerChannelHandlers(
         });
 
         // ── DELETE_CHANNEL ──────────────────────────────────────────────────
+        // `children` (PRD 19 A6): absent = legacy (v2.7.0 clients: the foreign
+        // key re-parents the children, exactly as before); "keep" moves them to
+        // the top level; "delete" deletes the whole subtree. Voice rooms being
+        // deleted are torn down on the server in EVERY mode, after the commit.
         socket.on("DELETE_CHANNEL", async (payload, ack) => {
             try {
                 const { channelId } = payload;
@@ -147,29 +162,81 @@ export function registerChannelHandlers(
                     return;
                 }
 
+                const mode = parseDeleteMode(payload.children);
+                if (!mode) {
+                    ack({ success: false, error: "Invalid option" });
+                    return;
+                }
+
                 const channel = await app.prisma.channel.findUnique({
                     where: { id: channelId },
                 });
 
-                if (!channel) {
+                if (!channel || channel.serverId !== socket.data.serverId) {
                     ack({ success: false, error: "Channel not found" });
                     return;
                 }
+                const serverId = channel.serverId;
+
+                const rows = await app.prisma.channel.findMany({
+                    where: { serverId },
+                    select: { id: true, parentId: true, position: true, type: true },
+                });
+                const plan = planChannelDelete(
+                    rows.map((r) => ({
+                        id: r.id,
+                        parentId: r.parentId,
+                        position: r.position,
+                        type: r.type as "TEXT" | "VOICE",
+                    })),
+                    channelId,
+                    mode,
+                );
 
                 // Collect the files this deletion will orphan BEFORE the rows
-                // go (PRD 16.9): the messages' attachments and the channel's
-                // own icon. Child channels are re-parented (SetNull), not
-                // deleted, so their messages and files are correctly left alone.
-                const orphanedFileUrls = await collectChannelFileUrls(app.prisma, channelId);
+                // go (PRD 16.9): every deleted channel's messages' attachments
+                // and its own icon. In legacy/keep mode children survive, so
+                // their messages and files are correctly left alone.
+                const orphanedFileUrls = [
+                    ...new Set(
+                        (await Promise.all(plan.deleteIds.map((id) => collectChannelFileUrls(app.prisma, id)))).flat(),
+                    ),
+                ];
 
-                // Cascade: Prisma schema has onDelete: Cascade for messages,
-                // and onDelete: SetNull for children. DB first, so a failed
-                // delete never loses a file.
-                await app.prisma.channel.delete({
-                    where: { id: channelId },
+                // One transaction: re-parent (keep mode), then delete. Cascade:
+                // messages onDelete Cascade, children onDelete SetNull (legacy).
+                // DB first, so a failed delete never loses a file or kicks anyone.
+                await app.prisma.$transaction(async (tx) => {
+                    for (const move of plan.reparent) {
+                        await tx.channel.update({
+                            where: { id: move.id },
+                            data: { parentId: null, position: move.position },
+                        });
+                    }
+                    await tx.channel.deleteMany({ where: { id: { in: plan.deleteIds } } });
                 });
 
-                ack({ success: true });
+                // Voice teardown, only now that the delete is committed. No
+                // USER_KICKED (it plays the kick sound): the client's
+                // channel-deleted handler is the notice.
+                for (const voiceId of plan.voiceIds) {
+                    for (const [, s] of io.sockets.sockets) {
+                        if (s.data.superseded || s.data.currentChannelId !== voiceId) continue;
+                        if (s.data.role === "viewer") {
+                            mediasoup.cleanupUserSession(voiceId, getMediasoupSessionKey(s));
+                            s.disconnect(true);
+                        } else {
+                            await removeSocketFromChannel({ mediasoup, presence }, s, voiceId);
+                        }
+                    }
+                    // Anyone still in presence without a live socket (grace period).
+                    for (const uid of await presence.getChannelOccupants(voiceId)) {
+                        await presence.leaveChannel(uid, voiceId);
+                    }
+                    voiceSessionStartedAt.delete(voiceId);
+                }
+
+                ack({ success: true, deletedChannelIds: plan.deleteIds });
 
                 // Release the files in the background (bounded concurrency) —
                 // a channel can hold thousands of images and the ack must not
@@ -183,17 +250,15 @@ export function registerChannelHandlers(
                         .catch((err) => app.log.warn({ err, channelId }, "Failed to release deleted channel's files"));
                 }
 
-                // Broadcast updated tree
-                await broadcastTreeUpdate(app, io, channel.serverId);
-
-                // Notify about deletion
-                io.to(`server:${channel.serverId}`).emit("CHANNEL_DELETED", {
-                    serverId: channel.serverId,
-                    channelId,
-                });
+                // ONE tree broadcast, then one CHANNEL_DELETED per deleted id
+                // (the client's handler closes the tab and leaves voice for each).
+                await broadcastTreeUpdate(app, io, serverId);
+                for (const deletedId of plan.deleteIds) {
+                    io.to(`server:${serverId}`).emit("CHANNEL_DELETED", { serverId, channelId: deletedId });
+                }
 
                 app.log.info(
-                    { socketId: socket.id, channelId, name: channel.name },
+                    { socketId: socket.id, channelId, name: channel.name, mode, deleted: plan.deleteIds.length },
                     "Channel deleted",
                 );
             } catch (err) {

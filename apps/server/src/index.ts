@@ -249,7 +249,7 @@ async function main(): Promise<void> {
     // Register socket event handlers
     registerConnectionHandlers(io, app, mediasoupService);
     registerVoiceHandlers(io, app, mediasoupService);
-    registerChannelHandlers(io, app);
+    registerChannelHandlers(io, app, mediasoupService);
     registerMessageHandlers(io, app);
     registerAdminHandlers(io, app, mediasoupService);
     registerDMHandlers(io, app);

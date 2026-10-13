@@ -161,8 +161,22 @@ export interface ClientToServerEvents {
 
     /** Client requests deletion of a channel. */
     DELETE_CHANNEL: (
-        payload: { channelId: string },
-        ack: (response: { success: boolean; error?: string }) => void,
+        payload: {
+            channelId: string;
+            /**
+             * What happens to the channel's children (PRD 19 A6). Absent = the
+             * pre-3.0 behaviour (the foreign key re-parents them with their old
+             * positions). "keep" moves them to the top level after the existing
+             * channels, in their current order; "delete" deletes the whole subtree.
+             */
+            children?: "keep" | "delete";
+        },
+        ack: (response: {
+            success: boolean;
+            error?: string;
+            /** Every channel id that was deleted (the target and, for "delete", its descendants). Absent from an older server. */
+            deletedChannelIds?: string[];
+        }) => void,
     ) => void;
 
     /**
