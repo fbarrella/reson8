@@ -2406,6 +2406,215 @@ function persistKeptTabs(): void {
     }
 }
 
+// ── Tab bar overflow (PRD 19 C8) ──────────────────────────────────────────────
+// Tabs that don't fit collapse into an "{n} more ▾" button. Measuring happens
+// in ONE place (layoutTabBar), real offsetWidths cached per element; it changes
+// only `display` (the .tab-hidden class) and `order`, never a width, so the
+// observer that triggers it cannot feed itself. Hidden tabs stay in the DOM
+// with their content and scroll keeper, and the kept-tabs order is the DOM
+// order, which this never touches.
+
+const tabOverflowBtn = document.getElementById("tab-overflow") as HTMLButtonElement;
+const tabOverflowLabel = document.getElementById("tab-overflow-label") as HTMLElement;
+const tabOverflowDot = document.getElementById("tab-overflow-dot") as HTMLElement;
+const tabWidthCache = new WeakMap<HTMLElement, number>();
+let tabOverflowButtonWidth = 0;
+let tabOverflowQueued = false;
+/** Counts layout passes (a no-layout-loop check reads it). */
+let tabOverflowRuns = 0;
+
+function invalidateTabWidth(el: HTMLElement): void {
+    tabWidthCache.delete(el);
+    scheduleTabOverflow();
+}
+
+function scheduleTabOverflow(): void {
+    if (tabOverflowQueued) return;
+    tabOverflowQueued = true;
+    requestAnimationFrame(() => {
+        tabOverflowQueued = false;
+        layoutTabBar();
+    });
+}
+
+function layoutTabBar(): void {
+    tabOverflowRuns++;
+    const tabs = Array.from(tabBar.querySelectorAll<HTMLElement>(".tab"));
+    // Not displayed yet (the welcome screen hides #main): every width would read 0
+    // and be cached. The observer fires again when the bar gets a size.
+    if (tabs.length === 0 || tabBar.clientWidth === 0) return;
+
+    // Real widths for anything not measured yet (un-hidden first so a hidden
+    // tab has one). One layout read after all the class changes.
+    const unmeasured = tabs.filter((t) => !tabWidthCache.has(t));
+    for (const t of unmeasured) t.classList.remove("tab-hidden");
+    if (!tabOverflowButtonWidth) {
+        tabOverflowLabel.textContent = "99 more";
+        tabOverflowBtn.style.display = "";
+    }
+    for (const t of unmeasured) tabWidthCache.set(t, t.offsetWidth);
+    if (!tabOverflowButtonWidth) {
+        tabOverflowButtonWidth = tabOverflowBtn.offsetWidth + 12; // + its margins
+        tabOverflowBtn.style.display = "none";
+    }
+
+    const widths = tabs.map((t) => tabWidthCache.get(t) ?? 0);
+    const avail = tabBar.clientWidth;
+    const total = widths.reduce((a, b) => a + b, 0);
+    const fitsAll = total <= avail;
+
+    const visible = new Set<number>();
+    const order: number[] = tabs.map((_, i) => i * 2);
+    if (fitsAll) {
+        tabs.forEach((_, i) => visible.add(i));
+    } else {
+        const room = avail - tabOverflowButtonWidth;
+        const activeIdx = tabs.findIndex((t) => t.classList.contains("active"));
+        let used = 0;
+        let lastFitted = -1;
+        if (activeIdx >= 0) {
+            used += widths[activeIdx];
+            visible.add(activeIdx);
+        }
+        for (let i = 0; i < tabs.length; i++) {
+            if (i === activeIdx) {
+                lastFitted = i;
+                continue;
+            }
+            if (used + widths[i] > room) break;
+            used += widths[i];
+            visible.add(i);
+            lastFitted = i;
+        }
+        // An active tab beyond the ones that fit takes the slot after the last one that fits.
+        if (activeIdx > lastFitted) order[activeIdx] = lastFitted * 2 + 1;
+    }
+
+    let hiddenUnread = false;
+    let hiddenCount = 0;
+    tabs.forEach((t, i) => {
+        const hide = !visible.has(i);
+        t.classList.toggle("tab-hidden", hide);
+        t.style.order = fitsAll ? "" : hide ? "" : String(order[i]);
+        if (hide) {
+            hiddenCount++;
+            if (t.classList.contains("has-unread")) hiddenUnread = true;
+        }
+    });
+
+    tabOverflowBtn.style.display = hiddenCount > 0 ? "" : "none";
+    tabOverflowLabel.textContent = `${hiddenCount} more`;
+    tabOverflowDot.style.display = hiddenUnread ? "" : "none";
+    if (hiddenCount === 0) closeTabOverflowMenu();
+    else if (tabOverflowMenuEl) buildTabOverflowMenu();
+}
+
+let tabOverflowMenuEl: HTMLDivElement | null = null;
+
+function closeTabOverflowMenu(): void {
+    tabOverflowMenuEl?.remove();
+    tabOverflowMenuEl = null;
+    tabOverflowBtn.setAttribute("aria-expanded", "false");
+}
+
+/** (Re)fills the dropdown from the tabs that are currently hidden. Labels are text only. */
+function buildTabOverflowMenu(): void {
+    if (!tabOverflowMenuEl) return;
+    const menu = tabOverflowMenuEl;
+    menu.replaceChildren();
+    const heading = document.createElement("div");
+    heading.className = "menu-heading tab-overflow-heading";
+    heading.textContent = "Open tabs that don't fit";
+    menu.appendChild(heading);
+
+    const hidden = Array.from(tabBar.querySelectorAll<HTMLElement>(".tab.tab-hidden"));
+    for (const tabEl of hidden) {
+        const id = tabEl.dataset.tabId ?? "";
+        const row = document.createElement("div");
+        row.className = "tab-overflow-row";
+        row.setAttribute("role", "menuitem");
+        if (tabEl.classList.contains("preview")) row.classList.add("is-preview");
+        if (tabEl.classList.contains("has-unread")) row.classList.add("has-unread");
+
+        const icon = document.createElement("span");
+        icon.className = "tab-overflow-icon";
+        const srcIcon = tabEl.querySelector(".tab-icon");
+        if (srcIcon) icon.innerHTML = srcIcon.innerHTML; // our own markup (emoji or a Phosphor <i>), never user text
+        row.appendChild(icon);
+
+        const label = document.createElement("span");
+        label.className = "tab-overflow-label";
+        label.textContent = tabEl.querySelector(".tab-label")?.textContent ?? tabEl.textContent?.trim() ?? id;
+        row.appendChild(label);
+
+        if (tabEl.classList.contains("kept")) {
+            const kept = document.createElement("span");
+            kept.className = "tab-overflow-kept";
+            kept.innerHTML = TAB_KEPT_ICON_SVG;
+            row.appendChild(kept);
+        }
+        if (tabEl.classList.contains("has-unread")) {
+            const pill = document.createElement("span");
+            pill.className = "count-pill";
+            pill.textContent = tabEl.querySelector(".tab-unread-count")?.textContent ?? "";
+            row.appendChild(pill);
+        }
+        if (id !== "server-log") {
+            const close = document.createElement("span");
+            close.className = "tab-overflow-close";
+            close.setAttribute("role", "button");
+            close.setAttribute("aria-label", "Close tab");
+            close.textContent = "✕";
+            close.addEventListener("click", (e) => {
+                e.stopPropagation();
+                closeTab(id, { reason: "user" });
+                layoutTabBar(); // the list reflects it at once
+            });
+            row.appendChild(close);
+        }
+        row.addEventListener("click", () => {
+            closeTabOverflowMenu();
+            switchTab(id);
+        });
+        menu.appendChild(row);
+    }
+}
+
+function openTabOverflowMenu(): void {
+    if (tabOverflowMenuEl) {
+        closeTabOverflowMenu();
+        return;
+    }
+    closeMenu(); // one popover at a time
+    const menu = document.createElement("div");
+    menu.className = "tab-overflow-menu";
+    menu.setAttribute("role", "menu");
+    document.body.appendChild(menu);
+    tabOverflowMenuEl = menu;
+    buildTabOverflowMenu();
+    const rect = tabOverflowBtn.getBoundingClientRect();
+    const left = Math.max(8, Math.min(rect.right - 260, window.innerWidth - 268));
+    menu.style.left = `${left}px`;
+    menu.style.top = `${rect.bottom + 6}px`;
+    tabOverflowBtn.setAttribute("aria-expanded", "true");
+}
+
+tabOverflowBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    openTabOverflowMenu();
+});
+document.addEventListener("pointerdown", (e) => {
+    if (!tabOverflowMenuEl) return;
+    const target = e.target as Node;
+    if (tabOverflowMenuEl.contains(target) || tabOverflowBtn.contains(target)) return;
+    closeTabOverflowMenu();
+});
+document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && tabOverflowMenuEl) closeTabOverflowMenu();
+});
+new ResizeObserver(() => layoutTabBar()).observe(tabBar);
+window.addEventListener("resize", () => scheduleTabOverflow());
+
 const TAB_KEPT_ICON_SVG =
     `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/></svg>`;
 
@@ -2472,6 +2681,7 @@ function setMutedIcon(host: Element, muted: boolean, iconClass: string, afterSel
 
 /** A muted channel's tab is faded, carries the bell-slash and never a badge (PRD 19 B2). */
 function setTabMuted(tab: ChatTab, muted: boolean): void {
+    invalidateTabWidth(tab.tabEl); // PRD 19 C8
     tab.tabEl.classList.toggle("muted", muted);
     setMutedIcon(tab.tabEl, muted, "tab-muted-icon", ".tab-label");
 }
@@ -2479,6 +2689,7 @@ function setTabMuted(tab: ChatTab, muted: boolean): void {
 /** Shows `n` unread (0 = none, -1 = unknown) on a tab: class, number and aria-label. */
 function paintTabUnread(tab: ChatTab, n: number): void {
     const shown = n !== 0;
+    invalidateTabWidth(tab.tabEl); // PRD 19 C8: the badge and the bolder label change the width
     tab.tabEl.classList.toggle("has-unread", shown);
     const pill = tab.tabEl.querySelector(".tab-unread-count");
     if (pill) pill.textContent = shown ? formatUnreadCount(n) : "";
@@ -2510,6 +2721,7 @@ function markDmTabRead(tab: ChatTab, opts: { hadUnreadOnPage?: boolean } = {}): 
 
 /** Applies a channel tab's mode to its element (classes + tooltip). */
 function renderTabMode(tab: ChatTab): void {
+    invalidateTabWidth(tab.tabEl); // PRD 19 C8: the pin icon, italics and a renamed label change the width
     const kept = tab.mode === "kept";
     tab.tabEl.classList.toggle("kept", kept);
     tab.tabEl.classList.toggle("preview", tab.mode === "preview");
@@ -6848,6 +7060,7 @@ function switchTab(tabId: string): void {
     const contentEl = tabContentArea.querySelector(`.tab-content[data-tab-id="${tabId}"]`);
     tabEl?.classList.add("active");
     contentEl?.classList.add("active");
+    scheduleTabOverflow(); // PRD 19 C8: the active tab must stay visible
 
     // Show/hide the composer (attachment tray + input bar)
     if (tabId === "server-log") {
@@ -6908,7 +7121,8 @@ function replaceablePreview(mode: "preview" | "kept"): ChatTab | null {
 /** Puts a new tab's element in the bar: in the replaced preview's slot, else at the end. */
 function insertTabElement(tabEl: HTMLElement, replaced: ChatTab | null): void {
     if (replaced) tabBar.insertBefore(tabEl, replaced.tabEl);
-    else tabBar.appendChild(tabEl);
+    else tabBar.insertBefore(tabEl, tabBar.querySelector("#tab-overflow")); // before the overflow button (PRD 19 C8)
+    scheduleTabOverflow();
 }
 
 /**
@@ -7176,6 +7390,7 @@ function closeTab(
     tab.tabEl.remove();
     tab.contentEl.remove();
     chatTabs.delete(channelId);
+    scheduleTabOverflow(); // PRD 19 C8
     replyTargets.delete(channelId); // a draft reply dies with its conversation's tab (PRD 16.11)
 
     if (previewTabId === channelId) previewTabId = null;

@@ -1183,12 +1183,123 @@
       background: var(--bg-secondary);
       border-bottom: 1px solid var(--border);
       flex-shrink: 0;
-      overflow-x: auto;
-      scrollbar-width: none;
+      overflow: hidden;
     }
 
-    #tab-bar::-webkit-scrollbar {
+    /* Tabs that don't fit are display:none, never detached (PRD 19 C8). */
+    .tab.tab-hidden {
       display: none;
+    }
+
+    .tab-overflow-btn {
+      order: 100000;
+      position: relative;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      margin: 0 6px;
+      padding: 4px 8px;
+      border: 1px solid transparent;
+      border-radius: var(--radius-md);
+      background: none;
+      color: var(--color-neutral-300);
+      font-size: 11px;
+      font-weight: 500;
+      white-space: nowrap;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+
+    .tab-overflow-btn:hover,
+    .tab-overflow-btn[aria-expanded="true"] {
+      background: var(--color-neutral-900);
+      color: var(--color-text);
+    }
+
+    .tab-overflow-dot {
+      position: absolute;
+      top: 1px;
+      right: 1px;
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--color-accent);
+    }
+
+    .tab-overflow-menu {
+      position: fixed;
+      z-index: 10000;
+      width: 260px;
+      padding: 5px;
+      background: var(--color-surface);
+      border-radius: var(--radius-md);
+      box-shadow: var(--shadow-lg);
+      color: var(--color-text);
+      font-size: 13px;
+    }
+
+    .tab-overflow-heading {
+      padding: 6px 8px 4px;
+    }
+
+    .tab-overflow-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      height: 32px;
+      padding: 0 8px;
+      border-radius: var(--radius-sm, 4px);
+      cursor: pointer;
+    }
+
+    .tab-overflow-row:hover {
+      background: var(--color-neutral-900);
+    }
+
+    .tab-overflow-icon {
+      display: inline-flex;
+      width: 16px;
+      justify-content: center;
+      color: var(--color-neutral-400);
+      flex-shrink: 0;
+    }
+
+    .tab-overflow-label {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .tab-overflow-row.is-preview .tab-overflow-label {
+      font-style: italic;
+    }
+
+    .tab-overflow-row.has-unread .tab-overflow-label {
+      font-weight: 600;
+    }
+
+    .tab-overflow-kept {
+      display: inline-flex;
+      color: var(--color-accent);
+    }
+
+    .tab-overflow-close {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      font-size: 10px;
+      color: var(--color-neutral-400);
+      flex-shrink: 0;
+    }
+
+    .tab-overflow-close:hover {
+      background: rgba(255, 255, 255, 0.1);
+      color: var(--color-text);
     }
 
     .tab {
@@ -6514,6 +6625,8 @@
       </div>
       <div id="tab-bar">
         <div class="tab active" data-tab-id="server-log">📋 Server Log</div>
+        <!-- Tabs that don't fit collapse into this button (PRD 19 C8). It is not a .tab. -->
+        <button type="button" id="tab-overflow" class="tab-overflow-btn" style="display:none;" aria-haspopup="menu" aria-expanded="false"><span id="tab-overflow-label">0 more</span><i class="ph ph-caret-down" aria-hidden="true"></i><span class="tab-overflow-dot" id="tab-overflow-dot" style="display:none;"></span></button>
       </div>
       <div id="tab-content-area">
         <div class="tab-content active" data-tab-id="server-log">

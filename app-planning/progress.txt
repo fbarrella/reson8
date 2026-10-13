@@ -2679,3 +2679,48 @@ Feature/Fix: DM sidebar (PRD 19 C7)
       path is the same getOnlineUsers call restoreKeptDmTabs already uses).
 
   Next Step: PRD 19 C8 — tab bar overflow.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Tab bar overflow (PRD 19 C8)
+
+  Problem: the tab bar scrolled sideways (hidden scrollbar), so tabs past the
+  edge were invisible and unreachable without hunting for them.
+
+  Solution:
+    - layoutTabBar() collapses what doesn't fit into an "{n} more ▾" button
+      right after the last visible tab. It runs from a ResizeObserver on
+      #tab-bar (and window resize / tab events via a one-frame scheduler).
+    - Real widths: offsetWidth cached per element in a WeakMap, invalidated by
+      paintTabUnread, setTabMuted and renderTabMode (which the rename path
+      also goes through); nothing is cached while the bar is not displayed
+      (the welcome screen) — that read 0 on the first try and broke the fit.
+    - Fitting reserves the active tab first and fills the rest in order; an
+      active tab beyond the ones that fit takes the slot after the last one
+      that fits via CSS `order`. Hidden tabs are display:none (.tab-hidden),
+      never detached, and the DOM order — hence reson8-kept-tabs — is never
+      touched. Only display and order change, never a width: no loop.
+    - The button carries a 7 px accent dot when a hidden tab has unread
+      messages (muted ones never get the has-unread class, so they don't).
+    - The dropdown (260 px, "Open tabs that don't fit"): icon, label
+      (textContent), the bookmark for a kept tab, the count pill and ✕
+      (not on the Server Log); a row opens the tab, ✕ closes it and the list
+      follows; outside click / Esc / selecting closes it. insertTabElement now
+      inserts before the button so it stays last.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts, index.html
+
+  Verification:
+    - tsc client clean; lint exit 0.
+    - Real client with 14 extra kept tabs: 11 hidden, "11 more" with the dot;
+      activating the last (hidden) tab made it visible next to the others
+      (order after the last fitted), DOM order unchanged; the dropdown listed
+      the hidden tabs with counts, bookmarks and ✕, a ✕ shrank it to "10 more",
+      a row opened its tab; 30 pane resizes caused 29 layout passes (one each,
+      no feedback loop); closing every tab hid the button. Screenshot compared
+      with frame 13b.
+    - Not driven: a window resize by dragging the OS frame (the observer is on
+      the bar, which the pane-width change exercises).
+
+  Next Step: PRD 19 C9 — voice room tab: people.
