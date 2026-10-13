@@ -3160,14 +3160,37 @@ function attachChannelContextMenu(el: HTMLElement, node: TreeNode, canMute = fal
               + `<button class="channel-ctx-menu-item ctx-mute-btn">${isChannelMuted(node.id) ? "🔔 Unmute Channel" : "🔕 Mute Channel"}</button><div class="ctx-menu-divider"></div>`
             : "";
 
-        menu.innerHTML = `
-            ${muteItem}
-            <button class="channel-ctx-menu-item ctx-rename-btn">✏️ Rename</button>
-            <button class="channel-ctx-menu-item ctx-move-btn">📁 Move to…</button>
-            ${!isVoice ? `<button class="channel-ctx-menu-item ctx-icon-btn">🖼️ Set Icon</button>` : ""}
-            ${!isVoice ? `<button class="channel-ctx-menu-item ctx-nsfw-toggle-btn">🔞 ${node.isNsfw ? "Unmark" : "Mark"} as NSFW</button>` : ""}
-            <button class="ctx-delete-channel-btn">🗑️ Delete Channel</button>
-        `;
+        // Who may manage channels (PRD 19 B6): `null` = unknown (an older
+        // server) -> today's behaviour, the items show and the server refuses;
+        // `false` -> the whole group is absent. The menu is rebuilt on every
+        // open, so PERMISSIONS_CHANGED needs no re-render.
+        const showManage = hasPerm(PERM.MANAGE_CHANNELS) !== false;
+        if (!canMute && !showManage) return; // a member on a voice/category row: no empty menu
+
+        menu.innerHTML = muteItem
+            ? muteItem.replace('<div class="ctx-menu-divider"></div>', "")
+            : "";
+        if (showManage) {
+            if (muteItem) {
+                const divider = document.createElement("div");
+                divider.className = "ctx-menu-divider";
+                menu.appendChild(divider);
+            }
+            const label = document.createElement("div");
+            label.className = "ctx-menu-label";
+            label.textContent = "Manage channel";
+            menu.appendChild(label);
+            const manage = document.createElement("div");
+            manage.innerHTML = `
+                <button class="channel-ctx-menu-item ctx-rename-btn">✏️ Rename…</button>
+                ${!isVoice ? `<button class="channel-ctx-menu-item ctx-icon-btn">🖼️ Set icon…</button>` : ""}
+                <button class="channel-ctx-menu-item ctx-move-btn">📁 Move to category…</button>
+                ${!isVoice ? `<button class="channel-ctx-menu-item ctx-nsfw-toggle-btn">🔞 ${node.isNsfw ? "Unmark" : "Mark"} as NSFW</button>` : ""}
+                <div class="ctx-menu-divider"></div>
+                <button class="ctx-delete-channel-btn">🗑️ Delete channel…</button>
+            `;
+            while (manage.firstChild) menu.appendChild(manage.firstChild);
+        }
 
         menu.querySelector(".ctx-mute-btn")?.addEventListener("click", () => {
             menu.remove();

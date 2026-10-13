@@ -1851,3 +1851,40 @@ Feature/Fix: Tab menu additions (PRD 19 B5)
       logic B4 verified (reconnect restore).
 
   Next Step: PRD 19 B6 — menu permissions.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Channel menu gated by permissions, grouped (PRD 19 B6)
+
+  Problem: the channel right-click menu showed Rename/Move/Delete (and Icon,
+  NSFW) to everyone; the server refused non-holders and the client played the
+  "insufficient perms" sound.
+
+  Solution (renderer + index.html): attachChannelContextMenu() builds its items
+  on every open from hasPerm(PERM.MANAGE_CHANNELS) (A8):
+    - false -> no "Manage channel" group at all; true or null (an older server
+      sends no permissions) -> the group, as today.
+    - Text channel: Keep open, Mute; then, when allowed, a divider, the
+      "Manage channel" label (a non-interactive div.ctx-menu-label set with
+      textContent), Rename…, Set icon…, Move to category…, Mark/Unmark NSFW, a
+      divider and Delete channel… (red, last). Voice channel / category rows:
+      only the manage group (Rename…, Move to category…, divider, Delete
+      channel…); a member there gets NO menu at all (nothing is appended).
+    - Because the menu is rebuilt per open, PERMISSIONS_CHANGED needs no
+      re-render.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts, index.html
+
+  Verification:
+    - tsc client clean; lint exit 0 (hasPerm is now used).
+    - Real client over CDP: as a member, Chat -> ["Keep open","Mute Channel"],
+      Lobby (voice) -> no menu; an admin bot assigned role-admin to the client
+      -> myPermissions 511 live (no reconnect) and Chat -> Keep open, Mute,
+      ---, Manage channel, Rename…, Set icon…, Move to category…, Mark as NSFW,
+      ---, Delete channel…; Lobby -> Manage channel, Rename…, Move to
+      category…, ---, Delete channel…; role removed -> Lobby menu gone again.
+    - NOT run: a v2.7.0 server (hasPerm null -> the items show; same code path
+      as `!== false`).
+
+  Next Step: PRD 19 B7 — deleting a voice channel says who is affected.
