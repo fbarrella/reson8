@@ -937,6 +937,8 @@ interface Reson8Api {
     downloadImage(url: string): void;
     setCustomEmojis(list: Array<{ name: string; imageUrl: string }>): void;
     renderMarkdown(text: string): { html: string; block: boolean };
+    /** Semver-aware comparison from app-version.ts (PRD 19 R0); null = unparseable. */
+    version: { compare(a: string, b: string): number | null };
     avatar: {
         isPlausibleEmail(email: string): boolean;
         selectionFor(provider: "libravatar" | "gravatar", email: string): { provider: "libravatar" | "gravatar"; hash: string };
@@ -12284,21 +12286,22 @@ whatsNewModal.addEventListener("click", (e) => {
 // persisted/dismissed-forever like "What's New" above — a mismatch is a
 // per-connection fact (you might connect to a different, up-to-date server
 // next), so it's re-shown on every connection where it's still true.
-function compareVersions(a: string, b: string): number {
-    const pa = a.split(".").map(Number);
-    const pb = b.split(".").map(Number);
-    for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-        const diff = (pa[i] ?? 0) - (pb[i] ?? 0);
-        if (diff !== 0) return diff;
-    }
-    return 0;
-}
-
+// Comparison is semver-aware (PRD 19 R0) — "3.0.0-beta.1" must not parse as
+// NaN — and lives in app-version.ts, reached through the preload.
 async function checkVersionMismatch(serverVersion: string): Promise<void> {
     const clientVersion = await api.getAppVersion();
     if (clientVersion === serverVersion) return;
 
-    const serverIsNewer = compareVersions(serverVersion, clientVersion) > 0;
+    const order = api.version.compare(serverVersion, clientVersion);
+    if (order === 0) return; // e.g. "v3.0.0" vs "3.0.0"
+    if (order === null) {
+        // Unparseable on one side: state both versions without guessing which is newer.
+        versionMismatchMessage.textContent = `This server runs v${serverVersion}; your client is v${clientVersion}.`;
+        btnVersionMismatchReleases.style.display = "none";
+        versionMismatchModal.classList.add("visible");
+        return;
+    }
+    const serverIsNewer = order > 0;
     versionMismatchMessage.textContent = serverIsNewer
         ? `This server is running v${serverVersion}, but your client is v${clientVersion}. Some features might not work correctly until you update.`
         : `Your client is v${clientVersion}, but this server is running v${serverVersion}. Some features might not work correctly until the server is updated.`;

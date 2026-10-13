@@ -736,3 +736,102 @@ Feature/Fix: <name>
   Verification:
     ...
   Next Step: ...
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Beta release pipeline — prereleases, update channel, version comparison (PRD 19 R0)
+
+  Problem: Phase 19 ships as 3.0.0-beta.N prereleases from the ui-overhaul-beta
+  branch, but the bump procedure only accepted X.Y.Z and had no publishing
+  steps, the renderer's compareVersions() split on "." (so "3.0.0-beta.1"
+  produced NaN parts and the version-mismatch modal could name the wrong side
+  as outdated), and nothing guaranteed that stable 2.7.x users would never be
+  offered a beta.
+
+  Step 0 findings (read from the installed packages, not memory):
+    - electron-updater 6.8.9: a version with a prerelease part sets
+      allowPrerelease = true (AppUpdater.js:218); autoInstallOnAppQuit
+      defaults to true (:114); the `channel` setter also sets
+      allowDowngrade = true (:44). GitHubProvider: with allowPrerelease it
+      scans releases.atom (stable or alpha/beta tags), reads `<channel>.yml`
+      (beta.yml for a beta tag) and falls back to latest.yml on a 404;
+      without it, it asks /releases/latest, which never resolves to a
+      pre-release.
+    - electron-builder 25 (app-builder-lib PublishManager.js:385–404,
+      updateInfoBuilder.js:37) does NOT apply the version-derived channel to
+      the GitHub provider: a beta build would write latest*.yml. This
+      contradicted the PRD's assumption; the user chose (13/10/2026) to build
+      prereleases on an explicit `beta` channel.
+
+  Solution:
+    - New pure module apps/client/src/app-version.ts: parseVersion /
+      compareVersions (semver §11 precedence, null when unparseable) /
+      isPrerelease / prereleaseChannel, covered by `npm run test:version`.
+    - main.ts states autoUpdater.allowPrerelease = isPrerelease(version)
+      (equal to electron-updater's own default; `channel` is never set).
+    - The renderer's local compareVersions() is gone: checkVersionMismatch()
+      uses api.version.compare() from the preload; an unparseable version
+      gets a neutral message with no Releases button.
+    - apps/client/scripts/update-channel.mjs adds `-c.publish.channel=beta`
+      for any prerelease version. Every packaging path uses it: build:* now
+      runs scripts/electron-build.mjs, test-build.mjs and the root
+      release-all.mjs append it. Verified with a real local Windows NSIS
+      build (version 2.7.0 + the override, scratch output dir): it wrote
+      beta.yml and no latest.yml, and baked `channel: beta` into the packaged
+      app-update.yml — read by GitHubProvider.channel only, so allowDowngrade
+      stays off. Consequences: beta tags serve beta.yml; the final stable
+      3.0.0 tag later serves beta apps through the latest.yml fallback; a
+      stable app that ever lands on a beta release whose pre-release box was
+      forgotten finds no latest.yml and errors instead of installing it.
+    - .claude/commands/bump-version.md rewritten for X.Y.Z-beta.N: branch
+      guard (only 3.0.0-beta.N, N = previous + 1, on ui-overhaul-beta), the
+      shields.io `--` escaping for the README badge, the beta notes format
+      (warning box, changes since the previous beta, link to earlier betas),
+      and an owner-run publishing checklist (upload only beta*.yml, mark
+      pre-release, verify /releases/latest still points at stable).
+    - eslint.config.mjs ignores app-planning/design_handoff_reson8_ui_overhaul/**
+      (the design study's bundled JS produced 90 lint errors; it is reference
+      material, never shipped).
+
+  Key Files Modified:
+    apps/client/src/app-version.ts (NEW)
+    apps/client/scripts/app-version-smoke.mjs (NEW)
+    apps/client/scripts/update-channel.mjs (NEW)
+    apps/client/scripts/electron-build.mjs (NEW)
+    apps/client/scripts/test-build.mjs
+    apps/client/package.json (build:* scripts, test:version)
+    apps/client/src/main.ts
+    apps/client/src/preload.ts
+    apps/client/src/renderer/renderer.ts
+    scripts/release-all.mjs
+    eslint.config.mjs
+    .claude/commands/bump-version.md
+    AGENTS.md, apps/client/AGENTS.md
+
+  Verification:
+    - npm run test:version: all ordering/equality/null/prerelease checks pass
+      (2.7.0 < 3.0.0-beta.1 < … < 3.0.0-beta.10 < 3.0.0, numeric vs
+      alphanumeric identifiers, v-prefix, malformed inputs).
+    - npx tsc --noEmit (apps/client): clean. npm run lint: 0 errors
+      (72 pre-existing warnings).
+    - update-channel.mjs: 2.7.0 → [], 3.0.0-beta.1 → [-c.publish.channel=beta],
+      malformed → error; release-all --dry-run passes.
+    - Real Windows build with the override (see above): beta.yml only.
+    - Real built client driven over CDP (no server needed; Windows, own
+      --user-data-dir): checkVersionMismatch("3.0.0-beta.1") → "server is
+      newer" + Releases button (the old code got this wrong); "2.6.0" →
+      "server needs updating"; "v2.7.0" → no modal; "nonsense" → neutral
+      text. Screenshot inspected.
+    - Not run: the GitHub publishing checklist (owner, at beta.1).
+
+  Environment notes (this Windows machine): node_modules was installed with
+  `npm ci --ignore-scripts`; shared-types needed `tsc --build --force`
+  because the tracked tsconfig.tsbuildinfo claimed an up-to-date build while
+  dist had no .d.ts; Electron's install.js only extracted `locales`, so the
+  cached zip was extracted with 7za; electron-builder's winCodeSign cache
+  needs symlink rights (pre-extracted without its darwin/ folder); Electron
+  must be launched with ELECTRON_RUN_AS_NODE unset (VS Code sets it). No
+  Docker/WSL/Postgres/Redis here, so server-backed checks (P1 onwards) need
+  a database setup first.
+
+  Next Step: PRD 19 A1 — member-visible server summary.

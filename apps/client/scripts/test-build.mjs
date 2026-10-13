@@ -12,6 +12,7 @@
  */
 
 import { spawnSync } from "node:child_process";
+import { updateChannelArgs } from "./update-channel.mjs";
 
 const PLATFORM_FLAGS = { win: "--win", linux: "--linux", mac: "--mac" };
 
@@ -30,7 +31,7 @@ if (!flag) {
 
 const res = spawnSync(
     "npx",
-    ["electron-builder", flag, `-c.artifactName=${ARTIFACT_NAME[platform]}`],
+    ["electron-builder", flag, `-c.artifactName=${ARTIFACT_NAME[platform]}`, ...updateChannelArgs()],
     { stdio: "inherit" },
 );
 process.exit(res.status ?? 1);

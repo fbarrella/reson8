@@ -18,6 +18,7 @@ import {
     withAvatarSize,
     type AvatarSelection,
 } from "./avatar";
+import { compareVersions } from "./app-version";
 import type {
     ClientToServerEvents,
     ServerToClientEvents,
@@ -1458,6 +1459,13 @@ const api = {
     // Hashing needs Node's crypto, which the renderer (a plain <script>)
     // doesn't have. The email itself never leaves this process: only
     // { provider, hash } goes to the server.
+
+    /** Semver-aware version comparison (PRD 19 R0): <0, 0, >0, or null when either side is unparseable. */
+    version: {
+        compare(a: string, b: string): number | null {
+            return compareVersions(a, b);
+        },
+    },
 
     avatar: {
         isPlausibleEmail(email: string): boolean {

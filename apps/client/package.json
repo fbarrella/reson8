@@ -13,10 +13,10 @@
     "scripts": {
         "dev": "tsc --build && node scripts/copy-html.mjs && electron .",
         "prebuild": "tsc --build && node scripts/copy-html.mjs",
-        "build": "electron-builder",
-        "build:win": "electron-builder --win",
-        "build:linux": "electron-builder --linux",
-        "build:mac": "electron-builder --mac",
+        "build": "node scripts/electron-build.mjs",
+        "build:win": "node scripts/electron-build.mjs --win",
+        "build:linux": "node scripts/electron-build.mjs --linux",
+        "build:mac": "node scripts/electron-build.mjs --mac",
         "test-build:win": "node scripts/test-build.mjs win",
         "test-build:linux": "node scripts/test-build.mjs linux",
         "test-build:mac": "node scripts/test-build.mjs mac",
@@ -29,6 +29,7 @@
         "test:identity": "tsc --build && node scripts/identity-smoke.mjs",
         "test:tls": "tsc --build && node scripts/tls-trust-smoke.mjs",
         "test:identity-backup": "tsc --build && node scripts/identity-backup-smoke.mjs",
+        "test:version": "tsc --build && node scripts/app-version-smoke.mjs",
         "typecheck": "tsc --noEmit"
     },
     "build": {

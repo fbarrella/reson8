@@ -50,6 +50,7 @@
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { updateChannelArgs, clientVersion } from "../apps/client/scripts/update-channel.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, "..");
@@ -180,8 +181,13 @@ if (process.platform === "linux") {
   skip("electron-builder (all targets)", `unrecognized host platform "${process.platform}"`);
 }
 
+// A prerelease (e.g. 3.0.0-beta.1) is built on its own update channel, so it
+// writes beta*.yml instead of latest*.yml (PRD 19 R0, see update-channel.mjs).
+const channelArgs = updateChannelArgs();
+if (channelArgs.length > 0) log(`prerelease ${clientVersion()}: building with ${channelArgs.join(" ")}`);
+
 for (const { flag, label } of electronBuilderTargets) {
-  runStep(label, "npx", ["electron-builder", flag], { cwd: CLIENT_DIR });
+  runStep(label, "npx", ["electron-builder", flag, ...channelArgs], { cwd: CLIENT_DIR });
 }
 
 // ── Summary ────────────────────────────────────────────────────────────

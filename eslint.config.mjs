@@ -28,6 +28,9 @@ export default defineConfig([
         "apps/client/.release-vendor/**",
         // SQL migrations are not JS, listed so a future glob widening can't pick them up.
         "apps/server/prisma/migrations/**",
+        // Phase 19 design handoff: HTML-study runtime and design-system bundles,
+        // reference material only (never shipped, never ported).
+        "app-planning/design_handoff_reson8_ui_overhaul/**",
     ]),
 
     js.configs.recommended,

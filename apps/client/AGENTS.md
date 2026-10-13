@@ -16,7 +16,8 @@ npm run test:link-preview # link-preview-guard.ts / link-preview-fetch.ts — bl
 npm run test:identity     # identity-proof.ts — signs with the client, verifies with the SERVER's built verifier (build apps/server first)
 npm run test:identity-backup  # identity-backup.ts + identity-store.ts — backup format/tamper cases, and the store's migration/locked/replace logic with a fake OS cipher
 npm run test:tls          # tls-trust.ts / tls-store.ts / tls-probe.ts — address parsing, the scheme decision table, the pin store, and the probe against real local servers (HTTPS cases need openssl)
-npm run build:linux       # electron-builder --linux (also :win, :mac)
+npm run test:version      # app-version.ts — semver ordering incl. -beta.N, prerelease channel (PRD 19 R0)
+npm run build:linux       # electron-builder --linux via scripts/electron-build.mjs (also :win, :mac) — adds -c.publish.channel=beta for a prerelease version (scripts/update-channel.mjs)
 ```
 
 `npm run dev` is the full loop — it rebuilds TS, copies `renderer/index.html` into `dist/`, and launches Electron. There's no watch mode; re-run after changes.

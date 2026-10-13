@@ -11,6 +11,7 @@ import { createHash, createPrivateKey, randomBytes } from "node:crypto";
 import { readFileSync, statSync, writeFileSync } from "node:fs";
 import { getInstanceId, hasExistingInstanceId, replaceInstanceId } from "./instance-id.js";
 import { autoUpdater, NsisUpdater } from "electron-updater";
+import { isPrerelease } from "./app-version.js";
 import { startCapture, resolvePidForWindowSourceId, listAudioProducingApps, platformSupportsCapture } from "@reson8/native-audio";
 import type { CaptureHandle } from "@reson8/native-audio";
 import MarkdownIt from "markdown-it";
@@ -869,6 +870,12 @@ function unregisterPttShortcut(): void {
 // Metadata check and download are separate steps: nothing downloads until
 // the user (or the modal's "Update Now") explicitly asks for it.
 autoUpdater.autoDownload = false;
+
+// PRD 19 R0: a -beta.N build follows the beta line; a stable build never sees
+// prereleases. electron-updater already derives this from the app version —
+// it is stated here so a future edit can't silently change it. NEVER set
+// autoUpdater.channel: its setter also turns on allowDowngrade.
+autoUpdater.allowPrerelease = isPrerelease(app.getVersion());
 
 // Installers aren't Authenticode-signed (no code-signing certificate). On
 // Windows, NsisUpdater otherwise runs a PowerShell Authenticode check of

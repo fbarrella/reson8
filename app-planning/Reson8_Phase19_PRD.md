@@ -188,6 +188,9 @@ Each item has: **Phase**, **Depends on**, **Study frames**, **Current Behavior (
 - root `AGENTS.md` (Electron gotchas + the bump note)
 - `apps/client/AGENTS.md` (the new test script)
 
+> [!NOTE]
+> **Step 0 outcome (13/10/2026, R0 done):** electron-builder 25 does **not** apply the version-derived channel to the GitHub provider, so a plain beta build writes `latest*.yml`. The user chose to build prereleases on an explicit `beta` channel: `apps/client/scripts/update-channel.mjs` adds `-c.publish.channel=beta` on every packaging path. A real Windows build confirmed it writes `beta.yml` only, and bakes `channel: beta` into `app-update.yml` without enabling downgrades. Details are in progress.txt (R0 entry) and `.claude/commands/bump-version.md`.
+
 ### Current Behavior (verified — see V30)
 
 - **Bump procedure:** it accepts only `X.Y.Z` and has no publishing steps. Publishing is done by hand: `npm run release:all` builds, and the user uploads to GitHub.
