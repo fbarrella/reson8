@@ -1251,11 +1251,55 @@ const sessionTimers = new Map<string, string>();
 // (no server round-trip needed, since MESSAGE_RECEIVED already broadcasts
 // server-wide regardless of which tabs are open); opening a channel's tab
 // clears it and persists the read cursor via MARK_CHANNEL_READ.
-const unreadChannelIds = new Set<string>();
-/** Partner ids of DM conversations with messages you haven't actually seen (PRD 18.13) —
- *  the DM counterpart of `unreadChannelIds`. A DM counts as read only when its tab is
- *  active AND the window is focused. */
-const unreadDmPartners = new Set<string>();
+//
+// PRD 19 B1: counts, not just flags. `-1` = unread with the number unknown
+// (an older server only sends `hasUnread`) and is shown as a dot. Counts are
+// not decremented when a message is deleted (accepted; the server's own count
+// is also taken at join time only).
+const unreadChannelCounts = new Map<string, number>();
+/** Partner id -> unread DM count, for conversations with messages you haven't actually
+ *  seen (PRD 18.13). A DM counts as read only when its tab is active AND the window is
+ *  focused. `-1` as above. */
+const unreadDmCounts = new Map<string, number>();
+
+/** Unread messages in a channel (0 = read, -1 = unread but unknown). */
+function channelUnread(channelId: string): number {
+    return unreadChannelCounts.get(channelId) ?? 0;
+}
+function hasChannelUnread(channelId: string): boolean {
+    return unreadChannelCounts.has(channelId);
+}
+function dmUnread(partnerId: string): number {
+    return unreadDmCounts.get(partnerId) ?? 0;
+}
+function hasDmUnread(partnerId: string): boolean {
+    return unreadDmCounts.has(partnerId);
+}
+/** Adds one to a count map, leaving an unknown (-1) count as it is. */
+function bumpCount(map: Map<string, number>, id: string): void {
+    const n = map.get(id);
+    map.set(id, n === undefined ? 1 : n < 0 ? n : n + 1);
+}
+/** "•" for unknown, "99+" from 100, else the number. */
+function formatUnreadCount(n: number): string {
+    return n < 0 ? "\u2022" : n >= 100 ? "99+" : String(n);
+}
+/** Creates or updates the count pill inside `host` (after the name), or removes it for 0. */
+function setUnreadPill(host: Element, n: number, pillClass: string, after: string): void {
+    let pill = host.querySelector(`.${pillClass}`) as HTMLElement | null;
+    if (n === 0) {
+        pill?.remove();
+        return;
+    }
+    if (!pill) {
+        pill = document.createElement("span");
+        pill.className = pillClass;
+        const anchor = host.querySelector(after);
+        if (anchor) anchor.after(pill);
+        else host.appendChild(pill);
+    }
+    pill.textContent = formatUnreadCount(n);
+}
 
 // Approved custom server emoji, cached for the picker's "+" tab and for
 // resolving :name: tokens in message content / reaction pills. Refreshed on
@@ -2238,7 +2282,7 @@ function fillTabElement(tabEl: HTMLElement, icon: string, name: string): void {
         `<span class="tab-icon" aria-hidden="true">${icon}</span>` +
         `<span class="tab-kept-icon">${TAB_KEPT_ICON_SVG}</span>` +
         `<span class="tab-label"></span>` +
-        `<span class="tab-unread-dot" aria-hidden="true"></span>` +
+        `<span class="tab-unread-count" aria-hidden="true"></span>` +
         `<span class="tab-close" role="button" aria-label="Close tab">✕</span>`;
     (tabEl.querySelector(".tab-label") as HTMLElement).textContent = name;
 }
@@ -2246,7 +2290,7 @@ function fillTabElement(tabEl: HTMLElement, icon: string, name: string): void {
 /**
  * Unread indicator on an open, unfocused channel tab (PRD 17.6) — kept or
  * preview alike, never for a muted channel. Derived from the same state the
- * tree uses (`unreadChannelIds` + `isChannelMuted`), so the two can't
+ * tree uses (`unreadChannelCounts` + `isChannelMuted`), so the two can't
  * disagree. DM tabs are out of scope (DMs are marked read on arrival).
  */
 function refreshTabUnread(channelId: string): void {
@@ -2255,17 +2299,24 @@ function refreshTabUnread(channelId: string): void {
     if (tab.kind === "dm") {
         // PRD 18.13. No mute for DMs. A tab you're looking at in a focused window is read.
         const partnerId = channelId.slice(3);
-        const showDm = unreadDmPartners.has(partnerId) && !(activeTabId === channelId && document.hasFocus());
-        tab.tabEl.classList.toggle("has-unread", showDm);
-        if (showDm) tab.tabEl.setAttribute("aria-label", `${tab.channelName} (unread)`);
-        else tab.tabEl.removeAttribute("aria-label");
+        const showDm = hasDmUnread(partnerId) && !(activeTabId === channelId && document.hasFocus());
+        paintTabUnread(tab, showDm ? dmUnread(partnerId) : 0);
         return;
     }
     if (tab.kind !== "channel") return;
-    const show = unreadChannelIds.has(channelId) && !isChannelMuted(channelId) && activeTabId !== channelId;
-    tab.tabEl.classList.toggle("has-unread", show);
-    if (show) tab.tabEl.setAttribute("aria-label", `${tab.channelName} (unread)`);
-    else tab.tabEl.removeAttribute("aria-label");
+    const show = hasChannelUnread(channelId) && !isChannelMuted(channelId) && activeTabId !== channelId;
+    paintTabUnread(tab, show ? channelUnread(channelId) : 0);
+}
+
+/** Shows `n` unread (0 = none, -1 = unknown) on a tab: class, number and aria-label. */
+function paintTabUnread(tab: ChatTab, n: number): void {
+    const shown = n !== 0;
+    tab.tabEl.classList.toggle("has-unread", shown);
+    const pill = tab.tabEl.querySelector(".tab-unread-count");
+    if (pill) pill.textContent = shown ? formatUnreadCount(n) : "";
+    if (!shown) tab.tabEl.removeAttribute("aria-label");
+    else if (n < 0) tab.tabEl.setAttribute("aria-label", `${tab.channelName} (unread)`);
+    else tab.tabEl.setAttribute("aria-label", `${tab.channelName} (${n} unread)`);
 }
 
 /**
@@ -2283,8 +2334,8 @@ function markDmTabRead(tab: ChatTab, opts: { hadUnreadOnPage?: boolean } = {}): 
     // `hadUnreadOnPage` once the page IS rendered.
     if (!tab.initialLoadDone && !opts.hadUnreadOnPage) return;
     const partnerId = tab.channelId.slice(3);
-    if (!unreadDmPartners.has(partnerId) && !opts.hadUnreadOnPage) return;
-    unreadDmPartners.delete(partnerId);
+    if (!hasDmUnread(partnerId) && !opts.hadUnreadOnPage) return;
+    unreadDmCounts.delete(partnerId);
     refreshTabUnread(tab.channelId);
     api.markDmsRead(partnerId);
 }
@@ -2674,6 +2725,8 @@ interface TreeNode {
     parentId: string | null;
     isNsfw?: boolean;
     hasUnread?: boolean;
+    /** PRD 19 A5/B1: capped unread count from the join-time tree (absent from an older server). */
+    unreadCount?: number;
     /** Custom tree icon (PRD 14.7, text channels only) — mutually
      *  exclusive with `iconUrl`; falls back to the default 💬 icon when
      *  both are null/undefined. */
@@ -2828,7 +2881,7 @@ function renderCategory(node: TreeNode, siblings: TreeNode[]): HTMLDivElement {
 // A purely local, per-user preference — no server round trip, no permission.
 // Stored as { [serverId]: channelId[] } so connecting to another Reson8
 // server never mixes lists. Unread state keeps being tracked while muted
-// (unreadChannelIds / the server's read cursor are untouched); muting only
+// (unreadChannelCounts / the server's read cursor are untouched); muting only
 // suppresses how it's painted, so unmuting reveals what arrived meanwhile.
 const MUTED_CHANNELS_KEY = "reson8-muted-channels";
 let mutedChannelIds = new Set<string>();
@@ -2907,16 +2960,10 @@ function applyChannelMuteState(channelId: string): void {
     const muted = isChannelMuted(channelId);
     el.classList.toggle("muted", muted);
 
-    const showUnread = unreadChannelIds.has(channelId) && !muted;
+    const showUnread = hasChannelUnread(channelId) && !muted;
     el.classList.toggle("unread", showUnread);
-    const dot = el.querySelector(".unread-dot");
-    if (showUnread && !dot) {
-        const newDot = document.createElement("span");
-        newDot.className = "unread-dot";
-        el.querySelector(".ch-name")?.after(newDot);
-    } else if (!showUnread) {
-        dot?.remove();
-    }
+    // The count keeps counting while muted; unmuting shows it again (PRD 19 B1/B2).
+    setUnreadPill(el, showUnread ? channelUnread(channelId) : 0, "unread-count", ".ch-name");
 }
 
 /** Muted eye shown at the right of the text channel whose tab is being viewed (PRD 16.3). */
@@ -2993,17 +3040,23 @@ function renderChannel(node: TreeNode, siblings: TreeNode[]): HTMLDivElement {
     // Unread indicator (text channels only) — seed from the server's
     // per-user flag (only trustworthy on the initial join-time tree, see
     // IChannelTreeNode.hasUnread), then let it persist across re-renders
-    // via unreadChannelIds until the tab is opened.
+    // via unreadChannelCounts until the tab is opened.
     if (!isVoice) {
         channel.dataset.channelId = node.id;
-        if (node.hasUnread && node.id !== activeTabId) unreadChannelIds.add(node.id);
+        // PRD 19 B1: seed only when there is no entry yet (a re-render must not
+        // reset a count that was already incremented live): the server's number,
+        // or -1 (unknown) from an older server that only sends the flag.
+        if (!hasChannelUnread(node.id) && node.id !== activeTabId) {
+            if (node.unreadCount !== undefined && node.unreadCount > 0) unreadChannelCounts.set(node.id, node.unreadCount);
+            else if (node.hasUnread) unreadChannelCounts.set(node.id, -1);
+        }
         // A muted channel (PRD 16.4) is faded and never paints unread visuals,
-        // though the unread set above keeps tracking it.
+        // though the count above keeps tracking it.
         if (isChannelMuted(node.id)) channel.classList.add("muted");
-        else if (unreadChannelIds.has(node.id)) channel.classList.add("unread");
+        else if (hasChannelUnread(node.id)) channel.classList.add("unread");
     }
-    const unreadDot = !isVoice && unreadChannelIds.has(node.id) && !isChannelMuted(node.id)
-        ? `<span class="unread-dot"></span>`
+    const unreadDot = !isVoice && hasChannelUnread(node.id) && !isChannelMuted(node.id)
+        ? `<span class="unread-count">${formatUnreadCount(channelUnread(node.id))}</span>`
         : "";
 
     channel.innerHTML = `
@@ -3311,7 +3364,7 @@ function autoOpenUnreadDmTabs(): void {
             for (const p of res.partners) {
                 // Seeded first, so the tabs that end up in the background keep
                 // their dot and their "Unread Messages" line (PRD 18.13).
-                unreadDmPartners.add(p.partnerId);
+                if (!hasDmUnread(p.partnerId)) unreadDmCounts.set(p.partnerId, p.unreadCount > 0 ? p.unreadCount : -1);
                 openDmTab(p.partnerId, p.partnerNickname, p.unreadCount);
             }
         }
@@ -3334,7 +3387,7 @@ function applyAccessState(hasAccess: boolean, opts: { restore?: boolean } = {}):
         for (const [tabId] of chatTabs) closeTab(tabId, { reason: "access" });
         previewTabId = null;
         keptTabsRestored = false;
-        unreadDmPartners.clear();
+        unreadDmCounts.clear();
         // The server already removed them from voice; mirror it locally.
         if (isInVoice) {
             api.leaveVoiceChannel();
@@ -4243,7 +4296,7 @@ api.on("disconnected", (data?: { reason?: string }) => {
     setPendingBadges(0);
     invites = [];
     invitesSection.style.display = "none";
-    unreadDmPartners.clear(); // PRD 18.13
+    unreadDmCounts.clear(); // PRD 18.13
     statusDot.classList.remove("connected");
     statusText.textContent = "Disconnected";
     statusText.classList.remove("connected");
@@ -5720,7 +5773,8 @@ async function fetchAndRenderLatestPage(tab: ChatTab, unreadCountHint?: number):
             // (PRD 18.13): a tab opened in the background on connect keeps its
             // dot, and its messages stay unread on the server.
             if (firstUnreadIndex !== -1) {
-                unreadDmPartners.add(partnerId);
+                // The page shows how many are unread when the server's number has not arrived.
+                if (!hasDmUnread(partnerId)) unreadDmCounts.set(partnerId, result.messages.length - firstUnreadIndex);
                 refreshTabUnread(tab.channelId);
                 markDmTabRead(tab, { hadUnreadOnPage: true });
             }
@@ -7298,26 +7352,22 @@ api.on("message", (msg: ChatMessage) => {
     // Unread indicator (PRD 4.13): MESSAGE_RECEIVED already broadcasts to
     // everyone in the server regardless of which tab is open, so this can
     // be tracked entirely client-side — no extra server round trip.
-    if (msg.channelId !== activeTabId) {
+    // Your own messages are never counted (PRD 19 B1).
+    if (msg.channelId !== activeTabId && msg.userId !== api.getInstanceId()) {
         markChannelUnread(msg.channelId);
     }
 });
 
 /** Flags a channel-tree row as unread without a full tree re-render (which would lose collapsed-category state). */
 function markChannelUnread(channelId: string): void {
-    if (unreadChannelIds.has(channelId)) return;
-    unreadChannelIds.add(channelId);
+    bumpCount(unreadChannelCounts, channelId); // PRD 19 B1: counts every message
     refreshTabUnread(channelId); // an open, unfocused tab shows it too (PRD 17.6)
     if (isChannelMuted(channelId)) return; // still tracked, just not painted (PRD 16.4)
 
     const el = channelTree.querySelector(`.tree-channel[data-channel-id="${CSS.escape(channelId)}"]`);
-    if (!el || el.classList.contains("unread")) return;
+    if (!el) return;
     el.classList.add("unread");
-    if (!el.querySelector(".unread-dot")) {
-        const dot = document.createElement("span");
-        dot.className = "unread-dot";
-        el.querySelector(".ch-name")?.after(dot);
-    }
+    setUnreadPill(el, channelUnread(channelId), "unread-count", ".ch-name");
 }
 
 function findTreeNode(nodes: TreeNode[], channelId: string): TreeNode | null {
@@ -7333,18 +7383,21 @@ function findTreeNode(nodes: TreeNode[], channelId: string): TreeNode | null {
 function markChannelRead(channelId: string): void {
     // Clear the cached tree node's join-time hasUnread flag too — otherwise a
     // later renderTree(currentTree) call (e.g. re-rendering on voice channel
-    // join/leave) re-seeds unreadChannelIds from that stale flag (see line
+    // join/leave) re-seeds unreadChannelCounts from that stale flag (see line
     // ~1283) and the notification erroneously reappears after being read.
     const node = findTreeNode(currentTree, channelId);
-    if (node) node.hasUnread = false;
+    if (node) {
+        node.hasUnread = false;
+        node.unreadCount = undefined; // PRD 19 B1: a re-render must not re-seed it either
+    }
 
-    if (!unreadChannelIds.has(channelId)) return;
-    unreadChannelIds.delete(channelId);
+    if (!hasChannelUnread(channelId)) return;
+    unreadChannelCounts.delete(channelId);
     refreshTabUnread(channelId); // PRD 17.6
 
     const el = channelTree.querySelector(`.tree-channel[data-channel-id="${CSS.escape(channelId)}"]`);
     el?.classList.remove("unread");
-    el?.querySelector(".unread-dot")?.remove();
+    el?.querySelector(".unread-count")?.remove();
 
     api.markChannelRead(channelId);
 }
@@ -7448,7 +7501,7 @@ api.on("dm-received", async (msg: DirectMessage) => {
         // A message from the partner is unread until you're really looking at
         // this tab (PRD 18.13); markDmTabRead() clears it at once if you are.
         if (msg.senderId !== myId) {
-            unreadDmPartners.add(partnerId);
+            bumpCount(unreadDmCounts, partnerId);
             refreshTabUnread(tabKey);
             markDmTabRead(tab);
         }

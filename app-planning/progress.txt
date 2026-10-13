@@ -1645,3 +1645,53 @@ channel-tree broadcasts keep their occupants (P12)
       start (before: occupants []).
 
   Next Step: P2 — B1 (unread counts in the current UI).
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Unread counts in the current UI (PRD 19 B1)
+
+  Problem: the client only knew WHETHER a channel/DM was unread (two Sets), so
+  the tree and tabs could only paint a dot.
+
+  Solution (renderer + index.html only):
+    - unreadChannelIds/unreadDmPartners (Sets) became unreadChannelCounts/
+      unreadDmCounts (Maps) with channelUnread/hasChannelUnread/dmUnread/
+      hasDmUnread, bumpCount() and formatUnreadCount() ("99+" from 100, "•"
+      for -1 = unread but unknown).
+    - Seeding: renderTree() seeds from node.unreadCount, or -1 from node.
+      hasUnread (an older server), only when there is no entry yet, so a
+      re-render never resets a live-incremented count. DMs seed from
+      GET_UNREAD_DM_PARTNERS' unreadCount, or from the page's unread messages
+      when the server number has not arrived.
+    - Live: every message in a non-active channel bumps the count; your own
+      messages are excluded (msg.userId !== api.getInstanceId()); a DM from the
+      partner adds 1 before markDmTabRead (still the only DM read path).
+    - Clearing: markChannelRead() deletes the entry and also clears the cached
+      node's unreadCount (a re-render cannot re-seed it); markDmTabRead()
+      deletes the DM entry.
+    - Display: one pill element. Tree: .unread-count after .ch-name (replaces
+      .unread-dot, also on the targeted update paths so collapsed categories
+      survive); tabs: .tab-unread-dot renamed .tab-unread-count and filled with
+      the same text; aria-label "{name} ({n} unread)" (unknown: "{name}
+      (unread)"). Muted channels keep counting but paint nothing.
+    - Deleted messages do not decrement (documented in the code comment).
+    - The online-users modal shows no unread today, so nothing was added there.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/renderer/index.html
+
+  Verification:
+    - tsc client clean; lint exit 0.
+    - Real built client over CDP against the real server (admin creates a
+      channel, a bot sends 3 messages): joined -> tree pill "3"; one more
+      message -> "4"; my own message -> unchanged; opening the channel ->
+      pill gone; disconnect + reconnect -> still gone. No old .unread-dot /
+      .tab-unread-dot elements remain. Screenshot inspected (red pills).
+    - NOT shown here: the DM tab pill while backgrounded: with the current
+      DM-tab behaviour the tab is opened AND focused (and so read at once);
+      B4 makes incoming DM tabs background tabs, and its verification covers
+      the DM count on a tab. The old-server "•" path is covered by the -1
+      branch (no v2.7.0 server build available here).
+
+  Next Step: PRD 19 B2 — muted channels fully silent.

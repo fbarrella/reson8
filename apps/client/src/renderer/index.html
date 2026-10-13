@@ -376,11 +376,19 @@
       color: var(--text-primary);
     }
 
-    .unread-dot {
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
+    /* Unread count pill (PRD 19 B1): the number, "99+" from 100, or a dot-sized
+       bullet when only the flag is known (an older server). */
+    .unread-count {
+      min-width: 16px;
+      height: 16px;
+      padding: 0 5px;
+      border-radius: 8px;
       background: var(--danger);
+      color: #fff;
+      font-size: 10px;
+      font-weight: 700;
+      line-height: 16px;
+      text-align: center;
       flex-shrink: 0;
     }
 
@@ -722,15 +730,21 @@
       font-style: italic;
     }
 
-    /* Unread on an open, unfocused channel tab (PRD 17.6) — the same red dot
-       as the tree's .unread-dot, and the label lifts from muted to the
-       normal text color. */
-    .tab .tab-unread-dot {
+    /* Unread on an open, unfocused channel tab (PRD 17.6) — the same count
+       pill as the tree's .unread-count (PRD 19 B1), and the label lifts from
+       muted to the normal text color. */
+    .tab .tab-unread-count {
       display: none;
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
+      min-width: 16px;
+      height: 16px;
+      padding: 0 5px;
+      border-radius: 8px;
       background: var(--danger);
+      color: #fff;
+      font-size: 10px;
+      font-weight: 700;
+      line-height: 16px;
+      text-align: center;
       flex-shrink: 0;
     }
 
@@ -739,7 +753,7 @@
       font-weight: 600;
     }
 
-    .tab.has-unread .tab-unread-dot {
+    .tab.has-unread .tab-unread-count {
       display: inline-block;
     }
 
