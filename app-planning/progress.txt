@@ -2903,3 +2903,58 @@ Feature/Fix: Multiple streams — Focus and Grid (PRD 19 C11)
       sharers, and picture/sound in cells (no frames flow here).
 
   Next Step: PRD 19 C12 — update corner card, in-call note, What's New.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Update corner card, About row table, What's new variants (PRD 19 C12)
+
+  Problem: an update interrupted with a blocking modal, the About row was one
+  line of text, and What's new had a single, older layout.
+
+  Solution:
+    - #update-modal is retired (a grep found no other user). A 360 px card sits
+      bottom-right above the status bar with an accent edge and glow, driven by
+      the B12 updateState: available (What's new / Later / Update), downloading
+      (progress with %, "You can keep chatting. We'll ask before restarting.",
+      Hide), ready (On next launch / Restart now), and the error text inside it.
+      × and Later and Hide only hide it; the phase, the gear dot and the About
+      row keep showing the state.
+    - In a call the card adds the amber "Restarting drops you from {room} for a
+      few seconds." (room name through textContent in a <strong>), kept in step
+      with the voice state through updateVoiceUI.
+    - About › Updates is the SPEC 8.1 row: idle / checking (spinner) / up to
+      date ("{v} is the latest version · checked just now") / available (New
+      tag, "Released {date} · {size} · you have {v}", Release notes + Update
+      now) / downloading (4 px bar, "{pct}% of {size} · you can keep using
+      Reson8") / ready (Restart to update) / error. The button id
+      btn-check-updates now acts per phase.
+    - What's new is a 600 px dialog (max 760 px) with a radial accent wash, the
+      logo, a kicker, the title, the date (GitHub's published_at, an additive
+      field on fetch-release-notes) and "View on GitHub"; the body keeps its
+      headings and turns "#123" into monospace accent chips; three variants —
+      launch ("Updated · you're on the new version", Got it, marks the version
+      seen), About ("Release notes", Close) and pending ("Available update",
+      Close). A backdrop click never marks it seen. Settings › About gained a
+      "What's new in this version" button.
+
+  Key Files Modified:
+    apps/client/src/main.ts, preload.ts
+    apps/client/src/renderer/renderer.ts, index.html
+
+  Verification:
+    - tsc client clean; lint exit 0.
+    - Real client with the update events driven through the real handlers:
+      available -> the card with What's new / Later / Update and the About row
+      with the New tag; Later hid the card while the phase and gear dot stayed;
+      downloading showed 42 % in the card (Hide only) and the row with its bar;
+      ready in the Lobby showed "Restarting drops you from Lobby…" (gone after
+      leaving); the error text inside the card; the three What's new variants
+      with the right kicker/button, chips for #142 and #7, width 600, and the
+      seen marker changing only on Got it. Screenshots reviewed (the stream
+      toggle leaking into the header was fixed after them).
+    - Not driven: a real electron-updater download/restart (unpackaged dev
+      builds can't), and the card with the Windows taskbar.
+
+  Next Step: end of P4 — the owner's checklist for 3.0.0-beta.2 (confirm every
+  item, full suites, smoke against v2.7.0 and a beta server, then
+  /bump-version 3.0.0-beta.2), and the decision on live stream previews (D2).

@@ -2960,11 +2960,11 @@
       color: var(--color-neutral-500);
     }
 
-    .voice-stream-layout-toggle {
+    .voice-layout-toggle.voice-stream-layout-toggle {
       display: none;
     }
 
-    .voice-stream-layout-toggle.visible {
+    .voice-layout-toggle.voice-stream-layout-toggle.visible {
       display: flex;
     }
 
@@ -3450,6 +3450,281 @@
       flex: 1;
       max-width: none;
       text-align: left;
+    }
+
+    /* ── Update corner card (PRD 19 C12) ──────────────────────────────── */
+    #update-card {
+      display: none;
+      position: fixed;
+      right: 16px;
+      bottom: 44px;
+      z-index: 9000;
+      width: 360px;
+      max-width: calc(100vw - 32px);
+      padding: 16px;
+      border-radius: var(--radius-lg);
+      border-left: 3px solid var(--color-accent);
+      background: var(--color-surface);
+      color: var(--color-text);
+      box-shadow: var(--shadow-lg), 0 0 24px color-mix(in srgb, var(--color-accent) 25%, transparent);
+      -webkit-app-region: no-drag;
+    }
+
+    #update-card.visible {
+      display: block;
+    }
+
+    .update-card-close {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      width: 24px;
+      height: 24px;
+      border: none;
+      border-radius: 50%;
+      background: none;
+      color: var(--color-neutral-400);
+      cursor: pointer;
+    }
+
+    .update-card-close:hover {
+      background: var(--color-neutral-900);
+      color: var(--color-text);
+    }
+
+    .update-card-head {
+      display: flex;
+      gap: 12px;
+      padding-right: 20px;
+    }
+
+    .update-card-icon {
+      font-size: 24px;
+      color: var(--color-accent);
+      flex-shrink: 0;
+    }
+
+    .update-card-title {
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    .update-card-note {
+      margin-top: 2px;
+      font-size: 12.5px;
+      color: var(--color-neutral-400);
+    }
+
+    .update-card-progress {
+      display: none;
+      align-items: center;
+      gap: 10px;
+      margin-top: 12px;
+      font-size: 12px;
+      color: var(--color-neutral-300);
+    }
+
+    #update-card.is-downloading .update-card-progress {
+      display: flex;
+    }
+
+    .update-card-bar,
+    .update-row-bar {
+      flex: 1;
+      height: 4px;
+      border-radius: 2px;
+      background: var(--color-neutral-800, #2a2a35);
+      overflow: hidden;
+    }
+
+    #update-card-bar-fill,
+    #update-row-bar-fill {
+      height: 100%;
+      width: 0;
+      background: var(--color-accent);
+      transition: width 0.2s ease;
+    }
+
+    .update-card-error {
+      margin-top: 10px;
+      font-size: 12px;
+      color: var(--color-danger-text);
+    }
+
+    .update-card-call {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      margin-top: 12px;
+      padding: 8px 10px;
+      border: 1px solid #6b5316;
+      border-radius: var(--radius-md);
+      background: rgba(234, 179, 8, 0.08);
+      font-size: 12.5px;
+      line-height: 1.4;
+      color: #e8c15a;
+    }
+
+    .update-card-call .ph {
+      margin-top: 1px;
+      flex-shrink: 0;
+    }
+
+    .update-card-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 14px;
+    }
+
+    .update-card-spacer {
+      flex: 1;
+    }
+
+    /* About › Updates row (PRD 19 C12, SPEC 8.1). */
+    .update-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-top: 14px;
+      padding: 12px;
+      border: 1px solid var(--color-divider);
+      border-radius: var(--radius-md);
+      background: var(--color-bg);
+    }
+
+    .update-row-icon {
+      font-size: 20px;
+      color: var(--color-neutral-400);
+    }
+
+    .update-row-main {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .update-row-title {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 500;
+    }
+
+    .update-row-note {
+      margin-top: 2px;
+      font-size: 12px;
+      color: var(--color-neutral-400);
+    }
+
+    .update-row-bar {
+      margin-top: 8px;
+    }
+
+    .update-row-actions {
+      display: flex;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+
+    .update-row-whatsnew {
+      margin-top: 8px;
+    }
+
+    .update-row-icon .spinning {
+      animation: update-spin 1s linear infinite;
+    }
+
+    @keyframes update-spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
+    /* What's new (PRD 19 C12, SPEC 8.3): 600 px, at most 760 px tall. */
+    .whatsnew-dialog {
+      display: flex;
+      flex-direction: column;
+      width: 600px;
+      max-width: calc(100vw - 32px);
+      max-height: min(760px, calc(100vh - 48px));
+      padding: 0;
+      overflow: hidden;
+    }
+
+    .whatsnew-head {
+      display: flex;
+      gap: 14px;
+      align-items: center;
+      padding: 22px 24px;
+      border-bottom: 1px solid var(--color-divider);
+      background: radial-gradient(circle at 0% 0%, color-mix(in srgb, var(--color-accent) 28%, transparent), transparent 60%);
+    }
+
+    .whatsnew-logo {
+      width: 44px;
+      height: 44px;
+      border-radius: 10px;
+    }
+
+    .whatsnew-kicker {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--color-accent-200);
+    }
+
+    .whatsnew-head h3 {
+      margin: 2px 0;
+      font-size: 19px;
+      font-weight: 600;
+    }
+
+    .whatsnew-meta {
+      display: flex;
+      gap: 12px;
+      font-size: 12px;
+      color: var(--color-neutral-400);
+    }
+
+    .whatsnew-link {
+      padding: 0;
+      border: none;
+      background: none;
+      color: var(--color-accent-200);
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    .whatsnew-link:hover {
+      text-decoration: underline;
+    }
+
+    #whats-new-modal .whats-new-body {
+      padding: 16px 24px;
+    }
+
+    .issue-chip {
+      padding: 0 6px;
+      border-radius: 4px;
+      background: var(--color-accent-900);
+      color: var(--color-accent-200);
+      font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+      font-size: 12px;
+    }
+
+    .whatsnew-foot {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 14px 24px;
+      border-top: 1px solid var(--color-divider);
+    }
+
+    .whatsnew-foot-note {
+      flex: 1;
+      font-size: 12px;
+      color: var(--color-neutral-500);
     }
 
     /* ── DM sidebar (PRD 19 C7) ───────────────────────────────────────── */
@@ -4203,7 +4478,6 @@
     #emoji-upload-animated-modal,
     #channel-icon-modal,
     #admin-modal,
-    #update-modal,
     #whats-new-modal,
     #version-mismatch-modal,
     #pin-replace-confirm-modal,
@@ -4241,7 +4515,6 @@
     #emoji-upload-animated-modal.visible,
     #channel-icon-modal.visible,
     #admin-modal.visible,
-    #update-modal.visible,
     #whats-new-modal.visible,
     #version-mismatch-modal.visible,
     #pin-replace-confirm-modal.visible,
@@ -4346,28 +4619,6 @@
       padding-left: 10px;
       border-left: 2px solid var(--border);
       color: var(--text-muted);
-    }
-
-    #update-modal .update-progress-wrap {
-      margin-top: 12px;
-      background: var(--bg-input);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      height: 8px;
-      overflow: hidden;
-    }
-
-    #update-modal .update-progress-bar {
-      height: 100%;
-      width: 0%;
-      background: var(--accent);
-      transition: width 0.2s ease;
-    }
-
-    #update-modal .update-status-text {
-      font-size: 12px;
-      color: var(--text-secondary);
-      margin-top: 8px;
     }
 
     /* ── Screen Share Selection Modal (PRD 12.10) ─────────────────────── */
@@ -5823,8 +6074,6 @@
       border-radius: 50%;
       background: var(--accent);
     }
-
-    #about-update-status { font-size: 12px; color: var(--text-secondary); margin-top: 10px; min-height: 16px; text-align: center; }
 
     /* Restricted user: connected, but without the Member role (PRD 18.18). */
     #access-banner {
@@ -7621,22 +7870,27 @@
     </div>
   </div>
 
-  <!-- ── Auto-Updater Modal (PRD 10.1) ───────────────────────────────────── -->
-  <div id="update-modal">
-    <div class="modal-content">
-      <h3 id="update-modal-title">⬆ Update Available</h3>
-      <p id="update-modal-message">A newer version of Reson8 is available. Some features might fail if you don't update.</p>
-      <div id="update-modal-progress-wrap" class="update-progress-wrap" style="display:none;">
-        <div id="update-modal-progress-bar" class="update-progress-bar"></div>
+  <!-- ── Update corner card (PRD 19 C12) ─────────────────────────────────── -->
+  <div id="update-card" role="dialog" aria-live="polite" aria-labelledby="update-card-title">
+    <button type="button" class="update-card-close" id="btn-update-close" aria-label="Dismiss">✕</button>
+    <div class="update-card-head">
+      <span class="update-card-icon"><i class="ph ph-arrow-circle-up" aria-hidden="true"></i></span>
+      <div class="update-card-text">
+        <div class="update-card-title" id="update-card-title"></div>
+        <div class="update-card-note" id="update-card-note"></div>
       </div>
-      <div id="update-modal-status" class="update-status-text" style="display:none;"></div>
-      <div class="modal-actions">
-        <button class="btn btn-cancel" id="btn-update-notes" style="display:none;">Release notes</button>
-        <button class="btn btn-cancel" id="btn-update-later">Not Now</button>
-        <button class="btn btn-create" id="btn-update-now">Update Now</button>
-        <button class="btn btn-cancel" id="btn-update-next" style="display:none;">On next launch</button>
-        <button class="btn btn-create" id="btn-update-restart" style="display:none;">Restart now</button>
-      </div>
+    </div>
+    <div class="update-card-progress" id="update-card-progress"><div class="update-card-bar"><div id="update-card-bar-fill"></div></div><span id="update-card-pct">0%</span></div>
+    <div class="update-card-error" id="update-card-error" style="display:none;"></div>
+    <div class="update-card-call" id="update-card-call" style="display:none;"><i class="ph ph-warning" aria-hidden="true"></i><div>Restarting drops you from <strong id="update-card-room"></strong> for a few seconds.</div></div>
+    <div class="update-card-actions">
+      <button type="button" class="btn btn-ghost" id="btn-update-notes" style="display:none;">What's new</button>
+      <span class="update-card-spacer"></span>
+      <button type="button" class="btn btn-secondary" id="btn-update-later">Later</button>
+      <button type="button" class="btn btn-secondary" id="btn-update-hide" style="display:none;">Hide</button>
+      <button type="button" class="btn btn-secondary" id="btn-update-next" style="display:none;">On next launch</button>
+      <button type="button" class="btn btn-primary" id="btn-update-now">Update</button>
+      <button type="button" class="btn btn-primary" id="btn-update-restart" style="display:none;">Restart now</button>
     </div>
   </div>
 
@@ -7654,12 +7908,19 @@
 
   <!-- ── "What's New" Post-Update Modal (PRD 11.4) ───────────────────────── -->
   <div id="whats-new-modal">
-    <div class="modal-content wide">
-      <h3 id="whats-new-title">🎉 What's New</h3>
+    <div class="dialog whatsnew-dialog" role="dialog" aria-modal="true" aria-labelledby="whats-new-title">
+      <div class="whatsnew-head">
+        <img class="whatsnew-logo" src="logo.png" alt="">
+        <div class="whatsnew-head-text">
+          <div class="whatsnew-kicker" id="whats-new-kicker"></div>
+          <h3 id="whats-new-title">What's new</h3>
+          <div class="whatsnew-meta"><span id="whats-new-date"></span><button type="button" class="whatsnew-link" id="btn-whats-new-github">View on GitHub</button></div>
+        </div>
+      </div>
       <div id="whats-new-body" class="whats-new-body"></div>
-      <div class="modal-actions">
-        <button class="btn btn-cancel" id="btn-whats-new-github">View on GitHub</button>
-        <button class="btn btn-create" id="btn-whats-new-dismiss">Got it</button>
+      <div class="whatsnew-foot">
+        <span class="whatsnew-foot-note" id="whats-new-foot-note">From the GitHub release. Shown once after each update; find it again in Settings › About.</span>
+        <button type="button" class="btn btn-primary" id="btn-whats-new-dismiss">Got it</button>
       </div>
     </div>
   </div>
@@ -8386,8 +8647,19 @@
         <p class="about-tagline">
           Self-hosted voice and text communication.
         </p>
-        <button class="btn btn-create" id="btn-check-updates" style="width:100%;">Check for Updates</button>
-        <div id="about-update-status"></div>
+        <div class="update-row" id="update-row">
+          <span class="update-row-icon"><i class="ph ph-arrows-clockwise" id="update-row-icon" aria-hidden="true"></i></span>
+          <div class="update-row-main">
+            <div class="update-row-title"><span id="update-row-title">Updates</span><span class="count-pill update-row-new" id="update-row-new" style="display:none;">New</span></div>
+            <div class="update-row-note" id="update-row-note"></div>
+            <div class="update-row-bar" id="update-row-bar" style="display:none;"><div id="update-row-bar-fill"></div></div>
+          </div>
+          <div class="update-row-actions">
+            <button type="button" class="btn btn-ghost" id="btn-update-row-notes" style="display:none;">Release notes</button>
+            <button type="button" class="btn btn-secondary" id="btn-check-updates">Check for updates</button>
+          </div>
+        </div>
+        <button type="button" class="btn btn-ghost update-row-whatsnew" id="btn-about-whats-new">What's new in this version</button>
 
         <!-- Identity key fingerprint (PRD 17.12) -->
         <div class="identity-row">

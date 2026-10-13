@@ -147,6 +147,8 @@ interface ReleaseNotes {
      *  loaded page with no module bundler to resolve a bare import into). */
     bodyHtml: string;
     htmlUrl: string;
+    /** ISO date the release was published (PRD 19 C12), when GitHub says. */
+    publishedAt?: string;
 }
 
 const markdownRenderer = new MarkdownIt({
@@ -204,6 +206,7 @@ async function fetchReleaseNotes(version: string): Promise<ReleaseNotes | null> 
                 typeof data.html_url === "string"
                     ? data.html_url
                     : `https://github.com/fbarrella/reson8/releases/tag/v${version}`,
+            publishedAt: typeof data.published_at === "string" ? data.published_at : undefined,
         };
     } catch {
         return null;

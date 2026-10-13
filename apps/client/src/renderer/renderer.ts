@@ -885,7 +885,7 @@ interface Reson8Api {
     downloadUpdate(): Promise<void>;
     quitAndInstall(): void;
     getAppVersion(): Promise<string>;
-    fetchReleaseNotes(version: string): Promise<{ name: string; bodyHtml: string; htmlUrl: string } | null>;
+    fetchReleaseNotes(version: string): Promise<{ name: string; bodyHtml: string; htmlUrl: string; publishedAt?: string } | null>;
     createChannel(
         serverId: string,
         name: string,
@@ -1620,24 +1620,39 @@ const btnSaveMaxMessageLength = document.getElementById("btn-save-max-message-le
 // About tab (PRD 10.1)
 const aboutVersion = document.getElementById("about-version") as HTMLDivElement;
 const btnCheckUpdates = document.getElementById("btn-check-updates") as HTMLButtonElement;
-const aboutUpdateStatus = document.getElementById("about-update-status") as HTMLDivElement;
+const updateRowTitle = document.getElementById("update-row-title") as HTMLElement;
+const updateRowNew = document.getElementById("update-row-new") as HTMLElement;
+const updateRowNote = document.getElementById("update-row-note") as HTMLElement;
+const updateRowBar = document.getElementById("update-row-bar") as HTMLElement;
+const updateRowBarFill = document.getElementById("update-row-bar-fill") as HTMLElement;
+const updateRowIcon = document.getElementById("update-row-icon") as HTMLElement;
+const btnUpdateRowNotes = document.getElementById("btn-update-row-notes") as HTMLButtonElement;
 
 // Update modal (PRD 10.1)
-const updateModal = document.getElementById("update-modal") as HTMLDivElement;
-const updateModalTitle = document.getElementById("update-modal-title") as HTMLHeadingElement;
-const updateModalMessage = document.getElementById("update-modal-message") as HTMLParagraphElement;
-const updateModalProgressWrap = document.getElementById("update-modal-progress-wrap") as HTMLDivElement;
-const updateModalProgressBar = document.getElementById("update-modal-progress-bar") as HTMLDivElement;
-const updateModalStatus = document.getElementById("update-modal-status") as HTMLDivElement;
+const updateCard = document.getElementById("update-card") as HTMLDivElement;
+const updateCardTitle = document.getElementById("update-card-title") as HTMLDivElement;
+const updateCardNote = document.getElementById("update-card-note") as HTMLDivElement;
+const updateCardBarFill = document.getElementById("update-card-bar-fill") as HTMLDivElement;
+const updateCardPct = document.getElementById("update-card-pct") as HTMLSpanElement;
+const updateCardError = document.getElementById("update-card-error") as HTMLDivElement;
+const updateCardCall = document.getElementById("update-card-call") as HTMLDivElement;
+const updateCardRoom = document.getElementById("update-card-room") as HTMLElement;
 const btnUpdateNow = document.getElementById("btn-update-now") as HTMLButtonElement;
 const btnUpdateLater = document.getElementById("btn-update-later") as HTMLButtonElement;
 const btnUpdateNotes = document.getElementById("btn-update-notes") as HTMLButtonElement;
 const btnUpdateNext = document.getElementById("btn-update-next") as HTMLButtonElement;
 const btnUpdateRestart = document.getElementById("btn-update-restart") as HTMLButtonElement;
+const btnUpdateHide = document.getElementById("btn-update-hide") as HTMLButtonElement;
+const btnUpdateClose = document.getElementById("btn-update-close") as HTMLButtonElement;
+/** Set by the update section below; called when the voice state changes (declared here so an early call is safe). */
+let updateCardVoiceHook: (() => void) | null = null;
 
 const whatsNewModal = document.getElementById("whats-new-modal") as HTMLDivElement;
 const whatsNewTitle = document.getElementById("whats-new-title") as HTMLHeadingElement;
 const whatsNewBody = document.getElementById("whats-new-body") as HTMLDivElement;
+const whatsNewKicker = document.getElementById("whats-new-kicker") as HTMLElement;
+const whatsNewDate = document.getElementById("whats-new-date") as HTMLElement;
+const whatsNewFootNote = document.getElementById("whats-new-foot-note") as HTMLElement;
 const btnWhatsNewGithub = document.getElementById("btn-whats-new-github") as HTMLButtonElement;
 const btnWhatsNewDismiss = document.getElementById("btn-whats-new-dismiss") as HTMLButtonElement;
 
@@ -6228,6 +6243,7 @@ document.addEventListener("input", (e) => {
 
 function updateVoiceUI(channelName?: string): void {
     refreshLocalSpeakingHalo();
+    updateCardVoiceHook?.(); // PRD 19 C12: the in-call restart note follows the room
     if (isInVoice) {
         renderVoiceRoom(); // PRD 19 C9 (a joined or switched room)
         voicePanel.classList.add("visible");
@@ -15559,93 +15575,123 @@ function formatBytes(n: number): string {
     return n >= 1024 * 1024 ? `${(n / (1024 * 1024)).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
 }
 
-/** The update modal's content for the current phase (opening it is the event handlers' decision). */
-function renderUpdateModal(state: UpdateState): void {
+/** The corner card's content for the current phase (showing it is the event handlers' decision). */
+function renderUpdateCard(state: UpdateState): void {
     const show = (el: HTMLElement, visible: boolean): void => {
         el.style.display = visible ? "" : "none";
     };
-    updateModalStatus.style.display = "none";
-    updateModalProgressWrap.style.display = "none";
     show(btnUpdateNow, false);
     show(btnUpdateLater, false);
     show(btnUpdateNotes, false);
     show(btnUpdateNext, false);
     show(btnUpdateRestart, false);
+    show(btnUpdateHide, false);
+    show(updateCardError, false);
+    updateCard.classList.toggle("is-downloading", state.phase === "downloading");
     btnUpdateNow.disabled = false;
-    btnUpdateNow.textContent = "Update Now";
+
+    // In a call, a restart drops you from the room (set with textContent).
+    const room = isInVoice && currentChannelId ? findChannelNodeById(currentTree, currentChannelId)?.name : null;
+    const warn = !!room && (state.phase === "available" || state.phase === "ready");
+    show(updateCardCall, warn);
+    if (warn) updateCardRoom.textContent = room ?? "";
 
     switch (state.phase) {
-        case "available": {
-            updateModalTitle.textContent = "⬆ Update Available";
-            const size = state.sizeBytes ? ` (${formatBytes(state.sizeBytes)})` : "";
-            updateModalMessage.textContent =
-                `A newer version of Reson8 (${state.next ?? "?"})${size} is available. Some features might fail if you don't update.`;
+        case "available":
+            updateCardTitle.textContent = `Reson8 ${state.next ?? ""} is available`;
+            updateCardNote.textContent = `You have ${state.current}.${state.sizeBytes ? ` ${formatBytes(state.sizeBytes)} to download.` : ""}`;
             show(btnUpdateNotes, !!state.next);
             show(btnUpdateLater, true);
             show(btnUpdateNow, true);
             break;
-        }
         case "downloading": {
-            updateModalTitle.textContent = "⬇ Downloading Update";
-            updateModalMessage.textContent =
-                state.total && state.transferred !== undefined
-                    ? `Downloading the update: ${formatBytes(state.transferred)} of ${formatBytes(state.total)}.`
-                    : "Downloading the update — this may take a moment.";
-            updateModalProgressWrap.style.display = "";
-            updateModalProgressBar.style.width = `${Math.round(state.percent ?? 0)}%`;
+            updateCardTitle.textContent = `Downloading Reson8 ${state.next ?? ""}…`;
+            updateCardNote.textContent = "You can keep chatting. We'll ask before restarting.";
+            const pct = Math.round(state.percent ?? 0);
+            updateCardBarFill.style.width = `${pct}%`;
+            updateCardPct.textContent = `${pct}%`;
+            show(btnUpdateHide, true);
             break;
         }
-        case "ready": {
+        case "ready":
             // Nothing restarts by itself (PRD 19 B12): the user picks.
-            updateModalTitle.textContent = "✅ Update Ready";
-            updateModalMessage.textContent =
-                "The update is downloaded. Restart now to install it, or it installs the next time Reson8 closes.";
+            updateCardTitle.textContent = "Ready to restart";
+            updateCardNote.textContent = "The update is downloaded. Restart now, or it installs the next time Reson8 closes.";
             show(btnUpdateNext, true);
             show(btnUpdateRestart, true);
             break;
-        }
-        case "error": {
-            updateModalTitle.textContent = "⚠ Update Failed";
-            updateModalMessage.textContent = "The update could not be completed.";
-            updateModalStatus.style.display = "";
-            updateModalStatus.textContent =
-                `Update failed: ${state.error}. Please download the latest version manually from GitHub.`;
+        case "error":
+            updateCardTitle.textContent = "Update failed";
+            updateCardNote.textContent = "The update could not be completed.";
+            show(updateCardError, true);
+            updateCardError.textContent = `Update failed: ${state.error}. Please download the latest version manually from GitHub.`;
             show(btnUpdateLater, true);
             show(btnUpdateNow, true);
             break;
-        }
         default:
             break;
     }
 }
 
-/** The About row: status text plus the check button's state. */
+/** "just now", "5 min ago", or a clock time — for the About row's "checked …". */
+function relativeChecked(at: number): string {
+    const sec = Math.max(0, Math.round((Date.now() - at) / 1000));
+    if (sec < 60) return "just now";
+    if (sec < 3600) return `${Math.round(sec / 60)} min ago`;
+    return new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+/** The About › Updates row, per SPEC 8.1: title, note, tag, bar and actions for each phase. */
 function renderUpdateAbout(state: UpdateState): void {
-    btnCheckUpdates.disabled = state.phase === "checking" || state.phase === "downloading";
-    btnCheckUpdates.textContent = state.phase === "checking" ? "Checking..." : "Check for Updates";
-    const checked = state.checkedAt
-        ? ` Checked ${new Date(state.checkedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.`
-        : "";
+    const checking = state.phase === "checking";
+    updateRowIcon.classList.toggle("spinning", checking);
+    updateRowNew.style.display = state.phase === "available" ? "" : "none";
+    updateRowBar.style.display = state.phase === "downloading" ? "" : "none";
+    btnUpdateRowNotes.style.display = state.phase === "available" && state.next ? "" : "none";
+    btnCheckUpdates.style.display = state.phase === "downloading" ? "none" : "";
+    btnCheckUpdates.disabled = checking;
+    btnCheckUpdates.className = "btn " + (state.phase === "available" || state.phase === "ready" ? "btn-primary" : "btn-secondary");
+    btnCheckUpdates.textContent =
+        state.phase === "available" ? "Update now" : state.phase === "ready" ? "Restart to update" : "Check for updates";
+    const date = state.releaseDate ? new Date(state.releaseDate).toLocaleDateString() : "";
+
     switch (state.phase) {
+        case "checking":
+            updateRowTitle.textContent = "Checking for updates…";
+            updateRowNote.textContent = "";
+            break;
         case "up-to-date":
-            aboutUpdateStatus.textContent = `You're up to date.${checked}`;
+            updateRowTitle.textContent = "You're up to date";
+            updateRowNote.textContent = `${state.current} is the latest version${state.checkedAt ? ` · checked ${relativeChecked(state.checkedAt)}` : ""}`;
             break;
         case "available":
-            aboutUpdateStatus.textContent = `Version ${state.next} is available.${checked}`;
+            updateRowTitle.textContent = `Reson8 ${state.next ?? ""} is available`;
+            updateRowNote.textContent = [
+                date ? `Released ${date}` : "",
+                state.sizeBytes ? formatBytes(state.sizeBytes) : "",
+                `you have ${state.current}`,
+            ]
+                .filter(Boolean)
+                .join(" · ");
             break;
-        case "downloading":
-            aboutUpdateStatus.textContent = `Downloading ${state.next ?? "the update"}… ${Math.round(state.percent ?? 0)}%`;
+        case "downloading": {
+            const pct = Math.round(state.percent ?? 0);
+            updateRowTitle.textContent = `Downloading ${state.next ?? "the update"}…`;
+            updateRowNote.textContent = `${pct}%${state.total ? ` of ${formatBytes(state.total)}` : ""} · you can keep using Reson8`;
+            updateRowBarFill.style.width = `${pct}%`;
             break;
+        }
         case "ready":
-            aboutUpdateStatus.textContent = `Version ${state.next ?? ""} is ready — restart to install.`;
+            updateRowTitle.textContent = "Update ready";
+            updateRowNote.textContent = "Downloaded. Restart Reson8 to finish — it takes a few seconds.";
             break;
         case "error":
-            aboutUpdateStatus.textContent = state.error
-                ? `Could not check for updates: ${state.error}`
-                : "Could not check for updates. Try again later.";
+            updateRowTitle.textContent = "Couldn't check for updates";
+            updateRowNote.textContent = state.error ? state.error : "Try again later.";
             break;
         default:
-            aboutUpdateStatus.textContent = "";
+            updateRowTitle.textContent = "Updates";
+            updateRowNote.textContent = state.checkedAt ? `Last checked ${relativeChecked(state.checkedAt)}` : "";
     }
 }
 
@@ -15656,7 +15702,8 @@ function renderUpdateGear(state: UpdateState): void {
         ?.classList.toggle("has-update", state.phase === "available" || state.phase === "ready");
 }
 
-updateListeners.add(renderUpdateModal);
+updateListeners.add(renderUpdateCard);
+updateCardVoiceHook = () => renderUpdateCard(updateState);
 updateListeners.add(renderUpdateAbout);
 updateListeners.add(renderUpdateGear);
 
@@ -15671,7 +15718,7 @@ function onUpdateAvailable(data: { version: string; releaseDate?: string; sizeBy
         error: undefined,
         checkedAt: Date.now(),
     });
-    updateModal.classList.add("visible");
+    updateCard.classList.add("visible");
 }
 
 function onDownloadProgress(data: { percent: number; transferred?: number; total?: number }): void {
@@ -15681,12 +15728,12 @@ function onDownloadProgress(data: { percent: number; transferred?: number; total
 
 function onUpdateDownloaded(): void {
     setUpdateState({ phase: "ready", percent: 100 });
-    updateModal.classList.add("visible");
+    updateCard.classList.add("visible");
 }
 
 function onUpdateError(data: { message: string }): void {
     setUpdateState({ phase: "error", error: data.message });
-    updateModal.classList.add("visible");
+    updateCard.classList.add("visible");
 }
 
 api.on("update-available", onUpdateAvailable);
@@ -15694,31 +15741,87 @@ api.on("download-progress", onDownloadProgress);
 api.on("update-downloaded", onUpdateDownloaded);
 api.on("update-error", onUpdateError);
 
-btnUpdateNow.addEventListener("click", () => {
+function startUpdateDownload(): void {
     setUpdateState({ phase: "downloading", percent: 0, transferred: undefined, total: undefined, error: undefined });
+    updateCard.classList.add("visible"); // the card shows the progress; Hide dismisses it
     api.downloadUpdate();
-});
+}
 
-btnUpdateLater.addEventListener("click", () => {
-    updateModal.classList.remove("visible");
-    // The phase stays "available" (or "error"): the gear dot and the About row remember it.
-});
+btnUpdateNow.addEventListener("click", startUpdateDownload);
+
+// × and Later (and Hide while downloading) only hide the card: the phase stays,
+// so the gear dot and the About row keep showing it (PRD 19 C12).
+const hideUpdateCard = (): void => updateCard.classList.remove("visible");
+btnUpdateLater.addEventListener("click", hideUpdateCard);
+btnUpdateClose.addEventListener("click", hideUpdateCard);
+btnUpdateHide.addEventListener("click", hideUpdateCard);
 
 btnUpdateRestart.addEventListener("click", () => {
     api.quitAndInstall();
 });
 
 btnUpdateNext.addEventListener("click", () => {
-    // Closes the modal and keeps phase "ready": electron-updater installs on
+    // Hides the card and keeps phase "ready": electron-updater installs on
     // quit (autoInstallOnAppQuit defaults to true; main.ts does not set it).
-    updateModal.classList.remove("visible");
+    hideUpdateCard();
 });
 
+/** Wraps "#123" issue references in monospace accent chips (text nodes only; links and code are left alone). */
+function chipIssueRefs(root: HTMLElement): void {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    const targets: Text[] = [];
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+        const text = n as Text;
+        if (/#\d+/.test(text.data) && !text.parentElement?.closest("a, code, pre")) targets.push(text);
+    }
+    for (const node of targets) {
+        const frag = document.createDocumentFragment();
+        let last = 0;
+        for (const m of node.data.matchAll(/#\d+/g)) {
+            const at = m.index ?? 0;
+            if (at > last) frag.append(node.data.slice(last, at));
+            const chip = document.createElement("span");
+            chip.className = "issue-chip";
+            chip.textContent = m[0];
+            frag.append(chip);
+            last = at + m[0].length;
+        }
+        if (last < node.data.length) frag.append(node.data.slice(last));
+        node.replaceWith(frag);
+    }
+}
+
+type WhatsNewVariant = "launch" | "about" | "pending";
+
 /**
- * The pending update's release notes (PRD 19 B12), through the What's New modal
- * in "pending" mode: Got it closes it WITHOUT marking any version as seen.
+ * Fills and opens the What's new dialog (PRD 19 C12). "launch" (first launch of a
+ * new version) is the only one whose button marks the version as seen; "about"
+ * (Settings › About) and "pending" (an available update's notes) just close.
  */
-btnUpdateNotes.addEventListener("click", async () => {
+function showWhatsNew(
+    variant: WhatsNewVariant,
+    version: string,
+    notes: { name: string; bodyHtml: string; htmlUrl: string; publishedAt?: string },
+): void {
+    pendingWhatsNewVersion = variant === "launch" ? version : null;
+    pendingWhatsNewUrl = notes.htmlUrl;
+    whatsNewKicker.textContent =
+        variant === "launch" ? "Updated · you're on the new version" : variant === "pending" ? "Available update" : "Release notes";
+    whatsNewTitle.textContent = `What's new in ${notes.name || `v${version}`}`;
+    whatsNewDate.textContent = notes.publishedAt ? new Date(notes.publishedAt).toLocaleDateString() : "";
+    btnWhatsNewDismiss.textContent = variant === "launch" ? "Got it" : "Close";
+    whatsNewFootNote.textContent =
+        variant === "launch"
+            ? "From the GitHub release. Shown once after each update; find it again in Settings › About."
+            : "From the GitHub release.";
+    // Already-rendered HTML (see main.ts's ReleaseNotes doc comment) — not raw markdown.
+    whatsNewBody.innerHTML = notes.bodyHtml || "<p>No release notes were provided for this version.</p>";
+    chipIssueRefs(whatsNewBody);
+    whatsNewModal.classList.add("visible");
+}
+
+/** The pending update's release notes (PRD 19 B12): Close never marks a version as seen. */
+async function openPendingNotes(): Promise<void> {
     const next = updateState.next;
     if (!next) return;
     const notes = await api.fetchReleaseNotes(next);
@@ -15726,11 +15829,27 @@ btnUpdateNotes.addEventListener("click", async () => {
         showToast("Could not load the release notes right now.");
         return;
     }
-    pendingWhatsNewVersion = null; // pending mode: nothing is marked as seen
-    pendingWhatsNewUrl = notes.htmlUrl;
-    whatsNewTitle.textContent = `🎉 What's New in ${notes.name || `v${next}`}`;
-    whatsNewBody.innerHTML = notes.bodyHtml || "<p>No release notes were provided for this version.</p>";
-    whatsNewModal.classList.add("visible");
+    showWhatsNew("pending", next, notes);
+}
+
+btnUpdateNotes.addEventListener("click", () => void openPendingNotes());
+btnUpdateRowNotes.addEventListener("click", () => void openPendingNotes());
+
+/** The About row's primary action depends on the phase: check, download, or restart. */
+btnCheckUpdates.addEventListener("click", () => {
+    if (updateState.phase === "available") startUpdateDownload();
+    else if (updateState.phase === "ready") api.quitAndInstall();
+});
+
+document.getElementById("btn-about-whats-new")?.addEventListener("click", async () => {
+    const version = updateState.current;
+    if (!version) return;
+    const notes = await api.fetchReleaseNotes(version);
+    if (!notes) {
+        showToast("Could not load the release notes right now.");
+        return;
+    }
+    showWhatsNew("about", version, notes);
 });
 
 // ── About Tab (PRD 10.1) ────────────────────────────────────────────────────
@@ -15782,13 +15901,7 @@ async function checkForWhatsNew(currentVersion: string): Promise<void> {
     // WITHOUT marking the version as seen, so the notes show at the next launch.
     if (isConnected || connectInProgress) return;
 
-    pendingWhatsNewVersion = currentVersion;
-    pendingWhatsNewUrl = notes.htmlUrl;
-    whatsNewTitle.textContent = `🎉 What's New in ${notes.name || `v${currentVersion}`}`;
-    // Already-rendered HTML (see main.ts's ReleaseNotes doc comment) — not
-    // raw markdown, so this no longer shows literal "#"/"**"/"-" syntax.
-    whatsNewBody.innerHTML = notes.bodyHtml || "<p>No release notes were provided for this version.</p>";
-    whatsNewModal.classList.add("visible");
+    showWhatsNew("launch", currentVersion, notes);
 }
 
 btnWhatsNewDismiss.addEventListener("click", () => {
@@ -15855,8 +15968,8 @@ versionMismatchModal.addEventListener("click", (e) => {
 });
 
 btnCheckUpdates.addEventListener("click", async () => {
-    // Already downloaded: nothing to check (the About row says "restart to install").
-    if (updateState.phase === "ready" || updateState.phase === "downloading") return;
+    // Update now / Restart are handled above; only the check phases get here.
+    if (updateState.phase === "ready" || updateState.phase === "downloading" || updateState.phase === "available") return;
     setUpdateState({ phase: "checking", error: undefined });
     const result = await api.checkForUpdates();
     if (result.status === "not-available") {
@@ -15865,7 +15978,7 @@ btnCheckUpdates.addEventListener("click", async () => {
         setUpdateState({ phase: "error", error: result.message, checkedAt: Date.now() });
     }
     // "available": the update-available event (onUpdateAvailable) sets the
-    // phase and opens the shared modal.
+    // phase and opens the corner card.
 });
 
 // ── Mic Sensitivity / Noise Gate ──────────────────────────────────────────
