@@ -1421,3 +1421,59 @@ Feature/Fix: DM directory, GET_DM_DIRECTORY (PRD 19 A7)
 
   Next Step: PRD 19 A8 — the client learns its own permissions.
   Reminder: P11 / P12 still need a decision.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: The client learns its own permissions (PRD 19 A8)
+
+  Problem: the client only learned three permissions, by probing admin calls
+  (GET_ROLES / GET_BANNED_USERS / GET_PENDING_EMOJIS); there was no signal for
+  MANAGE_CHANNELS, CREATE_CHANNEL, KICK_USER or ADMIN, which B6, B8 and C3 need.
+
+  Solution:
+    Shared types: the USER_JOIN_SERVER ack gains permissions?: string (the
+    aggregate as a decimal string; bigint is not JSON); new server->client
+    event PERMISSIONS_CHANGED { permissions }.
+    Server:
+      - connection.handler.ts: the join computes the aggregate once
+        (joinPermissions), derives hasAccess from it as before and puts
+        permissions in the ack.
+      - access-change.ts: sendPermissionsChanged(io, userId, serverId, perms)
+        (pure over a socket map: primary sockets of that user on that server
+        only, viewers skipped) and emitPermissionsChanged(io, app, ...)
+        (recomputes). applyAccessChange() now calls it for every role change,
+        whether or not ACCESS changed (e.g. gaining KICK_USER). ASSIGN_ROLE is
+        the only role-changing event, so every path is covered.
+    Client:
+      - preload forwards permissions on the connected event and the new
+        permissions-changed event.
+      - renderer: PERM (mirror of PermissionFlags, bigint literals; target
+        ES2022), myPermissions: bigint | null (null = unknown), setMyPermissions(),
+        hasPerm(flag): boolean | null. Reset to null on disconnect; a
+        permissions-changed event also refreshes the server summary (the A1
+        deviation noted there). NO gate changes: isAdminUser/canBanUsers/
+        canManageEmojis probes stay as they are.
+
+  Key Files Modified:
+    packages/shared-types/src/socket-events.ts
+    apps/server/src/services/access-change.ts
+    apps/server/src/handlers/connection.handler.ts
+    apps/server/src/__tests__/permissions-changed.test.ts (NEW)
+    apps/client/src/preload.ts, renderer/renderer.ts
+
+  Verification:
+    - tsc server/client clean; lint exit 0; server tests pass (4 new with a
+      fake io: decimal string, viewers/other users/other servers skipped,
+      "0", not connected).
+    - Real server: admin join ack 511, member 7; ASSIGN_ROLE role-admin ->
+      the target got PERMISSIONS_CHANGED "511"; removing admin and Member ->
+      "7" then "0" (and the existing ACCESS_CHANGED path still ran); the admin's
+      own socket got none.
+    - Real client over CDP: before connecting myPermissions null and every
+      hasPerm null; as a Member 7 -> kick/manage/admin all false; after
+      Disconnect null again.
+    - hasPerm() is intentionally unused so far (lint warning, like
+      getOnlineCountForDisplay): B6/B8/C3 consume it.
+
+  Next Step: PRD 19 A9 — screen-share server hardening.
+  Reminder: P11 / P12 still need a decision.

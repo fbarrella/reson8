@@ -747,7 +747,8 @@ export function registerConnectionHandlers(
 
                 // Access to channels, DMs and voice (PRD 18.18): computed once here
                 // and kept current by applyAccessChange() when roles change.
-                socket.data.hasAccess = hasServerAccess(await getUserPermissions(app.prisma, instanceId, serverId));
+                const joinPermissions = await getUserPermissions(app.prisma, instanceId, serverId);
+                socket.data.hasAccess = hasServerAccess(joinPermissions);
 
                 // Join the Socket.io room for this server
                 await socket.join(`server:${serverId}`);
@@ -841,7 +842,13 @@ export function registerConnectionHandlers(
 
                 socket.emit("CHANNEL_TREE_UPDATE", { serverId, tree });
 
-                ack({ success: true, serverId, hasAccess: socket.data.hasAccess });
+                ack({
+                    success: true,
+                    serverId,
+                    hasAccess: socket.data.hasAccess,
+                    // PRD 19 A8: the aggregate as a decimal string (bigint is not JSON).
+                    permissions: joinPermissions.toString(),
+                });
                 app.log.info(
                     { socketId: socket.id, nickname, serverId, instanceId },
                     "User joined server",

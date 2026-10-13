@@ -617,6 +617,8 @@ const api = {
                             serverId: res.serverId,
                             // An older server doesn't send it: treat as "has access" (PRD 18.18).
                             hasAccess: res.hasAccess !== false,
+                            // PRD 19 A8: undefined from an older server (the renderer treats it as unknown).
+                            permissions: res.permissions,
                             instanceId,
                             secure: address.scheme === "https",
                             pinned: address.scheme === "https" && !!address.pinned,
@@ -666,6 +668,9 @@ const api = {
             if (!payload.hasAccess) voiceService?.cleanup();
             emit("access-changed", payload);
         });
+
+        // The user's roles changed (PRD 19 A8).
+        socket.on("PERMISSIONS_CHANGED", (payload) => emit("permissions-changed", payload));
 
         socket.on("APPROVAL_GRANTED", () => {
             emit("approval-granted", null);

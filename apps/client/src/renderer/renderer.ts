@@ -1290,6 +1290,45 @@ let serverMaxMessageLength = 4000;
 /** The currently-connected server's display name, once fetched via getServerSettings() — null until then / after disconnect. */
 let connectedServerName: string | null = null;
 
+// ── Own permissions (PRD 19 A8) ──────────────────────────────────────────
+/**
+ * Mirrors PermissionFlags in packages/shared-types/src/models.ts (the renderer
+ * is a classic script and cannot import it). Keep the numbers in step.
+ */
+const PERM = {
+    CONNECT: 1n,
+    SPEAK: 2n,
+    SEND_MESSAGES: 4n,
+    CREATE_CHANNEL: 8n,
+    MANAGE_CHANNELS: 16n,
+    MANAGE_ROLES: 32n,
+    KICK_USER: 64n,
+    BAN_USER: 128n,
+    ADMIN: 256n,
+    MANAGE_EMOJIS: 512n,
+} as const;
+
+/** The user's aggregated permissions on the connected server; null = unknown (an older server, or not connected). */
+let myPermissions: bigint | null = null;
+
+function setMyPermissions(value: string | undefined): void {
+    try {
+        myPermissions = typeof value === "string" && /^\d+$/.test(value) ? BigInt(value) : null;
+    } catch {
+        myPermissions = null;
+    }
+}
+
+/**
+ * Whether the user holds `flag` (ADMIN holds everything). `null` while the
+ * permissions are unknown — callers must treat that as "don't hide anything
+ * based on this" (the server still decides).
+ */
+function hasPerm(flag: bigint): boolean | null {
+    if (myPermissions === null) return null;
+    return (myPermissions & PERM.ADMIN) !== 0n || (myPermissions & flag) !== 0n;
+}
+
 // ── Server summary (PRD 19 A1) ───────────────────────────────────────────
 // Member-visible server facts for the header and About. Null until fetched,
 // after disconnect, and on a v2.7.0 server (which has no GET_SERVER_SUMMARY).
@@ -3318,6 +3357,11 @@ function applyAccessState(hasAccess: boolean, opts: { restore?: boolean } = {}):
     }
 }
 
+api.on("permissions-changed", (data: { permissions: string }) => {
+    setMyPermissions(data.permissions); // PRD 19 A8
+    refreshServerSummary(); // PRD 19 A1: the admin list and counts may have changed
+});
+
 api.on("access-changed", (data: { hasAccess: boolean }) => {
     applyAccessState(data.hasAccess, { restore: true });
 });
@@ -4074,8 +4118,9 @@ api.on("dm-deleted", (payload: { dmId: string }) => {
 
 // ── Event Listeners ───────────────────────────────────────────────────────
 
-api.on("connected", (data: { serverId: string; instanceId: string; secure?: boolean; pinned?: boolean; hasAccess?: boolean }) => {
+api.on("connected", (data: { serverId: string; instanceId: string; secure?: boolean; pinned?: boolean; hasAccess?: boolean; permissions?: string }) => {
     isConnected = true;
+    setMyPermissions(data.permissions); // PRD 19 A8
     applyAccessState(data.hasAccess !== false); // PRD 18.18
     currentServerId = data.serverId;
     btnConnect.disabled = true;
@@ -4178,6 +4223,7 @@ api.on("disconnected", (data?: { reason?: string }) => {
     previousOccupantIds = new Set();
     previousSharingIds = new Set();
     connectedServerName = null;
+    myPermissions = null; // PRD 19 A8: unknown again
     clearServerSummary(); // PRD 19 A1
     updateWindowTitle();
     activeSpeakers.clear();

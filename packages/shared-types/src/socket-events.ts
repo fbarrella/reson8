@@ -82,6 +82,12 @@ export interface ClientToServerEvents {
              */
             hasAccess?: boolean;
             /**
+             * PRD 19 A8: the user's aggregated permissions for this server as a
+             * decimal string (a bigint is not valid JSON). Absent from an older
+             * server — the client then falls back to probing.
+             */
+            permissions?: string;
+            /**
              * PRD 18.8: the join was NOT completed — this identity is new and the
              * server approves new users first. The socket stays connected and is
              * sent APPROVAL_GRANTED / APPROVAL_REJECTED; it can do nothing else.
@@ -1001,6 +1007,13 @@ export interface ServerToClientEvents {
      * their primary sockets; not sent by a server older than 2.7.0.
      */
     ACCESS_CHANGED: (payload: { hasAccess: boolean }) => void;
+
+    /**
+     * The user's permissions changed (PRD 19 A8) — a role was added or removed.
+     * `permissions` is the new aggregate as a decimal string. Sent to each of
+     * their primary sockets; not sent by a server older than 3.0.
+     */
+    PERMISSIONS_CHANGED: (payload: { permissions: string }) => void;
 
     /** To moderators (BAN_USER/ADMIN): the approval queue changed (PRD 18.8). */
     PENDING_APPROVALS_CHANGED: (payload: { count: number; added?: boolean }) => void;

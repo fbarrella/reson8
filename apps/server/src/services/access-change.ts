@@ -25,6 +25,38 @@ type TypedIO = SocketIOServer<ClientToServerEvents, ServerToClientEvents, InterS
 export const membersRoom = (serverId: string): string => `members:${serverId}`;
 
 /**
+ * Tells each PRIMARY socket of `userId` their new permissions (PRD 19 A8).
+ * Viewer sockets are skipped (they have no UI that reads permissions).
+ * Returns how many sockets were told.
+ */
+export function sendPermissionsChanged(
+    io: Pick<TypedIO, "sockets">,
+    userId: string,
+    serverId: string,
+    permissions: bigint,
+): number {
+    let told = 0;
+    for (const [, s] of io.sockets.sockets) {
+        if (s.data.userId !== userId || s.data.serverId !== serverId) continue;
+        if (s.data.role === "viewer") continue;
+        s.emit("PERMISSIONS_CHANGED", { permissions: permissions.toString() });
+        told++;
+    }
+    return told;
+}
+
+/** Recomputes the user's permissions and tells their primary sockets (PRD 19 A8). */
+export async function emitPermissionsChanged(
+    io: TypedIO,
+    app: FastifyInstance,
+    userId: string,
+    serverId: string,
+): Promise<number> {
+    const perms = await getUserPermissions(app.prisma, userId, serverId);
+    return sendPermissionsChanged(io, userId, serverId, perms);
+}
+
+/**
  * Recomputes `userId`'s access and, if it differs from what their live sockets
  * hold, updates them. Safe to call after any role change; a user who is not
  * connected simply has nothing to update (the next join computes it).
@@ -39,6 +71,10 @@ export async function applyAccessChange(
     const perms = await getUserPermissions(app.prisma, userId, serverId);
     const hasAccess = hasServerAccess(perms);
     const presence = new PresenceService(app.redis);
+
+    // PRD 19 A8: every role change lands here, so the client's own-permission
+    // state is refreshed whether or not ACCESS changed (e.g. gaining KICK_USER).
+    sendPermissionsChanged(io, userId, serverId, perms);
 
     let changedSockets = 0;
     const affectedChannels = new Set<string>();
