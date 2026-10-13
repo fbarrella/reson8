@@ -2049,3 +2049,63 @@ Feature/Fix: What's New only before connecting (PRD 19 B11)
       the main process), the guard was exercised by timing instead.
 
   Next Step: PRD 19 B12 — update state machine, logic part.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Update state machine, logic part (PRD 19 B12)
+
+  Problem: the update modal had a 4-state flag; on update-downloaded the
+  renderer restarted the app after 1.2 s without asking; main sent only
+  { version } / { percent }; the About row, the modal and nothing else knew the
+  state.
+
+  Solution:
+    main.ts (additive payloads): update-available { version, releaseDate?,
+    sizeBytes? } (the first of info.files); download-progress also
+    { transferred, total }. The Windows signature-verifier override and
+    showUpdateError's manual-download hint text are unchanged. autoInstallOnAppQuit
+    is NOT set (electron-updater's default is true, confirmed in AppUpdater.js).
+    Renderer: ONE source of truth, `updateState` with phases idle / checking /
+    up-to-date / available / downloading / ready / error (+ current, next,
+    releaseDate, sizeBytes, percent, transferred, total, checkedAt, error) and
+    setUpdateState(patch) which notifies listeners. Three subscribers: the modal
+    (renderUpdateModal: per-phase title/message/buttons/progress with MB), the
+    About row (status text with "Checked hh:mm", the check button disabled while
+    checking/downloading) and a .has-update dot on the gear (#btn-server-settings)
+    in available/ready. Manual check: checking -> up-to-date / error (with
+    checkedAt) or the update-available event.
+    "Ready waits for you": the setTimeout(quitAndInstall) is gone. The ready
+    modal offers "Restart now" (api.quitAndInstall) and "On next launch" (closes,
+    phase stays ready; the install happens on quit). "Not Now" on available keeps
+    the phase (gear dot + About row remember it).
+    "Release notes" in the available state fetches the pending version's notes
+    into the What's New modal in pending mode (pendingWhatsNewVersion = null,
+    so Got it writes nothing to reson8-last-seen-version).
+    The event handlers are named functions (onUpdateAvailable, ...) so the state
+    machine can be exercised without the main process.
+
+  Key Files Modified:
+    apps/client/src/main.ts
+    apps/client/src/renderer/renderer.ts, index.html
+
+  Verification:
+    - tsc client clean; lint exit 0.
+    - Real client over CDP, driving the handlers: available -> modal with
+      "(90.0 MB)", buttons Release notes / Not Now / Update Now, About "Version
+      3.0.0-beta.2 is available. Checked …", gear dot on; Not Now -> modal
+      closed, gear dot and About remain; downloading -> progress 42% and
+      "38.1 MB of 90.0 MB", check button disabled; downloaded -> "Update Ready"
+      with Restart now / On next launch and NOTHING restarted after 2.5 s;
+      On next launch -> closed, phase ready, About "ready — restart to install";
+      error -> "Update Failed" + the manual-download text; Release notes with a
+      real version -> What's New modal opened, and Got it left
+      reson8-last-seen-version untouched; up-to-date -> "You're up to date.
+      Checked …". Screenshots taken (b12-available / b12-ready).
+    - Found and fixed while testing: the error branch left the previous
+      phase's title on the modal.
+    - NOT run: a real download and install (user, with the first beta);
+      the main-process payloads are type-checked only (no real update feed).
+
+  Next Step: end of P2. Before 3.0.0-beta.1 (PRD): the user confirms the P1/P2
+  items, the full suites pass (done below), a smoke run against a v2.7.0 and a
+  3.0.0-beta.1 server, then /bump-version 3.0.0-beta.1.

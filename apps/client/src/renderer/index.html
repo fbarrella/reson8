@@ -4144,6 +4144,18 @@
     .about-header .about-name { font-size: 15px; font-weight: 600; }
     .about-header #about-version { font-size: 12px; color: var(--text-muted); }
     .about-tagline { font-size: 12px; color: var(--text-secondary); margin-bottom: 16px; text-align: center; }
+    /* A dot on the gear while an update is available or ready (PRD 19 B12). */
+    #btn-server-settings.has-update::after {
+      content: "";
+      position: absolute;
+      top: 3px;
+      right: 3px;
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--accent);
+    }
+
     #about-update-status { font-size: 12px; color: var(--text-secondary); margin-top: 10px; min-height: 16px; text-align: center; }
 
     /* Restricted user: connected, but without the Member role (PRD 18.18). */
@@ -5874,8 +5886,11 @@
       </div>
       <div id="update-modal-status" class="update-status-text" style="display:none;"></div>
       <div class="modal-actions">
+        <button class="btn btn-cancel" id="btn-update-notes" style="display:none;">Release notes</button>
         <button class="btn btn-cancel" id="btn-update-later">Not Now</button>
         <button class="btn btn-create" id="btn-update-now">Update Now</button>
+        <button class="btn btn-cancel" id="btn-update-next" style="display:none;">On next launch</button>
+        <button class="btn btn-create" id="btn-update-restart" style="display:none;">Restart now</button>
       </div>
     </div>
   </div>

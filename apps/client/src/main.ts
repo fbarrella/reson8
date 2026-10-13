@@ -943,11 +943,21 @@ async function checkForUpdatesWithRetry(): Promise<{ status: "available" | "not-
 
 function setupAutoUpdater(): void {
     autoUpdater.on("update-available", (info) => {
-        mainWindow?.webContents.send("update-available", { version: info.version });
+        // Richer payload (PRD 19 B12), additive: the release date and the size of
+        // the file for this platform (the first of info.files).
+        mainWindow?.webContents.send("update-available", {
+            version: info.version,
+            releaseDate: info.releaseDate,
+            sizeBytes: info.files?.[0]?.size,
+        });
     });
 
     autoUpdater.on("download-progress", (progress) => {
-        mainWindow?.webContents.send("download-progress", { percent: progress.percent });
+        mainWindow?.webContents.send("download-progress", {
+            percent: progress.percent,
+            transferred: progress.transferred,
+            total: progress.total,
+        });
     });
 
     autoUpdater.on("update-downloaded", () => {

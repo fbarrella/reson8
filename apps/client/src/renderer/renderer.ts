@@ -1617,6 +1617,9 @@ const updateModalProgressBar = document.getElementById("update-modal-progress-ba
 const updateModalStatus = document.getElementById("update-modal-status") as HTMLDivElement;
 const btnUpdateNow = document.getElementById("btn-update-now") as HTMLButtonElement;
 const btnUpdateLater = document.getElementById("btn-update-later") as HTMLButtonElement;
+const btnUpdateNotes = document.getElementById("btn-update-notes") as HTMLButtonElement;
+const btnUpdateNext = document.getElementById("btn-update-next") as HTMLButtonElement;
+const btnUpdateRestart = document.getElementById("btn-update-restart") as HTMLButtonElement;
 
 const whatsNewModal = document.getElementById("whats-new-modal") as HTMLDivElement;
 const whatsNewTitle = document.getElementById("whats-new-title") as HTMLHeadingElement;
@@ -12758,91 +12761,217 @@ audioVoiceVolumeSlider.addEventListener("input", () => {
     api.setGlobalVoiceVolume(voiceVolume);
 });
 
-// ── Auto-Updater (PRD 10.1) ─────────────────────────────────────────────────
-// Modal state machine: idle → found → downloading → ready. The startup check
-// (fired from main.ts) never touches this UI directly — it only ever reaches
-// the renderer via the "update-available" event below, so a failed/negative
-// startup check is silent by construction, matching the spec.
+// ── Auto-Updater (PRD 10.1, state machine PRD 19 B12) ───────────────────────
+// ONE state object drives the update modal, the About row and the gear dot.
+// The startup check (fired from main.ts) never touches this UI directly: it
+// only reaches the renderer via the "update-available" event, so a failed or
+// negative startup check is silent by construction.
 
-type UpdateModalState = "idle" | "found" | "downloading" | "ready";
-let updateModalState: UpdateModalState = "idle";
+type UpdatePhase = "idle" | "checking" | "up-to-date" | "available" | "downloading" | "ready" | "error";
+interface UpdateState {
+    phase: UpdatePhase;
+    current: string;
+    next?: string;
+    releaseDate?: string;
+    sizeBytes?: number;
+    percent?: number;
+    transferred?: number;
+    total?: number;
+    checkedAt?: number;
+    error?: string;
+}
+let updateState: UpdateState = { phase: "idle", current: "" };
+const updateListeners = new Set<(s: UpdateState) => void>();
 
-function showUpdateFoundModal(version: string): void {
-    updateModalState = "found";
-    updateModalTitle.textContent = "⬆ Update Available";
-    updateModalMessage.textContent =
-        `A newer version of Reson8 (${version}) is available. Some features might fail if you don't update.`;
-    updateModalProgressWrap.style.display = "none";
+/** Merges `patch` into the state, then tells every listener. */
+function setUpdateState(patch: Partial<UpdateState>): void {
+    updateState = { ...updateState, ...patch };
+    for (const listener of updateListeners) listener(updateState);
+}
+
+function formatBytes(n: number): string {
+    return n >= 1024 * 1024 ? `${(n / (1024 * 1024)).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
+}
+
+/** The update modal's content for the current phase (opening it is the event handlers' decision). */
+function renderUpdateModal(state: UpdateState): void {
+    const show = (el: HTMLElement, visible: boolean): void => {
+        el.style.display = visible ? "" : "none";
+    };
     updateModalStatus.style.display = "none";
-    btnUpdateNow.style.display = "";
+    updateModalProgressWrap.style.display = "none";
+    show(btnUpdateNow, false);
+    show(btnUpdateLater, false);
+    show(btnUpdateNotes, false);
+    show(btnUpdateNext, false);
+    show(btnUpdateRestart, false);
     btnUpdateNow.disabled = false;
     btnUpdateNow.textContent = "Update Now";
-    btnUpdateLater.style.display = "";
+
+    switch (state.phase) {
+        case "available": {
+            updateModalTitle.textContent = "⬆ Update Available";
+            const size = state.sizeBytes ? ` (${formatBytes(state.sizeBytes)})` : "";
+            updateModalMessage.textContent =
+                `A newer version of Reson8 (${state.next ?? "?"})${size} is available. Some features might fail if you don't update.`;
+            show(btnUpdateNotes, !!state.next);
+            show(btnUpdateLater, true);
+            show(btnUpdateNow, true);
+            break;
+        }
+        case "downloading": {
+            updateModalTitle.textContent = "⬇ Downloading Update";
+            updateModalMessage.textContent =
+                state.total && state.transferred !== undefined
+                    ? `Downloading the update: ${formatBytes(state.transferred)} of ${formatBytes(state.total)}.`
+                    : "Downloading the update — this may take a moment.";
+            updateModalProgressWrap.style.display = "";
+            updateModalProgressBar.style.width = `${Math.round(state.percent ?? 0)}%`;
+            break;
+        }
+        case "ready": {
+            // Nothing restarts by itself (PRD 19 B12): the user picks.
+            updateModalTitle.textContent = "✅ Update Ready";
+            updateModalMessage.textContent =
+                "The update is downloaded. Restart now to install it, or it installs the next time Reson8 closes.";
+            show(btnUpdateNext, true);
+            show(btnUpdateRestart, true);
+            break;
+        }
+        case "error": {
+            updateModalTitle.textContent = "⚠ Update Failed";
+            updateModalMessage.textContent = "The update could not be completed.";
+            updateModalStatus.style.display = "";
+            updateModalStatus.textContent =
+                `Update failed: ${state.error}. Please download the latest version manually from GitHub.`;
+            show(btnUpdateLater, true);
+            show(btnUpdateNow, true);
+            break;
+        }
+        default:
+            break;
+    }
+}
+
+/** The About row: status text plus the check button's state. */
+function renderUpdateAbout(state: UpdateState): void {
+    btnCheckUpdates.disabled = state.phase === "checking" || state.phase === "downloading";
+    btnCheckUpdates.textContent = state.phase === "checking" ? "Checking..." : "Check for Updates";
+    const checked = state.checkedAt
+        ? ` Checked ${new Date(state.checkedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.`
+        : "";
+    switch (state.phase) {
+        case "up-to-date":
+            aboutUpdateStatus.textContent = `You're up to date.${checked}`;
+            break;
+        case "available":
+            aboutUpdateStatus.textContent = `Version ${state.next} is available.${checked}`;
+            break;
+        case "downloading":
+            aboutUpdateStatus.textContent = `Downloading ${state.next ?? "the update"}… ${Math.round(state.percent ?? 0)}%`;
+            break;
+        case "ready":
+            aboutUpdateStatus.textContent = `Version ${state.next ?? ""} is ready — restart to install.`;
+            break;
+        case "error":
+            aboutUpdateStatus.textContent = state.error
+                ? `Could not check for updates: ${state.error}`
+                : "Could not check for updates. Try again later.";
+            break;
+        default:
+            aboutUpdateStatus.textContent = "";
+    }
+}
+
+/** A dot on the gear while an update is available or ready. */
+function renderUpdateGear(state: UpdateState): void {
+    document
+        .getElementById("btn-server-settings")
+        ?.classList.toggle("has-update", state.phase === "available" || state.phase === "ready");
+}
+
+updateListeners.add(renderUpdateModal);
+updateListeners.add(renderUpdateAbout);
+updateListeners.add(renderUpdateGear);
+
+// Handlers are named so they can be exercised without the main process.
+function onUpdateAvailable(data: { version: string; releaseDate?: string; sizeBytes?: number }): void {
+    setUpdateState({
+        phase: "available",
+        next: data.version,
+        releaseDate: data.releaseDate,
+        sizeBytes: data.sizeBytes,
+        percent: undefined,
+        error: undefined,
+        checkedAt: Date.now(),
+    });
     updateModal.classList.add("visible");
 }
 
-function showUpdateDownloading(): void {
-    updateModalState = "downloading";
-    updateModalTitle.textContent = "⬇ Downloading Update";
-    updateModalMessage.textContent = "Downloading the update — this may take a moment.";
-    updateModalProgressWrap.style.display = "";
-    updateModalProgressBar.style.width = "0%";
-    updateModalStatus.style.display = "none";
-    btnUpdateNow.style.display = "none";
-    btnUpdateLater.style.display = "none";
+function onDownloadProgress(data: { percent: number; transferred?: number; total?: number }): void {
+    if (updateState.phase !== "downloading") return;
+    setUpdateState({ percent: data.percent, transferred: data.transferred, total: data.total });
 }
 
-function showUpdateReadyToRestart(): void {
-    updateModalState = "ready";
-    updateModalTitle.textContent = "✅ Update Ready";
-    updateModalMessage.textContent = "Update ready — restarting...";
-    updateModalProgressWrap.style.display = "none";
+function onUpdateDownloaded(): void {
+    setUpdateState({ phase: "ready", percent: 100 });
+    updateModal.classList.add("visible");
 }
 
-function showUpdateError(message: string): void {
-    updateModalStatus.style.display = "";
-    updateModalStatus.textContent =
-        `Update failed: ${message}. Please download the latest version manually from GitHub.`;
-    updateModalProgressWrap.style.display = "none";
-    btnUpdateNow.style.display = "";
-    btnUpdateNow.disabled = false;
-    btnUpdateNow.textContent = "Update Now";
-    btnUpdateLater.style.display = "";
+function onUpdateError(data: { message: string }): void {
+    setUpdateState({ phase: "error", error: data.message });
+    updateModal.classList.add("visible");
 }
 
-api.on("update-available", (data: { version: string }) => {
-    showUpdateFoundModal(data.version);
-});
-
-api.on("download-progress", (data: { percent: number }) => {
-    if (updateModalState === "downloading") {
-        updateModalProgressBar.style.width = `${Math.round(data.percent)}%`;
-    }
-});
-
-api.on("update-downloaded", () => {
-    showUpdateReadyToRestart();
-    setTimeout(() => api.quitAndInstall(), 1200);
-});
-
-api.on("update-error", (data: { message: string }) => {
-    showUpdateError(data.message);
-});
+api.on("update-available", onUpdateAvailable);
+api.on("download-progress", onDownloadProgress);
+api.on("update-downloaded", onUpdateDownloaded);
+api.on("update-error", onUpdateError);
 
 btnUpdateNow.addEventListener("click", () => {
-    showUpdateDownloading();
+    setUpdateState({ phase: "downloading", percent: 0, transferred: undefined, total: undefined, error: undefined });
     api.downloadUpdate();
 });
 
 btnUpdateLater.addEventListener("click", () => {
     updateModal.classList.remove("visible");
-    updateModalState = "idle";
+    // The phase stays "available" (or "error"): the gear dot and the About row remember it.
+});
+
+btnUpdateRestart.addEventListener("click", () => {
+    api.quitAndInstall();
+});
+
+btnUpdateNext.addEventListener("click", () => {
+    // Closes the modal and keeps phase "ready": electron-updater installs on
+    // quit (autoInstallOnAppQuit defaults to true; main.ts does not set it).
+    updateModal.classList.remove("visible");
+});
+
+/**
+ * The pending update's release notes (PRD 19 B12), through the What's New modal
+ * in "pending" mode: Got it closes it WITHOUT marking any version as seen.
+ */
+btnUpdateNotes.addEventListener("click", async () => {
+    const next = updateState.next;
+    if (!next) return;
+    const notes = await api.fetchReleaseNotes(next);
+    if (!notes) {
+        showToast("Could not load the release notes right now.");
+        return;
+    }
+    pendingWhatsNewVersion = null; // pending mode: nothing is marked as seen
+    pendingWhatsNewUrl = notes.htmlUrl;
+    whatsNewTitle.textContent = `🎉 What's New in ${notes.name || `v${next}`}`;
+    whatsNewBody.innerHTML = notes.bodyHtml || "<p>No release notes were provided for this version.</p>";
+    whatsNewModal.classList.add("visible");
 });
 
 // ── About Tab (PRD 10.1) ────────────────────────────────────────────────────
 
 api.getAppVersion().then((version) => {
     aboutVersion.textContent = `Version ${version}`;
+    setUpdateState({ current: version });
     checkForWhatsNew(version);
 });
 
@@ -12958,20 +13087,17 @@ versionMismatchModal.addEventListener("click", (e) => {
 });
 
 btnCheckUpdates.addEventListener("click", async () => {
-    btnCheckUpdates.disabled = true;
-    btnCheckUpdates.textContent = "Checking...";
-    aboutUpdateStatus.textContent = "";
+    // Already downloaded: nothing to check (the About row says "restart to install").
+    if (updateState.phase === "ready" || updateState.phase === "downloading") return;
+    setUpdateState({ phase: "checking", error: undefined });
     const result = await api.checkForUpdates();
-    btnCheckUpdates.disabled = false;
-    btnCheckUpdates.textContent = "Check for Updates";
     if (result.status === "not-available") {
-        aboutUpdateStatus.textContent = "You're up to date.";
+        setUpdateState({ phase: "up-to-date", checkedAt: Date.now() });
     } else if (result.status === "error") {
-        aboutUpdateStatus.textContent = result.message
-            ? `Could not check for updates: ${result.message}`
-            : "Could not check for updates. Try again later.";
+        setUpdateState({ phase: "error", error: result.message, checkedAt: Date.now() });
     }
-    // "available": the update-available listener above opens the shared modal.
+    // "available": the update-available event (onUpdateAvailable) sets the
+    // phase and opens the shared modal.
 });
 
 // ── Mic Sensitivity / Noise Gate ──────────────────────────────────────────
