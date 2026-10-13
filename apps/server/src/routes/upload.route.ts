@@ -24,6 +24,9 @@
  * that id over the socket. Local-disk `url`s are the host-independent path
  * ("/uploads/<file>"); clients resolve them against the server address.
  *
+ * Every route checks the file's real bytes (PRD 19 A10): a PNG/JPEG/GIF/WebP
+ * whose type equals the declared MIME type, stored under the sniffed extension.
+ *
  * Authorization: send `Authorization: Bearer <token>` with a token from the
  * socket's REQUEST_UPLOAD_TOKEN. The upload is then recorded as owned by that
  * user and only they can attach it. Requests with no header (clients older
@@ -42,7 +45,7 @@ import { ALLOW_TOKENLESS_UPLOADS } from "../config/upload.config.js";
 import { extractBearerToken, recordStoredFile, resolveUploadTokenOwner } from "../services/stored-file.service.js";
 import { deleteAttachment } from "../services/storage.service.js";
 import { getUserPermissions, isAdmin } from "../services/permissions.service.js";
-import { validateServerIcon } from "../services/image-sniff.js";
+import { validateImageBytes, validateServerIcon } from "../services/image-sniff.js";
 
 const ALLOWED_MIME_TYPES = new Set([
     "image/jpeg",
@@ -65,8 +68,16 @@ interface UploadOptions {
     requireToken?: boolean;
     /** Runs right after authentication, BEFORE the body is read. A returned refusal ends the request. */
     authorize?: (ownerId: string) => Promise<{ status: number; error: string } | null>;
-    /** Runs on the buffered bytes. `fileName` replaces the client's file name for storage. */
-    validate?: (buffer: Buffer, declaredMime: string) => { ok: true; fileName: string } | { ok: false; error: string };
+    /**
+     * Runs on the buffered bytes. `fileName` replaces the client's file name
+     * for storage. Defaults to validateImageBytes (PRD 19 A10): EVERY route
+     * checks the real bytes; the server icon passes its stricter rule.
+     */
+    validate?: (
+        buffer: Buffer,
+        declaredMime: string,
+        originalName: string,
+    ) => { ok: true; fileName: string } | { ok: false; error: string };
 }
 
 const UPLOADS_DIR = path.resolve(process.cwd(), "uploads");
@@ -217,15 +228,16 @@ async function handleUpload(
     }
 
     const buffer = Buffer.concat(chunks);
-    let originalName = data.filename || "image";
-    if (options.validate) {
-        const verdict = options.validate(buffer, data.mimetype);
-        if (!verdict.ok) {
-            reply.status(400).send({ error: verdict.error });
-            return;
-        }
-        originalName = verdict.fileName;
+    // PRD 19 A10: the stored name and extension come from the SNIFFED type,
+    // never from the client (a request used to be able to store x.html as an
+    // "image" under the public /uploads/ path).
+    const validate = options.validate ?? validateImageBytes;
+    const verdict = validate(buffer, data.mimetype, data.filename || "image");
+    if (!verdict.ok) {
+        reply.status(400).send({ error: verdict.error });
+        return;
     }
+    const originalName = verdict.fileName;
 
     let url: string;
     let publicId: string | undefined;

@@ -1539,3 +1539,62 @@ Feature/Fix: Screen-share switch enforced at PRODUCE and CONSUME (PRD 19 A9, sec
 
   Next Step: PRD 19 A10 — validate every upload by its real bytes.
   Reminder: P11 / P12 still need a decision.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Every upload is validated by its real bytes (PRD 19 A10, security)
+
+  Problem: all four upload routes trusted the MULTIPART MIME type the client
+  declared and stored the file under the CLIENT's file name and extension, so
+  a request could store x.html (or an SVG) as an "image" under the public
+  /uploads/ path, where the static route serves it as text/html from the
+  server's own origin.
+
+  Solution:
+    Server (services/image-sniff.ts, A2's sniffer):
+      - validateImageBytes(buffer, declaredMime, originalName): the bytes must
+        sniff as PNG/JPEG/GIF/WebP AND match the declared type; the stored name
+        is storedImageName(): client base name (dots kept, path separators
+        replaced, empty/extension-only -> "image") + the SNIFFED extension
+        (jpeg -> .jpg). No dimension rules (only the server icon has them).
+      - upload.route.ts: handleUpload()'s validate hook now defaults to
+        validateImageBytes, so /api/upload, /emoji, /emoji-animated (still
+        GIF-only through its MIME set) and /channel-icon are all validated; the
+        server icon keeps its stricter hook. Same size limits, MIME sets,
+        ledger and response. Refusal: 400 "That file isn't a valid PNG, JPEG,
+        GIF or WebP image." Cloudinary uploads gain only the validation (its
+        public_id base comes from the sniffed name).
+      - The error text reaches the user: uploadTo() throws Error(errBody.error);
+        the composer card shows att.error and logs it; emoji/icon flows log it.
+    Client: nothing.
+    Stored files are untouched: files already on disk keep their names; the
+    risk for OLD files is left to `npm run uploads:prune` and the owner.
+
+  Key Files Modified:
+    apps/server/src/services/image-sniff.ts
+    apps/server/src/routes/upload.route.ts
+    apps/server/src/__tests__/upload-validate.test.ts (NEW)
+
+  Verification:
+    - tsc server clean; lint exit 0; server tests pass (12 new: each format
+      with its matching type, PNG declared GIF, HTML and SVG refused, other
+      declared types refused, no dimension rule, x.html -> x.png,
+      photo.final.JPG -> photo.final.jpg, empty/".png" -> image.<ext>, no path
+      separators, jpeg -> .jpg).
+    - Real server, real files of every type to attachment, emoji and
+      channel-icon routes: PNG/JPEG/GIF/WebP all 200 and served back with the
+      matching image Content-Type under the sniffed extension (pic.jpeg ->
+      pic.jpg); PNG bytes named x.html -> stored x.png; PNG declared GIF,
+      HTML declared PNG and SVG declared PNG -> 400 with the message; the
+      animated-emoji route accepts a real GIF, refuses PNG bytes declared GIF
+      and a PNG declared image/png (its MIME set).
+    - NOT run (user to check on the real app): pasting from at least one
+      browser and one screenshot tool, as the PRD asks. User-visible change to
+      know about: a file whose bytes do not match the type the OS/browser
+      derived from its NAME (e.g. a PNG renamed photo.jpg, dropped into the
+      composer) is now refused instead of stored. If that proves common, the
+      fix belongs on the CLIENT (sniff and correct the declared type before
+      uploading), not in a looser server check; I have not done that.
+
+  Next Step: P1 is complete. P2 starts with B1 (unread counts in the current UI).
+  Reminder: P11 / P12 still need a decision.

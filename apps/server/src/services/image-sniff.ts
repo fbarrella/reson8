@@ -103,6 +103,55 @@ export function sniffImage(buf: Buffer): SniffedImage | null {
     return found;
 }
 
+// ── Every image upload (PRD 19 A10) ─────────────────────────────────────────
+
+export const IMAGE_UPLOAD_ERROR = "That file isn't a valid PNG, JPEG, GIF or WebP image.";
+
+const MIME_TO_TYPE: Record<string, SniffedImageType> = {
+    "image/png": "png",
+    "image/jpeg": "jpeg",
+    "image/gif": "gif",
+    "image/webp": "webp",
+};
+
+/** The stored extension for a sniffed type (jpeg is stored as .jpg). */
+export function extensionForType(type: SniffedImageType): "png" | "jpg" | "gif" | "webp" {
+    return type === "jpeg" ? "jpg" : type;
+}
+
+/**
+ * `<client base name>.<sniffed extension>`: the client's extension is dropped
+ * (so `x.html` holding PNG bytes is stored as `x.png`), and an empty base name
+ * becomes `image`. Characters outside [a-zA-Z0-9._-] are replaced later by the
+ * storage layer, as before.
+ */
+export function storedImageName(originalName: string, ext: string): string {
+    const lastDot = originalName.lastIndexOf(".");
+    const rawBase = lastDot >= 0 ? originalName.slice(0, lastDot) : originalName;
+    const base = rawBase.replace(/[\\/]/g, "_").trim();
+    return `${base || "image"}.${ext}`;
+}
+
+/**
+ * The shared check behind every image upload route: the bytes must be a real
+ * PNG/JPEG/GIF/WebP AND match the declared MIME type. No dimension rules here
+ * (only the server icon has those). Nothing else about a route changes: same
+ * size limits, same allowed MIME set, same ledger.
+ */
+export function validateImageBytes(
+    buf: Buffer,
+    declaredMime: string,
+    originalName = "image",
+): { ok: true; fileName: string; type: SniffedImageType } | { ok: false; error: string } {
+    const sniffed = sniffImage(buf);
+    if (!sniffed || MIME_TO_TYPE[declaredMime] !== sniffed.type) return { ok: false, error: IMAGE_UPLOAD_ERROR };
+    return {
+        ok: true,
+        fileName: storedImageName(originalName, extensionForType(sniffed.type)),
+        type: sniffed.type,
+    };
+}
+
 // ── Server icon rules ───────────────────────────────────────────────────────
 
 export const SERVER_ICON_MIN_SIDE = 256;
