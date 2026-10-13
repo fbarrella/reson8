@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas">
+<link rel="stylesheet" href="_ds/nocturne-74132c8e-6d8d-407f-9d91-f4b24746852e/styles.css">
+<script src="_ds/nocturne-74132c8e-6d8d-407f-9d91-f4b24746852e/_ds_bundle.js"></script>
+<style>body{margin:0;background:#0f1019}a{color:var(--color-accent-300)}a:hover{color:var(--color-accent-200)}.dv-turn{padding:48px 56px 40px;scroll-margin-top:16px}.dv-thd{display:flex;align-items:baseline;gap:10px;margin:0 0 24px}.dv-tid{font:600 10px ui-monospace,Menlo,monospace;padding:3px 7px;background:var(--color-accent-800);color:var(--color-accent-200);border-radius:4px;text-decoration:none}.dv-tname{font:600 14px/1.2 var(--font-body);color:var(--color-neutral-200)}.dv-opts{display:flex;flex-wrap:wrap;gap:48px;align-items:flex-start}.dv-opt{flex:none;display:flex;flex-direction:column;gap:12px;scroll-margin-top:16px}.dv-oid{font:600 10.5px ui-monospace,Menlo,monospace;padding:3px 7px;background:var(--color-neutral-900);color:var(--color-neutral-200);border-radius:5px;text-decoration:none}.dv-olabel{display:flex;align-items:baseline;gap:8px;font:400 13px/1.4 var(--font-body);color:var(--color-neutral-400)}.dv-opt:target .dv-oid{background:var(--color-accent-700);color:var(--color-neutral-100)}.dv-next{margin:28px 0 0;font:13px/1.5 var(--font-body);color:var(--color-neutral-500)}</style>
+</helmet>
+<section class="dv-turn" id="t16">
+  <div class="dv-thd"><a class="dv-tid" href="#t16">16</a><span class="dv-tname">About the server</span></div>
+  <div style="max-width:1440px;display:grid;grid-template-columns:repeat(3, minmax(0,1fr));gap:32px;margin-bottom:40px;font-size:13.5px;line-height:1.55;color:var(--color-neutral-400)">
+    <div><div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-accent-400);margin-bottom:6px">From the server menu</div><b style="color:var(--color-neutral-200);font-weight:500">About Farewell TS</b> in the server dropdown opens a read-only summary that every member sees, not just admins. The header shows the icon (or initials), the name and the address with a copy button.</div>
+    <div><div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-accent-400);margin-bottom:6px">Health at a glance</div>Three cards: <b style="color:var(--color-neutral-200);font-weight:500">Connection</b> (encrypted or not), <b style="color:var(--color-neutral-200);font-weight:500">Latency</b> from this device with signal bars and a re-measure button, and <b style="color:var(--color-neutral-200);font-weight:500">People</b>, showing online out of total with a bar.</div>
+    <div><div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-accent-400);margin-bottom:6px">Who runs it, what’s on</div>Admins are listed as chips with online dots; click one to open their profile. <b style="color:var(--color-neutral-200);font-weight:500">Features</b> lists everything a server can turn on, each marked On or Off, and follows Server settings live.</div>
+  </div>
+  <div class="dv-opts">
+    <div class="dv-opt" id="16a">
+      <div class="dv-olabel"><a class="dv-oid" href="#16a">16a</a>About Farewell TS — try re-measuring latency or opening an admin</div>
+      <dc-import name="Reson8 App" view="text" ctx="about" hint-size="1440px,900px"></dc-import>
+    </div>
+  </div>
+  <p class="dv-next">Try next: "server banner" · "update failed state" · "create a category"</p>
+</section>
+<section class="dv-turn" id="t15">
+  <div class="dv-thd"><a class="dv-tid" href="#t15">15</a><span class="dv-tname">Updates and multi-stream voice rooms</span></div>
+  <div style="max-width:1440px;display:grid;grid-template-columns:repeat(4, minmax(0,1fr));gap:32px;margin-bottom:40px;font-size:13.5px;line-height:1.55;color:var(--color-neutral-400)">
+    <div><div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-accent-400);margin-bottom:6px">Update available</div>In About (compare <a href="#4g">4g</a>), the update row becomes “Reson8 0.9.4 is available” with size, date and your version. It offers <b style="color:var(--color-neutral-200);font-weight:500">Release notes</b> and <b style="color:var(--color-neutral-200);font-weight:500">Update now</b>. Downloading shows progress in place, then the row changes to <b style="color:var(--color-neutral-200);font-weight:500">Restart to update</b>. The settings gear gets a dot until it’s done.</div>
+    <div><div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-accent-400);margin-bottom:6px">On launch</div>If a newer release is found when the app opens, a card appears in the corner instead of a blocking dialog. You can keep chatting while it downloads, and it warns that restarting drops your call. <b style="color:var(--color-neutral-200);font-weight:500">Later</b> and <b style="color:var(--color-neutral-200);font-weight:500">On next launch</b> are always available.</div>
+    <div><div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-accent-400);margin-bottom:6px">What’s new, once</div>On the first launch of a new version, the GitHub release notes open over the sign-in screen, before you connect to a server. They never interrupt you once you’re signed in. The modal shows highlights, fixes with issue numbers, and a link to the release. It’s shown once per version and can be reopened from About.</div>
+    <div><div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-accent-400);margin-bottom:6px">Up to five streams</div>With two or more streams the room switches to <b style="color:var(--color-neutral-200);font-weight:500">Focus</b>: one stream large, the rest as live previews on the right; click one to swap. <b style="color:var(--color-neutral-200);font-weight:500">Grid</b> tiles every stream at the same size. People shrink to a single row of chips under the streams, always in Featured (five and a “more” block). The header shows “5 / 5 sharing”, and Share screen explains why it’s full.</div>
+  </div>
+  <div class="dv-opts">
+    <div class="dv-opt" id="15a">
+      <div class="dv-olabel"><a class="dv-oid" href="#15a">15a</a>About — update available (press Update now, then Restart)</div>
+      <dc-import name="Reson8 App" view="text" settings="about" upd-avail="{{ true }}" upd-state="available" hint-size="1440px,900px"></dc-import>
+    </div>
+    <div class="dv-opt" id="15b">
+      <div class="dv-olabel"><a class="dv-oid" href="#15b">15b</a>App just opened — update prompt in the corner</div>
+      <dc-import name="Reson8 App" view="text" upd-prompt="{{ true }}" hint-size="1440px,900px"></dc-import>
+    </div>
+    <div class="dv-opt" id="15c">
+      <div class="dv-olabel"><a class="dv-oid" href="#15c">15c</a>First launch on 0.9.4 — release notes over the sign-in screen, before connecting to any server</div>
+      <dc-import name="Reson8 App" view="welcome" app-ver="0.9.4" whats-new="{{ true }}" hint-size="1440px,900px"></dc-import>
+    </div>
+    <div class="dv-opt" id="15d">
+      <div class="dv-olabel"><a class="dv-oid" href="#15d">15d</a>Five people sharing — Focus: one large, four live previews, people as chips</div>
+      <dc-import name="Reson8 App" view="voice" multi-share="{{ true }}" tile-mode="featured" hint-size="1440px,900px"></dc-import>
+    </div>
+    <div class="dv-opt" id="15e">
+      <div class="dv-olabel"><a class="dv-oid" href="#15e">15e</a>Five people sharing — Grid</div>
+      <dc-import name="Reson8 App" view="voice" multi-share="{{ true }}" ms-layout="grid" tile-mode="featured" hint-size="1440px,900px"></dc-import>
+    </div>
+  </div>
+  <p class="dv-next">Try next: "fullscreen stream view" · "picture-in-picture for a second stream" · "update failed state"</p>
+</section>
+<section class="dv-turn" id="t14">
+  <div class="dv-thd"><a class="dv-tid" href="#t14">14</a><span class="dv-tname">Right-click — categories</span></div>
+  <div style="max-width:1440px;display:grid;grid-template-columns:repeat(3, minmax(0,1fr));gap:32px;margin-bottom:40px;font-size:13.5px;line-height:1.55;color:var(--color-neutral-400)">
+    <div><div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-accent-400);margin-bottom:6px">Two admin actions</div>Right-clicking a category header opens a short admin menu: <b style="color:var(--color-neutral-200);font-weight:500">Rename category</b>, and <b style="color:var(--color-neutral-200);font-weight:500">Delete category</b> set apart at the bottom, like the channel menus.</div>
+    <div><div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-accent-400);margin-bottom:6px">Rename</div>Works like renaming a channel: the name is pre-selected, empty and duplicate names are caught as you type, Enter saves and Esc cancels. Its channels and collapsed state stay as they are.</div>
+    <div><div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-accent-400);margin-bottom:6px">Delete says what’s at stake</div>The dialog counts the channels inside and asks what happens to them. <b style="color:var(--color-neutral-200);font-weight:500">Keep the channels</b> is the default and moves them out of the category. <b style="color:var(--color-neutral-200);font-weight:500">Delete the channels too</b> is marked in red and says the history is gone for everyone. It also warns when people in its voice channels would be disconnected, and the button names how many channels it deletes.</div>
+  </div>
+  <div class="dv-opts">
+    <div class="dv-opt" id="14a">
+      <div class="dv-olabel"><a class="dv-oid" href="#14a">14a</a>Category menu — right-click “Discussions”</div>
+      <dc-import name="Reson8 App" view="text" ctx="category" hint-size="1440px,900px"></dc-import>
+    </div>
+    <div class="dv-opt" id="14b">
+      <div class="dv-olabel"><a class="dv-oid" href="#14b">14b</a>Rename category</div>
+      <dc-import name="Reson8 App" view="text" ctx="cat-rename" hint-size="1440px,900px"></dc-import>
+    </div>
+    <div class="dv-opt" id="14c">
+      <div class="dv-olabel"><a class="dv-oid" href="#14c">14c</a>Delete — safe default: keep the channels</div>
+      <dc-import name="Reson8 App" view="text" ctx="cat-delete" hint-size="1440px,900px"></dc-import>
+    </div>
+    <div class="dv-opt" id="14d">
+      <div class="dv-olabel"><a class="dv-oid" href="#14d">14d</a>Delete “Gaming” with its channels — the dangerous path, with people in voice</div>
+      <dc-import name="Reson8 App" view="text" ctx="cat-delete-all" hint-size="1440px,900px"></dc-import>
+    </div>
+  </div>
+  <p class="dv-next">Try next: "create a category" · "drag to reorder channels" · "drag tabs to reorder"</p>
+</section>
+<section class="dv-turn" id="t13">
+  <div class="dv-thd"><a class="dv-tid" href="#t13">13</a><span class="dv-tname">Tabs — the voice room tab and overflow</span></div>
+  <div style="max-width:1440px;display:grid;grid-template-columns:repeat(3, minmax(0,1fr));gap:32px;margin-bottom:40px;font-size:13.5px;line-height:1.55;color:var(--color-neutral-400)">
+    <div><div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-accent-400);margin-bottom:6px">One voice tab, yours to close</div>You can only be in one room, so there’s at most one voice tab and it never replaces anything. Its <b style="color:var(--color-neutral-200);font-weight:500">×</b> closes the tab but keeps you connected. <b style="color:var(--color-neutral-200);font-weight:500">Expand voice room</b> in the voice dock (bottom left) opens it again.</div>
+    <div><div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-accent-400);margin-bottom:6px">No + button</div>Tabs come from what you open: a text channel, a conversation, the voice room or search results. There’s nothing to create from an empty tab, so the + is gone.</div>
+    <div><div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-accent-400);margin-bottom:6px">Overflow</div>Tabs that don’t fit go into a <b style="color:var(--color-neutral-200);font-weight:500">“N more”</b> list at the end of the bar. The open tab always stays visible, and a dot on the list means something in it is unread. Each row in the list can be opened or closed.</div>
+  </div>
+  <div class="dv-opts">
+    <div class="dv-opt" id="13a">
+      <div class="dv-olabel"><a class="dv-oid" href="#13a">13a</a>Voice room tab with its × · close it and reopen with the dock’s Expand button</div>
+      <dc-import name="Reson8 App" view="voice" hint-size="1440px,900px"></dc-import>
+    </div>
+    <div class="dv-opt" id="13b">
+      <div class="dv-olabel"><a class="dv-oid" href="#13b">13b</a>Too many tabs — the overflow list open</div>
+      <dc-import name="Reson8 App" view="text" many-tabs="{{ true }}" tab-more="{{ true }}" hint-size="1440px,900px"></dc-import>
+    </div>
+  </div>
+  <p class="dv-next">Try next: "drag to reorder tabs" · "server banner" · "fullscreen stream view"</p>
+</section>
+<section class="dv-turn" id="t12">
+  <div class="dv-thd"><a class="dv-tid" href="#t12">12</a><span class="dv-tname">Server icon</span></div>
+  <div style="max-width:1440px;display:grid;grid-template-columns:repeat(3, minmax(0,1fr));gap:32px;margin-bottom:40px;font-size:13.5px;line-height:1.55;color:var(--color-neutral-400)">
+    <div><div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-accent-400);margin-bottom:6px">Set in General</div>Server settings › General now starts with <b style="color:var(--color-neutral-200);font-weight:500">Identity</b>, which shows the current icon with Upload, Change and Remove. The upload dialog is the image part of the channel icon dialog: drop a file, crop it to a square with zoom, and see how it looks at rail and list sizes.</div>
+    <div><div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-accent-400);margin-bottom:6px">Public on purpose</div>The dialog says up front that the icon gets a <b style="color:var(--color-neutral-200);font-weight:500">public link</b>, and shows the link. Clients save that link with the server, so the icon shows in the saved server list and the rail even when you aren’t connected. It also warns not to use anything private.</div>
+    <div><div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-accent-400);margin-bottom:6px">Initials otherwise</div>With no icon, every place the server appears shows its initials (FT) on the accent tint: the header, the settings header, the rail and the saved server list.</div>
+  </div>
+  <div class="dv-opts">
+    <div class="dv-opt" id="12a">
+      <div class="dv-olabel"><a class="dv-oid" href="#12a">12a</a>General — no icon yet, so “FT” · try Upload</div>
+      <dc-import name="Reson8 App" view="text" server-settings="general" hint-size="1440px,900px"></dc-import>
+    </div>
+    <div class="dv-opt" id="12b">
+      <div class="dv-olabel"><a class="dv-oid" href="#12b">12b</a>Upload dialog — image chosen, crop and public link explained</div>
+      <dc-import name="Reson8 App" view="text" server-settings="general" server-icon-dialog="file" hint-size="1440px,900px"></dc-import>
+    </div>
+    <div class="dv-opt" id="12c">
+      <div class="dv-olabel"><a class="dv-oid" href="#12c">12c</a>Icon set — shown in the header and on the rail</div>
+      <dc-import name="Reson8 App" view="text" server-icon="{{ true }}" hint-size="1440px,900px"></dc-import>
+    </div>
+    <div class="dv-opt" id="12d">
+      <div class="dv-olabel"><a class="dv-oid" href="#12d">12d</a>Not connected — the saved server list still shows the icon from its saved link</div>
+      <dc-import name="Reson8 App" view="welcome" server-icon="{{ true }}" hint-size="1440px,900px"></dc-import>
+    </div>
+  </div>
+  <p class="dv-next">Try next: "server banner" · "right-click a server in the rail" · "fullscreen stream view"</p>
+</section>
+<section class="dv-turn" id="t11">
+  <div class="dv-thd"><a class="dv-tid" href="#t11">11</a><span class="dv-tname">Full voice rooms — Mosaic or Featured</span></div>
+  <div style="max-width:1440px;display:grid;grid-template-columns:repeat(3, minmax(0,1fr));gap:32px;margin-bottom:40px;font-size:13.5px;line-height:1.55;color:var(--color-neutral-400)">
+    <div><div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-accent-400);margin-bottom:6px">Mosaic</div>Only for voice-only calls. Everyone gets a tile, and tiles shrink together to fill the room without scrolling, keeping their 4:3 shape. On small tiles the name gets smaller and the volume label is hidden. Once anyone shares a screen, the room switches to Featured and Mosaic is unavailable. Your choice comes back when the last stream ends.</div>
+    <div><div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-accent-400);margin-bottom:6px">Featured</div>Five tiles at full size, then a sixth block saying <b style="color:var(--color-neutral-200);font-weight:500">…and 11 more</b>. With a stream on stage it’s two tiles plus the block. Clicking the block opens a list of everyone else, and right-clicking a name there gives the same menu as a tile.</div>
+    <div><div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-accent-400);margin-bottom:6px">Who gets a tile</div>The person speaking comes first, then whoever is sharing, then you, then everyone else in join order. You switch modes in the room header.</div>
+  </div>
+  <div class="dv-opts">
+    <div class="dv-opt" id="11a">
+      <div class="dv-olabel"><a class="dv-oid" href="#11a">11a</a>Mosaic — a full room (16 / 16), no stream</div>
+      <dc-import name="Reson8 App" view="voice" crowd="{{ true }}" tile-mode="mosaic" share="{{ false }}" hint-size="1440px,900px"></dc-import>
+    </div>
+    <div class="dv-opt" id="11b">
+      <div class="dv-olabel"><a class="dv-oid" href="#11b">11b</a>Featured — five tiles and “…and 11 more” · list open</div>
+      <dc-import name="Reson8 App" view="voice" crowd="{{ true }}" tile-mode="featured" share="{{ false }}" more-pop="{{ true }}" hint-size="1440px,900px"></dc-import>
+    </div>
+    <div class="dv-opt" id="11d">
+      <div class="dv-olabel"><a class="dv-oid" href="#11d">11d</a>Someone is sharing — Featured is used and Mosaic is unavailable: two tiles and the block</div>
+      <dc-import name="Reson8 App" view="voice" crowd="{{ true }}" tile-mode="featured" hint-size="1440px,900px"></dc-import>
+    </div>
+  </div>
+  <p class="dv-next">Try next: "fullscreen stream view" · "watching two streams at once" · "right-click a conversation in the list"</p>
+</section>
+<section class="dv-turn" id="t10">
+  <div class="dv-thd"><a class="dv-tid" href="#t10">10</a><span class="dv-tname">Popped-out screen share</span></div>
+  <div style="max-width:1440px;display:grid;grid-template-columns:repeat(3, minmax(0,1fr));gap:32px;margin-bottom:40px;font-size:13.5px;line-height:1.55;color:var(--color-neutral-400)">
+    <div><div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-accent-400);margin-bottom:6px">Its own window</div><b style="color:var(--color-neutral-200);font-weight:500">Pop out</b> moves the stream into a separate window you can drag to another monitor. It’s titled with who is sharing what, and from which channel, so it still makes sense with Reson8 behind other windows.</div>
+    <div><div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-accent-400);margin-bottom:6px">Only what watching needs</div>The window has stream volume, fullscreen and <b style="color:var(--color-neutral-200);font-weight:500">Always on top</b>, which is on by default so the stream stays above a game. <b style="color:var(--color-neutral-200);font-weight:500">Return</b> and the close button both put the stream back in the app.</div>
+    <div><div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-accent-400);margin-bottom:6px">The stage says where it went</div>The stage in the app doesn’t go blank: it says the stream is in its own window and offers <b style="color:var(--color-neutral-200);font-weight:500">Bring it back</b> and <b style="color:var(--color-neutral-200);font-weight:500">Show window</b>. Tiles and call controls stay where they are.</div>
+  </div>
+  <div class="dv-opts">
+    <div class="dv-opt" id="10a">
+      <div class="dv-olabel"><a class="dv-oid" href="#10a">10a</a>Kdshy’s stream popped out · try Always on top, the volume slider, Show window, and closing it</div>
+      <dc-import name="Reson8 App" view="voice" popout="{{ true }}" hint-size="1440px,900px"></dc-import>
+    </div>
+  </div>
+  <p class="dv-next">Try next: "fullscreen stream view" · "watching two streams at once" · "right-click a conversation in the list"</p>
+</section>
+<section class="dv-turn" id="t9">
+  <div class="dv-thd"><a class="dv-tid" href="#t9">9</a><span class="dv-tname">Direct messages as tabs</span></div>
+  <div style="max-width:1440px;display:grid;grid-template-columns:repeat(4, minmax(0,1fr));gap:32px;margin-bottom:40px;font-size:13.5px;line-height:1.55;color:var(--color-neutral-400)">
+    <div><div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-accent-400);margin-bottom:6px">Owned by the server</div>Direct messages live on the server, like the channel tree. The list says which server it belongs to (“On Farewell TS”). Each server has its own people and history, so another server shows a different list, and with no server connected the button is disabled.</div>
+    <div><div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-accent-400);margin-bottom:6px">The rail only swaps the list</div><b style="color:var(--color-neutral-200);font-weight:500">Direct messages</b> replaces the channel tree with your conversations and leaves the right side as it was. Nothing opens until you pick someone. <b style="color:var(--color-neutral-200);font-weight:500">Servers</b> switches the list back the same way.</div>
+    <div><div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-accent-400);margin-bottom:6px">Conversations behave like channels</div>A conversation opens in the <b style="color:var(--color-neutral-200);font-weight:500">preview</b> tab, so the next channel or conversation you open replaces it unless you keep it open. You can double-click it, pin it with Keep open, or close it, like any other tab.</div>
+    <div><div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-accent-400);margin-bottom:6px">Unread everywhere it shows</div>A conversation’s unread count appears on its row in the list, on its tab while it’s open in the background, and as a total on the Direct messages button. Opening the conversation clears it.</div>
+  </div>
+  <div class="dv-opts">
+    <div class="dv-opt" id="9a">
+      <div class="dv-olabel"><a class="dv-oid" href="#9a">9a</a>Direct messages list opened while reading #Bug Reports, which stays open on the right</div>
+      <dc-import name="Reson8 App" view="text" side="dm" hint-size="1440px,900px"></dc-import>
+    </div>
+    <div class="dv-opt" id="9b">
+      <div class="dv-olabel"><a class="dv-oid" href="#9b">9b</a>Kdshy open in the preview tab · barrelleitor still unread · open him to see the tab replaced</div>
+      <dc-import name="Reson8 App" view="dm" hint-size="1440px,900px"></dc-import>
+    </div>
+  </div>
+  <p class="dv-next">Try next: "right-click a conversation in the list" · "context menu for categories" · "drag to reorder channels"</p>
+</section>
+<section class="dv-turn" id="t8">
+  <div class="dv-thd"><a class="dv-tid" href="#t8">8</a><span class="dv-tname">Right-click — people in a voice channel</span></div>
+  <div style="max-width:1440px;display:grid;grid-template-columns:repeat(3, minmax(0,1fr));gap:32px;margin-bottom:40px;font-size:13.5px;line-height:1.55;color:var(--color-neutral-400)">
+    <div><div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-accent-400);margin-bottom:6px">Yours first, then the admin’s</div>The <b style="color:var(--color-neutral-200);font-weight:500">Volume</b> slider (0–200%) and <b style="color:var(--color-neutral-200);font-weight:500">Mute locally</b> only change what you hear, so everyone gets them. <b style="color:var(--color-neutral-200);font-weight:500">Kick from channel</b> sits under a separate admin label and is the only item members don’t see.</div>
+    <div><div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-accent-400);margin-bottom:6px">Visible afterwards</div>After you change someone, their row shows it: their volume if it isn’t 100%, or a speaker-slash if you’ve muted them. That way “why can’t I hear X” has an answer in the list.</div>
+    <div><div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-accent-400);margin-bottom:6px">Same menu on the tiles</div>In the voice channel tab, right-click a person’s tile to get the same menu at the cursor, and the tile shows the same marks. Right-clicking yourself only offers <b style="color:var(--color-neutral-200);font-weight:500">Voice settings</b>.</div>
+  </div>
+  <div class="dv-opts">
+    <div class="dv-opt" id="8a">
+      <div class="dv-olabel"><a class="dv-oid" href="#8a">8a</a>Admin — right-click barrelleitor in Sala Precisa · try the slider, Mute locally, Kick</div>
+      <dc-import name="Reson8 App" view="text" ctx="member" hint-size="1440px,900px"></dc-import>
+    </div>
+    <div class="dv-opt" id="8b">
+      <div class="dv-olabel"><a class="dv-oid" href="#8b">8b</a>Member — the same menu without Kick from channel</div>
+      <dc-import name="Reson8 App" view="text" ctx="member" as-member="{{ true }}" hint-size="1440px,900px"></dc-import>
+    </div>
+    <div class="dv-opt" id="8c">
+      <div class="dv-olabel"><a class="dv-oid" href="#8c">8c</a>Voice channel tab — right-click a tile</div>
+      <dc-import name="Reson8 App" view="voice" share="{{ false }}" ctx="member-tile" hint-size="1440px,900px"></dc-import>
+    </div>
+  </div>
+  <p class="dv-next">Try next: "context menu for categories" · "move a member to another voice channel" · "drag to reorder channels"</p>
+</section>
+<section class="dv-turn" id="t7">
+  <div class="dv-thd"><a class="dv-tid" href="#t7">7</a><span class="dv-tname">Right-click — voice channels</span></div>
+  <div style="max-width:1440px;display:grid;grid-template-columns:repeat(3, minmax(0,1fr));gap:32px;margin-bottom:40px;font-size:13.5px;line-height:1.55;color:var(--color-neutral-400)">
+    <div><div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-accent-400);margin-bottom:6px">Same menu, trimmed</div>Voice channels get the admin part of the text channel menu: <b style="color:var(--color-neutral-200);font-weight:500">Rename</b>, <b style="color:var(--color-neutral-200);font-weight:500">Move to category</b> and <b style="color:var(--color-neutral-200);font-weight:500">Delete</b>. They have no tabs, unread counts or NSFW mark, so Keep open, Mute and Mark as NSFW are left out.</div>
+    <div><div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-accent-400);margin-bottom:6px">Same dialogs</div>Rename and Move open the same dialogs as for text channels (<a href="#6c">6c</a>, <a href="#6f">6f</a>), with the same checks and the same layout.</div>
+    <div><div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-accent-400);margin-bottom:6px">Delete says who’s affected</div>There’s no history to lose, so the confirmation says instead how many people are in the channel and will be disconnected. If you’re in it, you’re returned to text chat.</div>
+  </div>
+  <div class="dv-opts">
+    <div class="dv-opt" id="7a">
+      <div class="dv-olabel"><a class="dv-oid" href="#7a">7a</a>Voice channel menu — right-click any voice channel in the list</div>
+      <dc-import name="Reson8 App" view="text" ctx="vchannel" hint-size="1440px,900px"></dc-import>
+    </div>
+    <div class="dv-opt" id="7b">
+      <div class="dv-olabel"><a class="dv-oid" href="#7b">7b</a>Delete — “Sala Precisa” has three people in it, and the confirmation says so</div>
+      <dc-import name="Reson8 App" view="text" ctx="vdelete" hint-size="1440px,900px"></dc-import>
+    </div>
+  </div>
+  <p class="dv-next">Try next: "context menu for categories" · "right-click on a member in a voice channel" · "drag to reorder channels"</p>
+</section>
+<section class="dv-turn" id="t6">
+  <div class="dv-thd"><a class="dv-tid" href="#t6">6</a><span class="dv-tname">Right-click — text channels and tabs</span></div>
+  <div style="max-width:1440px;display:grid;grid-template-columns:repeat(3, minmax(0,1fr));gap:32px;margin-bottom:40px;font-size:13.5px;line-height:1.55;color:var(--color-neutral-400)">
+    <div><div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-accent-400);margin-bottom:6px">Yours first, then the admin's</div>The top of the menu holds actions that only affect you: <b style="color:var(--color-neutral-200);font-weight:500">Keep tab open</b> and <b style="color:var(--color-neutral-200);font-weight:500">Mute</b>. Under an <b style="color:var(--color-neutral-200);font-weight:500">Admin</b> label come the actions that change the channel for everyone: rename, icon, move and NSFW. <b style="color:var(--color-neutral-200);font-weight:500">Delete</b> sits apart at the bottom and always asks first.</div>
+    <div><div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-accent-400);margin-bottom:6px">Preview tabs, made visible</div>Clicking a channel opens it in the single <b style="color:var(--color-neutral-200);font-weight:500">preview</b> tab, shown in italics; the next channel you open replaces it. Double-click a channel or tab, or choose Keep open, to make it <b style="color:var(--color-neutral-200);font-weight:500">kept</b>, marked with a pin. Stopping keeping a tab open turns it back into the preview, and any other preview tab closes. Server Log stays put and has no menu.</div>
+    <div><div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-accent-400);margin-bottom:6px">Fewer steps</div><b style="color:var(--color-neutral-200);font-weight:500">Set icon</b> is now a single dialog instead of three: pick Emoji, Image or None, with a live preview of the channel row. <b style="color:var(--color-neutral-200);font-weight:500">Move</b> lists every category, including “No category”, instead of a dropdown. <b style="color:var(--color-neutral-200);font-weight:500">Rename</b> checks for empty and duplicate names as you type.</div>
+  </div>
+  <div class="dv-opts">
+    <div class="dv-opt" id="6a">
+      <div class="dv-olabel"><a class="dv-oid" href="#6a">6a</a>Channel menu — right-click any text channel in the list</div>
+      <dc-import name="Reson8 App" view="text" ctx="channel" hint-size="1440px,900px"></dc-import>
+    </div>
+    <div class="dv-opt" id="6b">
+      <div class="dv-olabel"><a class="dv-oid" href="#6b">6b</a>Tab menu — “Amigos do Meredis” open as a preview tab · try Keep open, Close tab, Close other tabs</div>
+      <dc-import name="Reson8 App" view="text" ctx="tab" hint-size="1440px,900px"></dc-import>
+    </div>
+    <div class="dv-opt" id="6c">
+      <div class="dv-olabel"><a class="dv-oid" href="#6c">6c</a>Rename — name pre-selected; Enter saves, Esc cancels</div>
+      <dc-import name="Reson8 App" view="text" ctx="rename" hint-size="1440px,900px"></dc-import>
+    </div>
+    <div class="dv-opt" id="6d">
+      <div class="dv-olabel"><a class="dv-oid" href="#6d">6d</a>Set icon — Emoji: pick a category, then an emoji; the preview updates as you go</div>
+      <dc-import name="Reson8 App" view="text" ctx="icon" hint-size="1440px,900px"></dc-import>
+    </div>
+    <div class="dv-opt" id="6e">
+      <div class="dv-olabel"><a class="dv-oid" href="#6e">6e</a>Set icon — Image: crop to a square with the zoom slider</div>
+      <dc-import name="Reson8 App" view="text" ctx="icon-image" hint-size="1440px,900px"></dc-import>
+    </div>
+    <div class="dv-opt" id="6f">
+      <div class="dv-olabel"><a class="dv-oid" href="#6f">6f</a>Move to category — choose where the channel goes; it’s added at the bottom</div>
+      <dc-import name="Reson8 App" view="text" ctx="move" hint-size="1440px,900px"></dc-import>
+    </div>
+    <div class="dv-opt" id="6g">
+      <div class="dv-olabel"><a class="dv-oid" href="#6g">6g</a>Delete — always confirms, since it removes the history for everyone</div>
+      <dc-import name="Reson8 App" view="text" ctx="delete" hint-size="1440px,900px"></dc-import>
+    </div>
+  </div>
+  <p class="dv-next">Try next: "context menus for voice channels and categories" · "right-click on a member" · "drag to reorder channels"</p>
+</section>
+<section class="dv-turn" id="t5">
+  <div class="dv-thd"><a class="dv-tid" href="#t5">5</a><span class="dv-tname">Server settings — admins only, from the server menu</span></div>
+  <div style="max-width:1440px;display:grid;grid-template-columns:repeat(3, minmax(0,1fr));gap:32px;margin-bottom:40px;font-size:13.5px;line-height:1.55;color:var(--color-neutral-400)">
+    <div><div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-accent-400);margin-bottom:6px">Three tabs → seven pages</div>User Management covered four separate jobs, so it's split into <b style="color:var(--color-neutral-200);font-weight:500">Members</b>, <b style="color:var(--color-neutral-200);font-weight:500">Joining &amp; invites</b>, <b style="color:var(--color-neutral-200);font-weight:500">Bans</b> and the <b style="color:var(--color-neutral-200);font-weight:500">Identity log</b>. The Server tab is split too: features and the message limit go to <b style="color:var(--color-neutral-200);font-weight:500">General</b>, approval and invite rules sit next to the invites they control, and signed identity and relay protection go to <b style="color:var(--color-neutral-200);font-weight:500">Sign-in security</b>.</div>
+    <div><div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-accent-400);margin-bottom:6px">One menu per member</div>Each member row used to have four always-visible controls. Now it shows the role and a ⋮ menu. Actions that don't apply stay in the menu but are disabled and explain why, for example that you can't ban yourself. Ban and Reset key ask for confirmation. “View identity log” opens the log filtered to that person.</div>
+    <div><div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-accent-400);margin-bottom:6px">Shared shell, server scope</div>It uses the same panel as client settings (<a class="dv-oid" href="#4a">4a</a>), with a server header and an “Admins only” line. Non-admins never see the menu entry. Badges show work waiting: emoji requests and pending approvals. Relay protection only changes when you press Save, because a wrong address locks people out.</div>
+  </div>
+  <div class="dv-opts">
+    <div class="dv-opt" id="5a">
+      <div class="dv-olabel"><a class="dv-oid" href="#5a">5a</a>Members — search, filter, open ⋮ on any row; try Ban or Reset key</div>
+      <dc-import name="Reson8 App" view="text" server-settings="members" hint-size="1440px,900px"></dc-import>
+    </div>
+    <div class="dv-opt" id="5b">
+      <div class="dv-olabel"><a class="dv-oid" href="#5b">5b</a>Joining &amp; invites — approval on with 2 waiting; Create invite dialog open</div>
+      <dc-import name="Reson8 App" view="text" server-settings="joining" sv-approve="{{ true }}" sv-dialog="invite" hint-size="1440px,900px"></dc-import>
+    </div>
+    <div class="dv-opt" id="5c">
+      <div class="dv-olabel"><a class="dv-oid" href="#5c">5c</a>Identity log — filtered to Tester, as reached from the Members ⋮ menu</div>
+      <dc-import name="Reson8 App" view="text" server-settings="log" log-user="Tester" hint-size="1440px,900px"></dc-import>
+    </div>
+    <div class="dv-opt" id="5d">
+      <div class="dv-olabel"><a class="dv-oid" href="#5d">5d</a>Sign-in security — signed identity warning, relay protection with Save</div>
+      <dc-import name="Reson8 App" view="text" server-settings="security" hint-size="1440px,900px"></dc-import>
+    </div>
+    <div class="dv-opt" id="5e">
+      <div class="dv-olabel"><a class="dv-oid" href="#5e">5e</a>Emoji — approve or reject requests; approved ones join the library</div>
+      <dc-import name="Reson8 App" view="text" server-settings="emoji" hint-size="1440px,900px"></dc-import>
+    </div>
+    <div class="dv-opt" id="5f">
+      <div class="dv-olabel"><a class="dv-oid" href="#5f">5f</a>General — Nudge, Screen sharing, max message length</div>
+      <dc-import name="Reson8 App" view="text" server-settings="general" hint-size="1440px,900px"></dc-import>
+    </div>
+  </div>
+  <p class="dv-next">Try next: "channel settings and permissions" · "what a non-admin sees in the server menu" · "a moderator role between Member and Admin"</p>
+</section>
+<section class="dv-turn" id="t4">
+  <div class="dv-thd"><a class="dv-tid" href="#t4">4</a><span class="dv-tname">Client settings — from the gear, bottom-left</span></div>
+  <div style="max-width:1440px;display:grid;grid-template-columns:repeat(3, minmax(0,1fr));gap:32px;margin-bottom:40px;font-size:13.5px;line-height:1.55;color:var(--color-neutral-400)">
+    <div><div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-accent-400);margin-bottom:6px">Four tabs → seven pages</div>The settings are regrouped by what you're thinking about. <b style="color:var(--color-neutral-200);font-weight:500">Voice</b> holds the mic and how it transmits. <b style="color:var(--color-neutral-200);font-weight:500">Sound</b> holds the output device and every volume, which used to be split across two tabs. <b style="color:var(--color-neutral-200);font-weight:500">Shortcuts</b> gets its own page. Identity moves from About to <b style="color:var(--color-neutral-200);font-weight:500">Profile</b>. The old Application tab is split into <b style="color:var(--color-neutral-200);font-weight:500">Privacy &amp; safety</b> and <b style="color:var(--color-neutral-200);font-weight:500">Window</b>.</div>
+    <div><div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-accent-400);margin-bottom:6px">Controls appear when they apply</div>The noise-gate threshold only shows once the gate is on, and it's drawn as a marker on the live level meter. The push-to-talk key sits right under the Push-to-talk choice and warns until it's set. Link-preview blur options grey out when previews are off.</div>
+    <div><div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-accent-400);margin-bottom:6px">Saved as you go</div>There is no Save or Close footer, since every change applies right away; close with × or by clicking outside. The panel says it is for this device only, and points to the server menu for server options. “Don't warn me again” in <a class="dv-oid" href="#3c">3c</a> switches off the NSFW warning in <a class="dv-oid" href="#4e">4e</a>.</div>
+  </div>
+  <div class="dv-opts">
+    <div class="dv-opt" id="4a">
+      <div class="dv-olabel"><a class="dv-oid" href="#4a">4a</a>Voice — live input meter · turn on Noise gate to get the threshold · switch to Push-to-talk</div>
+      <dc-import name="Reson8 App" view="text" settings="voice" hint-size="1440px,900px"></dc-import>
+    </div>
+    <div class="dv-opt" id="4h">
+      <div class="dv-olabel"><a class="dv-oid" href="#4h">4h</a>Voice — Hear yourself, Noise gate and Noise suppression on: each reveals its own control</div>
+      <dc-import name="Reson8 App" view="text" settings="voice" voice-on="{{ true }}" hint-size="1440px,900px"></dc-import>
+    </div>
+    <div class="dv-opt" id="4b">
+      <div class="dv-olabel"><a class="dv-oid" href="#4b">4b</a>Sound — output device, master voice volume, alerts and nudges</div>
+      <dc-import name="Reson8 App" view="text" settings="sound" hint-size="1440px,900px"></dc-import>
+    </div>
+    <div class="dv-opt" id="4c">
+      <div class="dv-olabel"><a class="dv-oid" href="#4c">4c</a>Shortcuts — click a shortcut box and press keys to record it</div>
+      <dc-import name="Reson8 App" view="text" settings="shortcuts" hint-size="1440px,900px"></dc-import>
+    </div>
+    <div class="dv-opt" id="4d">
+      <div class="dv-olabel"><a class="dv-oid" href="#4d">4d</a>Profile &amp; identity — avatar source and email; key fingerprint, export and import</div>
+      <dc-import name="Reson8 App" view="text" settings="profile" hint-size="1440px,900px"></dc-import>
+    </div>
+    <div class="dv-opt" id="4e">
+      <div class="dv-olabel"><a class="dv-oid" href="#4e">4e</a>Privacy &amp; safety — NSFW, link previews, avatar requests, trusted certificates</div>
+      <dc-import name="Reson8 App" view="text" settings="privacy" hint-size="1440px,900px"></dc-import>
+    </div>
+    <div class="dv-opt" id="4f">
+      <div class="dv-olabel"><a class="dv-oid" href="#4f">4f</a>Window — system tray behaviour</div>
+      <dc-import name="Reson8 App" view="text" settings="window" hint-size="1440px,900px"></dc-import>
+    </div>
+    <div class="dv-opt" id="4g">
+      <div class="dv-olabel"><a class="dv-oid" href="#4g">4g</a>About — press Check for updates</div>
+      <dc-import name="Reson8 App" view="text" settings="about" hint-size="1440px,900px"></dc-import>
+    </div>
+  </div>
+  <p class="dv-next">Try next: "server settings for admins (from the server menu)" · "an update-available state on <a class="dv-oid" href="#4g">4g</a>" · "a settings search field"</p>
+</section>
+<section class="dv-turn" id="t3">
+  <div class="dv-thd"><a class="dv-tid" href="#t3">3</a><span class="dv-tname">When things need attention — failure, password, NSFW</span></div>
+  <div style="max-width:1440px;display:grid;grid-template-columns:repeat(3, minmax(0,1fr));gap:32px;margin-bottom:40px;font-size:13.5px;line-height:1.55;color:var(--color-neutral-400)">
+    <div><div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-accent-400);margin-bottom:6px">Fail in place</div>A failed connect stays on the same card as the steps, so you can see which step stopped. It gives two likely fixes, and Try again / Edit details keep what you typed. The title-bar pill turns red.</div>
+    <div><div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-accent-400);margin-bottom:6px">Ask only when asked</div>The password field on <a class="dv-oid" href="#2a">2a</a> stays optional. If a server turns out to be private, the flow pauses at “Signing in” and asks for the password. After Join, the remaining steps continue.</div>
+    <div><div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-accent-400);margin-bottom:6px">NSFW, acknowledged once</div>Opening a channel tagged NSFW asks first. Confirming covers that channel for the rest of the session. “Don’t warn me again” skips the prompt for every NSFW channel on this server.</div>
+  </div>
+  <div class="dv-opts">
+    <div class="dv-opt" id="3a">
+      <div class="dv-olabel"><a class="dv-oid" href="#3a">3a</a>Connection failed — from <a class="dv-oid" href="#2a">2a</a> · Try again fails again; change the address and it connects</div>
+      <dc-import name="Reson8 App" view="welcome" first-run="{{ true }}" scenario="fail" hint-size="1440px,900px"></dc-import>
+    </div>
+    <div class="dv-opt" id="3b">
+      <div class="dv-olabel"><a class="dv-oid" href="#3b">3b</a>Password required — from <a class="dv-oid" href="#2a">2a</a> · enter anything and Join to finish connecting</div>
+      <dc-import name="Reson8 App" view="welcome" first-run="{{ true }}" scenario="password" hint-size="1440px,900px"></dc-import>
+    </div>
+    <div class="dv-opt" id="3c">
+      <div class="dv-olabel"><a class="dv-oid" href="#3c">3c</a>NSFW channel prompt — click Weeb Shit or Coisas in the tree to trigger it again</div>
+      <dc-import name="Reson8 App" view="text" nsfw-prompt="Weeb Shit" hint-size="1440px,900px"></dc-import>
+    </div>
+  </div>
+  <p class="dv-next">Try next: "a wrong-password retry state on <a class="dv-oid" href="#3b">3b</a>" · "the Settings → Privacy page that undoes the NSFW choice" · "start the settings screens"</p>
+</section>
+<section class="dv-turn" id="t2">
+  <div class="dv-thd"><a class="dv-tid" href="#t2">2</a><span class="dv-tname">Starting point — not connected</span></div>
+  <div style="max-width:1440px;display:grid;grid-template-columns:repeat(3, minmax(0,1fr));gap:32px;margin-bottom:40px;font-size:13.5px;line-height:1.55;color:var(--color-neutral-400)">
+    <div><div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-accent-400);margin-bottom:6px">Where it sits</div>Launch → this screen → Connect → the steps play out in place → you land on the server (<a class="dv-oid" href="#1a">1a</a>). The title-bar pill reads “Not connected” here; once connected it becomes the switcher (<a class="dv-oid" href="#1d">1d</a>) for hopping to another saved server.</div>
+    <div><div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-accent-400);margin-bottom:6px">Nothing empty</div>The old empty tree and blank Server Log are replaced by one focused form. Channels, voice and private messages need a server, so the sidebar is hidden and the rail is dimmed. The Server Log still records the connection.</div>
+    <div><div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-accent-400);margin-bottom:6px">Freedom, up front</div>The right side lists saved servers for one-click reconnects. A “Host your own” block shows that the server is a free image anyone can run. On first launch, the empty saved list explains how servers get saved.</div>
+  </div>
+  <div class="dv-opts">
+    <div class="dv-opt" id="2a">
+      <div class="dv-olabel"><a class="dv-oid" href="#2a">2a</a>First launch — empty form, no saved servers</div>
+      <dc-import name="Reson8 App" view="welcome" first-run="{{ true }}" hint-size="1440px,900px"></dc-import>
+    </div>
+    <div class="dv-opt" id="2b">
+      <div class="dv-olabel"><a class="dv-oid" href="#2b">2b</a>Returning — remembered credentials + saved servers · press Connect to watch the flow</div>
+      <dc-import name="Reson8 App" view="welcome" hint-size="1440px,900px"></dc-import>
+    </div>
+  </div>
+  <p class="dv-next">Try next: "a connection-failed state on <a class="dv-oid" href="#2b">2b</a>" · "a password-required prompt" · "start the settings screens"</p>
+</section>
+<section class="dv-turn" id="t1">
+  <div class="dv-thd"><a class="dv-tid" href="#t1">1</a><span class="dv-tname">Reson8 desktop client — polished study (Nocturne)</span></div>
+  <div style="max-width:1440px;display:grid;grid-template-columns:repeat(3, minmax(0,1fr));gap:32px;margin-bottom:40px;font-size:13.5px;line-height:1.55;color:var(--color-neutral-400)">
+    <div><div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-accent-400);margin-bottom:6px">Connection, de-cluttered</div>The always-visible server / user / password fields and Connect / Disconnect buttons collapse into one status pill in the title bar. It opens a popover with saved servers — official, a friend's or <span style="font-family:ui-monospace,Menlo,monospace">localhost</span> — so self-hosting is a first-class citizen.</div>
+    <div><div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-accent-400);margin-bottom:6px">Same structure, calmer</div>Channel tree, tabs, chat and the metadata bar keep their places. Category icons are gone (the caret collapses them); voice members nest under their room with a speaking ring; unread, NSFW and member counts are the only badges.</div>
+    <div><div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-accent-400);margin-bottom:6px">Accent as light</div>The accent is a line and a glow — active channel, active tab, pinned card — never a flood. Green/red are reserved for live state (voice, mute, leave). The status bar carries the client version next to ping, encryption and ID.</div>
+  </div>
+  <div class="dv-opts">
+    <div class="dv-opt" id="1a">
+      <div class="dv-olabel"><a class="dv-oid" href="#1a">1a</a>Text channel · hover a message for actions · click names, channels, tabs, the pin; type and press Enter</div>
+      <dc-import name="Reson8 App" view="text" msg-menu="{{ true }}" hint-size="1440px,900px"></dc-import>
+    </div>
+    <div class="dv-opt" id="1b">
+      <div class="dv-olabel"><a class="dv-oid" href="#1b">1b</a>Voice room — opened from the channel tree or the voice dock</div>
+      <dc-import name="Reson8 App" view="voice" hint-size="1440px,900px"></dc-import>
+    </div>
+    <div class="dv-opt" id="1k">
+      <div class="dv-olabel"><a class="dv-oid" href="#1k">1k</a>Windows / macOS share picker — screens / windows, app audio, custom stream name · Start sharing puts your stream on stage</div>
+      <dc-import name="Reson8 App" view="voice" share-picker="{{ true }}" hint-size="1440px,900px"></dc-import>
+    </div>
+    <div class="dv-opt" id="1l">
+      <div class="dv-olabel"><a class="dv-oid" href="#1l">1l</a>Linux · step 1 — Reson8 hands off to the system picker (xdg-desktop-portal / KDE Plasma)</div>
+      <dc-import name="Reson8 App" view="voice" share="{{ false }}" platform="linux" linux-step="portal" hint-size="1440px,900px"></dc-import>
+    </div>
+    <div class="dv-opt" id="1m">
+      <div class="dv-olabel"><a class="dv-oid" href="#1m">1m</a>Linux · step 2 — back in Reson8: confirm the source, name the stream, start</div>
+      <dc-import name="Reson8 App" view="voice" share="{{ false }}" platform="linux" linux-step="name" hint-size="1440px,900px"></dc-import>
+    </div>
+    <div class="dv-opt" id="1f">
+      <div class="dv-olabel"><a class="dv-oid" href="#1f">1f</a>Voice room without a screen share · mic device menu open (caret beside mic / headphones)</div>
+      <dc-import name="Reson8 App" view="voice" share="{{ false }}" dev-menu="room-in" hint-size="1440px,900px"></dc-import>
+    </div>
+    <div class="dv-opt" id="1c">
+      <div class="dv-olabel"><a class="dv-oid" href="#1c">1c</a>Private messages — online server users (message + nudge) and offline people from your conversations (message only)</div>
+      <dc-import name="Reson8 App" view="dm" hint-size="1440px,900px"></dc-import>
+    </div>
+    <div class="dv-opt" id="1d">
+      <div class="dv-olabel"><a class="dv-oid" href="#1d">1d</a>Connection popover from the title-bar pill</div>
+      <dc-import name="Reson8 App" view="text" conn-open="{{ true }}" hint-size="1440px,900px"></dc-import>
+    </div>
+    <div class="dv-opt" id="1e">
+      <div class="dv-olabel"><a class="dv-oid" href="#1e">1e</a>Server menu from the header caret — about, copy address, create channel and settings (admin)</div>
+      <dc-import name="Reson8 App" view="text" server-menu="{{ true }}" hint-size="1440px,900px"></dc-import>
+    </div>
+  </div>
+  <div style="height:48px"></div>
+  <div class="dv-opts">
+    <div class="dv-opt" id="1j">
+      <div class="dv-olabel"><a class="dv-oid" href="#1j">1j</a>Profile card — click any name or avatar (messages, voice members, private messages)</div>
+      <dc-import name="Reson8 App" view="text" profile="Kdshy" hint-size="1440px,900px"></dc-import>
+    </div>
+    <div class="dv-opt" id="1i">
+      <div class="dv-olabel"><a class="dv-oid" href="#1i">1i</a>Message search — results panel for “log”; scope, filters, click a result to jump</div>
+      <dc-import name="Reson8 App" view="text" search="log" hint-size="1440px,900px"></dc-import>
+    </div>
+    <div class="dv-opt" id="1g">
+      <div class="dv-olabel"><a class="dv-oid" href="#1g">1g</a>Create channel — text (from the server menu)</div>
+      <dc-import name="Reson8 App" view="text" create-channel="text" hint-size="1440px,900px"></dc-import>
+    </div>
+    <div class="dv-opt" id="1h">
+      <div class="dv-olabel"><a class="dv-oid" href="#1h">1h</a>Create channel — voice (no NSFW toggle)</div>
+      <dc-import name="Reson8 App" view="text" create-channel="voice" hint-size="1440px,900px"></dc-import>
+    </div>
+  </div>
+  <p class="dv-next">Try next: "embed cards for links like the Instagram ones in the current app" · "a first-launch / no-server state" · "compact density version of <a class="dv-oid" href="#1a">1a</a>"</p>
+</section>
+</x-dc>
+</body>
+</html>

@@ -2824,6 +2824,9 @@ None of these are fixed silently. Each is either assigned to an item or left for
 
 **P10. Saved server password stored in plaintext localStorage.** Fixed in C1.
 
+**P11. A failed `USER_JOIN_SERVER` leaves the socket signed in** (`connection.handler.ts`, found during A1 on 13/10/2026). `socket.data.userId`/`serverId` are set before the role upsert; when that step throws (for example an unseeded database), the ack is `{ success: false }` but the packet gate lets the socket call every event it allows for a signed-in user. Only reachable when a join fails on a database error.
+- **TO-DO, not assigned yet:** clear `userId`, `serverId` and the other join-derived `socket.data` fields on any failed join (or set them only after the last fallible step), and add a test that a failed join leaves the socket default-denied. Decide the item at the next planning pass.
+
 ---
 
 ## Open Decisions
