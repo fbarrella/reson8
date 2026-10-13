@@ -18,6 +18,7 @@ import { PermissionFlags } from "@reson8/shared-types";
 import { buildChannelTree } from "../services/channel-tree.service.js";
 import {
     annotateSessionStarts,
+    hydrateOccupants,
     removeSocketFromChannel,
     voiceSessionStartedAt,
 } from "../services/voice-session.service.js";
@@ -78,6 +79,9 @@ async function broadcastTreeUpdate(
         })),
     );
 
+    // PRD 19 P12: the broadcast tree used to carry no occupants, so every
+    // client's voice rooms looked empty after any channel change.
+    await hydrateOccupants(tree, new PresenceService(app.redis), app.prisma);
     // PRD 19 A3: running voice sessions ride on the tree (a global value, so a
     // shared broadcast can carry it).
     annotateSessionStarts(tree);

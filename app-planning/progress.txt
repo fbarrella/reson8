@@ -1598,3 +1598,50 @@ Feature/Fix: Every upload is validated by its real bytes (PRD 19 A10, security)
 
   Next Step: P1 is complete. P2 starts with B1 (unread counts in the current UI).
   Reminder: P11 / P12 still need a decision.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: P1.5 — a failed join no longer leaves the socket signed in (P11) and
+channel-tree broadcasts keep their occupants (P12)
+
+  Problem:
+    P11: USER_JOIN_SERVER wrote socket.data.userId/serverId BEFORE its last
+    fallible steps (user upsert, role grants, membership). When one threw, the
+    ack said { success: false } but the packet gate (which only looks at
+    userId + serverId) treated the socket as signed in.
+    P12: broadcastTreeUpdate() sent a tree built from the database alone
+    (occupants: []) and clients replace their tree with it, so after any channel
+    create/rename/move/delete every voice room looked empty until the next
+    presence update.
+
+  Solution:
+    P11: services/join-state.ts (NEW): snapshotJoinState()/restoreJoinState()
+    over the five join-owned fields (userId, serverId, nickname,
+    currentChannelId, hasAccess). The handler snapshots at entry and restores on
+    the invite-unusable path, the identity-create-race path and the catch. A
+    socket that was already signed in keeps its previous state if a re-join
+    fails; one that never was is default-deny again.
+    P12: hydrateOccupants() moved out of connection.handler.ts into
+    voice-session.service.ts (shared, with the start-time bootstrap for occupied
+    voice rooms); the join-time tree and broadcastTreeUpdate() both use it.
+
+  Key Files Modified:
+    apps/server/src/services/join-state.ts (NEW)
+    apps/server/src/services/voice-session.service.ts
+    apps/server/src/handlers/connection.handler.ts, channel.handler.ts
+    apps/server/src/__tests__/join-state.test.ts (NEW), voice-session.test.ts
+    app-planning/Reson8_Phase19_PRD.md (P11 and P12 marked fixed)
+
+  Verification:
+    - tsc clean; server tests pass (3 + 2 new; the join-state test also
+      asserts requiresSignIn for a normal event).
+    - P11 on a real server: with the Member role id temporarily renamed in the
+      database (the join's role upsert then violates the FK), a new identity's
+      join -> { success:false, "Failed to join server" }; on the SAME socket
+      GET_SERVER_SUMMARY and GET_ONLINE_USERS -> "Not signed in" (before: the
+      summary answered). The role id was restored afterwards.
+    - P12 on a real server: an occupant sat in Lobby; an admin renamed a text
+      channel; the broadcast tree's Lobby carried the occupant and the session
+      start (before: occupants []).
+
+  Next Step: P2 — B1 (unread counts in the current UI).

@@ -42,7 +42,8 @@ import { requireInvite } from "../config/invite.config.js";
 import { getUserPermissions } from "../services/permissions.service.js";
 import { hasServerAccess, rolesToGrant } from "../services/access.service.js";
 import { membersRoom } from "../services/access-change.js";
-import { annotateSessionStarts, voiceSessionStartedAt } from "../services/voice-session.service.js";
+import { restoreJoinState, snapshotJoinState } from "../services/join-state.js";
+import { annotateSessionStarts, hydrateOccupants, voiceSessionStartedAt } from "../services/voice-session.service.js";
 import { applyUnreadCounts, countUnreadByChannel } from "../services/unread.service.js";
 import {
     INVITE_FAIL_WINDOW_SECONDS,
@@ -347,6 +348,9 @@ export function registerConnectionHandlers(
 
         // ── USER_JOIN_SERVER ────────────────────────────────────────────────
         socket.on("USER_JOIN_SERVER", async (payload, ack) => {
+            // PRD 19 P11: the join writes socket.data before its last fallible
+            // steps; any failure from there on puts it back (default-deny).
+            const priorJoinState = snapshotJoinState(socket.data);
             try {
                 const { nickname, instanceId, password } = payload;
                 if (typeof instanceId !== "string" || instanceId.length === 0 || instanceId.length > 128) {
@@ -674,6 +678,7 @@ export function registerConnectionHandlers(
                     } catch (err) {
                         if (err instanceof InviteUnusableError) {
                             // Used up / revoked / expired between the check and now.
+                            restoreJoinState(socket.data, priorJoinState);
                             ack({ success: false, error: INVITE_MESSAGES.invalid, errorCode: "INVITE_INVALID" });
                             return;
                         }
@@ -687,6 +692,7 @@ export function registerConnectionHandlers(
                         // Another first join created the row with its own key in between.
                         logIdentityEvent("REFUSED", "otherDevice");
                         app.log.warn({ ...identityLog, reason: "otherDevice" }, "Join refused (identity create race lost)");
+                        restoreJoinState(socket.data, priorJoinState);
                         ack({ success: false, error: IDENTITY_MESSAGES.otherDevice });
                         return;
                     }
@@ -812,29 +818,7 @@ export function registerConnectionHandlers(
 
                 // Hydrate occupants from Redis presence so joining
                 // clients see who is already in voice channels
-                async function hydrateOccupants(
-                    nodes: typeof tree,
-                ): Promise<void> {
-                    for (const node of nodes) {
-                        const occupantIds =
-                            await presence.getChannelOccupants(node.id);
-                        if (occupantIds.length > 0) {
-                            node.occupants = await Promise.all(
-                                occupantIds.map((uid) => buildOccupant(uid, presence, app.prisma)),
-                            );
-                            // Bootstrap voice session start time for occupied voice channels
-                            // (approximate — covers server-restart recovery)
-                            const chMeta = channelDtos.find((c: { id: string }) => c.id === node.id);
-                            if (chMeta && (chMeta.type as string) === "VOICE" && !voiceSessionStartedAt.has(node.id)) {
-                                voiceSessionStartedAt.set(node.id, new Date());
-                            }
-                        }
-                        if (node.children.length > 0) {
-                            await hydrateOccupants(node.children);
-                        }
-                    }
-                }
-                await hydrateOccupants(tree);
+                await hydrateOccupants(tree, presence, app.prisma);
                 // PRD 19 A3: occupied voice rooms carry their session start so a
                 // client that connects mid-session shows the running timer at once.
                 annotateSessionStarts(tree, true);
@@ -855,6 +839,7 @@ export function registerConnectionHandlers(
                 );
             } catch (err) {
                 app.log.error({ err }, "Error in USER_JOIN_SERVER");
+                restoreJoinState(socket.data, priorJoinState);
                 ack({ success: false, error: "Failed to join server" });
             }
         });

@@ -51,6 +51,40 @@ export async function presencePayload(
 }
 
 /**
+ * Fills `occupants` on every node of a channel tree from Redis presence
+ * (PRD 19 P12), recursively. Shared by the join-time tree and every tree
+ * broadcast: a tree built from the database alone has `occupants: []`, which
+ * made every voice room look empty on every client after any channel change.
+ * An occupied voice room with no running session start gets one now
+ * (approximate; covers a server restart).
+ */
+export async function hydrateOccupants(
+    nodes: {
+        id: string;
+        type: string;
+        occupants: IUserPresence[];
+        children: unknown[];
+    }[],
+    presence: Pick<PresenceService, "getChannelOccupants" | "getUserPresence">,
+    prisma: FastifyInstance["prisma"],
+): Promise<void> {
+    for (const node of nodes) {
+        const occupantIds = await presence.getChannelOccupants(node.id);
+        if (occupantIds.length > 0) {
+            node.occupants = await Promise.all(
+                occupantIds.map((uid) => buildOccupant(uid, presence as PresenceService, prisma)),
+            );
+            if (node.type === "VOICE" && !voiceSessionStartedAt.has(node.id)) {
+                voiceSessionStartedAt.set(node.id, new Date());
+            }
+        }
+        if (node.children.length > 0) {
+            await hydrateOccupants(node.children as typeof nodes, presence, prisma);
+        }
+    }
+}
+
+/**
  * Sets `sessionStartedAt` on every voice node whose room has a running
  * session (recursively). `requireOccupants` is for trees that carry occupants
  * (the join-time tree): a stale map entry for an empty room is then ignored.
