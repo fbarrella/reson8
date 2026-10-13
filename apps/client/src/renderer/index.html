@@ -2960,6 +2960,14 @@
       color: var(--color-neutral-500);
     }
 
+    .voice-stream-layout-toggle {
+      display: none;
+    }
+
+    .voice-stream-layout-toggle.visible {
+      display: flex;
+    }
+
     .voice-layout-toggle {
       display: flex;
       margin-left: auto;
@@ -2997,19 +3005,224 @@
     /* The in-app stream stage (PRD 19 C10): the stream above, people as a strip below. */
     .voice-stream {
       display: none;
-      position: relative;
       flex: 1;
       min-height: 0;
       background: #000;
     }
 
     .voice-room.has-stream .voice-stream {
-      display: block;
+      display: flex;
+    }
+
+    .voice-stream-main {
+      position: relative;
+      flex: 1;
+      min-width: 0;
     }
 
     .voice-room.has-stream .voice-room-stage {
-      flex: 0 0 150px;
+      flex: 0 0 clamp(96px, 20vh, 150px);
       border-top: 1px solid var(--color-divider);
+    }
+
+    /* The people strip turns into 44 px chips when its tiles would be under 90 px tall (PRD 19 C11). */
+    .voice-grid.chips {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-start;
+      align-content: flex-start;
+    }
+
+    .voice-grid.chips .voice-tile {
+      flex-direction: row;
+      width: auto !important;
+      height: 44px !important;
+      padding: 0 12px;
+      gap: 8px;
+    }
+
+    .voice-grid.chips .voice-more {
+      width: auto !important;
+      height: 44px !important;
+      padding: 0 12px;
+    }
+
+    .voice-grid.chips .voice-tile .sharing-badge {
+      position: static;
+    }
+
+    /* Focus: the other streams as static cards (PRD 19 C11). */
+    .voice-stream-side {
+      display: none;
+      flex-direction: column;
+      gap: 8px;
+      width: 212px;
+      flex-shrink: 0;
+      padding: 10px;
+      overflow-y: auto;
+      background: var(--color-bg);
+      border-left: 1px solid var(--color-divider);
+    }
+
+    .voice-stream.has-side .voice-stream-side {
+      display: flex;
+    }
+
+    .voice-stream-side-head {
+      padding: 0 2px;
+    }
+
+    .voice-stream-card {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px;
+      border: 1px solid var(--color-neutral-700);
+      border-radius: var(--radius-md);
+      background: var(--color-surface);
+      color: var(--color-text);
+      text-align: left;
+      cursor: pointer;
+    }
+
+    .voice-stream-card:hover {
+      border-color: var(--color-accent);
+    }
+
+    .voice-stream-card-text {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      flex: 1;
+    }
+
+    .voice-stream-card-name {
+      font-size: 13px;
+      font-weight: 500;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .voice-stream-card-sub {
+      font-size: 11px;
+      color: var(--color-neutral-500);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .voice-live-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--color-danger, #e5484d);
+      flex-shrink: 0;
+    }
+
+    /* Grid: every stream at one 16:9 size. */
+    .voice-streams {
+      display: none;
+      flex: 1;
+      min-width: 0;
+      padding: 12px;
+      gap: 12px;
+      justify-content: center;
+      align-content: center;
+      background: #000;
+    }
+
+    .voice-stream.is-grid .voice-stream-main,
+    .voice-stream.is-grid .voice-stream-side {
+      display: none;
+    }
+
+    .voice-stream.is-grid .voice-streams {
+      display: grid;
+    }
+
+    .voice-grid-cell {
+      position: relative;
+      min-width: 0;
+      overflow: hidden;
+      border-radius: var(--radius-md);
+      background: #0b0b10;
+    }
+
+    .voice-grid-video {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .voice-grid-video video {
+      max-width: 100%;
+      max-height: 100%;
+    }
+
+    .voice-grid-label {
+      position: absolute;
+      left: 6px;
+      bottom: 6px;
+      max-width: 70%;
+      padding: 2px 8px;
+      border-radius: var(--radius-md);
+      background: rgba(0, 0, 0, 0.6);
+      color: #fff;
+      font-size: 12px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .voice-grid-actions {
+      position: absolute;
+      top: 6px;
+      right: 6px;
+      display: flex;
+      gap: 4px;
+      opacity: 0;
+      transition: opacity 0.12s;
+    }
+
+    .voice-grid-cell:hover .voice-grid-actions {
+      opacity: 1;
+    }
+
+    .voice-grid-actions button {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 26px;
+      height: 26px;
+      border: none;
+      border-radius: var(--radius-md);
+      background: rgba(0, 0, 0, 0.6);
+      color: #fff;
+      cursor: pointer;
+    }
+
+    .voice-grid-note {
+      position: absolute;
+      inset: 0;
+      display: none;
+      flex-direction: column;
+      gap: 8px;
+      padding: 12px;
+      background: var(--color-bg);
+      color: var(--color-neutral-300);
+      font-size: 12.5px;
+    }
+
+    .voice-grid-cell.is-popped .voice-grid-note {
+      display: flex;
+    }
+
+    .voice-room-sharing {
+      font-size: 12px;
+      color: var(--color-neutral-400);
     }
 
     .voice-stream-video {

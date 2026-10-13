@@ -2847,3 +2847,59 @@ Feature/Fix: In-app stream stage with an optional pop-out (PRD 19 C10)
 
   Next Step: PRD 19 C11 — multiple streams: Focus and Grid (Step 0 asks the
   owner about live previews).
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Multiple streams — Focus and Grid (PRD 19 C11)
+
+  Problem: the stage (C10) showed one stream; with several people sharing there
+  was no way to see who else was live or to see more than one at a time.
+
+  Solution (the default build, no server change):
+    - api.stage in the preload became multi-handle: one watch per sharer id
+      (watch/stop(id?)/isWatching(id?)/setVolume/setMuted/qualityHeight(id));
+      "stage-ended" carries targetUserId.
+    - Header: "{n} / 5 sharing" and a Focus | Grid toggle (from two streams),
+      remembered in reson8-stream-layout. The people toggle stays forced to
+      Featured while anyone shares.
+    - Focus: the main stream is the C10 stage; the other sharers are static
+      LIVE cards in a 212 px "Also live · {n}" column (avatar, name, the stream
+      name when known from an earlier watch else "Screen share", a LIVE dot) —
+      no video, no extra consumers. Clicking one stops the current watch and
+      then starts the new one (C10's sequencing).
+    - Grid: every stream in a 16:9 cell sized by fitVoiceTiles(ratio 16/9),
+      each with its own watch and muted (one stream's sound at a time);
+      double-click or ⤢ focuses one; a per-cell Pop out opens that stream's
+      Viewer (the cell shows "in its own window" with Bring it back / Show
+      window, and closing the Viewer by any route puts the stream back).
+      Cells are keyed by sharer: a share that starts adds a cell + watch, one
+      that stops removes them; the last one ending leaves the grid.
+    - People: with a stream on stage the strip's height is clamp(96px, 20vh,
+      150px) and its tiles become 44 px chips when they would be under 90 px.
+
+  NOT built — owner decision D2: Step 0 asks for CPU % / inbound kbit/s with
+  3 and 5 sharers (all full vs. non-focused paused) BEFORE deciding on live
+  previews (the new viewer-socket event SET_CONSUMER_LAYERS). That needs real
+  multi-sharer video, which this machine does not deliver (see C10's entry), so
+  no measurement exists and the cards stay static. The owner needs to run the
+  measurement (or waive it) and say yes/no.
+
+  Key Files Modified:
+    apps/client/src/preload.ts
+    apps/client/src/renderer/renderer.ts, index.html
+
+  Verification:
+    - tsc client clean; lint exit 0.
+    - Three real Electron clients (two sharers, one watcher): the header read
+      "1 / 5 sharing" then "2 / 5 sharing" with the toggle appearing; Focus on
+      A showed B as a static card "Also live · 1"; clicking it swapped the main
+      stream to B (stop, then start) and A became the card; Grid showed two
+      318x178 cells each with a watch, Pop out on one opened a Viewer and the
+      cell showed the popped state, Bring it back closed it and restored the
+      cell; double-click returned to Focus on that stream; a sharer stopping
+      removed its card, the last stopping returned the room to idle.
+      Screenshot reviewed.
+    - Not driven: the 44 px chip layout (needs a short window), more than two
+      sharers, and picture/sound in cells (no frames flow here).
+
+  Next Step: PRD 19 C12 — update corner card, in-call note, What's New.

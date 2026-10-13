@@ -256,9 +256,12 @@ async function buildIdentityProof(
 
 /** The pinned certificate the current connection uses (null for a publicly trusted one) — PRD 19 C10. */
 let activePin: { ca: string; fingerprint256: string } | null = null;
-/** The in-app stage's watch, if any (PRD 19 C10). One at a time; owned here because MediaStreams can't cross contextBridge. */
-let stageHandle: WatchHandle | null = null;
-let stageStarting = false;
+/**
+ * The in-app stage's watches, keyed by the sharer's user id (PRD 19 C10/C11): one in Focus, up to
+ * five in Grid. Owned here because MediaStreams can't cross contextBridge.
+ */
+const stageHandles = new Map<string, WatchHandle>();
+const stageStarting = new Set<string>();
 let stageVolume = 100;
 
 /** A viewer ticket from the server (PRD 17.12), or null (older server / not joined). */
@@ -1926,6 +1929,7 @@ const api = {
          * Watches `targetUserId`'s share with a viewer socket of its own and
          * puts the video into the element named `containerId`. The ticket is
          * requested here and never reaches the renderer. Resolves once playing.
+         * One watch per sharer; a second call for the same sharer is refused.
          */
         async watch(
             targetUserId: string,
@@ -1933,10 +1937,11 @@ const api = {
             containerId: string,
         ): Promise<{ success: boolean; streamName?: string; error?: string }> {
             if (!serverBaseUrl) return { success: false, error: "Not connected to a server" };
-            if (stageHandle || stageStarting) return { success: false, error: "Already watching" };
-            const container = document.getElementById(containerId);
-            if (!container) return { success: false, error: "The stage is not open" };
-            stageStarting = true;
+            if (stageHandles.has(targetUserId) || stageStarting.has(targetUserId)) {
+                return { success: false, error: "Already watching" };
+            }
+            if (!document.getElementById(containerId)) return { success: false, error: "The stage is not open" };
+            stageStarting.add(targetUserId);
             try {
                 const ticket = await requestViewerTicket();
                 const handle = await startScreenWatch({
@@ -1948,10 +1953,10 @@ const api = {
                     channelId,
                     onEnded: (reason, kind) => {
                         // Tear down our side first, then tell the renderer why.
-                        const h = stageHandle;
-                        stageHandle = null;
+                        const h = stageHandles.get(targetUserId);
+                        stageHandles.delete(targetUserId);
                         void h?.close();
-                        emit("stage-ended", { reason, kind });
+                        emit("stage-ended", { targetUserId, reason, kind });
                     },
                 });
                 // The container may have gone while connecting (the tab was closed).
@@ -1962,39 +1967,48 @@ const api = {
                 }
                 handle.setVolume(stageVolume);
                 target.replaceChildren(handle.videoEl);
-                stageHandle = handle;
+                stageHandles.set(targetUserId, handle);
                 return { success: true, streamName: handle.streamName };
             } catch (err: any) {
                 return { success: false, error: err?.message ?? "Couldn't start watching" };
             } finally {
-                stageStarting = false;
+                stageStarting.delete(targetUserId);
             }
         },
 
-        /** Stops the stage watch (server-side too) and removes its media; resolves once it is gone. */
-        async stop(): Promise<void> {
-            const h = stageHandle;
-            stageHandle = null;
-            await h?.close();
+        /** Stops one sharer's watch (or all of them) — server-side too — and resolves once it is gone. */
+        async stop(targetUserId?: string): Promise<void> {
+            const ids = targetUserId ? [targetUserId] : [...stageHandles.keys()];
+            const handles = ids.map((id) => stageHandles.get(id)).filter((h): h is WatchHandle => !!h);
+            for (const id of ids) stageHandles.delete(id);
+            await Promise.all(handles.map((h) => h.close()));
         },
 
-        isWatching(): boolean {
-            return !!stageHandle || stageStarting;
+        isWatching(targetUserId?: string): boolean {
+            return targetUserId
+                ? stageHandles.has(targetUserId) || stageStarting.has(targetUserId)
+                : stageHandles.size > 0 || stageStarting.size > 0;
         },
 
-        /** 0–200, remembered for the next watch. */
-        setVolume(percent: number): void {
-            stageVolume = Math.max(0, Math.min(200, Number(percent) || 0));
-            stageHandle?.setVolume(stageVolume);
+        /** 0–200, remembered for the next watch; one sharer's or every watch's. */
+        setVolume(percent: number, targetUserId?: string): void {
+            const v = Math.max(0, Math.min(200, Number(percent) || 0));
+            if (targetUserId) {
+                stageHandles.get(targetUserId)?.setVolume(v);
+                return;
+            }
+            stageVolume = v;
+            for (const h of stageHandles.values()) h.setVolume(v);
         },
 
-        setMuted(muted: boolean): void {
-            stageHandle?.setMuted(!!muted);
+        setMuted(muted: boolean, targetUserId?: string): void {
+            if (targetUserId) stageHandles.get(targetUserId)?.setMuted(!!muted);
+            else for (const h of stageHandles.values()) h.setMuted(!!muted);
         },
 
         /** Received video height (e.g. 1080) once known, else null. */
-        qualityHeight(): number | null {
-            return stageHandle?.qualityHeight() ?? null;
+        qualityHeight(targetUserId: string): number | null {
+            return stageHandles.get(targetUserId)?.qualityHeight() ?? null;
         },
     },
 

@@ -1133,11 +1133,11 @@ interface Reson8Api {
     /** The in-app stream stage (PRD 19 C10): one viewer socket in the preload, video placed into a container by id. */
     stage: {
         watch(targetUserId: string, channelId: string, containerId: string): Promise<{ success: boolean; streamName?: string; error?: string }>;
-        stop(): Promise<void>;
-        isWatching(): boolean;
-        setVolume(percent: number): void;
-        setMuted(muted: boolean): void;
-        qualityHeight(): number | null;
+        stop(targetUserId?: string): Promise<void>;
+        isWatching(targetUserId?: string): boolean;
+        setVolume(percent: number, targetUserId?: string): void;
+        setMuted(muted: boolean, targetUserId?: string): void;
+        qualityHeight(targetUserId: string): number | null;
     };
     on(event: string, callback: (...args: any[]) => void): void;
 }
@@ -5296,14 +5296,21 @@ function speakingEls(userId: string): NodeListOf<Element> {
 }
 
 /** The columns and tile size (4:3) that make the tiles as large as possible without scrolling. Pure. */
-function fitVoiceTiles(count: number, width: number, height: number, gap: number): { cols: number; w: number; h: number } {
+function fitVoiceTiles(
+    count: number,
+    width: number,
+    height: number,
+    gap: number,
+    ratio = 4 / 3,
+    maxWidth = 420,
+): { cols: number; w: number; h: number } {
     let best = { cols: 1, w: 0, h: 0 };
     for (let cols = 1; cols <= Math.max(1, count); cols++) {
         const rows = Math.ceil(count / cols);
         const byWidth = (width - gap * (cols - 1)) / cols;
-        const byHeight = ((height - gap * (rows - 1)) / rows) * (4 / 3);
-        const w = Math.floor(Math.min(byWidth, byHeight, 420));
-        if (w > best.w) best = { cols, w, h: Math.floor((w * 3) / 4) };
+        const byHeight = ((height - gap * (rows - 1)) / rows) * ratio;
+        const w = Math.floor(Math.min(byWidth, byHeight, maxWidth));
+        if (w > best.w) best = { cols, w, h: Math.floor(w / ratio) };
     }
     return best;
 }
@@ -5339,11 +5346,17 @@ function createVoiceTab(): VoiceTab {
         `<div class="voice-room">` +
         `<div class="voice-room-header">` +
         `<span class="voice-room-name"></span><span class="voice-room-count"></span>` +
+        `<span class="voice-room-sharing"></span>` +
+        `<div class="voice-layout-toggle voice-stream-layout-toggle" role="group" aria-label="Stream layout">` +
+        `<button type="button" data-stream-layout="focus">Focus</button>` +
+        `<button type="button" data-stream-layout="grid">Grid</button>` +
+        `</div>` +
         `<div class="voice-layout-toggle" role="group" aria-label="Layout">` +
         `<button type="button" data-layout="mosaic">Mosaic</button>` +
         `<button type="button" data-layout="featured">Featured</button>` +
         `</div></div>` +
         `<div class="voice-stream" id="voice-stream">` +
+        `<div class="voice-stream-main">` +
         `<div class="voice-stream-video" id="voice-stream-video"></div>` +
         `<div class="voice-stream-info"><span class="sharing-badge">LIVE</span>` +
         `<span class="voice-stream-quality"></span><span class="voice-stream-title"></span></div>` +
@@ -5359,6 +5372,9 @@ function createVoiceTab(): VoiceTab {
         `<button type="button" class="btn btn-primary voice-stream-bringback">Bring it back</button>` +
         `<button type="button" class="btn btn-secondary voice-stream-showwindow">Show window</button>` +
         `</div></div>` +
+        `</div>` +
+        `<div class="voice-stream-side"><div class="voice-stream-side-head section-label"></div><div class="voice-stream-cards"></div></div>` +
+        `<div class="voice-streams"></div>` +
         `</div>` +
         `<div class="voice-room-stage"><div class="voice-grid"></div></div>` +
         `</div>`;
@@ -5388,6 +5404,7 @@ function createVoiceTab(): VoiceTab {
         channelId: currentChannelId ?? "",
     };
     vt.observer.observe(stage);
+    vt.observer.observe(contentEl.querySelector(".voice-stream") as HTMLElement);
     const choose = (layout: VoiceLayout): void => {
         if (anyoneSharingInRoom(voiceRoomNode())) return; // forced Featured; nothing to choose
         writeVoiceLayoutPref(layout);
@@ -5395,6 +5412,19 @@ function createVoiceTab(): VoiceTab {
     };
     vt.btnMosaic.addEventListener("click", () => choose("mosaic"));
     vt.btnFeatured.addEventListener("click", () => choose("featured"));
+    contentEl.querySelector('[data-stream-layout="focus"]')?.addEventListener("click", () => {
+        writeStreamLayoutPref("focus");
+        if (stageState === "grid") {
+            const first = roomSharers()[0];
+            void leaveStreamGrid().then(() => {
+                if (first && currentChannelId) void startStageWatch({ userId: first.userId, nickname: first.nickname, channelId: currentChannelId });
+            });
+        }
+    });
+    contentEl.querySelector('[data-stream-layout="grid"]')?.addEventListener("click", () => {
+        writeStreamLayoutPref("grid");
+        void enterStreamGrid();
+    });
     return vt;
 }
 
@@ -5533,6 +5563,9 @@ function renderVoiceRoom(): void {
     if (stageTarget && stageState !== "idle" && !node.occupants.some((o) => o.userId === stageTarget!.userId && o.isSharingScreen)) {
         void stopStageWatch("The stream ended");
     }
+    renderSharingHeader(); // PRD 19 C11
+    renderStageSide();
+    syncStreamGrid();
     const layout = effectiveVoiceLayout(node);
     vt.btnMosaic.classList.toggle("active", layout === "mosaic");
     vt.btnFeatured.classList.toggle("active", layout === "featured");
@@ -5575,7 +5608,10 @@ function layoutVoiceTiles(): void {
     vt.moreBlock.style.display = hiddenCount > 0 ? "" : "none";
     vt.moreBlock.textContent = `…and ${hiddenCount} more`;
 
-    const bucket = fit.w < 160 ? 32 : fit.w < 260 ? 48 : fit.w < 380 ? 64 : 80;
+    // With a stream on stage, a strip whose tiles would be under 90 px tall becomes 44 px chips.
+    const chips = inStrip && fit.h < 90;
+    vt.grid.classList.toggle("chips", chips);
+    const bucket = chips ? 28 : fit.w < 160 ? 32 : fit.w < 260 ? 48 : fit.w < 380 ? 64 : 80;
     for (const el of ordered) {
         el.style.width = `${fit.w}px`;
         el.style.height = `${fit.h}px`;
@@ -5590,9 +5626,10 @@ function layoutVoiceTiles(): void {
     }
     vt.moreBlock.style.width = `${fit.w}px`;
     vt.moreBlock.style.height = `${fit.h}px`;
-    vt.grid.style.gridTemplateColumns = `repeat(${fit.cols}, ${fit.w}px)`;
+    vt.grid.style.gridTemplateColumns = chips ? "" : `repeat(${fit.cols}, ${fit.w}px)`;
     vt.grid.append(...ordered, vt.moreBlock);
     if (voiceMoreMenuEl) buildVoiceMoreMenu();
+    layoutStreamGrid(); // PRD 19 C11: the stream grid shares this resize pass
 }
 
 function closeVoiceMoreMenu(): void {
@@ -5661,7 +5698,7 @@ document.getElementById("btn-expand-voice")?.addEventListener("click", () => ope
 // stage. Clicks are ignored while a transition runs, and every transition waits
 // for the previous side to close — there is never a moment with two consumers.
 
-type StageState = "idle" | "starting" | "stage" | "popping" | "popped" | "returning";
+type StageState = "idle" | "starting" | "stage" | "popping" | "popped" | "returning" | "grid";
 let stageState: StageState = "idle";
 let stageTarget: { userId: string; channelId: string; nickname: string } | null = null;
 let stageStreamName = "";
@@ -5683,8 +5720,10 @@ function renderStage(): void {
     if (!room || !stream) return;
     const active = stageState !== "idle";
     room.classList.toggle("has-stream", active);
+    stream.classList.toggle("is-grid", stageState === "grid");
     stream.classList.toggle("is-popped", stageState === "popped" || stageState === "returning" || stageState === "popping");
     stream.classList.toggle("is-busy", stageState === "starting");
+    renderStageSide();
 
     const note = stageEl<HTMLElement>(".voice-stream-note-text");
     const actions = stageEl<HTMLElement>(".voice-stream-note-actions");
@@ -5706,10 +5745,300 @@ function renderStage(): void {
     layoutVoiceTiles();
 }
 
+// ── Several streams: Focus and Grid (PRD 19 C11) ──────────────────────────────
+// Focus: the main stream is the C10 stage; the other sharers are static LIVE
+// cards in a 212 px column (no video, no extra consumers). Grid: every stream
+// gets its own watch at one 16:9 size, muted (one stream's sound at a time —
+// double-click focuses one). Live previews on the cards are NOT built: they
+// need a server event and the owner's decision after a measurement (D2).
+
+const STREAM_LAYOUT_KEY = "reson8-stream-layout";
+type StreamLayout = "focus" | "grid";
+
+function readStreamLayoutPref(): StreamLayout {
+    try {
+        return localStorage.getItem(STREAM_LAYOUT_KEY) === "grid" ? "grid" : "focus";
+    } catch {
+        return "focus";
+    }
+}
+
+function writeStreamLayoutPref(layout: StreamLayout): void {
+    try {
+        localStorage.setItem(STREAM_LAYOUT_KEY, layout);
+    } catch {
+        /* storage unavailable — the choice just won't be remembered */
+    }
+}
+
+/** Stream names learned from a watch's ack, so a static card can show one. */
+const knownStreamNames = new Map<string, string>();
+
+/** One cell per sharer while the grid is up. `windowId` is set while that stream is popped out. */
+const gridCells = new Map<string, { nickname: string; cell: HTMLElement; windowId: number | null; watching: boolean }>();
+
+function roomSharers(): TreeNode["occupants"] {
+    const node = voiceRoomNode();
+    return node ? node.occupants.filter((o) => o.isSharingScreen) : [];
+}
+
+/** The header's "{n} / 5 sharing" and the Focus | Grid toggle (shown from two streams up). */
+function renderSharingHeader(): void {
+    if (!voiceTab) return;
+    const sharers = roomSharers();
+    const label = voiceTab.contentEl.querySelector(".voice-room-sharing") as HTMLElement;
+    label.textContent = sharers.length > 0 ? `${sharers.length} / ${MAX_SCREEN_SHARES_PER_ROOM} sharing` : "";
+    const toggle = voiceTab.contentEl.querySelector(".voice-stream-layout-toggle") as HTMLElement;
+    toggle.classList.toggle("visible", sharers.length >= 2);
+    const grid = stageState === "grid";
+    toggle.querySelector('[data-stream-layout="focus"]')?.classList.toggle("active", !grid);
+    toggle.querySelector('[data-stream-layout="grid"]')?.classList.toggle("active", grid);
+}
+
+/** The "Also live · {n}" column: static cards for every sharer that isn't on the main stage. */
+function renderStageSide(): void {
+    const stream = stageEl<HTMLElement>(".voice-stream");
+    const head = stageEl<HTMLElement>(".voice-stream-side-head");
+    const cards = stageEl<HTMLElement>(".voice-stream-cards");
+    if (!stream || !head || !cards) return;
+    const others = stageState === "grid" || !stageTarget ? [] : roomSharers().filter((o) => o.userId !== stageTarget!.userId);
+    stream.classList.toggle("has-side", others.length > 0 && stageState !== "idle");
+    head.textContent = `Also live · ${others.length}`;
+    // Keyed by user id so a presence update doesn't rebuild an unchanged card.
+    const present = new Set(others.map((o) => o.userId));
+    for (const el of Array.from(cards.children) as HTMLElement[]) {
+        if (!present.has(el.dataset.userId ?? "")) el.remove();
+    }
+    for (const occ of others) {
+        let card = cards.querySelector<HTMLElement>(`[data-user-id="${CSS.escape(occ.userId)}"]`);
+        if (!card) {
+            const btn = document.createElement("button");
+            btn.type = "button";
+            card = btn;
+            card.className = "voice-stream-card";
+            card.dataset.userId = occ.userId;
+            card.append(createAvatarElement(occ.userId, occ.nickname, 36));
+            const text = document.createElement("span");
+            text.className = "voice-stream-card-text";
+            const name = document.createElement("span");
+            name.className = "voice-stream-card-name";
+            const sub = document.createElement("span");
+            sub.className = "voice-stream-card-sub";
+            text.append(name, sub);
+            const dot = document.createElement("span");
+            dot.className = "voice-live-dot";
+            dot.title = "Live";
+            card.append(text, dot);
+            card.addEventListener("click", () => {
+                const channelId = currentChannelId;
+                if (channelId) void startStageWatch({ userId: occ.userId, nickname: occ.nickname, channelId });
+            });
+            cards.appendChild(card);
+        }
+        (card.querySelector(".voice-stream-card-name") as HTMLElement).textContent = occ.nickname;
+        (card.querySelector(".voice-stream-card-sub") as HTMLElement).textContent =
+            knownStreamNames.get(occ.userId) ?? "Screen share";
+    }
+}
+
+/** Sizes the grid cells (16:9, as large as will fit) — called with every voice-room layout pass. */
+function layoutStreamGrid(): void {
+    if (stageState !== "grid") return;
+    const host = stageEl<HTMLElement>(".voice-streams");
+    if (!host || gridCells.size === 0) return;
+    const rect = host.getBoundingClientRect();
+    const fit = fitVoiceTiles(gridCells.size, Math.max(0, rect.width - 24), Math.max(0, rect.height - 24), 12, 16 / 9, 1600);
+    host.style.gridTemplateColumns = `repeat(${fit.cols}, ${fit.w}px)`;
+    for (const entry of gridCells.values()) {
+        entry.cell.style.width = `${fit.w}px`;
+        entry.cell.style.height = `${fit.h}px`;
+    }
+}
+
+function gridVideoId(userId: string): string {
+    return `voice-grid-video-${userId}`;
+}
+
+function buildGridCell(occ: TreeNode["occupants"][number]): HTMLElement {
+    const cell = document.createElement("div");
+    cell.className = "voice-grid-cell";
+    cell.dataset.userId = occ.userId;
+    const video = document.createElement("div");
+    video.className = "voice-grid-video";
+    video.id = gridVideoId(occ.userId);
+    const label = document.createElement("div");
+    label.className = "voice-grid-label";
+    label.textContent = occ.nickname;
+    const actions = document.createElement("div");
+    actions.className = "voice-grid-actions";
+    const focus = document.createElement("button");
+    focus.type = "button";
+    focus.className = "voice-grid-focus";
+    focus.title = "Focus this stream";
+    focus.innerHTML = `<i class="ph ph-arrows-out-simple" aria-hidden="true"></i>`;
+    const pop = document.createElement("button");
+    pop.type = "button";
+    pop.className = "voice-grid-popout";
+    pop.title = "Pop out";
+    pop.innerHTML = `<i class="ph ph-arrow-square-out" aria-hidden="true"></i>`;
+    actions.append(focus, pop);
+    const note = document.createElement("div");
+    note.className = "voice-grid-note";
+    const noteText = document.createElement("div");
+    noteText.textContent = `${occ.nickname}'s stream is in its own window`;
+    const noteActions = document.createElement("div");
+    noteActions.className = "voice-stream-note-actions";
+    const back = document.createElement("button");
+    back.type = "button";
+    back.className = "btn btn-primary voice-grid-bringback";
+    back.textContent = "Bring it back";
+    const show = document.createElement("button");
+    show.type = "button";
+    show.className = "btn btn-secondary voice-grid-showwindow";
+    show.textContent = "Show window";
+    noteActions.append(back, show);
+    note.append(noteText, noteActions);
+    cell.append(video, label, actions, note);
+    cell.addEventListener("dblclick", () => void focusStream(occ.userId));
+    focus.addEventListener("click", (e) => {
+        e.stopPropagation();
+        void focusStream(occ.userId);
+    });
+    pop.addEventListener("click", (e) => {
+        e.stopPropagation();
+        void popOutGridStream(occ.userId);
+    });
+    back.addEventListener("click", () => void bringBackGridStream(occ.userId));
+    show.addEventListener("click", () => {
+        const w = gridCells.get(occ.userId)?.windowId;
+        if (typeof w === "number") void api.focusViewerWindow(w);
+    });
+    return cell;
+}
+
+async function startGridWatch(userId: string): Promise<void> {
+    const entry = gridCells.get(userId);
+    const channelId = currentChannelId;
+    if (!entry || !channelId || entry.watching) return;
+    entry.watching = true;
+    const res = await api.stage.watch(userId, channelId, gridVideoId(userId));
+    if (!gridCells.has(userId) || stageState !== "grid") {
+        // The grid was torn down (or this cell removed) while connecting.
+        if (res.success) await api.stage.stop(userId);
+        return;
+    }
+    if (!res.success) {
+        entry.watching = false;
+        entry.cell.querySelector(".voice-grid-label")!.textContent = `${entry.nickname} — couldn't load`;
+        return;
+    }
+    if (res.streamName) knownStreamNames.set(userId, res.streamName);
+    api.stage.setMuted(true, userId); // one stream's sound at a time; Focus brings it back
+    entry.cell.querySelector(".voice-grid-label")!.textContent = res.streamName
+        ? `${entry.nickname} · ${res.streamName}`
+        : entry.nickname;
+}
+
+/** Keeps the grid's cells and watches in step with who is sharing right now. */
+function syncStreamGrid(): void {
+    if (stageState !== "grid") return;
+    const host = stageEl<HTMLElement>(".voice-streams");
+    if (!host) return;
+    const sharers = roomSharers();
+    const present = new Set(sharers.map((o) => o.userId));
+    for (const [userId, entry] of gridCells) {
+        if (present.has(userId)) continue;
+        entry.cell.remove();
+        gridCells.delete(userId);
+        if (entry.windowId !== null) void api.closeViewerWindow(entry.windowId);
+        void api.stage.stop(userId);
+    }
+    for (const occ of sharers) {
+        if (gridCells.has(occ.userId)) continue;
+        const cell = buildGridCell(occ);
+        host.appendChild(cell);
+        gridCells.set(occ.userId, { nickname: occ.nickname, cell, windowId: null, watching: false });
+        void startGridWatch(occ.userId);
+    }
+    if (gridCells.size === 0) {
+        // Nobody is sharing any more: the grid has nothing to show.
+        void stopStageWatch();
+        return;
+    }
+    layoutStreamGrid();
+    renderSharingHeader();
+}
+
+async function enterStreamGrid(): Promise<void> {
+    if (stageState === "grid") return;
+    if (!requireServerAccess()) return;
+    if (!isInVoice || !currentChannelId || roomSharers().length === 0) return;
+    if (stageState === "starting" || stageState === "popping" || stageState === "returning") return;
+    if (stageState !== "idle") await stopStageWatch(); // the focus watch (and a popped Viewer) first
+    openVoiceTab({ focus: true });
+    if (!voiceTab) return;
+    stageState = "grid";
+    stageTarget = null;
+    renderStage();
+    syncStreamGrid();
+}
+
+/** Leaves the grid, closing every stream and any popped Viewer. */
+async function leaveStreamGrid(): Promise<void> {
+    const windows = [...gridCells.values()].map((e) => e.windowId).filter((w): w is number => w !== null);
+    for (const entry of gridCells.values()) entry.cell.remove();
+    gridCells.clear();
+    stageState = "idle";
+    await Promise.all(windows.map((w) => api.closeViewerWindow(w)));
+    await api.stage.stop();
+    renderStage();
+}
+
+/** Grid → Focus on one stream (double-click / ⤢, or the Focus toggle). */
+async function focusStream(userId: string): Promise<void> {
+    const occ = roomSharers().find((o) => o.userId === userId);
+    const channelId = currentChannelId;
+    if (!occ || !channelId) return;
+    writeStreamLayoutPref("focus");
+    if (stageState === "grid") await leaveStreamGrid();
+    await startStageWatch({ userId, nickname: occ.nickname, channelId });
+}
+
+async function popOutGridStream(userId: string): Promise<void> {
+    const entry = gridCells.get(userId);
+    const channelId = currentChannelId;
+    if (!entry || !channelId || entry.windowId !== null) return;
+    entry.watching = false;
+    await api.stage.stop(userId);
+    const res = await api.openScreenShareViewer(userId, entry.nickname, channelId, roomNameForStage());
+    if (!gridCells.has(userId) || stageState !== "grid") {
+        if (res.success && typeof res.windowId === "number") void api.closeViewerWindow(res.windowId);
+        return;
+    }
+    if (!res.success || typeof res.windowId !== "number") {
+        showToast(escapeHtml(res.error ?? "Couldn't open the stream window"));
+        void startGridWatch(userId);
+        return;
+    }
+    entry.windowId = res.windowId;
+    entry.cell.classList.add("is-popped");
+}
+
+async function bringBackGridStream(userId: string): Promise<void> {
+    const entry = gridCells.get(userId);
+    if (!entry || entry.windowId === null) return;
+    const closed = await api.closeViewerWindow(entry.windowId);
+    if (!closed) {
+        entry.windowId = null;
+        entry.cell.classList.remove("is-popped");
+        void startGridWatch(userId);
+    }
+}
+
 function paintStageQuality(): void {
     const el = stageEl<HTMLElement>(".voice-stream-quality");
     if (!el) return;
-    const h = api.stage.qualityHeight();
+    const h = stageTarget ? api.stage.qualityHeight(stageTarget.userId) : null;
     el.textContent = h ? `${h}p` : "";
 }
 
@@ -5726,7 +6055,8 @@ async function startStageWatch(target: { userId: string; nickname: string; chann
         return;
     }
     if (stageState === "starting" || stageState === "popping" || stageState === "returning") return;
-    if (stageState !== "idle") await stopStageWatch(); // switching to another sharer
+    if (stageState === "grid") await leaveStreamGrid();
+    else if (stageState !== "idle") await stopStageWatch(); // switching to another sharer
 
     openVoiceTab({ focus: true });
     if (!voiceTab) return;
@@ -5749,6 +6079,8 @@ async function startStageWatch(target: { userId: string; nickname: string; chann
         return;
     }
     stageStreamName = res.streamName ?? "";
+    if (stageStreamName) knownStreamNames.set(target.userId, stageStreamName);
+    api.stage.setMuted(false, target.userId);
     stageState = "stage";
     renderStage();
     paintStageQuality();
@@ -5756,20 +6088,24 @@ async function startStageWatch(target: { userId: string; nickname: string; chann
     let tries = 0;
     stageQualityTimer = setInterval(() => {
         paintStageQuality();
-        if (++tries >= 10 || api.stage.qualityHeight()) stopStageQualityPoll();
+        if (++tries >= 10 || (stageTarget && api.stage.qualityHeight(stageTarget.userId))) stopStageQualityPoll();
     }, 500);
 }
 
 /** Ends the stage watch and any popped Viewer; always lands in `idle`. */
 async function stopStageWatch(message?: string): Promise<void> {
-    if (stageState === "idle" && !stageViewerWindowId && !api.stage.isWatching()) return;
+    if (stageState === "idle" && !stageViewerWindowId && gridCells.size === 0 && !api.stage.isWatching()) return;
     const windowId = stageViewerWindowId;
     stageViewerWindowId = null;
+    const gridWindows = [...gridCells.values()].map((e) => e.windowId).filter((w): w is number => w !== null);
+    for (const entry of gridCells.values()) entry.cell.remove();
+    gridCells.clear();
     stageState = "idle";
     stageTarget = null;
     stageStreamName = "";
     stopStageQualityPoll();
     if (windowId !== null) await api.closeViewerWindow(windowId);
+    await Promise.all(gridWindows.map((w) => api.closeViewerWindow(w)));
     await api.stage.stop();
     renderStage();
     if (message) showToast(escapeHtml(message));
@@ -5836,13 +6172,33 @@ async function bringBackStage(): Promise<void> {
 }
 
 api.on("viewer-closed", (data: { windowId: number }) => {
+    // A grid stream's Viewer closed: that stream goes back into its cell.
+    for (const [userId, entry] of gridCells) {
+        if (entry.windowId === data.windowId) {
+            entry.windowId = null;
+            entry.cell.classList.remove("is-popped");
+            if (stageState === "grid") void startGridWatch(userId);
+            return;
+        }
+    }
     // The user closed the Viewer (its ✕, Exit Stream or Return): the stream comes home.
     if (data.windowId === stageViewerWindowId && stageState === "popped") void returnToStage();
     else if (data.windowId === stageViewerWindowId && stageState === "returning") void returnToStage();
 });
 
-api.on("stage-ended", (data: { reason: string; kind: "ended" | "lost" }) => {
-    if (stageState !== "stage") return;
+api.on("stage-ended", (data: { targetUserId: string; reason: string; kind: "ended" | "lost" }) => {
+    if (stageState === "grid") {
+        // One stream of the grid ended: its cell goes (the presence update does the same for a stopped share).
+        const entry = gridCells.get(data.targetUserId);
+        if (entry) {
+            entry.cell.remove();
+            gridCells.delete(data.targetUserId);
+            if (gridCells.size === 0) void stopStageWatch(data.kind === "ended" ? "The stream ended" : "Lost the connection to the stream");
+            else layoutStreamGrid();
+        }
+        return;
+    }
+    if (stageState !== "stage" || stageTarget?.userId !== data.targetUserId) return;
     void stopStageWatch(data.kind === "ended" ? "The stream ended" : "Lost the connection to the stream");
 });
 
@@ -5854,7 +6210,7 @@ document.addEventListener("click", (e) => {
     else if (t.closest(".voice-stream-showwindow")) {
         if (stageViewerWindowId !== null) void api.focusViewerWindow(stageViewerWindowId);
     } else if (t.closest(".voice-stream-fullscreen")) {
-        const stream = stageEl<HTMLElement>(".voice-stream");
+        const stream = stageEl<HTMLElement>(".voice-stream-main");
         if (!stream) return;
         if (document.fullscreenElement) void document.exitFullscreen();
         else void stream.requestFullscreen().catch(() => showToast("Fullscreen isn't available here."));
@@ -5863,7 +6219,7 @@ document.addEventListener("click", (e) => {
 document.addEventListener("input", (e) => {
     const t = e.target as HTMLInputElement;
     if (!t.classList?.contains("voice-stream-volume")) return;
-    api.stage.setVolume(Number(t.value));
+    api.stage.setVolume(Number(t.value), stageTarget?.userId);
     const readout = stageEl<HTMLElement>(".voice-stream-volume-readout");
     if (readout) readout.textContent = `${t.value}%`;
 });
