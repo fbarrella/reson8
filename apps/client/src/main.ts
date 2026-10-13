@@ -35,6 +35,8 @@ import {
     type BackupPayload,
 } from "./identity-backup.js";
 import { fingerprintOf, publicKeyBase64 } from "./identity-proof.js";
+import { getSavedPasswords } from "./saved-passwords.js";
+import { isValidPassword, isValidSavedServerId } from "./saved-passwords-store.js";
 import { TlsTrustStore } from "./tls-store.js";
 import { probeServer } from "./tls-probe.js";
 import { hostKey, isFingerprint, type CertInfo } from "./tls-trust.js";
@@ -1162,6 +1164,31 @@ app.whenReady().then(() => {
         } catch (err) {
             return { ok: false, error: (err as Error).message };
         }
+    });
+
+    // ── Saved server passwords (PRD 19 C1) ─────────────────────────────────
+    // Only the main window's own webContents may use these. The plaintext is
+    // returned by exactly one channel — `saved-password-get-for-connect`, which
+    // only the preload's connect path calls (it is not exposed on reson8Api).
+    const fromMainWindow = (event: Electron.IpcMainInvokeEvent): boolean =>
+        !!mainWindow && event.sender === mainWindow.webContents;
+
+    ipcMain.handle("saved-password-set", (event, id: unknown, pw: unknown) => {
+        if (!fromMainWindow(event) || !isValidSavedServerId(id) || !isValidPassword(pw)) return { stored: false };
+        return getSavedPasswords().set(id, pw);
+    });
+    ipcMain.handle("saved-password-delete", (event, id: unknown) => {
+        if (fromMainWindow(event) && isValidSavedServerId(id)) getSavedPasswords().delete(id);
+    });
+    ipcMain.handle("saved-password-has", (event, id: unknown) => {
+        return fromMainWindow(event) && isValidSavedServerId(id) ? getSavedPasswords().has(id) : false;
+    });
+    ipcMain.handle("saved-password-available", (event) => {
+        return fromMainWindow(event) ? getSavedPasswords().available() : false;
+    });
+    ipcMain.handle("saved-password-get-for-connect", (event, id: unknown) => {
+        if (!fromMainWindow(event) || !isValidSavedServerId(id)) return null;
+        return getSavedPasswords().get(id);
     });
 
     ipcMain.handle("tls-get-connect-options", (_event, host: unknown, port: unknown) => {

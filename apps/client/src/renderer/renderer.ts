@@ -832,8 +832,16 @@ interface Reson8Api {
         nickname: string,
         password?: string,
         inviteCode?: string,
+        savedServerId?: string,
     ): Promise<void>;
     getServerBaseUrl(): string;
+    /** Saved server passwords (PRD 19 C1) — the plaintext is never readable here. */
+    savedPassword: {
+        available(): Promise<boolean>;
+        set(id: string, password: string): Promise<{ stored: boolean }>;
+        delete(id: string): Promise<void>;
+        has(id: string): Promise<boolean>;
+    };
     tls: {
         parseServerAddress(raw: string): { ok: true; value: TlsServerAddress } | { ok: false; error: string };
         decideScheme(input: {
@@ -1536,25 +1544,8 @@ setTimeout(() => {
 }, 100);
 
 // ── Remember Me: auto-populate saved server info ──────────────────────────
-if (localStorage.getItem("reson8-remember-me") === "true") {
-    rememberMeCheckbox.checked = true;
-    const savedUrl = localStorage.getItem("reson8-server-url");
-    const savedNick = localStorage.getItem("reson8-nickname");
-    const savedPassword = localStorage.getItem("reson8-server-password");
-    if (savedUrl) serverUrlInput.value = savedUrl;
-    if (savedNick) nicknameInput.value = savedNick;
-    if (savedPassword) serverPasswordInput.value = savedPassword;
-}
+// Saved servers replace the single remembered server (PRD 19 C1): see the "Saved servers" section.
 
-// When unchecked, immediately clear saved data
-rememberMeCheckbox.addEventListener("change", () => {
-    if (!rememberMeCheckbox.checked) {
-        localStorage.removeItem("reson8-remember-me");
-        localStorage.removeItem("reson8-server-url");
-        localStorage.removeItem("reson8-nickname");
-        localStorage.removeItem("reson8-server-password");
-    }
-});
 
 // Copy instance ID to clipboard
 btnCopyId.addEventListener("click", () => {
@@ -2412,6 +2403,14 @@ function log(message: string, type: "info" | "success" | "error" | "" = ""): voi
 
     eventLog.appendChild(entry);
     eventLog.scrollTop = eventLog.scrollHeight;
+
+    // While the welcome screen is showing there is no Server Log to read: mirror
+    // connect progress and errors into its status line (text only).
+    if (!isConnected && !document.body.classList.contains("is-approving") && message) {
+        const tmp = document.createElement("div");
+        tmp.innerHTML = message;
+        welcomeStatus(tmp.textContent ?? "", type === "error" ? "error" : type === "success" ? "success" : "");
+    }
 }
 
 /** Shows a transient toast in the top-right corner (used by Nudge; general-purpose otherwise). */
@@ -2456,18 +2455,7 @@ async function startConnect(): Promise<void> {
     // Only sent when typed; never remembered (a code is single-purpose, PRD 18.9).
     const inviteCode = inviteCodeInput.value.trim() || undefined;
 
-    // Persist or clear server info based on Remember Me checkbox
-    if (rememberMeCheckbox.checked) {
-        localStorage.setItem("reson8-remember-me", "true");
-        localStorage.setItem("reson8-server-url", serverUrlInput.value.trim());
-        localStorage.setItem("reson8-nickname", nickname);
-        localStorage.setItem("reson8-server-password", serverPasswordInput.value);
-    } else {
-        localStorage.removeItem("reson8-remember-me");
-        localStorage.removeItem("reson8-server-url");
-        localStorage.removeItem("reson8-nickname");
-        localStorage.removeItem("reson8-server-password");
-    }
+    welcomeStatus("Connecting…", "");
 
     connectInProgress = true;
     btnConnect.disabled = true; // the probe can take a few seconds
@@ -2481,7 +2469,12 @@ async function startConnect(): Promise<void> {
             `Connecting to ${shown} ${target.scheme === "https" ? "over HTTPS" : "(not encrypted)"} as "${nickname}"...`,
             "info",
         );
-        await api.connect(target, nickname, password, inviteCode);
+        // A typed password always wins; otherwise a saved server's stored one is
+        // read by the preload from the main process at join time (PRD 19 C1).
+        const savedId = !password && selectedSavedServerId && savedServerById(selectedSavedServerId)?.hasPassword
+            ? selectedSavedServerId
+            : undefined;
+        await api.connect(target, nickname, password, inviteCode, savedId);
     } finally {
         connectInProgress = false;
         if (!isConnected) btnConnect.disabled = false;
@@ -2762,6 +2755,437 @@ btnConnect.addEventListener("click", () => {
 btnDisconnect.addEventListener("click", () => {
     api.disconnect();
 });
+
+// ── Saved servers, the welcome screen and the rail (PRD 19 C1) ───────────────
+// `reson8-saved-servers` replaces the single remembered server. Passwords are
+// NEVER stored here: they live in the main process (safeStorage); an entry only
+// says `hasPassword`. The address is stored EXACTLY as typed (identityHostOf()
+// signs it without the scheme, and AUTH_ALLOWED_HOSTS matches on it) — never
+// re-serialised from a parsed host/port.
+
+interface SavedServer {
+    id: string;
+    address: string;
+    name: string;
+    nickname: string;
+    iconUrl?: string | null;
+    iconThumb?: string | null;
+    hasPassword?: boolean;
+    lastConnected: number;
+}
+
+const SAVED_SERVERS_KEY = "reson8-saved-servers";
+const MAX_SAVED_SERVERS = 50;
+const MAX_THUMB_CHARS = 32 * 1024;
+let savedServers: SavedServer[] = [];
+/** The saved entry the NEXT connect belongs to (picked from the list, the rail or Edit). */
+let selectedSavedServerId: string | null = null;
+/** The saved entry the CURRENT connection belongs to (null: connected without Remember). */
+let activeSavedServerId: string | null = null;
+/** Set when the user picked another server while connected: connect once disconnected. */
+let pendingSwitchSavedId: string | null = null;
+
+function savedServerById(id: string): SavedServer | undefined {
+    return savedServers.find((s) => s.id === id);
+}
+
+function readSavedServers(): SavedServer[] {
+    try {
+        const raw = JSON.parse(localStorage.getItem(SAVED_SERVERS_KEY) ?? "[]");
+        if (!Array.isArray(raw)) return [];
+        const out: SavedServer[] = [];
+        for (const e of raw) {
+            if (!e || typeof e !== "object") continue;
+            const o = e as Record<string, unknown>;
+            if (typeof o.id !== "string" || typeof o.address !== "string" || typeof o.nickname !== "string") continue;
+            out.push({
+                id: o.id,
+                address: o.address,
+                nickname: o.nickname,
+                name: typeof o.name === "string" && o.name ? o.name : o.address,
+                iconUrl: typeof o.iconUrl === "string" ? o.iconUrl : null,
+                iconThumb: typeof o.iconThumb === "string" && o.iconThumb.length <= MAX_THUMB_CHARS ? o.iconThumb : null,
+                hasPassword: o.hasPassword === true,
+                lastConnected: typeof o.lastConnected === "number" ? o.lastConnected : 0,
+            });
+        }
+        return out.sort((a, b) => b.lastConnected - a.lastConnected).slice(0, MAX_SAVED_SERVERS);
+    } catch {
+        return [];
+    }
+}
+
+function writeSavedServers(): void {
+    savedServers.sort((a, b) => b.lastConnected - a.lastConnected);
+    if (savedServers.length > MAX_SAVED_SERVERS) {
+        // Entries cut by the cap lose their stored password too.
+        for (const dropped of savedServers.slice(MAX_SAVED_SERVERS)) void api.savedPassword.delete(dropped.id);
+        savedServers = savedServers.slice(0, MAX_SAVED_SERVERS);
+    }
+    try {
+        localStorage.setItem(SAVED_SERVERS_KEY, JSON.stringify(savedServers));
+    } catch {
+        /* storage unavailable (or full): the list simply is not remembered */
+    }
+}
+
+/** The host a name falls back to: the address without a scheme. */
+function addressToHostLabel(address: string): string {
+    return address.replace(/^[a-z]+:\/\//i, "").replace(/\/.*$/, "");
+}
+
+/** "just now", "5 minutes ago", "3 days ago". */
+function relativeTime(ms: number): string {
+    if (!ms) return "never";
+    const sec = Math.max(0, Math.round((Date.now() - ms) / 1000));
+    if (sec < 45) return "just now";
+    const min = Math.round(sec / 60);
+    if (min < 60) return `${min} minute${min === 1 ? "" : "s"} ago`;
+    const hr = Math.round(min / 60);
+    if (hr < 24) return `${hr} hour${hr === 1 ? "" : "s"} ago`;
+    const day = Math.round(hr / 24);
+    if (day < 30) return `${day} day${day === 1 ? "" : "s"} ago`;
+    return new Date(ms).toLocaleDateString();
+}
+
+/** Up to two initials of a server name. */
+function serverInitials(name: string): string {
+    const words = name.trim().split(/[\s._-]+/).filter(Boolean);
+    const letters = words.length >= 2 ? words[0][0] + words[1][0] : (words[0] ?? "?").slice(0, 2);
+    return letters.toUpperCase();
+}
+
+/**
+ * The ONE place a server's avatar is drawn (PRD 19 C1/C5): its icon when there
+ * is one (a thumbnail data URL or a resolved URL), else the initials on
+ * `--color-accent-900`. The initials stay underneath, so a broken image falls
+ * back to them.
+ */
+function serverAvatarElement(name: string, imageUrl: string | null | undefined, size: number): HTMLElement {
+    const el = document.createElement("span");
+    el.className = "server-avatar";
+    el.style.width = `${size}px`;
+    el.style.height = `${size}px`;
+    el.style.fontSize = `${Math.max(10, Math.round(size * 0.38))}px`;
+    el.textContent = serverInitials(name);
+    if (imageUrl) {
+        const img = document.createElement("img");
+        img.alt = "";
+        img.addEventListener("error", () => img.remove());
+        img.src = imageUrl;
+        el.appendChild(img);
+    }
+    return el;
+}
+
+function welcomeStatus(text: string, kind: "" | "error" | "success"): void {
+    const el = document.getElementById("welcome-status");
+    if (!el) return;
+    el.textContent = text;
+    el.className = kind;
+}
+
+/** Fills the form from a saved entry (the next connect then belongs to it). */
+function fillFormFromSaved(entry: SavedServer): void {
+    serverUrlInput.value = entry.address;
+    nicknameInput.value = entry.nickname;
+    serverPasswordInput.value = ""; // a stored password is used by the preload, never shown
+    rememberMeCheckbox.checked = true;
+    selectedSavedServerId = entry.id;
+    serverPasswordInput.placeholder = entry.hasPassword ? "Saved password" : "Password (optional)";
+}
+
+function connectSavedServer(id: string): void {
+    const entry = savedServerById(id);
+    if (!entry) return;
+    if (isConnected || connectInProgress) {
+        if (activeSavedServerId === id && isConnected) return; // already there
+        // Switching: the full disconnect path, then connect once it has finished.
+        pendingSwitchSavedId = id;
+        api.disconnect();
+        return;
+    }
+    fillFormFromSaved(entry);
+    void startConnect();
+}
+
+function removeSavedServer(id: string): void {
+    savedServers = savedServers.filter((s) => s.id !== id);
+    void api.savedPassword.delete(id);
+    if (selectedSavedServerId === id) selectedSavedServerId = null;
+    writeSavedServers();
+    renderSavedServers();
+}
+
+function renderSavedServers(): void {
+    // The welcome list
+    const list = document.getElementById("saved-server-list") as HTMLElement;
+    const empty = document.getElementById("saved-server-empty") as HTMLElement;
+    list.textContent = "";
+    empty.style.display = savedServers.length === 0 ? "" : "none";
+    for (const entry of savedServers) {
+        const row = document.createElement("div");
+        row.className = "saved-row";
+        row.setAttribute("role", "button");
+        row.tabIndex = 0;
+        row.appendChild(serverAvatarElement(entry.name, entry.iconThumb ?? entry.iconUrl, 40));
+
+        const main = document.createElement("div");
+        main.className = "saved-row-main";
+        const name = document.createElement("div");
+        name.className = "saved-row-name";
+        name.textContent = entry.name;
+        const addr = document.createElement("div");
+        addr.className = "saved-row-address";
+        addr.textContent = entry.address;
+        const meta = document.createElement("div");
+        meta.className = "saved-row-meta";
+        meta.textContent = `${entry.nickname} · ${relativeTime(entry.lastConnected)}`;
+        main.append(name, addr, meta);
+
+        const actions = document.createElement("div");
+        actions.className = "saved-row-actions";
+        const connect = document.createElement("button");
+        connect.className = "btn btn-primary";
+        connect.textContent = "Connect";
+        connect.addEventListener("click", (e) => {
+            e.stopPropagation();
+            connectSavedServer(entry.id);
+        });
+        const edit = document.createElement("button");
+        edit.className = "btn btn-secondary";
+        edit.textContent = "Edit";
+        edit.addEventListener("click", (e) => {
+            e.stopPropagation();
+            fillFormFromSaved(entry);
+            serverUrlInput.focus();
+        });
+        const remove = document.createElement("button");
+        remove.className = "btn btn-ghost";
+        remove.textContent = "Remove";
+        remove.addEventListener("click", (e) => {
+            e.stopPropagation();
+            removeSavedServer(entry.id);
+        });
+        actions.append(connect, edit, remove);
+
+        row.append(main, actions);
+        row.addEventListener("click", () => connectSavedServer(entry.id));
+        row.addEventListener("keydown", (e) => {
+            if (e.key === "Enter") connectSavedServer(entry.id);
+        });
+        list.appendChild(row);
+    }
+
+    // The rail tiles
+    const rail = document.getElementById("rail-server-list") as HTMLElement;
+    rail.textContent = "";
+    for (const entry of savedServers) {
+        const tile = document.createElement("button");
+        tile.type = "button";
+        tile.className = "rail-tile" + (isConnected && activeSavedServerId === entry.id ? " active" : "");
+        tile.title = `${entry.name} — ${entry.address}`;
+        tile.setAttribute("aria-label", entry.name);
+        tile.appendChild(serverAvatarElement(entry.name, entry.iconThumb ?? entry.iconUrl, 36));
+        tile.addEventListener("click", () => connectSavedServer(entry.id));
+        rail.appendChild(tile);
+    }
+}
+
+/** An image URL -> an 80x80 PNG data URL (PRD 19 C1/Q7), or null on any failure / over the size cap. */
+async function makeIconThumbnail(url: string): Promise<string | null> {
+    try {
+        const res = await api.fetchImageBytes(url);
+        if (!res.success || !res.bytes) return null;
+        const bitmap = await createImageBitmap(new Blob([res.bytes as BlobPart]));
+        const canvas = document.createElement("canvas");
+        canvas.width = 80;
+        canvas.height = 80;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return null;
+        // cover-fit, centred
+        const side = Math.min(bitmap.width, bitmap.height);
+        ctx.drawImage(bitmap, (bitmap.width - side) / 2, (bitmap.height - side) / 2, side, side, 0, 0, 80, 80);
+        bitmap.close();
+        const data = canvas.toDataURL("image/png");
+        return data.length <= MAX_THUMB_CHARS ? data : null;
+    } catch {
+        return null;
+    }
+}
+
+/** Writes the connected server's name and icon into its saved entry (PRD 19 C1 step 7). */
+async function refreshSavedServerMeta(name: string | null | undefined, iconUrl: string | null | undefined): Promise<void> {
+    if (!activeSavedServerId) return;
+    const entry = savedServerById(activeSavedServerId);
+    if (!entry) return;
+    let changed = false;
+    if (name && entry.name !== name) {
+        entry.name = name;
+        changed = true;
+    }
+    if (iconUrl === null && (entry.iconUrl || entry.iconThumb)) {
+        entry.iconUrl = null;
+        entry.iconThumb = null;
+        changed = true;
+    } else if (iconUrl && iconUrl !== entry.iconUrl) {
+        entry.iconUrl = iconUrl;
+        changed = true;
+        const thumb = await makeIconThumbnail(iconUrl);
+        if (thumb) entry.iconThumb = thumb; // on failure the old thumbnail stays
+    }
+    if (changed) {
+        writeSavedServers();
+        renderSavedServers();
+    }
+}
+
+/** On `connected`: save/update the entry when Remember is ticked (so a failed connect never creates one). */
+function onSavedServerConnected(): void {
+    const address = serverUrlInput.value.trim();
+    const nickname = nicknameInput.value.trim() || "User";
+    activeSavedServerId = null;
+    if (rememberMeCheckbox.checked && address) {
+        let entry = selectedSavedServerId ? savedServerById(selectedSavedServerId) : undefined;
+        entry ??= savedServers.find((s) => s.address === address && s.nickname === nickname);
+        if (entry) {
+            entry.address = address; // an Edit may have changed them
+            entry.nickname = nickname;
+        } else {
+            entry = {
+                id: crypto.randomUUID(),
+                address,
+                name: addressToHostLabel(address),
+                nickname,
+                iconUrl: null,
+                iconThumb: null,
+                hasPassword: false,
+                lastConnected: Date.now(),
+            };
+            savedServers.push(entry);
+        }
+        entry.lastConnected = Date.now();
+        activeSavedServerId = entry.id;
+        selectedSavedServerId = entry.id;
+        const typed = serverPasswordInput.value;
+        if (typed) {
+            const id = entry.id;
+            void api.savedPassword.set(id, typed).then((res) => {
+                const e = savedServerById(id);
+                if (e) {
+                    e.hasPassword = res.stored;
+                    writeSavedServers();
+                }
+                if (!res.stored) {
+                    showToast(
+                        "This computer cannot store the password securely, so it was not saved. You'll be asked for it next time.",
+                        7000,
+                    );
+                }
+            });
+        }
+        writeSavedServers();
+    } else if (selectedSavedServerId && savedServerById(selectedSavedServerId)) {
+        // Connected from the saved list without touching Remember: it is still that entry.
+        const entry = savedServerById(selectedSavedServerId)!;
+        entry.lastConnected = Date.now();
+        activeSavedServerId = entry.id;
+        writeSavedServers();
+    }
+    welcomeStatus("", "");
+    renderSavedServers();
+}
+
+function onSavedServerDisconnected(): void {
+    activeSavedServerId = null;
+    renderSavedServers();
+    const next = pendingSwitchSavedId;
+    pendingSwitchSavedId = null;
+    if (next) setTimeout(() => connectSavedServer(next), 50); // after the disconnect fully settled
+}
+
+/** One-time move of the single remembered server (v2.7.0 and older) into the list. */
+function migrateLegacyRememberedServer(): void {
+    try {
+        if (localStorage.getItem("reson8-remember-me") !== "true") return;
+        const url = localStorage.getItem("reson8-server-url");
+        const nick = localStorage.getItem("reson8-nickname");
+        const pw = localStorage.getItem("reson8-server-password");
+        // The plaintext keys are removed whatever happens next.
+        for (const k of ["reson8-remember-me", "reson8-server-url", "reson8-nickname", "reson8-server-password"]) {
+            localStorage.removeItem(k);
+        }
+        if (!url) return;
+        const entry: SavedServer = {
+            id: crypto.randomUUID(),
+            address: url,
+            name: addressToHostLabel(url),
+            nickname: nick || "User",
+            hasPassword: false,
+            lastConnected: Date.now(),
+        };
+        savedServers.push(entry);
+        writeSavedServers();
+        if (pw) {
+            void api.savedPassword.set(entry.id, pw).then((res) => {
+                if (res.stored) {
+                    entry.hasPassword = true;
+                    writeSavedServers();
+                } else {
+                    showToast(
+                        "Your saved server password couldn't be stored securely and was removed. You'll be asked for it next time.",
+                        9000,
+                    );
+                }
+            });
+        }
+    } catch {
+        /* nothing to migrate */
+    }
+}
+
+function initSavedServers(): void {
+    savedServers = readSavedServers();
+    migrateLegacyRememberedServer();
+    renderSavedServers();
+    // Pre-fill the form from the most recent entry (what "Remember" used to do).
+    const latest = savedServers[0];
+    if (latest) fillFormFromSaved(latest);
+    // Editing the address or nickname makes it a different target than the picked entry.
+    for (const input of [serverUrlInput, nicknameInput]) {
+        input.addEventListener("input", () => {
+            const picked = selectedSavedServerId ? savedServerById(selectedSavedServerId) : undefined;
+            if (picked && (picked.address !== serverUrlInput.value.trim() || picked.nickname !== nicknameInput.value.trim())) {
+                // Keep the entry (an Edit updates it on connect) but stop using its stored password.
+                serverPasswordInput.placeholder = "Password (optional)";
+            }
+        });
+    }
+    // Enter in the form connects.
+    for (const input of [serverUrlInput, nicknameInput, serverPasswordInput, document.getElementById("invite-code") as HTMLInputElement]) {
+        input.addEventListener("keydown", (e) => {
+            if (e.key === "Enter") void startConnect();
+        });
+    }
+    document.getElementById("rail-add")?.addEventListener("click", () => {
+        if (isConnected) {
+            // Adding another server: disconnect first, then land on the empty form.
+            selectedSavedServerId = null;
+            serverUrlInput.value = "";
+            serverPasswordInput.value = "";
+            rememberMeCheckbox.checked = true;
+            api.disconnect();
+        } else {
+            selectedSavedServerId = null;
+            serverUrlInput.value = "";
+            serverPasswordInput.value = "";
+            rememberMeCheckbox.checked = true;
+        }
+        setTimeout(() => serverUrlInput.focus(), 0);
+    });
+}
+
+initSavedServers();
 
 // ── Channel Tree Rendering ────────────────────────────────────────────────
 
@@ -4563,6 +4987,9 @@ api.on("connected", (data: { serverId: string; instanceId: string; secure?: bool
     serverUrlInput.disabled = true;
     nicknameInput.disabled = true;
     serverPasswordInput.disabled = true;
+    document.body.classList.add("is-connected");
+    document.body.classList.remove("is-approving");
+    onSavedServerConnected(); // PRD 19 C1
     statusDot.classList.add("connected");
     statusText.textContent = `Connected as ${nicknameInput.value.trim() || "User"}`;
     statusText.classList.add("connected");
@@ -4625,6 +5052,7 @@ api.on("connected", (data: { serverId: string; instanceId: string; secure?: bool
             connectedServerName = res.name;
             updateWindowTitle();
         }
+        if (res.success) void refreshSavedServerMeta(res.name, res.iconUrl); // PRD 19 C1
         if (res.success && res.maxMessageLength !== undefined) {
             serverMaxMessageLength = res.maxMessageLength;
             chatInput.maxLength = serverMaxMessageLength;
@@ -4672,6 +5100,8 @@ api.on("disconnected", (data?: { reason?: string }) => {
     serverUrlInput.disabled = false;
     nicknameInput.disabled = false;
     serverPasswordInput.disabled = false;
+    document.body.classList.remove("is-connected", "is-approving");
+    onSavedServerDisconnected(); // PRD 19 C1
     renderConnectionSecurity(); // isConnected is false → hides the lock and the warning (PRD 18.3)
     hideApprovalScreen(); // PRD 18.8
     pendingApprovals = [];
@@ -8784,12 +9214,14 @@ function showApprovalScreen(fingerprint: string): void {
     (document.getElementById("approval-text") as HTMLElement).textContent =
         "This server asks a moderator to let new people in. You can leave this window open — you'll join automatically as soon as they do.";
     approvalScreen.classList.add("visible");
+    document.body.classList.add("is-approving"); // the waiting screen lives in #main
     btnConnect.disabled = true;
     btnDisconnect.disabled = false;
 }
 
 function hideApprovalScreen(): void {
     approvalScreen.classList.remove("visible");
+    document.body.classList.remove("is-approving");
 }
 
 api.on("approval-pending", (payload: { fingerprint?: string }) => {
@@ -11573,6 +12005,7 @@ api.on("server-settings-updated", (data: {
     iconUrl?: string | null;
 }) => {
     serverNudgeEnabled = data.nudgeEnabled;
+    if (data.iconUrl !== undefined) void refreshSavedServerMeta(undefined, data.iconUrl); // PRD 19 C1
     refreshServerSummary();
     // If the Online Users modal is open, re-render so Nudge buttons appear/disappear live.
     if (onlineUsersModal.classList.contains("visible")) {

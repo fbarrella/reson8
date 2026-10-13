@@ -127,64 +127,336 @@
       flex-direction: column;
     }
 
-    /* ── Toolbar ───────────────────────────────────────────────────────── */
-    #toolbar {
+    /* ── Title bar (PRD 19 C1/C2) ─────────────────────────────────────── */
+    #titlebar {
       display: flex;
       align-items: center;
-      gap: 8px;
-      padding: 8px 12px;
-      background: var(--bg-secondary);
-      border-bottom: 1px solid var(--border);
+      gap: 12px;
+      height: 38px;
+      padding: 0 12px;
+      background: var(--color-bg);
+      border-bottom: 1px solid var(--color-divider);
       flex-shrink: 0;
     }
 
-    #toolbar .brand {
-      font-weight: 700;
-      font-size: 15px;
-      color: var(--accent);
-      margin-right: 12px;
-      letter-spacing: -0.5px;
+    #titlebar .brand {
+      font-weight: 600;
+      font-size: 14px;
+      color: var(--color-text);
+      letter-spacing: -0.2px;
       display: flex;
       align-items: center;
-      gap: 6px;
+      gap: 8px;
     }
 
-    #toolbar .brand img {
+    #titlebar .brand img {
       height: 20px;
       width: 20px;
       object-fit: contain;
     }
 
-    #toolbar input {
-      background: var(--bg-input);
-      border: 1px solid var(--border);
-      color: var(--text-primary);
-      padding: 5px 10px;
-      border-radius: var(--radius);
+    .server-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      max-width: 320px;
+      margin: 0 auto;
+      padding: 4px 12px;
+      border: 1px solid var(--color-divider);
+      border-radius: 999px;
+      background: var(--color-neutral-900);
+      color: var(--color-neutral-300);
       font-size: 12px;
-      font-family: var(--font);
-      outline: none;
-      transition: border-color 0.2s;
+      cursor: pointer;
     }
 
-    #toolbar input:focus {
-      border-color: var(--accent);
+    .server-pill:hover {
+      background: var(--color-neutral-800);
+      color: var(--color-text);
     }
 
-    #toolbar input#host {
-      width: 140px;
+    .server-pill #server-pill-text {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
-    #toolbar input#port {
-      width: 60px;
+    .server-pill-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--color-neutral-600);
+      flex-shrink: 0;
     }
 
-    #toolbar input#nickname {
-      width: 100px;
+    .server-pill-dot.connected {
+      background: var(--color-success);
     }
 
-    #toolbar input#server-password {
-      width: 120px;
+    /* ── Shell: rail | (welcome | main) ────────────────────────────────── */
+    #shell {
+      display: flex;
+      flex: 1;
+      min-height: 0;
+    }
+
+    #rail {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+      width: 64px;
+      flex-shrink: 0;
+      padding: 10px 0;
+      background: var(--color-bg);
+      border-right: 1px solid var(--color-divider);
+    }
+
+    .rail-btn {
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 40px;
+      height: 40px;
+      border: 1px solid transparent;
+      border-radius: var(--radius-md);
+      background: none;
+      color: var(--color-neutral-400);
+      font-size: 20px;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+
+    .rail-btn:hover:not(:disabled) {
+      background: var(--color-neutral-900);
+      color: var(--color-text);
+    }
+
+    .rail-btn.active {
+      background: var(--color-accent-900);
+      color: var(--color-accent-200);
+    }
+
+    .rail-btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    .rail-badge {
+      position: absolute;
+      top: -4px;
+      right: -4px;
+    }
+
+    .rail-divider {
+      width: 28px;
+      height: 1px;
+      background: var(--color-divider);
+      flex-shrink: 0;
+    }
+
+    #rail-server-list {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+      overflow-y: auto;
+      overflow-x: hidden;
+      min-height: 0;
+      padding: 2px;
+    }
+
+    .rail-tile {
+      padding: 0;
+      border: 2px solid transparent;
+      border-radius: var(--radius-md);
+      background: none;
+      cursor: pointer;
+      flex-shrink: 0;
+      line-height: 0;
+    }
+
+    .rail-tile.active {
+      border-color: var(--color-accent);
+    }
+
+    .rail-spacer {
+      flex: 1;
+    }
+
+    /* A server's icon, or its initials on accent-900 (PRD 19 C1/C5: ONE helper). */
+    .server-avatar {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      overflow: hidden;
+      border-radius: var(--radius-md);
+      background: var(--color-accent-900);
+      color: var(--color-accent-200);
+      font-weight: 600;
+      line-height: 1;
+      user-select: none;
+    }
+
+    .server-avatar img {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    /* ── Welcome screen ─────────────────────────────────────────────────── */
+    #welcome-screen {
+      flex: 1;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      overflow: auto;
+      padding: var(--space-8);
+      background: var(--color-bg);
+    }
+
+    body:not(.is-connected):not(.is-approving) #welcome-screen {
+      display: flex;
+    }
+
+    body:not(.is-connected):not(.is-approving) #main {
+      display: none;
+    }
+
+    .welcome-inner {
+      display: flex;
+      gap: 28px;
+      align-items: flex-start;
+      width: 100%;
+      max-width: 920px;
+    }
+
+    .welcome-form {
+      width: 360px;
+      flex-shrink: 0;
+    }
+
+    .welcome-form .dialog-title {
+      font-size: 20px;
+    }
+
+    .welcome-form label {
+      margin-top: var(--space-4);
+    }
+
+    .welcome-form .optional {
+      color: var(--color-neutral-500);
+    }
+
+    .welcome-form input.input {
+      margin-bottom: 0;
+    }
+
+    .welcome-form input#invite-code {
+      margin-top: var(--space-3);
+      letter-spacing: 1px;
+      text-transform: uppercase;
+    }
+
+    .welcome-form input#invite-code.invite-needed {
+      border-color: var(--warning);
+    }
+
+    .welcome-remember {
+      display: flex !important;
+      align-items: center;
+      gap: 8px;
+      margin-top: var(--space-4);
+      color: var(--color-neutral-400);
+      cursor: pointer;
+      user-select: none;
+    }
+
+    #welcome-status {
+      min-height: 18px;
+      margin-top: var(--space-3);
+      font-size: 12px;
+      color: var(--color-neutral-400);
+    }
+
+    #welcome-status.error {
+      color: var(--color-danger-text);
+    }
+
+    #welcome-status.success {
+      color: var(--color-success);
+    }
+
+    .welcome-saved {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .welcome-saved .section-label {
+      margin: 6px 0 var(--space-3);
+    }
+
+    #saved-server-empty {
+      padding: var(--space-6);
+      border: 1px dashed var(--color-divider);
+      border-radius: var(--radius-lg);
+      color: var(--color-neutral-500);
+      font-size: 13px;
+    }
+
+    .saved-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 12px;
+      margin-bottom: 8px;
+      border: 1px solid var(--color-divider);
+      border-radius: var(--radius-lg);
+      background: var(--color-surface);
+      cursor: pointer;
+    }
+
+    .saved-row:hover {
+      border-color: var(--color-accent-700);
+    }
+
+    .saved-row-main {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .saved-row-name {
+      font-weight: 500;
+      color: var(--color-text);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .saved-row-address {
+      font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+      font-size: 11.5px;
+      color: var(--color-neutral-400);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .saved-row-meta {
+      margin-top: 2px;
+      font-size: 11.5px;
+      color: var(--color-neutral-500);
+    }
+
+    .saved-row-actions {
+      display: flex;
+      gap: 6px;
+      flex-shrink: 0;
     }
 
     .btn {
@@ -381,8 +653,8 @@
 
     /* ── Left Pane (Channel Tree) ─────────────────────────────────────── */
     #left-pane {
-      width: 220px;
-      min-width: 180px;
+      width: 280px;
+      min-width: 220px;
       background: var(--bg-secondary);
       border-right: 1px solid var(--border);
       display: flex;
@@ -404,7 +676,6 @@
     }
 
     #btn-create-channel,
-    #btn-server-settings,
     #btn-online-users {
       background: none;
       border: 1px solid var(--border);
@@ -421,7 +692,6 @@
     }
 
     #btn-create-channel:hover,
-    #btn-server-settings:hover,
     #btn-online-users:hover {
       border-color: var(--accent);
       color: var(--accent);
@@ -4211,12 +4481,10 @@
 
     #btn-server-settings .pending-badge {
       position: absolute;
-      top: -5px;
-      right: -5px;
+      top: -4px;
+      right: -4px;
       margin: 0;
     }
-
-    #btn-server-settings { position: relative; }
 
     .pending-approval-row {
       display: flex;
@@ -4237,16 +4505,6 @@
     .pending-approval-row button { padding: 4px 8px; font-size: 11px; }
 
     /* ── Invite codes (PRD 18.9) ─────────────────────────────────────────── */
-    #toolbar input#invite-code {
-      width: 130px;
-      letter-spacing: 1px;
-      text-transform: uppercase;
-    }
-
-    #toolbar input#invite-code.invite-needed {
-      border-color: var(--warning);
-    }
-
     .invite-row {
       padding: 7px 10px;
       margin-bottom: 6px;
@@ -5555,20 +5813,15 @@
 </head>
 
 <body>
-  <!-- ── Toolbar ─────────────────────────────────────────────────────── -->
-  <div id="toolbar">
+  <!-- ── Title bar (PRD 19 C2 wires the server pill) ─────────────────── -->
+  <header id="titlebar">
     <span class="brand"><img src="logo.png" alt="Reson8 Logo">Reson8</span>
-    <input type="text" id="server-url" placeholder="Server URL (e.g. server.reson8.com or localhost:9800)">
-    <input type="text" id="nickname" placeholder="Nickname" value="User">
-    <input type="password" id="server-password" placeholder="Password (optional)">
-    <input type="text" id="invite-code" placeholder="Invite code" autocomplete="off" spellcheck="false" maxlength="32" style="display:none;" title="This server needs an invite code for new users">
-    <label id="remember-me-label" style="display:flex; align-items:center; gap:4px; font-size:11px; color:var(--text-secondary); cursor:pointer; user-select:none;">
-      <input type="checkbox" id="remember-me">
-      Remember
-    </label>
-    <button class="btn btn-connect" id="btn-connect">Connect</button>
-    <button class="btn btn-disconnect" id="btn-disconnect" disabled>Disconnect</button>
-  </div>
+    <button type="button" id="server-pill" class="server-pill" aria-haspopup="menu">
+      <span class="server-pill-dot" id="server-pill-dot"></span>
+      <span id="server-pill-text">Not connected</span>
+      <i class="ph ph-caret-down" aria-hidden="true"></i>
+    </button>
+  </header>
 
   <!-- ── Unencrypted-connection warning (PRD 18.3) ───────────────────── -->
   <div id="tls-warning-banner" role="status">
@@ -5576,6 +5829,50 @@
     <button type="button" id="btn-tls-warning-dismiss">Don't warn me again for this server</button>
     <button type="button" id="btn-tls-warning-close" aria-label="Close this warning">✕</button>
   </div>
+
+  <div id="shell">
+  <!-- ── Server rail (PRD 19 C1) ─────────────────────────────────────── -->
+  <nav id="rail" aria-label="Servers">
+    <button type="button" class="rail-btn active" id="rail-servers" title="Servers" aria-label="Servers"><i class="ph ph-hard-drives" aria-hidden="true"></i></button>
+    <button type="button" class="rail-btn" id="rail-dms" title="Direct messages — connect to a server first" aria-label="Direct messages" disabled><i class="ph ph-chat-circle-text" aria-hidden="true"></i><span class="rail-badge count-pill" id="rail-dm-badge" style="display:none;"></span></button>
+    <div class="rail-divider"></div>
+    <div id="rail-server-list"></div>
+    <button type="button" class="rail-btn" id="rail-add" title="Add a server" aria-label="Add a server"><i class="ph ph-plus" aria-hidden="true"></i></button>
+    <div class="rail-spacer"></div>
+    <button id="btn-server-settings" class="rail-btn" title="Settings" aria-label="Settings"><span class="pending-badge" id="pending-badge-gear" style="display:none;"></span><i class="ph ph-gear" aria-hidden="true"></i></button>
+  </nav>
+
+  <!-- ── Welcome screen: shown while not connected (PRD 19 C1) ───────── -->
+  <section id="welcome-screen" aria-label="Connect to a server">
+    <div class="welcome-inner">
+      <div class="welcome-form dialog">
+        <h1 class="dialog-title">Connect to a server</h1>
+        <p class="dialog-subtitle">Enter an address, or pick one of your saved servers.</p>
+        <label for="server-url">Server address</label>
+        <input type="text" id="server-url" class="input" placeholder="server.reson8.com or localhost:9800" autocomplete="off" spellcheck="false">
+        <label for="nickname">Nickname</label>
+        <input type="text" id="nickname" class="input" placeholder="Nickname" value="User" autocomplete="off">
+        <label for="server-password">Password <span class="optional">(optional)</span></label>
+        <input type="password" id="server-password" class="input" placeholder="Password (optional)" autocomplete="off">
+        <input type="text" id="invite-code" class="input" placeholder="Invite code" autocomplete="off" spellcheck="false" maxlength="32" style="display:none;" title="This server needs an invite code for new users">
+        <label id="remember-me-label" class="welcome-remember">
+          <input type="checkbox" id="remember-me">
+          Remember this server
+        </label>
+        <div class="modal-actions">
+          <button class="btn btn-primary btn-connect" id="btn-connect">Connect</button>
+        </div>
+        <div id="welcome-status" role="status" aria-live="polite"></div>
+      </div>
+      <div class="welcome-saved">
+        <div class="section-label">Saved servers</div>
+        <div id="saved-server-list"></div>
+        <div id="saved-server-empty">No saved servers yet. Tick "Remember this server" when you connect and it will show up here.</div>
+      </div>
+    </div>
+  </section>
+  <!-- The disconnect action lives in the server pill (PRD 19 C2); kept as a hidden control the connection code drives. -->
+  <button type="button" id="btn-disconnect" hidden disabled>Disconnect</button>
 
   <!-- ── Main Three-Pane Layout ──────────────────────────────────────── -->
   <div id="main">
@@ -5607,13 +5904,6 @@
               <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
               <path d="M16 3.13a4 4 0 0 1 0 7.75" />
             </svg><span class="online-indicator" id="online-dot"></span></button>
-          <button id="btn-server-settings" title="Server Settings"><span class="pending-badge" id="pending-badge-gear" style="display:none;"></span><svg width="14" height="14"
-              viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
-              stroke-linejoin="round">
-              <circle cx="12" cy="12" r="3" />
-              <path
-                d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-            </svg></button>
           <button id="btn-create-channel" title="Create Channel">+</button>
         </div>
       </div>
@@ -5722,6 +6012,8 @@
       </div>
     </div>
   </div>
+
+  </div><!-- /#shell -->
 
   <!-- ── Status Bar ────────────────────────────────────────────────────── -->
   <div id="status-bar">

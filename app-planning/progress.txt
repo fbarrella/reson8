@@ -2306,3 +2306,88 @@ Feature/Fix: Base component styles (PRD 19 F4)
 
   Next Step: P3 complete. P4 starts with C1 (saved servers, welcome screen and
   the server rail).
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Saved servers, welcome screen and the server rail (PRD 19 C1)
+
+  Problem: one remembered server in four plaintext localStorage keys (password
+  included), a toolbar connect form, no list, no rail.
+
+  Solution:
+    Main process:
+      - saved-passwords-store.ts (NEW, Electron-free): <userData>/server-
+        passwords.json = { id: base64(encrypted pw) }, atomic write, 0600; set/
+        has/get/delete with validation (UUID-shaped id, password <= 256 chars);
+        nothing is stored unless the cipher is RELIABLE.
+      - saved-passwords.ts (NEW): the safeStorage adapter with the identity
+        key's rule (not Linux basic_text). IPC saved-password-set/delete/has/
+        available/get-for-connect, every one refused unless event.sender is the
+        main window's webContents; the plaintext is returned ONLY by
+        get-for-connect, which is not on reson8Api.
+    Preload: connect(..., savedServerId?) — when no password was typed the join
+    asks main for the stored one at join time (every reconnect) and keeps no
+    copy; a typed password wins. api.savedPassword.{available,set,delete,has}.
+    Renderer + index.html:
+      - Store reson8-saved-servers (max 50, newest first, validated on read);
+        the address is stored as typed. A remembered entry is written on
+        `connected` (a failed connect creates nothing); the same address +
+        nickname updates the entry; Edit keeps the entry and updates its
+        address/nickname on connect.
+      - Migration: the four v2.7.0 keys become one entry, the password moves to
+        the main-process store (a toast when it cannot be stored securely), and
+        the plaintext keys are removed unconditionally.
+      - Shell: #toolbar is gone. #titlebar (logo, "Reson8", the pill — C2 wires
+        it) / #shell: #rail (64 px: Servers, DMs [disabled: "Direct messages —
+        connect to a server first"], divider, saved tiles 40x40 with the active
+        ring, Add a server, the settings gear at the bottom keeping
+        #btn-server-settings, #pending-badge-gear and the B12 update dot),
+        #welcome-screen and #main. body.is-connected / .is-approving decide
+        welcome vs main (the approval screen keeps working); the connect inputs
+        and #invite-code keep their ids; log() mirrors progress/errors into the
+        welcome status line; #btn-disconnect stays as a hidden control.
+      - Welcome: the connect form (a .dialog) and the saved list (icon
+        thumbnail or initials, name, address in monospace, nickname + relative
+        time, Connect / Edit / Remove; clicking a row connects).
+      - Switching: a rail tile while connected runs the full disconnect path
+        and connects on `disconnected`.
+      - Name/icon refresh on connected and on server-settings-updated; a changed
+        iconUrl is fetched through fetch-image-bytes, drawn into 80x80 and
+        stored as a PNG data URL (<= 32 KB, else none; failure keeps the old
+        one; null clears both).
+      - serverAvatarElement(name, url, size): the ONE avatar helper (C5 reuses).
+      - The sidebar is 280 px (SPEC 1.1).
+    test:saved-passwords (NEW): 19 checks (validation, 0600, plaintext never on
+    disk, unreliable cipher, decrypt failure, corrupt file, foreign keys).
+
+  Key Files Modified:
+    apps/client/src/saved-passwords-store.ts, saved-passwords.ts (NEW)
+    apps/client/scripts/saved-passwords-smoke.mjs (NEW), package.json
+    apps/client/src/main.ts, preload.ts
+    apps/client/src/renderer/renderer.ts, index.html
+    apps/client/AGENTS.md
+
+  Verification:
+    - tsc client clean; lint exit 0; test:saved-passwords passes.
+    - Real client, throwaway profile, two real servers (:9800 open, :9801 with
+      SERVER_PRIVATE_PASSWORD): a fresh profile shows the welcome screen with no
+      saved servers and the DM button disabled; v2.7.0 keys seeded -> one entry
+      (pw stored in the main process), the four keys gone, form pre-filled;
+      connect to :9801 with a typed password + Remember -> an entry with
+      hasPassword; neither localStorage nor the DOM contains the password
+      string; disconnect, then Connect from the list with the field empty ->
+      connected (the preload used the stored one); the same entry with
+      hasPassword forced off -> "Invalid server password" (so the previous run
+      really used the stored password); an admin set a server icon -> the
+      entry got iconUrl and an 80x80 PNG thumbnail and the rail tile shows it
+      with the active ring; connecting without Remember adds no entry; a failed
+      connect (:1) adds none; switching from :9800 to :9801 via the saved entry
+      disconnects, reconnects and moves the ring. Screenshots reviewed.
+    - NOT run: a Linux basic_text keyring (the "asks for it" path is the
+      stored:false branch covered by the unit test), the TLS trust/changed
+      modals and the approval + invite flows from the new screen (their code
+      paths are unchanged; approval uses #main which is kept visible),
+      packaged-offline icon display (the thumbnail is a data URL in
+      localStorage).
+
+  Next Step: PRD 19 C2 — title-bar pill, switcher and status bar.

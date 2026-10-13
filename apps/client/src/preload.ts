@@ -488,6 +488,12 @@ const api = {
         password?: string,
         /** Only for a NEW identity on a server that requires one (PRD 18.9); never stored. */
         inviteCode?: string,
+        /**
+         * A saved server's id (PRD 19 C1). When no password was typed, the join
+         * asks the main process for that server's stored password at join time
+         * (and on every reconnect); this process keeps no copy.
+         */
+        savedServerId?: string,
     ): Promise<void> {
         if (socket?.connected) {
             socket.disconnect();
@@ -595,10 +601,19 @@ const api = {
                 return;
             }
 
+            // A typed password always wins over a stored one (PRD 19 C1); the stored
+            // one is read from the main process for this join only.
+            let joinPassword = password;
+            if (!joinPassword && savedServerId) {
+                joinPassword =
+                    (await ipcRenderer.invoke("saved-password-get-for-connect", savedServerId).catch(() => null)) ??
+                    undefined;
+            }
+
             // Join the server — let the server decide the serverId
             joiningSocket.emit(
                 "USER_JOIN_SERVER",
-                { nickname, instanceId, password, avatar: avatarSelection, identity, inviteCode },
+                { nickname, instanceId, password: joinPassword, avatar: avatarSelection, identity, inviteCode },
                 (res) => {
                     joinServerInFlight = false;
                     if (res.pending) {
@@ -2041,6 +2056,19 @@ const api = {
             }
             socket.emit("NUDGE_USER", { targetUserId }, resolve);
         });
+    },
+
+    /**
+     * Saved server passwords (PRD 19 C1). The plaintext is never readable from
+     * here: `set` stores, `has` reports, `connect(…, savedServerId)` uses it.
+     */
+    savedPassword: {
+        /** false when the OS cannot protect it reliably (e.g. Linux without a keyring). */
+        available: (): Promise<boolean> => ipcRenderer.invoke("saved-password-available"),
+        set: (id: string, password: string): Promise<{ stored: boolean }> =>
+            ipcRenderer.invoke("saved-password-set", id, password),
+        delete: (id: string): Promise<void> => ipcRenderer.invoke("saved-password-delete", id),
+        has: (id: string): Promise<boolean> => ipcRenderer.invoke("saved-password-has", id),
     },
 
     getServerSettings(): Promise<{
