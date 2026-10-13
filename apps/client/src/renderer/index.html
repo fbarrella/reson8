@@ -2825,28 +2825,6 @@
       cursor: pointer;
     }
 
-    .channel-ctx-menu-item {
-      width: 100%;
-      background: none;
-      border: none;
-      color: var(--text-primary);
-      font-size: 12px;
-      padding: 8px 12px;
-      border-radius: 3px;
-      cursor: pointer;
-      text-align: left;
-      transition: background 0.1s;
-    }
-
-    .channel-ctx-menu-item:hover {
-      background: rgba(255,255,255,0.06);
-    }
-
-    .ctx-menu-divider {
-      height: 1px;
-      margin: 4px 0;
-      background: var(--border);
-    }
 
     /* Muted text channel (PRD 16.4): faded, almost "disabled"-looking, but
        still fully clickable. Brightens a little on hover so the user can read
@@ -2891,12 +2869,6 @@
       opacity: 0.55;
     }
 
-    /* A tab-menu item that would do nothing (PRD 19 B5) is disabled, not hidden. */
-    .channel-ctx-menu-item:disabled {
-      opacity: 0.4;
-      cursor: default;
-      pointer-events: none;
-    }
 
     .modal-content {
       background: var(--bg-secondary);
@@ -4525,117 +4497,136 @@
       color: var(--accent);
     }
 
-    /* Kick context menu (right-click on tree occupants) */
-    .occupant-ctx-menu {
+    /* ── Menus (PRD 19 F3) — the one menu look: surface, shadow-lg, 5px
+       padding, 32px items with a 15px icon, accent hover, danger last. ───── */
+    .menu {
       position: fixed;
       z-index: 10000;
-      background: #1a1f2e;
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      box-shadow: 0 4px 16px rgba(0,0,0,0.5);
-      padding: 4px;
-      min-width: 160px;
+      min-width: 190px;
+      max-width: 280px;
+      padding: 5px;
+      background: var(--color-surface);
+      border-radius: var(--radius-md);
+      box-shadow: var(--shadow-lg);
+      color: var(--color-text);
+      font-size: 13px;
     }
 
-    .ctx-kick-btn {
+    .menu:focus {
+      outline: none;
+    }
+
+    .menu-item {
+      display: flex;
+      align-items: center;
+      gap: 9px;
       width: 100%;
-      background: none;
+      height: 32px;
+      padding: 0 10px;
       border: none;
-      color: #e74c3c;
-      font-size: 12px;
-      padding: 8px 12px;
-      border-radius: 3px;
-      cursor: pointer;
+      border-radius: var(--radius-sm);
+      background: none;
+      color: var(--color-text);
+      font: inherit;
       text-align: left;
-      transition: background 0.1s;
+      cursor: pointer;
     }
 
-    .ctx-kick-btn:hover {
-      background: rgba(231,76,60,0.15);
+    .menu-item-icon {
+      flex-shrink: 0;
+      font-size: 15px;
+      color: var(--color-neutral-400);
     }
 
-    /* Non-interactive group label inside a context menu (PRD 19 B6). */
-    .ctx-menu-label {
-      padding: 6px 12px 2px;
+    .menu-item-label {
+      flex: 1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .menu-item-hint {
+      flex-shrink: 0;
       font-size: 11px;
-      color: var(--text-muted);
+      color: var(--color-neutral-500);
+    }
+
+    .menu-item:hover:not(:disabled),
+    .menu-item:focus-visible {
+      background: var(--color-accent-900);
+      color: var(--color-accent-200);
+      outline: none;
+    }
+
+    .menu-item:hover:not(:disabled) .menu-item-icon,
+    .menu-item:focus-visible .menu-item-icon {
+      color: var(--color-accent-200);
+    }
+
+    .menu-item:disabled {
+      opacity: 0.4;
+      cursor: default;
+    }
+
+    .menu-item.danger,
+    .menu-item.danger .menu-item-icon {
+      color: var(--color-danger-text);
+    }
+
+    .menu-item.danger:hover:not(:disabled),
+    .menu-item.danger:focus-visible {
+      background: color-mix(in oklch, var(--color-live) 16%, transparent);
+      color: var(--color-danger-text);
+    }
+
+    .menu-heading {
+      padding: 8px 10px 3px;
+      font-size: 10.5px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
       text-transform: uppercase;
-      letter-spacing: 0.04em;
-      pointer-events: none;
+      color: var(--color-neutral-500);
     }
 
-    .ctx-delete-channel-btn {
-      width: 100%;
-      background: none;
-      border: none;
-      color: #e74c3c;
-      font-size: 12px;
-      padding: 8px 12px;
-      border-radius: 3px;
-      cursor: pointer;
-      text-align: left;
-      transition: background 0.1s;
+    .menu-divider {
+      height: 1px;
+      margin: 5px 4px;
+      background: var(--color-divider);
     }
 
-    .ctx-delete-channel-btn:hover {
-      background: rgba(231,76,60,0.15);
+    .menu-slider {
+      padding: 6px 10px 8px;
     }
 
-    .ctx-volume-row {
-      padding: 6px 12px 10px;
-    }
-
-    .ctx-volume-label {
+    .menu-slider-head {
       display: flex;
       justify-content: space-between;
-      font-size: 11px;
-      color: var(--text-secondary);
       margin-bottom: 4px;
+      font-size: 12px;
+      color: var(--color-neutral-400);
     }
 
-    .ctx-volume-value {
-      color: var(--accent);
+    .menu-slider-value {
+      color: var(--color-accent-200);
       font-weight: 600;
     }
 
-    .ctx-volume-ticks {
+    .menu-slider-input {
+      width: 100%;
+      accent-color: var(--color-accent);
+    }
+
+    .menu-slider-ticks {
       display: flex;
       justify-content: space-between;
       font-size: 10px;
-      color: var(--text-muted);
+      color: var(--color-neutral-500);
     }
 
-    .ctx-menu-hint {
-      display: block;
-      padding: 0 12px 4px;
-      font-size: 11px;
-      color: var(--text-muted);
-    }
-
-    .ctx-volume-slider {
-      width: 100%;
-      accent-color: var(--accent);
-    }
-
-    .ctx-mute-btn {
-      width: 100%;
-      background: none;
-      border: none;
-      color: var(--text-primary);
-      font-size: 12px;
-      padding: 8px 12px;
-      border-radius: 3px;
-      cursor: pointer;
-      text-align: left;
-      transition: background 0.1s;
-    }
-
-    .ctx-mute-btn:hover {
-      background: rgba(255,255,255,0.06);
-    }
-
-    .ctx-mute-btn.active {
-      color: var(--danger);
+    /* The row a menu belongs to while it is open: the accent ring. */
+    .menu-open {
+      outline: 1px solid var(--color-accent);
+      outline-offset: -1px;
     }
 
     /* Green dot on Online Users button */

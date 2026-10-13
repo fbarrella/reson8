@@ -3154,102 +3154,66 @@ function attachChannelContextMenu(el: HTMLElement, node: TreeNode, canMute = fal
         e.preventDefault();
         e.stopPropagation();
 
-        document.querySelector(".occupant-ctx-menu")?.remove();
-
-        const menu = document.createElement("div");
-        menu.className = "occupant-ctx-menu";
-        menu.style.left = `${e.clientX}px`;
-        menu.style.top = `${e.clientY}px`;
-
-        // Mute is personal (client-side, no permission) and only offered on an
-        // openable text channel — never voice channels or category rows (PRD 16.4).
-        // Keep Tab Open (PRD 17.5) sits with Mute: both are personal, text-channel-only.
-        const isKept = chatTabs.get(node.id)?.mode === "kept";
-        const muteItem = canMute
-            ? `<button class="channel-ctx-menu-item ctx-keep-btn">🔖 ${isKept ? "Stop keeping open" : "Keep open"}</button>`
-              + `<button class="channel-ctx-menu-item ctx-mute-btn">${isChannelMuted(node.id) ? "🔔 Unmute Channel" : "🔕 Mute Channel"}</button><div class="ctx-menu-divider"></div>`
-            : "";
-
         // Who may manage channels (PRD 19 B6): `null` = unknown (an older
         // server) -> today's behaviour, the items show and the server refuses;
-        // `false` -> the whole group is absent. The menu is rebuilt on every
-        // open, so PERMISSIONS_CHANGED needs no re-render.
+        // `false` -> the whole group is absent. Rebuilt on every open, so
+        // PERMISSIONS_CHANGED needs no re-render.
         const showManage = hasPerm(PERM.MANAGE_CHANNELS) !== false;
-        if (!canMute && !showManage) return; // a member on a voice/category row: no empty menu
-
-        menu.innerHTML = muteItem
-            ? muteItem.replace('<div class="ctx-menu-divider"></div>', "")
-            : "";
-        if (showManage) {
-            if (muteItem) {
-                const divider = document.createElement("div");
-                divider.className = "ctx-menu-divider";
-                menu.appendChild(divider);
-            }
-            const label = document.createElement("div");
-            label.className = "ctx-menu-label";
-            label.textContent = "Manage channel";
-            menu.appendChild(label);
-            const manage = document.createElement("div");
-            manage.innerHTML = `
-                <button class="channel-ctx-menu-item ctx-rename-btn">✏️ Rename…</button>
-                ${!isVoice ? `<button class="channel-ctx-menu-item ctx-icon-btn">🖼️ Set icon…</button>` : ""}
-                <button class="channel-ctx-menu-item ctx-move-btn">📁 Move to category…</button>
-                ${!isVoice ? `<button class="channel-ctx-menu-item ctx-nsfw-toggle-btn">🔞 ${node.isNsfw ? "Unmark" : "Mark"} as NSFW</button>` : ""}
-                <div class="ctx-menu-divider"></div>
-                <button class="ctx-delete-channel-btn">🗑️ Delete channel…</button>
-            `;
-            while (manage.firstChild) menu.appendChild(manage.firstChild);
+        if (!canMute && !showManage) {
+            closeMenu(); // a member on a voice/category row: no empty menu
+            return;
         }
 
-        menu.querySelector(".ctx-mute-btn")?.addEventListener("click", () => {
-            menu.remove();
-            setChannelMuted(node.id, !isChannelMuted(node.id));
-        });
+        const items: MenuItem[] = [];
 
-        menu.querySelector(".ctx-keep-btn")?.addEventListener("click", () => {
-            menu.remove();
-            setTabKept(node.id, !isKept);
-        });
+        // Keep open and Mute are personal and only offered on an openable text
+        // channel (PRD 16.4, 17.5) — never voice channels or category rows.
+        if (canMute) {
+            const isKept = chatTabs.get(node.id)?.mode === "kept";
+            items.push({
+                label: isKept ? "Stop keeping open" : "Keep open",
+                icon: "ph-bookmark-simple",
+                onClick: () => setTabKept(node.id, !isKept),
+            });
+            const muted = isChannelMuted(node.id);
+            items.push({
+                label: muted ? "Unmute channel" : "Mute channel",
+                icon: muted ? "ph-bell" : "ph-bell-slash",
+                onClick: () => setChannelMuted(node.id, !muted),
+            });
+        }
 
-        menu.querySelector(".ctx-rename-btn")?.addEventListener("click", () => {
-            menu.remove();
-            showRenameModal(node.id, node.name);
-        });
-
-        menu.querySelector(".ctx-move-btn")?.addEventListener("click", () => {
-            menu.remove();
-            showMoveModal(node.id, node.name);
-        });
-
-        menu.querySelector(".ctx-icon-btn")?.addEventListener("click", () => {
-            menu.remove();
-            showChannelIconModal(node.id);
-        });
-
-        menu.querySelector(".ctx-nsfw-toggle-btn")?.addEventListener("click", async () => {
-            menu.remove();
-            const result = await api.updateChannel(node.id, { isNsfw: !node.isNsfw });
-            if (!result.success) {
-                log(`Failed to update channel: ${result.error}`, "error");
-                if (result.error && /permission|denied/i.test(result.error)) SoundAlert.play("insufficient_perms.mp3");
+        if (showManage) {
+            if (items.length > 0) items.push({ divider: true });
+            items.push({ heading: "Manage channel" });
+            items.push({ label: "Rename…", icon: "ph-pencil-simple", onClick: () => showRenameModal(node.id, node.name) });
+            if (!isVoice) {
+                items.push({ label: "Set icon…", icon: "ph-image", onClick: () => showChannelIconModal(node.id) });
             }
-        });
-
-        menu.querySelector(".ctx-delete-channel-btn")?.addEventListener("click", () => {
-            menu.remove();
-            showDeleteModal(node.id, node.name);
-        });
-
-        document.body.appendChild(menu);
-
-        const closeCtx = (ev: MouseEvent) => {
-            if (!menu.contains(ev.target as Node)) {
-                menu.remove();
-                document.removeEventListener("click", closeCtx, true);
+            items.push({ label: "Move to category…", icon: "ph-folder", onClick: () => showMoveModal(node.id, node.name) });
+            if (!isVoice) {
+                items.push({
+                    label: `${node.isNsfw ? "Unmark" : "Mark"} as NSFW`,
+                    icon: "ph-prohibit",
+                    onClick: async () => {
+                        const result = await api.updateChannel(node.id, { isNsfw: !node.isNsfw });
+                        if (!result.success) {
+                            log(`Failed to update channel: ${result.error}`, "error");
+                            if (result.error && /permission|denied/i.test(result.error)) SoundAlert.play("insufficient_perms.mp3");
+                        }
+                    },
+                });
             }
-        };
-        setTimeout(() => document.addEventListener("click", closeCtx, true), 0);
+            items.push({ divider: true });
+            items.push({
+                label: "Delete channel…",
+                icon: "ph-trash",
+                danger: true,
+                onClick: () => showDeleteModal(node.id, node.name),
+            });
+        }
+
+        openMenu(items, e.clientX, e.clientY, { anchor: el });
     });
 }
 
@@ -3285,6 +3249,238 @@ function getSavedLocalMute(userId: string): boolean {
 
 function setSavedLocalMute(userId: string, muted: boolean): void {
     localStorage.setItem(`reson8-local-mute-${userId}`, muted ? "1" : "0");
+}
+
+// ── Menu builder (PRD 19 F3) ─────────────────────────────────────────────────
+// ONE menu implementation for every context menu: channel, tab and occupant
+// menus all describe themselves as MenuItem[] and call openMenu(). Every label,
+// hint and heading is set with textContent.
+
+type MenuItem =
+    | {
+          label: string;
+          /** A Phosphor class, e.g. "ph-bell-slash". */
+          icon?: string;
+          onClick: () => void;
+          hint?: string;
+          danger?: boolean;
+          disabled?: boolean;
+      }
+    | { heading: string }
+    | { divider: true }
+    | {
+          slider: {
+              label: string;
+              min: number;
+              max: number;
+              step: number;
+              value: number;
+              ticks?: number[];
+              format?: (v: number) => string;
+              /** Live, while dragging. */
+              onInput: (v: number) => void;
+              /** On release. */
+              onChange: (v: number) => void;
+          };
+      };
+
+interface OpenMenuState {
+    el: HTMLElement;
+    anchor?: HTMLElement;
+    returnFocusTo?: HTMLElement;
+    teardown: () => void;
+}
+let openMenuState: OpenMenuState | null = null;
+const MENU_EDGE_MARGIN = 8;
+
+/** Closes the open menu (if any), removes the anchor ring and returns focus. */
+function closeMenu(): void {
+    const state = openMenuState;
+    if (!state) return;
+    openMenuState = null;
+    state.teardown();
+    state.el.remove();
+    state.anchor?.classList.remove("menu-open");
+    const target = state.returnFocusTo ?? state.anchor;
+    if (target && typeof target.focus === "function" && target.isConnected) target.focus({ preventScroll: true });
+}
+
+/**
+ * Opens a menu at (x, y), clamped to the window with an 8 px margin (flipping
+ * left/up when there is no room). One at a time: it closes any open menu first.
+ * Closes on an outside pointerdown, Escape, window blur, scroll and resize.
+ * Up/Down/Home/End move between enabled items; Enter/Space activate; Left/Right
+ * adjust a slider.
+ */
+function openMenu(
+    items: MenuItem[],
+    x: number,
+    y: number,
+    opts: { anchor?: HTMLElement; returnFocusTo?: HTMLElement } = {},
+): void {
+    closeMenu();
+    if (items.length === 0) return;
+
+    const menu = document.createElement("div");
+    menu.className = "menu";
+    menu.setAttribute("role", "menu");
+    menu.tabIndex = -1;
+
+    for (const item of items) {
+        if ("divider" in item) {
+            const d = document.createElement("div");
+            d.className = "menu-divider";
+            d.setAttribute("role", "presentation");
+            menu.appendChild(d);
+        } else if ("heading" in item) {
+            const hd = document.createElement("div");
+            hd.className = "menu-heading";
+            hd.setAttribute("role", "presentation");
+            hd.textContent = item.heading;
+            menu.appendChild(hd);
+        } else if ("slider" in item) {
+            const cfg = item.slider;
+            const fmt = cfg.format ?? ((v: number) => String(v));
+            const row = document.createElement("div");
+            row.className = "menu-slider";
+            row.setAttribute("role", "presentation");
+            const head = document.createElement("div");
+            head.className = "menu-slider-head";
+            const lab = document.createElement("span");
+            lab.textContent = cfg.label;
+            const readout = document.createElement("span");
+            readout.className = "menu-slider-value";
+            readout.textContent = fmt(cfg.value);
+            head.append(lab, readout);
+            const input = document.createElement("input");
+            input.type = "range";
+            input.className = "menu-slider-input";
+            input.min = String(cfg.min);
+            input.max = String(cfg.max);
+            input.step = String(cfg.step);
+            input.value = String(cfg.value);
+            input.setAttribute("aria-label", cfg.label);
+            input.addEventListener("input", () => {
+                const v = Number(input.value);
+                readout.textContent = fmt(v);
+                cfg.onInput(v);
+            });
+            input.addEventListener("change", () => cfg.onChange(Number(input.value)));
+            row.append(head, input);
+            if (cfg.ticks && cfg.ticks.length > 0) {
+                const ticks = document.createElement("div");
+                ticks.className = "menu-slider-ticks";
+                for (const t of cfg.ticks) {
+                    const tick = document.createElement("span");
+                    tick.textContent = fmt(t);
+                    ticks.appendChild(tick);
+                }
+                row.appendChild(ticks);
+            }
+            menu.appendChild(row);
+        } else {
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = "menu-item" + (item.danger ? " danger" : "");
+            btn.setAttribute("role", "menuitem");
+            btn.tabIndex = -1;
+            if (item.icon) {
+                const ic = document.createElement("i");
+                ic.className = `ph ${item.icon} menu-item-icon`;
+                ic.setAttribute("aria-hidden", "true");
+                btn.appendChild(ic);
+            }
+            const lab = document.createElement("span");
+            lab.className = "menu-item-label";
+            lab.textContent = item.label;
+            btn.appendChild(lab);
+            if (item.hint) {
+                const hint = document.createElement("span");
+                hint.className = "menu-item-hint";
+                hint.textContent = item.hint;
+                btn.appendChild(hint);
+            }
+            if (item.disabled) {
+                btn.disabled = true;
+                btn.setAttribute("aria-disabled", "true");
+            }
+            btn.addEventListener("click", () => {
+                if (item.disabled) return;
+                closeMenu();
+                item.onClick();
+            });
+            menu.appendChild(btn);
+        }
+    }
+
+    // Positioned after rendering, measured, then clamped (flip before clamp).
+    menu.style.left = "0px";
+    menu.style.top = "0px";
+    menu.style.visibility = "hidden";
+    document.body.appendChild(menu);
+    const rect = menu.getBoundingClientRect();
+    let left = x;
+    let top = y;
+    if (left + rect.width > window.innerWidth - MENU_EDGE_MARGIN) left = x - rect.width;
+    if (top + rect.height > window.innerHeight - MENU_EDGE_MARGIN) top = y - rect.height;
+    left = Math.max(MENU_EDGE_MARGIN, Math.min(left, window.innerWidth - rect.width - MENU_EDGE_MARGIN));
+    top = Math.max(MENU_EDGE_MARGIN, Math.min(top, window.innerHeight - rect.height - MENU_EDGE_MARGIN));
+    menu.style.left = `${left}px`;
+    menu.style.top = `${top}px`;
+    menu.style.visibility = "";
+
+    opts.anchor?.classList.add("menu-open");
+
+    const focusables = (): HTMLElement[] =>
+        Array.from(menu.querySelectorAll<HTMLElement>("button.menu-item:not(:disabled), input.menu-slider-input"));
+    const onPointerDown = (e: PointerEvent): void => {
+        if (!menu.contains(e.target as Node)) closeMenu();
+    };
+    const onKeyDown = (e: KeyboardEvent): void => {
+        if (e.key === "Escape") {
+            e.preventDefault();
+            e.stopPropagation();
+            closeMenu();
+            return;
+        }
+        if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) return;
+        const list = focusables();
+        if (list.length === 0) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const current = list.indexOf(document.activeElement as HTMLElement);
+        let next: number;
+        if (e.key === "ArrowDown") next = current < 0 ? 0 : (current + 1) % list.length;
+        else if (e.key === "ArrowUp") next = current < 0 ? list.length - 1 : (current - 1 + list.length) % list.length;
+        else if (e.key === "Home") next = 0;
+        else next = list.length - 1;
+        list[next].focus();
+    };
+    const onBlur = (): void => closeMenu();
+    const onScroll = (e: Event): void => {
+        // Scrolling the menu's own content (a slider drag never scrolls) is fine.
+        if (e.target instanceof Node && menu.contains(e.target)) return;
+        closeMenu();
+    };
+    const onResize = (): void => closeMenu();
+    document.addEventListener("pointerdown", onPointerDown, true);
+    document.addEventListener("keydown", onKeyDown, true);
+    window.addEventListener("blur", onBlur);
+    document.addEventListener("scroll", onScroll, true); // capture: #channel-tree, .chat-messages, the window
+    window.addEventListener("resize", onResize);
+
+    openMenuState = {
+        el: menu,
+        anchor: opts.anchor,
+        returnFocusTo: opts.returnFocusTo,
+        teardown: () => {
+            document.removeEventListener("pointerdown", onPointerDown, true);
+            document.removeEventListener("keydown", onKeyDown, true);
+            window.removeEventListener("blur", onBlur);
+            document.removeEventListener("scroll", onScroll, true);
+            window.removeEventListener("resize", onResize);
+        },
+    };
 }
 
 // ── Occupant menu (PRD 19 B8) ────────────────────────────────────────────────
@@ -3330,95 +3526,57 @@ function openVoiceSettings(): void {
     (document.querySelector('.settings-tab-btn[data-settings-tab="voice"]') as HTMLElement | null)?.click();
 }
 
-/** Today's .occupant-ctx-menu renderer for an OccupantMenuModel. */
-function renderOccupantMenu(model: OccupantMenuModel, x: number, y: number): void {
-    document.querySelector(".occupant-ctx-menu")?.remove();
-    const menu = document.createElement("div");
-    menu.className = "occupant-ctx-menu";
-    menu.style.left = `${x}px`;
-    menu.style.top = `${y}px`;
-
+/** Draws an OccupantMenuModel with the shared menu builder (PRD 19 F3). */
+function renderOccupantMenu(model: OccupantMenuModel, x: number, y: number, anchor?: HTMLElement): void {
     if (model.kind === "self") {
-        const item = document.createElement("button");
-        item.className = "channel-ctx-menu-item ctx-voice-settings-btn";
-        item.textContent = "Voice settings…";
-        item.addEventListener("click", () => {
-            menu.remove();
-            openVoiceSettings();
-        });
-        menu.appendChild(item);
-    } else {
-        const volumeRow = document.createElement("div");
-        volumeRow.className = "ctx-volume-row";
-        const label = document.createElement("span");
-        label.className = "ctx-volume-label";
-        label.append("Volume ");
-        const readout = document.createElement("span");
-        readout.className = "ctx-volume-value";
-        readout.textContent = `${model.volume.value}%`;
-        label.appendChild(readout);
-        const slider = document.createElement("input");
-        slider.type = "range";
-        slider.className = "ctx-volume-slider";
-        slider.min = String(model.volume.min);
-        slider.max = String(model.volume.max);
-        slider.step = String(model.volume.step);
-        slider.value = String(model.volume.value);
-        const ticks = document.createElement("div");
-        ticks.className = "ctx-volume-ticks";
-        for (const t of model.volume.ticks) {
-            const tick = document.createElement("span");
-            tick.textContent = `${t}%`;
-            ticks.appendChild(tick);
-        }
-        volumeRow.append(label, slider, ticks);
-        // Live: the audio and the readout only. Saved (and the tree mark
-        // refreshed) once, when the drag ends — not on every step.
-        slider.addEventListener("input", () => {
-            const percent = parseInt(slider.value, 10);
-            readout.textContent = `${percent}%`;
-            api.setLocalUserVolume(model.userId, percent);
-        });
-        slider.addEventListener("change", () => {
-            setSavedLocalVolume(model.userId, parseInt(slider.value, 10));
-            refreshOccupantMarks(model.userId);
-        });
-        menu.appendChild(volumeRow);
+        openMenu(
+            [{ label: "Voice settings…", icon: "ph-gear", onClick: () => openVoiceSettings() }],
+            x,
+            y,
+            { anchor },
+        );
+        return;
+    }
 
-        const divider = document.createElement("div");
-        divider.className = "ctx-menu-divider";
-        menu.appendChild(divider);
-
-        const muteBtn = document.createElement("button");
-        muteBtn.className = `ctx-mute-btn${model.localMuted ? " active" : ""}`;
-        const setMuteLabel = (muted: boolean): void => {
-            muteBtn.textContent = muted ? "🔇 Unmute locally" : "🔊 Mute locally";
-            muteBtn.classList.toggle("active", muted);
-        };
-        setMuteLabel(model.localMuted);
-        const hint = document.createElement("span");
-        hint.className = "ctx-menu-hint";
-        hint.textContent = "Only for you";
-        muteBtn.addEventListener("click", () => {
-            const nowMuted = !muteBtn.classList.contains("active");
-            api.setLocalUserMute(model.userId, nowMuted);
-            setSavedLocalMute(model.userId, nowMuted);
-            setMuteLabel(nowMuted);
-            refreshOccupantMarks(model.userId); // targeted: collapsed categories survive
-        });
-        menu.append(muteBtn, hint);
-
-        if (model.canKick) {
-            const divider2 = document.createElement("div");
-            divider2.className = "ctx-menu-divider";
-            const modLabel = document.createElement("div");
-            modLabel.className = "ctx-menu-label";
-            modLabel.textContent = "Moderate";
-            const kickBtn = document.createElement("button");
-            kickBtn.className = "ctx-kick-btn";
-            kickBtn.textContent = "🚫 Kick from channel";
-            kickBtn.addEventListener("click", async () => {
-                menu.remove();
+    const items: MenuItem[] = [
+        {
+            slider: {
+                label: "Volume",
+                min: model.volume.min,
+                max: model.volume.max,
+                step: model.volume.step,
+                value: model.volume.value,
+                ticks: model.volume.ticks,
+                format: (v) => `${v}%`,
+                // Live: the audio and the readout only. Saved (and the tree mark
+                // refreshed) once, when the drag ends — not on every step.
+                onInput: (v) => api.setLocalUserVolume(model.userId, v),
+                onChange: (v) => {
+                    setSavedLocalVolume(model.userId, v);
+                    refreshOccupantMarks(model.userId);
+                },
+            },
+        },
+        { divider: true },
+        {
+            label: model.localMuted ? "Unmute locally" : "Mute locally",
+            icon: model.localMuted ? "ph-speaker-high" : "ph-speaker-slash",
+            hint: "Only for you",
+            onClick: () => {
+                const nowMuted = !model.localMuted;
+                api.setLocalUserMute(model.userId, nowMuted);
+                setSavedLocalMute(model.userId, nowMuted);
+                refreshOccupantMarks(model.userId); // targeted: collapsed categories survive
+            },
+        },
+    ];
+    if (model.canKick) {
+        items.push({ divider: true }, { heading: "Moderate" });
+        items.push({
+            label: "Kick from channel",
+            icon: "ph-sign-out",
+            danger: true,
+            onClick: async () => {
                 const result = await api.kickUser(model.userId, model.channelId);
                 if (result.success) {
                     showToast(`${escapeHtml(model.nickname)} was kicked from ${escapeHtml(model.channelName)}`);
@@ -3426,21 +3584,10 @@ function renderOccupantMenu(model: OccupantMenuModel, x: number, y: number): voi
                     log(`Failed to kick: ${result.error}`, "error");
                     if (result.error && /permission|denied/i.test(result.error)) SoundAlert.play("insufficient_perms.mp3");
                 }
-            });
-            menu.append(divider2, modLabel, kickBtn);
-        }
+            },
+        });
     }
-
-    document.body.appendChild(menu);
-
-    // Close on click outside (but not while dragging the slider)
-    const closeCtx = (ev: MouseEvent) => {
-        if (!menu.contains(ev.target as Node)) {
-            menu.remove();
-            document.removeEventListener("click", closeCtx, true);
-        }
-    };
-    setTimeout(() => document.addEventListener("click", closeCtx, true), 0);
+    openMenu(items, x, y, { anchor });
 }
 
 /**
@@ -3526,7 +3673,7 @@ function renderOccupants(container: HTMLElement, node: TreeNode): void {
         el.addEventListener("contextmenu", (e) => {
             e.preventDefault();
             e.stopPropagation();
-            renderOccupantMenu(buildOccupantMenuModel(occ, node), e.clientX, e.clientY);
+            renderOccupantMenu(buildOccupantMenuModel(occ, node), e.clientX, e.clientY, el);
         });
 
         container.appendChild(el);
@@ -5958,11 +6105,6 @@ function showTabContextMenu(e: MouseEvent, channelId: string): void {
     const tab = chatTabs.get(channelId);
     if (!tab) return;
 
-    document.querySelector(".occupant-ctx-menu")?.remove();
-    const menu = document.createElement("div");
-    menu.className = "occupant-ctx-menu";
-    menu.style.left = `${e.clientX}px`;
-    menu.style.top = `${e.clientY}px`;
     const kept = tab.mode === "kept";
     // Tabs in bar order, the Server Log excluded (it is never closed in bulk).
     const barIds = Array.from(tabBar.querySelectorAll<HTMLElement>(".tab"))
@@ -5970,40 +6112,37 @@ function showTabContextMenu(e: MouseEvent, channelId: string): void {
         .filter((id) => id !== "server-log" && chatTabs.has(id));
     const otherIds = barIds.filter((id) => id !== channelId);
     const rightIds = barIds.slice(barIds.indexOf(channelId) + 1);
-    menu.innerHTML = `
-        <button class="channel-ctx-menu-item ctx-keep-btn">🔖 ${kept ? "Stop keeping open" : "Keep open"}</button>
-        <div class="ctx-menu-divider"></div>
-        <button class="channel-ctx-menu-item ctx-close-tab-btn">✕ Close tab</button>
-        <button class="channel-ctx-menu-item ctx-close-others-btn"${otherIds.length === 0 ? " disabled" : ""}>Close other tabs</button>
-        <button class="channel-ctx-menu-item ctx-close-right-btn"${rightIds.length === 0 ? " disabled" : ""}>Close tabs to the right</button>
-    `;
-    menu.querySelector(".ctx-keep-btn")?.addEventListener("click", () => {
-        menu.remove();
-        setTabKept(channelId, !kept);
-    });
-    menu.querySelector(".ctx-close-tab-btn")?.addEventListener("click", () => {
-        menu.remove();
-        closeTab(channelId);
-    });
-    // Each tab goes through closeTab(..., "user"), so a kept one is also un-kept
-    // (and forgotten) exactly as if its own ✕ had been clicked.
-    menu.querySelector(".ctx-close-others-btn")?.addEventListener("click", () => {
-        menu.remove();
-        for (const id of otherIds) closeTab(id, { reason: "user" });
-    });
-    menu.querySelector(".ctx-close-right-btn")?.addEventListener("click", () => {
-        menu.remove();
-        for (const id of rightIds) closeTab(id, { reason: "user" });
-    });
-    document.body.appendChild(menu);
 
-    const closeCtx = (ev: MouseEvent) => {
-        if (!menu.contains(ev.target as Node)) {
-            menu.remove();
-            document.removeEventListener("click", closeCtx, true);
-        }
-    };
-    setTimeout(() => document.addEventListener("click", closeCtx, true), 0);
+    // Each closes through closeTab(..., "user"), so a kept tab is also un-kept
+    // and forgotten exactly as if its own ✕ had been clicked.
+    openMenu(
+        [
+            {
+                label: kept ? "Stop keeping open" : "Keep open",
+                icon: "ph-bookmark-simple",
+                onClick: () => setTabKept(channelId, !kept),
+            },
+            { divider: true },
+            { label: "Close tab", icon: "ph-x", onClick: () => closeTab(channelId) },
+            {
+                label: "Close other tabs",
+                disabled: otherIds.length === 0,
+                onClick: () => {
+                    for (const id of otherIds) closeTab(id, { reason: "user" });
+                },
+            },
+            {
+                label: "Close tabs to the right",
+                disabled: rightIds.length === 0,
+                onClick: () => {
+                    for (const id of rightIds) closeTab(id, { reason: "user" });
+                },
+            },
+        ],
+        e.clientX,
+        e.clientY,
+        { anchor: tab.tabEl },
+    );
 }
 
 /**

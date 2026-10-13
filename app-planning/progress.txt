@@ -2210,3 +2210,56 @@ Feature/Fix: Vendored Inter and Phosphor icons (PRD 19 F2)
       were not built here.
 
   Next Step: PRD 19 F3 — one menu builder.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: One menu builder for every context menu (PRD 19 F3)
+
+  Problem: three hand-built context menus (channel, tab, occupant) with their
+  own DOM, dismissal and CSS, none keyboard-accessible or edge-clamped.
+
+  Solution (renderer + index.html):
+    - New section "Menu builder (PRD 19 F3)": MenuItem (label/icon/onClick/hint/
+      danger/disabled | heading | divider | slider), openMenu(items, x, y,
+      { anchor, returnFocusTo }) and closeMenu(). One menu at a time. Closes on
+      an outside pointerdown (capture), Escape, window blur, a scroll anywhere
+      (one capture listener: #channel-tree, .chat-messages, the window) and
+      resize. Positioned after measuring: flips left/up when there is no room,
+      then clamps to the window with an 8 px margin. The anchor row gets
+      .menu-open (the accent ring) while open; focus returns to returnFocusTo
+      or the anchor. Keyboard: Up/Down (wrapping), Home, End move between
+      enabled items and the slider; Enter/Space activate; Left/Right adjust a
+      slider natively. role=menu / menuitem / presentation; every label, hint
+      and heading via textContent.
+    - Look (README): --color-surface, --shadow-lg, 5 px padding, 32 px items
+      with a 15 px Phosphor icon, accent-900/accent-200 hover, 10.5 px uppercase
+      headings, 1 px divider, danger items red and last.
+    - Migrated: attachChannelContextMenu (B6 grouping and the MANAGE_CHANNELS
+      gate preserved), renderOccupantMenu (B8's model maps straight onto items:
+      slider with onInput/onChange, Mute locally with the "Only for you" hint,
+      Moderate heading + danger Kick, self menu), showTabContextMenu (B5). Labels
+      moved to Phosphor icons; a local mute now closes the menu (items close on
+      click) instead of toggling its label in place.
+    - Deleted: the .occupant-ctx-menu / .channel-ctx-menu-item / .ctx-* CSS and
+      the old DOM code (grep shows no reference left).
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts, index.html
+    apps/client/AGENTS.md
+
+  Verification:
+    - tsc client clean; lint exit 0.
+    - Real client over CDP: member channel menu = Keep open, Mute channel; the
+      anchor ring appears and Escape removes menu and ring; opened at (2,2),
+      (1005,725), the right edge and the bottom edge the menu rect stays inside
+      the 1008x729 window with >= 8 px margin on every side (flipped left/up);
+      keyboard only: Down/Down/Down wraps, Up, End, Home, Enter on the first
+      item -> menu closed and the tab kept; scroll of the tree, window blur,
+      resize and an outside pointerdown each close it; admin channel and voice
+      menus match B6; the occupant slider saves nothing on input (readout 145%)
+      and persists 145 on release, with the tree mark updated; the tab menu
+      shows the disabled items. Screenshots reviewed (channel, occupant).
+    - NOT checked: returnFocusTo with a real focusable opener (the tree rows
+      are not focusable; no caller passes it yet).
+
+  Next Step: PRD 19 F4 — base component styles.
