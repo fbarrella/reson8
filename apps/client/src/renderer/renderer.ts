@@ -2390,7 +2390,7 @@ function renderTabMode(tab: ChatTab): void {
     tab.tabEl.classList.toggle("preview", tab.mode === "preview");
     tab.tabEl.title = kept
         ? `${tab.channelName} — kept open`
-        : `${tab.channelName} — preview: opening another conversation replaces this tab. Double-click or right-click → Keep Tab Open to keep it.`;
+        : `${tab.channelName} — preview: opening another conversation replaces this tab. Double-click or right-click → Keep open to keep it.`;
 }
 /** Initial + "load older" page size for both channel and DM history (PRD 14.2). */
 const CHAT_PAGE_SIZE = 20;
@@ -3156,7 +3156,7 @@ function attachChannelContextMenu(el: HTMLElement, node: TreeNode, canMute = fal
         // Keep Tab Open (PRD 17.5) sits with Mute: both are personal, text-channel-only.
         const isKept = chatTabs.get(node.id)?.mode === "kept";
         const muteItem = canMute
-            ? `<button class="channel-ctx-menu-item ctx-keep-btn">🔖 ${isKept ? "Stop Keeping Open" : "Keep Tab Open"}</button>`
+            ? `<button class="channel-ctx-menu-item ctx-keep-btn">🔖 ${isKept ? "Stop keeping open" : "Keep open"}</button>`
               + `<button class="channel-ctx-menu-item ctx-mute-btn">${isChannelMuted(node.id) ? "🔔 Unmute Channel" : "🔕 Mute Channel"}</button><div class="ctx-menu-divider"></div>`
             : "";
 
@@ -5509,7 +5509,7 @@ function openChatTab(
             switchTab(channelId);
         }
     });
-    tabEl.addEventListener("contextmenu", (e) => showChannelTabContextMenu(e, channelId));
+    tabEl.addEventListener("contextmenu", (e) => showTabContextMenu(e, channelId));
     wireTabKeepGesture(tabEl, channelId);
 
     // A replacement takes the replaced tab's slot in the bar.
@@ -5631,7 +5631,7 @@ function openDmTab(
             switchTab(tabKey);
         }
     });
-    tabEl.addEventListener("contextmenu", (e) => showChannelTabContextMenu(e, tabKey)); // Keep Tab Open / Close (PRD 19 B4)
+    tabEl.addEventListener("contextmenu", (e) => showTabContextMenu(e, tabKey)); // Keep Tab Open / Close (PRD 19 B4)
     wireTabKeepGesture(tabEl, tabKey);
 
     insertTabElement(tabEl, replaced);
@@ -5758,8 +5758,12 @@ function setTabKept(tabId: string, kept: boolean): void {
     persistKeptTabs();
 }
 
-/** Right-click on a channel tab (PRD 17.5): Keep Tab Open / Stop Keeping Open, Close Tab. */
-function showChannelTabContextMenu(e: MouseEvent, channelId: string): void {
+/**
+ * Right-click on a channel or DM tab (PRD 17.5, 19 B5): Keep open / Stop keeping
+ * open, Close tab, Close other tabs, Close tabs to the right. The Server Log
+ * tab has no menu (it cannot be closed) and is never closed by the bulk items.
+ */
+function showTabContextMenu(e: MouseEvent, channelId: string): void {
     e.preventDefault();
     e.stopPropagation();
     const tab = chatTabs.get(channelId);
@@ -5771,10 +5775,18 @@ function showChannelTabContextMenu(e: MouseEvent, channelId: string): void {
     menu.style.left = `${e.clientX}px`;
     menu.style.top = `${e.clientY}px`;
     const kept = tab.mode === "kept";
+    // Tabs in bar order, the Server Log excluded (it is never closed in bulk).
+    const barIds = Array.from(tabBar.querySelectorAll<HTMLElement>(".tab"))
+        .map((el) => el.dataset.tabId ?? "")
+        .filter((id) => id !== "server-log" && chatTabs.has(id));
+    const otherIds = barIds.filter((id) => id !== channelId);
+    const rightIds = barIds.slice(barIds.indexOf(channelId) + 1);
     menu.innerHTML = `
-        <button class="channel-ctx-menu-item ctx-keep-btn">🔖 ${kept ? "Stop Keeping Open" : "Keep Tab Open"}</button>
+        <button class="channel-ctx-menu-item ctx-keep-btn">🔖 ${kept ? "Stop keeping open" : "Keep open"}</button>
         <div class="ctx-menu-divider"></div>
-        <button class="channel-ctx-menu-item ctx-close-tab-btn">✕ Close Tab</button>
+        <button class="channel-ctx-menu-item ctx-close-tab-btn">✕ Close tab</button>
+        <button class="channel-ctx-menu-item ctx-close-others-btn"${otherIds.length === 0 ? " disabled" : ""}>Close other tabs</button>
+        <button class="channel-ctx-menu-item ctx-close-right-btn"${rightIds.length === 0 ? " disabled" : ""}>Close tabs to the right</button>
     `;
     menu.querySelector(".ctx-keep-btn")?.addEventListener("click", () => {
         menu.remove();
@@ -5783,6 +5795,16 @@ function showChannelTabContextMenu(e: MouseEvent, channelId: string): void {
     menu.querySelector(".ctx-close-tab-btn")?.addEventListener("click", () => {
         menu.remove();
         closeTab(channelId);
+    });
+    // Each tab goes through closeTab(..., "user"), so a kept one is also un-kept
+    // (and forgotten) exactly as if its own ✕ had been clicked.
+    menu.querySelector(".ctx-close-others-btn")?.addEventListener("click", () => {
+        menu.remove();
+        for (const id of otherIds) closeTab(id, { reason: "user" });
+    });
+    menu.querySelector(".ctx-close-right-btn")?.addEventListener("click", () => {
+        menu.remove();
+        for (const id of rightIds) closeTab(id, { reason: "user" });
     });
     document.body.appendChild(menu);
 

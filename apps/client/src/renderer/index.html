@@ -2808,6 +2808,13 @@
       opacity: 0.55;
     }
 
+    /* A tab-menu item that would do nothing (PRD 19 B5) is disabled, not hidden. */
+    .channel-ctx-menu-item:disabled {
+      opacity: 0.4;
+      cursor: default;
+      pointer-events: none;
+    }
+
     .modal-content {
       background: var(--bg-secondary);
       border: 1px solid var(--border);

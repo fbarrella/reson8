@@ -1819,3 +1819,35 @@ Feature/Fix: DM tabs follow the preview/kept rules (PRD 19 B4)
       style is renderTabMode's existing .preview class.
 
   Next Step: PRD 19 B5.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Tab menu additions (PRD 19 B5)
+
+  Problem: the tab right-click menu (channel tabs only) had two items.
+
+  Solution (renderer + index.html): showChannelTabContextMenu became
+  showTabContextMenu and is attached to DM tabs too (B4 wired it). Items:
+  Keep open / Stop keeping open, Close tab, Close other tabs, Close tabs to the
+  right (SPEC 3.5 casing; the preview tooltip and the tree menu's keep label
+  use the same wording). "Close other tabs" closes every tab except this one
+  and the Server Log; "to the right" closes the tabs after this one in bar
+  order, Server Log excluded; each goes through closeTab(id, "user"), so a kept
+  tab is also un-kept and forgotten. An item that would do nothing is
+  disabled, not hidden (.channel-ctx-menu-item:disabled). The Server Log tab
+  has no menu.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts, index.html
+
+  Verification:
+    - tsc client clean; lint exit 0.
+    - Real client over CDP, 6 tabs (5 kept channels/DM + log): right-click the
+      3rd -> four items, all enabled; "Close tabs to the right" -> log, 1st,
+      2nd, 3rd remain and the kept-tabs store lost the closed ids; "Close other
+      tabs" leaves the log and that tab with a one-id store; on the only tab
+      "Close other tabs" and "Close tabs to the right" are [disabled].
+    - NOT re-checked: persistence across a full app restart is the same store
+      logic B4 verified (reconnect restore).
+
+  Next Step: PRD 19 B6 — menu permissions.
