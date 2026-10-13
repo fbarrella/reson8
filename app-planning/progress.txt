@@ -1970,3 +1970,31 @@ Feature/Fix: Occupant menu — one model, targeted updates, KICK_USER gate, self
       silently fails (use an IIFE) and clicking outside closes the menu.
 
   Next Step: PRD 19 B9 — tree marks for local volume and mute.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Tree marks for local volume and mute (PRD 19 B9)
+
+  Problem: a locally changed volume was invisible in the tree, and the
+  locally-muted icon used the accent colour that now means something else.
+
+  Solution (renderer + index.html): renderOccupants() adds
+  <span class="occ-local-volume">{n}%</span> (monospace, muted colour) after the
+  name when the saved volume is not 100 and the person is not locally muted;
+  OCC_LOCALLY_MUTED_ICON is restyled to var(--text-muted).
+  refreshOccupantMarks(userId) (B8) now maintains BOTH marks in place on every
+  .tree-occupant[data-user-id], so the menu's change/mute updates them without
+  renderTree().
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts, index.html
+
+  Verification:
+    - tsc client clean; lint exit 0.
+    - Real client over CDP: default -> no marks; volume 60 via the menu ->
+      "60%"; mute locally -> the muted icon and no volume mark; unmute -> "60%"
+      again; back to 100 -> no mark. Full render and targeted update agree
+      (both paths exercised: connect render, then menu updates). Screenshot
+      taken (b9-marks.png).
+
+  Next Step: PRD 19 B10 — voice row count tooltip and icon.
