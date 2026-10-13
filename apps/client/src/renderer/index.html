@@ -2816,6 +2816,135 @@
       box-shadow: 0 4px 40px rgba(0, 0, 0, 0.5);
     }
 
+    /* ── Server icon dialog (PRD 19 C5) ───────────────────────────────── */
+    #server-icon-modal {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 110;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0, 0, 0, 0.6);
+      -webkit-app-region: no-drag;
+    }
+
+    #server-icon-modal.visible {
+      display: flex;
+    }
+
+    .server-icon-card {
+      width: 520px;
+      max-width: calc(100vw - 32px);
+      max-height: calc(100vh - 48px);
+      overflow-y: auto;
+    }
+
+    .server-icon-error {
+      margin-bottom: var(--space-4);
+      padding: 8px 10px;
+      border: 1px solid var(--color-danger-border);
+      border-radius: var(--radius-md);
+      color: var(--color-danger-text);
+      font-size: 12.5px;
+    }
+
+    .server-icon-drop {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+      padding: 28px;
+      border: 1px dashed var(--color-neutral-700);
+      border-radius: var(--radius-lg);
+      color: var(--color-neutral-400);
+      font-size: 22px;
+    }
+
+    .server-icon-drop > div {
+      font-size: 13px;
+    }
+
+    .server-icon-drop.over {
+      border-color: var(--color-accent);
+      background: var(--color-accent-900);
+    }
+
+    .server-icon-crop-row {
+      display: flex;
+      gap: 24px;
+      align-items: flex-start;
+    }
+
+    .server-icon-previews {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      align-items: flex-start;
+      padding-top: 10px;
+    }
+
+    .server-icon-previews canvas {
+      border-radius: var(--radius-md);
+      background: var(--color-accent-900);
+    }
+
+    .server-icon-notice {
+      margin: var(--space-4) 0;
+      padding: 10px 12px;
+      border: 1px solid var(--color-accent-700);
+      border-radius: var(--radius-md);
+      background: color-mix(in srgb, var(--color-accent) 8%, transparent);
+      font-size: 12.5px;
+      color: var(--color-neutral-300);
+    }
+
+    .server-icon-notice-title {
+      font-weight: 600;
+      color: var(--color-accent-200);
+      margin-bottom: 4px;
+    }
+
+    .server-icon-notice p {
+      margin: 0 0 6px;
+    }
+
+    .server-icon-notice code {
+      display: block;
+      word-break: break-all;
+      font-size: 11.5px;
+      color: var(--color-neutral-400);
+    }
+
+    .server-icon-row {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 12px;
+      margin-bottom: 14px;
+      border: 1px solid var(--color-divider);
+      border-radius: var(--radius-md);
+      background: var(--color-bg);
+    }
+
+    .server-icon-row-text {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .server-icon-row-title {
+      font-weight: 500;
+    }
+
+    .server-icon-row-note {
+      font-size: 12px;
+      color: var(--color-neutral-500);
+    }
+
+    .server-icon-row-actions {
+      display: flex;
+      gap: 8px;
+    }
+
     /* ── About {server} (PRD 19 C4) ───────────────────────────────────── */
     #about-server-modal {
       display: none;
@@ -5955,7 +6084,7 @@
     /* ── Channel Icon Modal (PRD 14.7) — duplicated, not shared, from the
        emoji crop modal above (this codebase's convention: duplication over
        a premature shared abstraction for a second, slightly different use). */
-    #channel-icon-crop-viewport {
+    .icon-crop-viewport {
       width: 220px;
       height: 220px;
       margin: 10px auto;
@@ -5966,12 +6095,10 @@
       background: repeating-conic-gradient(#2a2a35 0% 25%, #232330 0% 50%) 50% / 16px 16px;
       cursor: grab;
     }
-
-    #channel-icon-crop-viewport.dragging {
+    .icon-crop-viewport.dragging {
       cursor: grabbing;
     }
-
-    #channel-icon-crop-img {
+    .icon-crop-img {
       position: absolute;
       top: 0;
       left: 0;
@@ -5980,13 +6107,11 @@
       -webkit-user-drag: none;
       pointer-events: none;
     }
-
-    #channel-icon-crop-zoom {
+    .icon-crop-zoom {
       width: 100%;
       accent-color: var(--accent);
       margin-bottom: 12px;
     }
-
     #channel-icon-emoji-grid {
       max-height: 320px;
       overflow-y: auto;
@@ -6810,14 +6935,58 @@
       </div>
 
       <div id="channel-icon-step-crop" style="display:none;">
-        <div id="channel-icon-crop-viewport">
-          <img id="channel-icon-crop-img" alt="">
+        <div id="channel-icon-crop-viewport" class="icon-crop-viewport">
+          <img id="channel-icon-crop-img" class="icon-crop-img" alt="">
         </div>
-        <input type="range" id="channel-icon-crop-zoom" min="1" max="3" step="0.01" value="1">
+        <input type="range" id="channel-icon-crop-zoom" class="icon-crop-zoom" min="1" max="3" step="0.01" value="1">
         <div class="modal-actions">
           <button class="btn btn-cancel" id="btn-channel-icon-upload-cancel">Cancel</button>
           <button class="btn btn-create" id="btn-channel-icon-upload-confirm">Upload</button>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Server icon (PRD 19 C5) ──────────────────────────────────────── -->
+  <div id="server-icon-modal" role="dialog" aria-modal="true" aria-labelledby="server-icon-title">
+    <div class="dialog server-icon-card">
+      <h2 class="dialog-title" id="server-icon-title">Server icon</h2>
+      <p class="dialog-subtitle">Square, at least 256×256 pixels, up to 1 MB. PNG, JPEG, GIF or WebP.</p>
+      <div id="server-icon-error" class="server-icon-error" style="display:none;" role="alert"></div>
+
+      <div id="server-icon-step-pick">
+        <input type="file" id="server-icon-file-input" accept="image/png,image/jpeg,image/gif,image/webp" style="display:none;">
+        <div id="server-icon-drop" class="server-icon-drop">
+          <i class="ph ph-image" aria-hidden="true"></i>
+          <div>Drop an image here</div>
+          <button type="button" class="btn btn-secondary" id="btn-server-icon-choose">Choose a file…</button>
+        </div>
+      </div>
+
+      <div id="server-icon-step-crop" style="display:none;">
+        <div class="server-icon-crop-row">
+          <div>
+            <div id="server-icon-crop-viewport" class="icon-crop-viewport"><img id="server-icon-crop-img" class="icon-crop-img" alt=""></div>
+            <label for="server-icon-crop-zoom">Zoom</label>
+            <input type="range" id="server-icon-crop-zoom" class="icon-crop-zoom" min="1" max="3" step="0.01" value="1">
+          </div>
+          <div class="server-icon-previews">
+            <div class="section-label">Preview</div>
+            <canvas id="server-icon-preview-40" width="40" height="40"></canvas>
+            <canvas id="server-icon-preview-24" width="24" height="24"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <div class="server-icon-notice">
+        <div class="server-icon-notice-title">The icon gets a public link</div>
+        <p>The image is stored on the server, but anyone with the link can open it. Reson8 also saves the link in each person's saved server list so the icon shows while they're disconnected. Don't use a private image.</p>
+        <code id="server-icon-link"></code>
+      </div>
+
+      <div class="modal-actions">
+        <button class="btn btn-secondary" id="btn-server-icon-cancel">Cancel</button>
+        <button class="btn btn-primary" id="btn-server-icon-save" disabled>Save icon</button>
       </div>
     </div>
   </div>
@@ -6877,6 +7046,17 @@
 
       <!-- Server Tab (admin-only server-wide settings) -->
       <div class="settings-panel" data-settings-panel="server">
+        <div class="server-icon-row" id="server-icon-row">
+          <span id="server-icon-row-preview"></span>
+          <div class="server-icon-row-text">
+            <div class="server-icon-row-title">Server icon</div>
+            <div class="server-icon-row-note">Shown in the rail, the header and saved server lists. Anyone with the link can open it.</div>
+          </div>
+          <div class="server-icon-row-actions">
+            <button type="button" class="btn btn-secondary" id="btn-server-icon-upload">Upload</button>
+            <button type="button" class="btn btn-ghost" id="btn-server-icon-remove" style="display:none;">Remove</button>
+          </div>
+        </div>
         <div class="toggle-row">
           <div class="toggle-row-info">
             <div class="toggle-row-text">

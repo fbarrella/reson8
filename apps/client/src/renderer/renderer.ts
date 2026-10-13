@@ -1414,6 +1414,7 @@ function refreshServerSummary(): void {
         if (!isConnected || currentServerId !== serverIdAtRequest) return;
         serverSummary = summary;
         renderServerHeader(); // PRD 19 C3: the online count and the icon
+        renderServerIconRow(); // PRD 19 C5
         if (aboutModal.classList.contains("visible")) renderAboutServer(); // PRD 19 C4: stays live while open
     }, 2000);
 }
@@ -2111,25 +2112,148 @@ const channelIconCropZoom = document.getElementById("channel-icon-crop-zoom") as
 const btnChannelIconUploadCancel = document.getElementById("btn-channel-icon-upload-cancel") as HTMLButtonElement;
 const btnChannelIconUploadConfirm = document.getElementById("btn-channel-icon-upload-confirm") as HTMLButtonElement;
 
+/**
+ * The "cover + pan + zoom" square cropper (PRD 19 C5) — extracted from the
+ * channel-icon dialog so the server-icon dialog shares ONE implementation.
+ * Elements are passed in; nothing here knows about channels or servers.
+ */
+class IconCropper {
+    private naturalW = 0;
+    private naturalH = 0;
+    private baseScale = 1;
+    private zoomFactor = 1;
+    private offsetX = 0;
+    private offsetY = 0;
+    private objectUrl: string | null = null;
+    private dragging = false;
+    private dragStart = { x: 0, y: 0, offsetX: 0, offsetY: 0 };
+
+    constructor(
+        private readonly viewport: HTMLElement,
+        private readonly img: HTMLImageElement,
+        private readonly zoom: HTMLInputElement,
+        private readonly size: number,
+        /** Called once an image has loaded and is ready to crop. */
+        private readonly onReady: () => void,
+        /** Called on every pan/zoom (previews). */
+        private readonly onChange: () => void = () => {},
+    ) {
+        img.addEventListener("load", () => this.handleLoad());
+        viewport.addEventListener("mousedown", (e) => {
+            this.dragging = true;
+            viewport.classList.add("dragging");
+            this.dragStart = { x: e.clientX, y: e.clientY, offsetX: this.offsetX, offsetY: this.offsetY };
+            e.preventDefault();
+        });
+        document.addEventListener("mousemove", (e) => {
+            if (!this.dragging) return;
+            this.offsetX = this.dragStart.offsetX + (e.clientX - this.dragStart.x);
+            this.offsetY = this.dragStart.offsetY + (e.clientY - this.dragStart.y);
+            this.clamp();
+            this.apply();
+        });
+        document.addEventListener("mouseup", () => {
+            if (this.dragging) {
+                this.dragging = false;
+                viewport.classList.remove("dragging");
+            }
+        });
+        zoom.addEventListener("input", () => {
+            this.zoomFactor = parseFloat(zoom.value);
+            this.clamp();
+            this.apply();
+        });
+    }
+
+    /** Starts cropping `file` (the caller has already validated type and size). */
+    loadFile(file: Blob): void {
+        if (this.objectUrl) URL.revokeObjectURL(this.objectUrl);
+        this.objectUrl = URL.createObjectURL(file);
+        this.img.src = this.objectUrl;
+    }
+
+    /** Forgets the image (dialog closed). */
+    clear(): void {
+        if (this.objectUrl) {
+            URL.revokeObjectURL(this.objectUrl);
+            this.objectUrl = null;
+        }
+        this.img.removeAttribute("src");
+        this.naturalW = 0;
+        this.naturalH = 0;
+    }
+
+    isReady(): boolean {
+        return this.naturalW > 0 && this.naturalH > 0;
+    }
+
+    /** The cropped square as a canvas of `outSize` x `outSize`. */
+    toCanvas(outSize: number): HTMLCanvasElement {
+        const scale = this.baseScale * this.zoomFactor;
+        const canvas = document.createElement("canvas");
+        canvas.width = outSize;
+        canvas.height = outSize;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) throw new Error("Canvas not supported");
+        ctx.drawImage(this.img, -this.offsetX / scale, -this.offsetY / scale, this.size / scale, this.size / scale, 0, 0, outSize, outSize);
+        return canvas;
+    }
+
+    /** The cropped square encoded as `mime` (null if the browser could not encode it). */
+    toBlob(outSize: number, mime: string, quality?: number): Promise<Blob | null> {
+        const canvas = this.toCanvas(outSize);
+        return new Promise((resolve) => canvas.toBlob(resolve, mime, quality));
+    }
+
+    private handleLoad(): void {
+        this.naturalW = this.img.naturalWidth;
+        this.naturalH = this.img.naturalHeight;
+        if (!this.naturalW || !this.naturalH) return;
+        this.baseScale = Math.max(this.size / this.naturalW, this.size / this.naturalH);
+        this.zoomFactor = 1;
+        this.zoom.value = "1";
+        this.offsetX = (this.size - this.naturalW * this.baseScale) / 2;
+        this.offsetY = (this.size - this.naturalH * this.baseScale) / 2;
+        this.apply();
+        this.onReady();
+    }
+
+    private apply(): void {
+        const scale = this.baseScale * this.zoomFactor;
+        this.img.style.width = `${this.naturalW}px`;
+        this.img.style.height = `${this.naturalH}px`;
+        this.img.style.transform = `translate(${this.offsetX}px, ${this.offsetY}px) scale(${scale})`;
+        this.onChange();
+    }
+
+    /** Keeps the image fully covering the viewport — offsets can't drift so far that a gap would show. */
+    private clamp(): void {
+        const scale = this.baseScale * this.zoomFactor;
+        const minX = this.size - this.naturalW * scale;
+        const minY = this.size - this.naturalH * scale;
+        this.offsetX = Math.min(0, Math.max(minX, this.offsetX));
+        this.offsetY = Math.min(0, Math.max(minY, this.offsetY));
+    }
+}
+
 const CHANNEL_ICON_CROP_VIEWPORT_SIZE = 220;
 const CHANNEL_ICON_MAX_UPLOAD_SIZE = 512 * 1024; // 512KB, pre-crop (PRD 14.7's own cap, not the emoji one)
 const CHANNEL_ICON_ALLOWED_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 
 let pendingChannelIconId: string | null = null;
 
-// State for the channel-icon crop tool — a separate set of variables from
-// the emoji crop tool's own (duplicated, not shared, per this feature's
-// design decision), since both modals could in principle be reasoned about
-// independently and neither is ever open while the other is mid-crop.
-let channelIconCropNaturalWidth = 0;
-let channelIconCropNaturalHeight = 0;
-let channelIconCropBaseScale = 1;
-let channelIconCropZoomFactor = 1;
-let channelIconCropOffsetX = 0;
-let channelIconCropOffsetY = 0;
-let channelIconCropObjectUrl: string | null = null;
-let channelIconCropDragging = false;
-let channelIconCropDragStart = { x: 0, y: 0, offsetX: 0, offsetY: 0 };
+// The channel-icon dialog's cropper: the shared IconCropper (PRD 19 C5) — it no
+// longer carries a private copy of the crop code.
+const channelCropper = new IconCropper(
+    channelIconCropViewport,
+    channelIconCropImg,
+    channelIconCropZoom,
+    CHANNEL_ICON_CROP_VIEWPORT_SIZE,
+    () => {
+        channelIconStepSelect.style.display = "none";
+        channelIconStepCrop.style.display = "block";
+    },
+);
 
 // State for the crop tool
 let emojiCropNaturalWidth = 0;
@@ -9300,6 +9424,7 @@ async function openSettingsPanel(): Promise<void> {
     void refreshPendingApprovals(); // PRD 18.8
     void refreshInvites(); // PRD 18.9
     adminModal.classList.add("visible");
+    renderServerIconRow(); // PRD 19 C5
 
     // Populate audio devices
     await populateAudioDevices();
@@ -12341,7 +12466,12 @@ api.on("server-settings-updated", (data: {
     iconUrl?: string | null;
 }) => {
     serverNudgeEnabled = data.nudgeEnabled;
-    if (data.iconUrl !== undefined) void refreshSavedServerMeta(undefined, data.iconUrl); // PRD 19 C1
+    if (data.iconUrl !== undefined) {
+        void refreshSavedServerMeta(undefined, data.iconUrl); // PRD 19 C1
+        if (serverSummary) serverSummary.iconUrl = data.iconUrl; // PRD 19 C5: show it now, not after the debounce
+        renderServerHeader();
+        renderServerIconRow();
+    }
     refreshServerSummary();
     // If the Online Users modal is open, re-render so Nudge buttons appear/disappear live.
     if (onlineUsersModal.classList.contains("visible")) {
@@ -12878,13 +13008,7 @@ function showChannelIconModal(channelId: string): void {
 function closeChannelIconModal(): void {
     channelIconModal.classList.remove("visible");
     pendingChannelIconId = null;
-    if (channelIconCropObjectUrl) {
-        URL.revokeObjectURL(channelIconCropObjectUrl);
-        channelIconCropObjectUrl = null;
-    }
-    channelIconCropImg.removeAttribute("src");
-    channelIconCropNaturalWidth = 0;
-    channelIconCropNaturalHeight = 0;
+    channelCropper.clear();
 }
 
 /** Builds a simple category-grouped emoji grid inside the modal — a
@@ -12978,99 +13102,17 @@ channelIconFileInput.addEventListener("change", () => {
         return;
     }
 
-    if (channelIconCropObjectUrl) URL.revokeObjectURL(channelIconCropObjectUrl);
-    channelIconCropObjectUrl = URL.createObjectURL(file);
-    channelIconCropImg.src = channelIconCropObjectUrl;
-});
-
-function applyChannelIconCropTransform(): void {
-    const scale = channelIconCropBaseScale * channelIconCropZoomFactor;
-    channelIconCropImg.style.width = `${channelIconCropNaturalWidth}px`;
-    channelIconCropImg.style.height = `${channelIconCropNaturalHeight}px`;
-    channelIconCropImg.style.transform = `translate(${channelIconCropOffsetX}px, ${channelIconCropOffsetY}px) scale(${scale})`;
-}
-
-/** Keeps the image fully covering the viewport — offsets can't drift so far that a gap would show. */
-function clampChannelIconCropOffsets(): void {
-    const scale = channelIconCropBaseScale * channelIconCropZoomFactor;
-    const displayedW = channelIconCropNaturalWidth * scale;
-    const displayedH = channelIconCropNaturalHeight * scale;
-    const minX = CHANNEL_ICON_CROP_VIEWPORT_SIZE - displayedW;
-    const minY = CHANNEL_ICON_CROP_VIEWPORT_SIZE - displayedH;
-    channelIconCropOffsetX = Math.min(0, Math.max(minX, channelIconCropOffsetX));
-    channelIconCropOffsetY = Math.min(0, Math.max(minY, channelIconCropOffsetY));
-}
-
-channelIconCropImg.addEventListener("load", () => {
-    channelIconCropNaturalWidth = channelIconCropImg.naturalWidth;
-    channelIconCropNaturalHeight = channelIconCropImg.naturalHeight;
-    if (!channelIconCropNaturalWidth || !channelIconCropNaturalHeight) return;
-
-    channelIconCropBaseScale = Math.max(
-        CHANNEL_ICON_CROP_VIEWPORT_SIZE / channelIconCropNaturalWidth,
-        CHANNEL_ICON_CROP_VIEWPORT_SIZE / channelIconCropNaturalHeight,
-    );
-    channelIconCropZoomFactor = 1;
-    channelIconCropZoom.value = "1";
-
-    const displayedW = channelIconCropNaturalWidth * channelIconCropBaseScale;
-    const displayedH = channelIconCropNaturalHeight * channelIconCropBaseScale;
-    channelIconCropOffsetX = (CHANNEL_ICON_CROP_VIEWPORT_SIZE - displayedW) / 2;
-    channelIconCropOffsetY = (CHANNEL_ICON_CROP_VIEWPORT_SIZE - displayedH) / 2;
-    applyChannelIconCropTransform();
-
-    channelIconStepSelect.style.display = "none";
-    channelIconStepCrop.style.display = "block";
-});
-
-channelIconCropViewport.addEventListener("mousedown", (e) => {
-    channelIconCropDragging = true;
-    channelIconCropViewport.classList.add("dragging");
-    channelIconCropDragStart = { x: e.clientX, y: e.clientY, offsetX: channelIconCropOffsetX, offsetY: channelIconCropOffsetY };
-    e.preventDefault();
-});
-
-document.addEventListener("mousemove", (e) => {
-    if (!channelIconCropDragging) return;
-    channelIconCropOffsetX = channelIconCropDragStart.offsetX + (e.clientX - channelIconCropDragStart.x);
-    channelIconCropOffsetY = channelIconCropDragStart.offsetY + (e.clientY - channelIconCropDragStart.y);
-    clampChannelIconCropOffsets();
-    applyChannelIconCropTransform();
-});
-
-document.addEventListener("mouseup", () => {
-    if (channelIconCropDragging) {
-        channelIconCropDragging = false;
-        channelIconCropViewport.classList.remove("dragging");
-    }
-});
-
-channelIconCropZoom.addEventListener("input", () => {
-    channelIconCropZoomFactor = parseFloat(channelIconCropZoom.value);
-    clampChannelIconCropOffsets();
-    applyChannelIconCropTransform();
+    channelCropper.loadFile(file);
 });
 
 btnChannelIconUploadConfirm.addEventListener("click", async () => {
     if (!pendingChannelIconId) return;
-    if (!channelIconCropNaturalWidth || !channelIconCropNaturalHeight) return;
+    if (!channelCropper.isReady()) return;
     const channelId = pendingChannelIconId;
 
     btnChannelIconUploadConfirm.disabled = true;
     try {
-        const scale = channelIconCropBaseScale * channelIconCropZoomFactor;
-        const srcX = -channelIconCropOffsetX / scale;
-        const srcY = -channelIconCropOffsetY / scale;
-        const srcSize = CHANNEL_ICON_CROP_VIEWPORT_SIZE / scale;
-
-        const canvas = document.createElement("canvas");
-        canvas.width = 128;
-        canvas.height = 128;
-        const ctx = canvas.getContext("2d");
-        if (!ctx) throw new Error("Canvas not supported");
-        ctx.drawImage(channelIconCropImg, srcX, srcY, srcSize, srcSize, 0, 0, 128, 128);
-
-        const blob: Blob | null = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+        const blob = await channelCropper.toBlob(128, "image/png");
         if (!blob) throw new Error("Failed to crop image");
 
         const buffer = await blob.arrayBuffer();
@@ -13101,6 +13143,186 @@ btnChannelIconUploadConfirm.addEventListener("click", async () => {
         btnChannelIconUploadConfirm.disabled = false;
     }
 });
+
+// ── Server icon (PRD 19 C5) ──────────────────────────────────────────────────
+
+const SERVER_ICON_VIEWPORT = 220;
+const SERVER_ICON_MAX_BYTES = 1024 * 1024; // the server's own cap (A2)
+const SERVER_ICON_MIN_SIDE = 256;
+const SERVER_ICON_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+const serverIconModal = document.getElementById("server-icon-modal") as HTMLDivElement;
+const serverIconFileInput = document.getElementById("server-icon-file-input") as HTMLInputElement;
+const btnServerIconSave = document.getElementById("btn-server-icon-save") as HTMLButtonElement;
+const serverIconError = document.getElementById("server-icon-error") as HTMLDivElement;
+const serverIconPreviewBig = document.getElementById("server-icon-preview-40") as HTMLCanvasElement;
+const serverIconPreviewSmall = document.getElementById("server-icon-preview-24") as HTMLCanvasElement;
+
+/** Draws the current crop into the two preview sizes (the real avatars are 40 and 24 px). */
+function paintServerIconPreviews(): void {
+    if (!serverCropper?.isReady()) return;
+    for (const c of [serverIconPreviewBig, serverIconPreviewSmall]) {
+        const ctx = c.getContext("2d");
+        if (!ctx) continue;
+        ctx.clearRect(0, 0, c.width, c.height);
+        ctx.drawImage(serverCropper.toCanvas(c.width), 0, 0);
+    }
+}
+
+const serverCropper: IconCropper | null = new IconCropper(
+    document.getElementById("server-icon-crop-viewport") as HTMLDivElement,
+    document.getElementById("server-icon-crop-img") as HTMLImageElement,
+    document.getElementById("server-icon-crop-zoom") as HTMLInputElement,
+    SERVER_ICON_VIEWPORT,
+    () => {
+        (document.getElementById("server-icon-step-pick") as HTMLElement).style.display = "none";
+        (document.getElementById("server-icon-step-crop") as HTMLElement).style.display = "block";
+        btnServerIconSave.disabled = false;
+        paintServerIconPreviews();
+    },
+    () => paintServerIconPreviews(),
+);
+
+function showServerIconError(text: string): void {
+    serverIconError.textContent = text;
+    serverIconError.style.display = text ? "block" : "none";
+}
+
+function closeServerIconModal(): void {
+    serverIconModal.classList.remove("visible");
+    serverCropper?.clear();
+    btnServerIconSave.disabled = true;
+    showServerIconError("");
+    (document.getElementById("server-icon-step-pick") as HTMLElement).style.display = "block";
+    (document.getElementById("server-icon-step-crop") as HTMLElement).style.display = "none";
+}
+
+/** The icon's current public URL, or null. */
+function serverIconPublicUrl(): string | null {
+    return serverSummary?.iconUrl ?? currentServerIcon();
+}
+
+function openServerIconModal(): void {
+    closeServerIconModal();
+    const url = serverIconPublicUrl();
+    (document.getElementById("server-icon-link") as HTMLElement).textContent = url ?? "Shown after you save";
+    serverIconModal.classList.add("visible");
+}
+
+/** Validates a picked/dropped file and hands it to the cropper. */
+async function pickServerIconFile(file: File | undefined): Promise<void> {
+    if (!file || !serverCropper) return;
+    showServerIconError("");
+    if (!SERVER_ICON_TYPES.has(file.type)) {
+        showServerIconError("Use a PNG, JPEG, GIF or WebP image.");
+        return;
+    }
+    if (file.size > SERVER_ICON_MAX_BYTES) {
+        showServerIconError("That image is over 1 MB.");
+        return;
+    }
+    try {
+        const bitmap = await createImageBitmap(file);
+        const small = bitmap.width < SERVER_ICON_MIN_SIDE || bitmap.height < SERVER_ICON_MIN_SIDE;
+        bitmap.close();
+        if (small) {
+            showServerIconError(`The image must be at least ${SERVER_ICON_MIN_SIDE}×${SERVER_ICON_MIN_SIDE} pixels.`);
+            return;
+        }
+    } catch {
+        showServerIconError("That file couldn't be read as an image.");
+        return;
+    }
+    serverCropper.loadFile(file);
+}
+
+serverIconFileInput.addEventListener("change", () => {
+    const file = serverIconFileInput.files?.[0];
+    serverIconFileInput.value = "";
+    void pickServerIconFile(file);
+});
+document.getElementById("btn-server-icon-choose")?.addEventListener("click", () => serverIconFileInput.click());
+document.getElementById("btn-server-icon-cancel")?.addEventListener("click", closeServerIconModal);
+serverIconModal.addEventListener("click", (e) => {
+    if (e.target === serverIconModal) closeServerIconModal();
+});
+const serverIconDrop = document.getElementById("server-icon-drop") as HTMLDivElement;
+serverIconDrop.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    serverIconDrop.classList.add("over");
+});
+serverIconDrop.addEventListener("dragleave", () => serverIconDrop.classList.remove("over"));
+serverIconDrop.addEventListener("drop", (e) => {
+    e.preventDefault();
+    serverIconDrop.classList.remove("over");
+    void pickServerIconFile(e.dataTransfer?.files?.[0]);
+});
+
+btnServerIconSave.addEventListener("click", async () => {
+    if (!serverCropper?.isReady()) return;
+    btnServerIconSave.disabled = true;
+    showServerIconError("");
+    let uploadId: string | undefined;
+    try {
+        // 512x512 PNG; if that is over 1 MB, retry as WebP at 0.9 (the server's cap).
+        let blob = await serverCropper.toBlob(512, "image/png");
+        let name = "server-icon.png";
+        let mime = "image/png";
+        if (blob && blob.size > SERVER_ICON_MAX_BYTES) {
+            blob = await serverCropper.toBlob(512, "image/webp", 0.9);
+            name = "server-icon.webp";
+            mime = "image/webp";
+        }
+        if (!blob || blob.size > SERVER_ICON_MAX_BYTES) throw new Error("The cropped image is still over 1 MB");
+        const up = await api.uploadServerIcon(await blob.arrayBuffer(), name, mime);
+        uploadId = up.uploadId;
+        if (!uploadId) throw new Error("This server did not accept the upload");
+        const res = await api.updateServerSettings({ iconUploadId: uploadId });
+        if (!res.success) throw new Error(res.error ?? "The icon could not be saved");
+        uploadId = undefined; // claimed
+        showToast("Server icon updated");
+        closeServerIconModal();
+    } catch (err: any) {
+        showServerIconError(err?.message ?? "The icon could not be saved");
+        if (uploadId) void discardUpload(uploadId);
+        btnServerIconSave.disabled = !serverCropper?.isReady();
+    }
+});
+
+/** The Identity row at the top of Server settings: preview, Upload/Change, Remove. */
+function renderServerIconRow(): void {
+    const preview = document.getElementById("server-icon-row-preview");
+    if (!preview) return;
+    const name = connectedServerName ?? "Server";
+    const url = currentServerIcon();
+    preview.replaceChildren(serverAvatarElement(name, url, 56));
+    const hasIcon = !!(serverSummary?.iconUrl ?? null);
+    (document.getElementById("btn-server-icon-upload") as HTMLButtonElement).textContent = hasIcon ? "Change" : "Upload";
+    (document.getElementById("btn-server-icon-remove") as HTMLButtonElement).style.display = hasIcon ? "" : "none";
+}
+
+document.getElementById("btn-server-icon-upload")?.addEventListener("click", openServerIconModal);
+{
+    const removeBtn = document.getElementById("btn-server-icon-remove") as HTMLButtonElement;
+    let armedTimer: ReturnType<typeof setTimeout> | null = null;
+    removeBtn.addEventListener("click", async () => {
+        if (!removeBtn.classList.contains("armed")) {
+            // A small confirm: the second click within 4 s removes it.
+            removeBtn.classList.add("armed");
+            removeBtn.textContent = "Click again to remove";
+            armedTimer = setTimeout(() => {
+                removeBtn.classList.remove("armed");
+                removeBtn.textContent = "Remove";
+            }, 4000);
+            return;
+        }
+        if (armedTimer) clearTimeout(armedTimer);
+        removeBtn.classList.remove("armed");
+        removeBtn.textContent = "Remove";
+        const res = await api.updateServerSettings({ iconUploadId: null });
+        showToast(res.success ? "Server icon removed" : escapeHtml(res.error ?? "Couldn't remove the icon"));
+        if (res.success) void refreshServerSummary();
+    });
+}
 
 // Emoji button toggle
 btnEmoji.addEventListener("click", (e) => {

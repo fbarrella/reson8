@@ -2530,3 +2530,44 @@ Feature/Fix: About {server} (PRD 19 C4)
       Screenshot reviewed.
 
   Next Step: PRD 19 C5 — server icon UI.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Server icon UI (PRD 19 C5)
+
+  Problem: an admin had no way to give the server an icon from the client,
+  and the channel-icon dialog owned the only crop code.
+
+  Solution:
+    - renderer.ts: a shared IconCropper class (cover scale, drag-to-pan,
+      zoom 1-3, clamp so no gap shows; loadFile/clear/isReady/toCanvas/
+      toBlob). The channel-icon dialog now uses it (its private crop state
+      and handlers are gone; same 128 px PNG output).
+    - A "Server icon" dialog (#server-icon-modal): drop or choose a file;
+      the client checks type (png/jpeg/gif/webp), <= 1 MB and >= 256x256
+      (createImageBitmap) before cropping; live previews at 40 and 24 px;
+      the public-link notice and the resolved URL (or "Shown after you
+      save"); "Save icon" stays disabled until a file is cropped.
+    - Save: 512x512 PNG (retry as WebP q0.9 when over 1 MB) ->
+      uploadServerIcon -> updateServerSettings({ iconUploadId }); the
+      upload is discarded when the second step fails.
+    - Settings -> Server gets an "Server icon" row (56 px preview,
+      Upload/Change, Remove with a click-again confirm -> iconUploadId:
+      null). The row, header, pill, rail and saved-entry thumbnail follow the
+      SERVER_SETTINGS_UPDATED broadcast immediately.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts, index.html
+
+  Verification:
+    - tsc client clean; lint exit 0.
+    - Real client as a server admin: row showed Upload/Change correctly;
+      a 100x100 image and a text file were refused with the right messages;
+      a 600x400 gradient image opened the crop step with both previews;
+      Save closed the dialog, the header avatar became the new /uploads URL,
+      the row switched to Change + Remove; Remove (two clicks) returned the
+      header to initials and the row to Upload. Screenshot reviewed.
+    - Not driven: the channel-icon dialog end to end after the refactor
+      (the cropper object exists; same code path as the server dialog).
+
+  Next Step: PRD 19 C6 — category menu and rename/delete dialogs.
