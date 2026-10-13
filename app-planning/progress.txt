@@ -1170,3 +1170,82 @@ access-change keep it (PRD 19 A3)
   update. Pre-existing; logged as a TO-DO in the PRD, not fixed here.
 
   Next Step: PRD 19 A4 — cap of 5 concurrent screen shares per room.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Cap of 5 concurrent screen shares per room (PRD 19 A4)
+
+  Problem: PRODUCE created screen-video producers with no check at all; the
+  server-wide toggle was only enforced at WATCH_SCREEN_SHARE, so a room could
+  carry any number of shares.
+
+  Solution:
+    Shared types: MAX_SCREEN_SHARES_PER_ROOM = 5 (models.ts); the PRODUCE and
+    SET_SCREEN_SHARE_STATE acks gain optional errorCode "SCREEN_SHARE_LIMIT".
+    Server:
+      - services/channel-lock.ts (NEW): withChannelLock(key, fn), a per-key
+        promise chain; a rejection does not break the chain; the entry is
+        removed once the chain drained (channelLockCount() for tests).
+      - services/screen-share-limit.ts (NEW): the code, the user message and
+        the pure screenShareSlotAvailable(otherLiveShares, max).
+      - MediasoupService.countScreenVideoProducers(channelId, exceptKey):
+        live (not closed) screen-video producers, excluding one session.
+      - voice.handler PRODUCE: only for appData.mediaType "screen-video" the
+        count, sendTransport.produce() and the slot assignment run inside
+        withChannelLock(channelId); at the cap the ack is { success:false,
+        error, errorCode:"SCREEN_SHARE_LIMIT" } and nothing is produced.
+        Mic and screen-audio take no lock.
+      - SET_SCREEN_SHARE_STATE: when turning ON for a user with no live screen
+        producer of their own while the room is full, the flag is coerced to
+        false and the ack carries the code (older clients ignore the ack).
+    Client:
+      - voice.service: the produce error carries errorCode; a failed or refused
+        screen-video produce now STOPS the already-granted capture tracks
+        (before, a failed produce left the OS sharing indicator on).
+      - preload: startScreenShareVideo / ...ViaSystemPicker return errorCode.
+      - renderer: both start paths show the static toast "All 5 stream slots
+        are in use. You can share when someone stops." and do not call
+        setScreenShareState(true) (the video is produced BEFORE audio capture
+        starts, so no audio capture exists to stop); the modal path closes the
+        modal. The Share button is labelled "Share screen · 5/5" (title +
+        .share-full dimming) when you are not sharing and the room's occupants
+        include 5 sharers; clicking it toasts without opening the picker.
+        Updated from updateOccupants() and the channel-tree event.
+
+  Key Files Modified:
+    packages/shared-types/src/models.ts, socket-events.ts
+    apps/server/src/services/channel-lock.ts (NEW)
+    apps/server/src/services/screen-share-limit.ts (NEW)
+    apps/server/src/services/mediasoup.service.ts
+    apps/server/src/handlers/voice.handler.ts
+    apps/server/src/__tests__/channel-lock.test.ts (NEW)
+    apps/client/src/services/voice.service.ts
+    apps/client/src/preload.ts
+    apps/client/src/renderer/renderer.ts, index.html
+    apps/server/AGENTS.md
+
+  Verification:
+    - tsc --noEmit server/client clean; lint exit 0 (73 warnings, same);
+      server tests 28 files / 426 pass (9 new: ordering, concurrency across
+      keys, rejection does not block, drained map, a check-then-act race
+      leaves exactly one winner, the slot decision, the message).
+    - Real server, real mediasoup, 7 socket clients each with a send transport
+      and handcrafted VP9 L1T3 RTP parameters (no media):
+        shares 1–5 OK; #6 → REFUSED SCREEN_SHARE_LIMIT with the exact text;
+        SET_SCREEN_SHARE_STATE(true) without a producer → refused with the
+        code, as a live sharer → success; a mic (audio) PRODUCE in the full
+        room → OK; after one sharer's CLOSE_PRODUCER #6 shares; after another
+        sharer's socket disconnects (transport closes) #7 shares; with one
+        slot free, two simultaneous requests → exactly one OK.
+    - Real built client over CDP: with 4 sharers in the room the button reads
+      "Share Screen"; with 5 it reads "Share screen · 5/5", is dimmed and a
+      click shows the toast with no picker; when I am the sharer it reads
+      "Stop Sharing". Screenshot inspected (toast).
+    - NOT run: the capture-stop on a refused real share (needs a granted
+      desktop capture; the cleanup is a try/catch around sendTransport.produce
+      that calls stopScreenVideoProducing()), the OS "sharing" indicator, and
+      six app instances by hand — user to verify on a real desktop with six
+      clients, or at least two.
+
+  Next Step: PRD 19 A5 — unread counts for channels.
+  Reminder: P11 and P12 (PRD "Pre-Existing Issues") still need a decision.

@@ -522,6 +522,8 @@ export interface ClientToServerEvents {
             success: boolean;
             producerId?: string;
             error?: string;
+            /** PRD 19 A4: a screen-video produce refused because the room has MAX_SCREEN_SHARES_PER_ROOM live shares. */
+            errorCode?: "SCREEN_SHARE_LIMIT";
         }) => void,
     ) => void;
 
@@ -621,7 +623,12 @@ export interface ClientToServerEvents {
      */
     SET_SCREEN_SHARE_STATE: (
         payload: { isSharingScreen: boolean; streamName?: string },
-        ack: (response: { success: boolean; error?: string }) => void,
+        ack: (response: {
+            success: boolean;
+            error?: string;
+            /** PRD 19 A4: the room is full, so the flag was NOT turned on. Older clients ignore this ack. */
+            errorCode?: "SCREEN_SHARE_LIMIT";
+        }) => void,
     ) => void;
 
     // ── Screen Share Viewing (PRD 12.13) ──────────────────────────────────

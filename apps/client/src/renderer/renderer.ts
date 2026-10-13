@@ -1090,8 +1090,9 @@ interface Reson8Api {
     ): Promise<{ success: boolean; error?: string }>;
     stopAppAudioCapture(): Promise<void>;
     stopScreenShare(): Promise<void>;
-    startScreenShareVideo(chromeMediaSourceId: string): Promise<{ success: boolean; error?: string }>;
+    startScreenShareVideo(chromeMediaSourceId: string): Promise<{ success: boolean; error?: string; errorCode?: "SCREEN_SHARE_LIMIT" }>;
     startScreenShareViaSystemPicker(): Promise<{
+        errorCode?: "SCREEN_SHARE_LIMIT";
         success: boolean;
         label?: string;
         sourceType?: "screen" | "window";
@@ -3453,6 +3454,27 @@ function updateVoiceUI(channelName?: string): void {
     }
 }
 
+/**
+ * Mirrors MAX_SCREEN_SHARES_PER_ROOM in packages/shared-types/src/models.ts
+ * (PRD 19 A4); the renderer is a classic script and cannot import it. The
+ * server is the authority — this only labels the button and saves a pointless
+ * picker.
+ */
+const MAX_SCREEN_SHARES_PER_ROOM = 5;
+const SCREEN_SHARE_LIMIT_TOAST = "All 5 stream slots are in use. You can share when someone stops.";
+
+/** How many people in the room you are in are sharing their screen right now. */
+function countRoomScreenShares(): number {
+    if (!isInVoice || !currentChannelId) return 0;
+    const node = findChannelNodeById(currentTree, currentChannelId);
+    return node ? node.occupants.filter((o) => o.isSharingScreen).length : 0;
+}
+
+/** True when you are not sharing and the room has no free stream slot. */
+function isScreenShareRoomFull(): boolean {
+    return !isSharingScreen && countRoomScreenShares() >= MAX_SCREEN_SHARES_PER_ROOM;
+}
+
 /** Reflects sharing/enabled state on the Share Screen button (PRD 12.9). */
 /**
  * Screen sharing is disabled outright on macOS builds — the packaging
@@ -3476,11 +3498,15 @@ function updateShareScreenButton(): void {
         btnShareScreen.disabled = true;
         return;
     }
+    const roomFull = serverScreenShareEnabled && isScreenShareRoomFull();
+    btnShareScreen.classList.toggle("share-full", roomFull);
     btnShareScreen.title = isSharingScreen
         ? "Stop Sharing"
-        : serverScreenShareEnabled
-          ? "Share Screen"
-          : "Screen sharing is disabled on this server";
+        : !serverScreenShareEnabled
+          ? "Screen sharing is disabled on this server"
+          : roomFull
+            ? `Share screen · ${MAX_SCREEN_SHARES_PER_ROOM}/${MAX_SCREEN_SHARES_PER_ROOM}`
+            : "Share Screen";
     btnShareScreen.disabled = !serverScreenShareEnabled;
 }
 
@@ -3619,6 +3645,11 @@ btnShareScreen.addEventListener("click", async () => {
         await stopSharingScreen();
         return;
     }
+    // Full room: say so without opening the picker (the server still decides).
+    if (isScreenShareRoomFull()) {
+        showToast(SCREEN_SHARE_LIMIT_TOAST);
+        return;
+    }
     if (api.isLinuxWayland) {
         await startScreenShareViaSystemPicker();
         return;
@@ -3669,6 +3700,11 @@ btnStopShareAlert.addEventListener("click", stopSharingScreen);
 async function startScreenShareViaSystemPicker(): Promise<void> {
     const videoRes = await api.startScreenShareViaSystemPicker();
     if (!videoRes.success) {
+        if (videoRes.errorCode === "SCREEN_SHARE_LIMIT") {
+            // The capture was already stopped by the voice service.
+            showToast(SCREEN_SHARE_LIMIT_TOAST);
+            return;
+        }
         log(`Failed to start screen share: ${videoRes.error}`, "error");
         return;
     }
@@ -4303,6 +4339,7 @@ function seedSessionTimersFromTree(nodes: TreeNode[]): void {
 api.on("channel-tree", (data: { serverId: string; tree: TreeNode[] }) => {
     ensureMutedChannelsLoaded(data.serverId);
     seedSessionTimersFromTree(data.tree); // PRD 19 A3 (before the render that shows the timers)
+    queueMicrotask(updateShareScreenButton); // PRD 19 A4: after renderTree stores the new tree
     pruneMutedChannels(data.tree);
     renderTree(data.tree);
     syncOpenTabNames(data.tree);
@@ -4521,6 +4558,7 @@ function updateOccupants(channelId: string, occupants: any[]): void {
 
     if (walk(currentTree)) {
         renderTree(currentTree);
+        updateShareScreenButton(); // PRD 19 A4: the room's free stream slots changed
     }
 }
 
@@ -10742,8 +10780,15 @@ btnScreenShareStart.addEventListener("click", async () => {
 
     const videoRes = await api.startScreenShareVideo(source.id);
     if (!videoRes.success) {
-        log(`Failed to start screen share: ${videoRes.error}`, "error");
         btnScreenShareStart.disabled = false;
+        if (videoRes.errorCode === "SCREEN_SHARE_LIMIT") {
+            // The capture was already stopped by the voice service, and the
+            // audio capture below was never started.
+            closeScreenShareModal();
+            showToast(SCREEN_SHARE_LIMIT_TOAST);
+            return;
+        }
+        log(`Failed to start screen share: ${videoRes.error}`, "error");
         return;
     }
 

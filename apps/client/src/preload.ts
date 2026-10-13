@@ -1786,7 +1786,9 @@ const api = {
     },
 
     /** Starts capturing and producing the chosen source as SVC video (PRD 12.8/12.10). */
-    async startScreenShareVideo(chromeMediaSourceId: string): Promise<{ success: boolean; error?: string }> {
+    async startScreenShareVideo(
+        chromeMediaSourceId: string,
+    ): Promise<{ success: boolean; error?: string; errorCode?: "SCREEN_SHARE_LIMIT" }> {
         if (!voiceService) {
             return { success: false, error: "Not connected to voice" };
         }
@@ -1794,7 +1796,11 @@ const api = {
             await voiceService.startScreenVideoProducing(chromeMediaSourceId);
             return { success: true };
         } catch (err: any) {
-            return { success: false, error: err?.message ?? "Failed to start screen video" };
+            return {
+                success: false,
+                error: err?.message ?? "Failed to start screen video",
+                errorCode: err?.errorCode === "SCREEN_SHARE_LIMIT" ? "SCREEN_SHARE_LIMIT" : undefined,
+            };
         }
     },
 
@@ -1804,6 +1810,7 @@ const api = {
         label?: string;
         sourceType?: "screen" | "window";
         error?: string;
+        errorCode?: "SCREEN_SHARE_LIMIT";
     }> {
         if (!voiceService) {
             return { success: false, error: "Not connected to voice" };
@@ -1819,7 +1826,11 @@ const api = {
             );
             return { success: true, label: source?.name || label, sourceType: source?.sourceType };
         } catch (err: any) {
-            return { success: false, error: err?.message ?? "Failed to start screen video" };
+            return {
+                success: false,
+                error: err?.message ?? "Failed to start screen video",
+                errorCode: err?.errorCode === "SCREEN_SHARE_LIMIT" ? "SCREEN_SHARE_LIMIT" : undefined,
+            };
         }
     },
 

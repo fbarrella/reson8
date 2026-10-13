@@ -163,7 +163,7 @@ export interface VoiceSignaling {
         kind: "audio" | "video",
         rtpParameters: any,
         appData?: { mediaType?: "screen-audio" | "screen-video" },
-    ): Promise<{ success: boolean; producerId?: string; error?: string }>;
+    ): Promise<{ success: boolean; producerId?: string; error?: string; errorCode?: "SCREEN_SHARE_LIMIT" }>;
 
     consume(
         producerId: string,
@@ -416,7 +416,9 @@ export class VoiceService {
                         appData as { mediaType?: "screen-audio" | "screen-video" } | undefined,
                     );
                     if (!prodRes.success || !prodRes.producerId) {
-                        throw new Error(prodRes.error);
+                        // The server's reason code (PRD 19 A4) rides on the error so
+                        // the caller can tell "the room is full" from a failure.
+                        throw Object.assign(new Error(prodRes.error), { errorCode: prodRes.errorCode });
                     }
                     callback({ id: prodRes.producerId });
                 } catch (err) {
@@ -654,12 +656,20 @@ export class VoiceService {
         if (!this.sendTransport || !this.screenVideoStream) throw new Error("Send transport not ready");
 
         const track = this.screenVideoStream.getVideoTracks()[0];
-        this.screenVideoProducer = await this.sendTransport.produce({
-            track,
-            encodings: [{ scalabilityMode: "L1T3", maxBitrate: 2_500_000 }],
-            codecOptions: { videoGoogleStartBitrate: 1000 },
-            appData: { mediaType: "screen-video" },
-        });
+        try {
+            this.screenVideoProducer = await this.sendTransport.produce({
+                track,
+                encodings: [{ scalabilityMode: "L1T3", maxBitrate: 2_500_000 }],
+                codecOptions: { videoGoogleStartBitrate: 1000 },
+                appData: { mediaType: "screen-video" },
+            });
+        } catch (err) {
+            // Refused (e.g. the room is full, PRD 19 A4) or failed: the capture
+            // was already granted, so stop it NOW — otherwise the OS keeps
+            // showing "sharing" for a stream nobody will ever receive.
+            this.stopScreenVideoProducing();
+            throw err;
+        }
     }
 
     /** Stops screen-share video capture and closes its Producer. */

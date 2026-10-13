@@ -341,6 +341,24 @@ export class MediasoupService extends EventEmitter {
         return producers;
     }
 
+    /**
+     * How many screen-video producers are live in a channel (PRD 19 A4). A
+     * producer closed through `transportclose` may still sit in its slot for a
+     * moment, so `closed` is checked. `exceptKey` leaves one session out (the
+     * caller's own share must not count against itself). Viewer sessions share
+     * this map but never have a screen-video producer.
+     */
+    countScreenVideoProducers(channelId: string, exceptKey?: string): number {
+        const channelSessions = this.sessions.get(channelId);
+        if (!channelSessions) return 0;
+        let live = 0;
+        for (const [key, session] of channelSessions) {
+            if (key === exceptKey) continue;
+            if (session.screenVideoProducer && !session.screenVideoProducer.closed) live++;
+        }
+        return live;
+    }
+
     /** Cleans up all voice resources for a user leaving a channel. */
     cleanupUserSession(channelId: string, userId: string): void {
         const session = this.sessions.get(channelId)?.get(userId);

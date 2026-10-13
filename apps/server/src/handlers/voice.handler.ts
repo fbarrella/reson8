@@ -24,6 +24,12 @@ import type {
 import type { MediasoupService } from "../services/mediasoup.service.js";
 import { PresenceService } from "../services/presence.service.js";
 import { buildOccupant, voiceSessionStartedAt, getMediasoupSessionKey } from "./connection.handler.js";
+import { withChannelLock } from "../services/channel-lock.js";
+import {
+    SCREEN_SHARE_LIMIT_CODE,
+    SCREEN_SHARE_LIMIT_MESSAGE,
+    screenShareSlotAvailable,
+} from "../services/screen-share-limit.js";
 
 type TypedIO = SocketIOServer<
     ClientToServerEvents,
@@ -241,17 +247,36 @@ export function registerVoiceHandlers(
                     return;
                 }
 
-                const session = mediasoup.getSession(channelId, getMediasoupSessionKey(socket));
+                const sessionKey = getMediasoupSessionKey(socket);
+                const session = mediasoup.getSession(channelId, sessionKey);
                 if (!session?.sendTransport || session.sendTransport.id !== transportId) {
                     ack({ success: false, error: "Send transport not found" });
                     return;
                 }
+                const sendTransport = session.sendTransport;
 
-                const producer = await session.sendTransport.produce({
-                    kind,
-                    rtpParameters,
-                    appData,
-                });
+                let producer;
+                if (mediaType === "screen-video") {
+                    // PRD 19 A4: at most MAX_SCREEN_SHARES_PER_ROOM live shares.
+                    // The count, produce() and the slot assignment run under one
+                    // per-channel lock, or two simultaneous last-slot requests
+                    // would both pass the check. Mic and screen-audio never
+                    // take the lock.
+                    const created = await withChannelLock(channelId, async () => {
+                        const others = mediasoup.countScreenVideoProducers(channelId, sessionKey);
+                        if (!screenShareSlotAvailable(others)) return null;
+                        const p = await sendTransport.produce({ kind, rtpParameters, appData });
+                        session.screenVideoProducer = p;
+                        return p;
+                    });
+                    if (!created) {
+                        ack({ success: false, error: SCREEN_SHARE_LIMIT_MESSAGE, errorCode: SCREEN_SHARE_LIMIT_CODE });
+                        return;
+                    }
+                    producer = created;
+                } else {
+                    producer = await sendTransport.produce({ kind, rtpParameters, appData });
+                }
 
                 // Mic, screen-video, and screen-audio are three independent
                 // Producers that can all be active at once — each gets its
@@ -529,6 +554,20 @@ export function registerVoiceHandlers(
                     }
                 }
 
+                // PRD 19 A4: mirrors the PRODUCE cap — a user with no live
+                // screen producer of their own can't flip the flag on while
+                // the room is full.
+                let limited = false;
+                if (isSharingScreen && channelId) {
+                    const sessionKey = getMediasoupSessionKey(socket);
+                    const own = mediasoup.getSession(channelId, sessionKey)?.screenVideoProducer;
+                    const hasOwnLive = !!own && !own.closed;
+                    if (!hasOwnLive && !screenShareSlotAvailable(mediasoup.countScreenVideoProducers(channelId, sessionKey))) {
+                        isSharingScreen = false;
+                        limited = true;
+                    }
+                }
+
                 await presence.setScreenShareState(userId, isSharingScreen, streamName);
 
                 if (channelId) {
@@ -544,6 +583,10 @@ export function registerVoiceHandlers(
                     });
                 }
 
+                if (limited) {
+                    ack({ success: false, error: SCREEN_SHARE_LIMIT_MESSAGE, errorCode: SCREEN_SHARE_LIMIT_CODE });
+                    return;
+                }
                 ack({ success: true });
             } catch (err) {
                 app.log.error({ err }, "Error in SET_SCREEN_SHARE_STATE");

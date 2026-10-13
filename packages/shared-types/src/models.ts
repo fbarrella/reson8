@@ -150,6 +150,13 @@ export interface IUserProfile {
 }
 
 /**
+ * How many screen shares one voice room can carry at once (PRD 19 A4). The
+ * server enforces it at PRODUCE; the renderer mirrors the number (it is a
+ * classic script and cannot import this) to label the Share button.
+ */
+export const MAX_SCREEN_SHARES_PER_ROOM = 5;
+
+/**
  * Member-visible facts about the server (PRD 19 A1) — what About and the
  * server header show. Counts are per userId (= per install), not per person.
  */
