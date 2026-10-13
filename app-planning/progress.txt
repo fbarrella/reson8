@@ -1731,3 +1731,40 @@ Feature/Fix: Muted channels are fully silent (PRD 19 B2)
       tab before sampling it).
 
   Next Step: PRD 19 B3 — one "mark channel read" rule.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: One "mark channel read" rule for tree and tab (PRD 19 B3)
+
+  Problem: switchTab() called markChannelRead() unconditionally (so a tab still
+  loading, or a window nobody was looking at, counted as "read"), and a message
+  arriving on the ACTIVE channel while the window was unfocused was never
+  counted. (The handoff assumed opening from a tab did not clear; it did.)
+
+  Solution (renderer only; decision D1 = the DM focus rule of PRD 18.13):
+    - markChannelTabRead(tab): marks the channel read only when its tab is the
+      active one, document.hasFocus() is true and its page has rendered
+      (initialLoadDone). markDmTabRead() is untouched and still the only DM
+      read path.
+    - Called from every view path: switchTab() (tree click and tab click both
+      end there), scrollToMostRecent(), the end of loadChatHistory() (a tab that
+      was loading when opened is read once it has been seen), the window focus
+      handler, and the message handler.
+    - Message handler: a message from someone else counts when its channel is
+      not active OR the window is not focused; markChannelTabRead() then clears
+      it immediately when you really are looking at it. No sound changes.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts
+
+  Verification:
+    - tsc client clean; lint exit 0.
+    - Real client over CDP (focus emulation on, a bot sending): two channels
+      with 2 unread each -> opening one from the TREE clears its pill;
+      a message in a background channel -> pill 1; opening it from its TAB
+      clears it; with document.hasFocus() forced to false a message on the
+      ACTIVE channel -> pill 1; focus restored + focus event -> cleared.
+    - Note: the unfocused state was simulated by overriding document.hasFocus
+      (the headless window really has OS focus), then restored.
+
+  Next Step: PRD 19 B4 — DM tabs follow the preview/kept rules.

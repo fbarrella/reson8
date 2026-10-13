@@ -5355,7 +5355,6 @@ function renderAdminUsers(users: any[]): void {
 
 function switchTab(tabId: string): void {
     activeTabId = tabId;
-    markChannelRead(tabId);
 
     // Close emoji picker on tab switch
     closeEmojiPicker();
@@ -5388,6 +5387,10 @@ function switchTab(tabId: string): void {
     if (tab?.initialLoadDone) {
         stickToBottom(tab);
     }
+    // Opening a channel (tree or tab) reads it when it is really being looked
+    // at — the same rule as DMs (PRD 19 B3). A tab still loading is read when
+    // its history has rendered (loadChatHistory).
+    if (tab?.kind === "channel") markChannelTabRead(tab);
     // Looking at a DM tab (in a focused window) reads it (PRD 18.13).
     if (tab?.kind === "dm") {
         markDmTabRead(tab);
@@ -5771,6 +5774,7 @@ async function loadChatHistory(tab: ChatTab, unreadCountHint?: number): Promise<
     await fetchAndRenderLatestPage(tab, unreadCountHint);
     tab.initialLoadDone = true;
     tab.atTrueLatest = true;
+    if (tab.kind === "channel") markChannelTabRead(tab); // PRD 19 B3: now it has been seen
     ensureHistoryFilled(tab); // an under-filled first page would never load more (PRD 17.8)
 }
 
@@ -5867,7 +5871,7 @@ async function scrollToMostRecent(tab: ChatTab): Promise<void> {
     smoothScroll(tab, () => tab.messagesEl.scrollTo({ top: tab.messagesEl.scrollHeight, behavior: "smooth" }));
     // Landing at the bottom clears unread state, same as a natural
     // scroll-to-bottom or tab switch already does.
-    markChannelRead(tab.channelId);
+    markChannelTabRead(tab);
 }
 
 function setJumpToRecentVisible(tab: ChatTab, visible: boolean): void {
@@ -7387,9 +7391,14 @@ api.on("message", (msg: ChatMessage) => {
     // Unread indicator (PRD 4.13): MESSAGE_RECEIVED already broadcasts to
     // everyone in the server regardless of which tab is open, so this can
     // be tracked entirely client-side — no extra server round trip.
-    // Your own messages are never counted (PRD 19 B1).
-    if (msg.channelId !== activeTabId && msg.userId !== api.getInstanceId()) {
-        markChannelUnread(msg.channelId);
+    // Your own messages are never counted (PRD 19 B1). A message counts when
+    // its channel is not the active tab OR the window is not focused (PRD 19
+    // B3, the DM rule); markChannelTabRead() then clears it at once when you
+    // really are looking at it.
+    if (msg.userId !== api.getInstanceId()) {
+        if (msg.channelId !== activeTabId || !document.hasFocus()) markChannelUnread(msg.channelId);
+        const viewed = chatTabs.get(msg.channelId);
+        if (viewed) markChannelTabRead(viewed);
     }
 });
 
@@ -7412,6 +7421,19 @@ function findTreeNode(nodes: TreeNode[], channelId: string): TreeNode | null {
         if (found) return found;
     }
     return null;
+}
+
+/**
+ * Marks a channel read only when it is really being looked at (PRD 19 B3, the
+ * DM rule of PRD 18.13): its tab is active, the window has focus and its page
+ * has rendered. The ONE entry point for every view path (tab switch, tree
+ * click, window focus, history load, a message arriving).
+ */
+function markChannelTabRead(tab: ChatTab): void {
+    if (tab.kind !== "channel") return;
+    if (activeTabId !== tab.channelId || !document.hasFocus()) return;
+    if (!tab.initialLoadDone) return;
+    markChannelRead(tab.channelId);
 }
 
 /** Clears a channel's unread state locally and persists the read cursor server-side. */
@@ -10302,6 +10324,7 @@ window.addEventListener("blur", hideReactionCard);
 window.addEventListener("focus", () => {
     const tab = chatTabs.get(activeTabId);
     if (tab?.kind === "dm") markDmTabRead(tab);
+    if (tab?.kind === "channel") markChannelTabRead(tab); // PRD 19 B3
     for (const [id, t] of chatTabs) if (t.kind === "dm") refreshTabUnread(id);
 });
 window.addEventListener("blur", () => {
