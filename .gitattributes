@@ -1,0 +1,3 @@
+# Scripts with a shebang line must stay LF on every checkout: a CRLF "#!/usr/bin/env node"
+# line fails to parse when vitest imports the script (core.autocrlf=true on Windows).
+*.mjs text eol=lf
