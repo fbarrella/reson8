@@ -2783,15 +2783,29 @@
     /* Muted text channel (PRD 16.4): faded, almost "disabled"-looking, but
        still fully clickable. Brightens a little on hover so the user can read
        what they're about to open. */
-    .tree-channel.muted .ch-icon,
-    .tree-channel.muted .ch-name {
+    .tree-channel.muted:not(.viewing) .ch-icon,
+    .tree-channel.muted:not(.viewing) .ch-name {
       opacity: 0.45;
       transition: opacity 0.1s;
     }
 
-    .tree-channel.muted:hover .ch-icon,
-    .tree-channel.muted:hover .ch-name {
+    .tree-channel.muted:not(.viewing):hover .ch-icon,
+    .tree-channel.muted:not(.viewing):hover .ch-name {
       opacity: 0.7;
+    }
+
+    /* Bell-slash of a muted channel, in the tree and on its tab (PRD 19 B2).
+       The viewed channel keeps full opacity (the :not(.viewing) above). */
+    .ch-muted-icon,
+    .tab-muted-icon {
+      display: inline-flex;
+      align-items: center;
+      flex-shrink: 0;
+      color: var(--text-muted);
+    }
+
+    .tab.muted:not(.active) {
+      opacity: 0.55;
     }
 
     .modal-content {

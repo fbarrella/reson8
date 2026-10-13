@@ -1695,3 +1695,39 @@ Feature/Fix: Unread counts in the current UI (PRD 19 B1)
       branch (no v2.7.0 server build available here).
 
   Next Step: PRD 19 B2 — muted channels fully silent.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Muted channels are fully silent (PRD 19 B2)
+
+  Problem: a muted channel already hid its dot (tree and tab) and played no
+  sound, but it had no bell-slash, its tab was not faded, and the viewed
+  channel's fade rule was missing.
+
+  Solution (renderer + index.html):
+    - Tree: the existing .muted fade now applies only while the row is not
+      .viewing (full opacity while you are in it); a .ch-muted-icon bell-slash
+      (inline SVG constant BELL_SLASH_ICON_SVG, F2 swaps in Phosphor) sits after
+      the name, built by renderChannel() and toggled by applyChannelMuteState().
+    - Tab: setTabMuted() toggles .muted (opacity .55 unless active) and a
+      .tab-muted-icon next to the label; called from refreshTabUnread(), which
+      already runs on tab creation and on every mute change, so a tab opened
+      later for a muted channel comes up muted. A muted tab never shows a badge.
+    - All targeted DOM updates (no renderTree(), collapsed categories survive).
+    - Unmuting shows the stored count again (B1 keeps counting while muted).
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts, index.html
+
+  Verification:
+    - tsc client clean; lint exit 0.
+    - Real client over CDP: a channel with 2 unread -> pill "2"; muted -> no
+      pill, bell-slash present, name opacity 0.45; unmuted -> pill "2" again;
+      muted while viewing -> .muted .viewing, name opacity 1, its tab is
+      "tab preview muted active" with the bell and an empty badge. Screenshot
+      taken (b2-muted.png).
+    - NOT checked visually: the faded tab while another tab is active (the
+      state classes and the CSS rule are in place; the headless run closed that
+      tab before sampling it).
+
+  Next Step: PRD 19 B3 — one "mark channel read" rule.

@@ -2304,8 +2304,40 @@ function refreshTabUnread(channelId: string): void {
         return;
     }
     if (tab.kind !== "channel") return;
+    setTabMuted(tab, isChannelMuted(channelId)); // PRD 19 B2
     const show = hasChannelUnread(channelId) && !isChannelMuted(channelId) && activeTabId !== channelId;
     paintTabUnread(tab, show ? channelUnread(channelId) : 0);
+}
+
+/**
+ * Bell-with-a-slash for a muted channel (PRD 19 B2). An inline SVG until F2
+ * vendors Phosphor, which swaps it for `ph-bell-slash`.
+ */
+const BELL_SLASH_ICON_SVG =
+    `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13.73 21a2 2 0 0 1-3.46 0"/><path d="M18.63 13A17.89 17.89 0 0 1 18 8"/><path d="M6.26 6.26A5.86 5.86 0 0 0 6 8c0 7-3 9-3 9h14"/><path d="M18 8a6 6 0 0 0-9.33-5"/><line x1="1" y1="1" x2="23" y2="23"/></svg>`;
+
+/** Adds or removes the bell-slash inside `host`, right after `afterSelector` (or at the end). */
+function setMutedIcon(host: Element, muted: boolean, iconClass: string, afterSelector: string): void {
+    const existing = host.querySelector(`.${iconClass}`);
+    if (!muted) {
+        existing?.remove();
+        return;
+    }
+    if (existing) return;
+    const icon = document.createElement("span");
+    icon.className = iconClass;
+    icon.title = "Muted";
+    icon.setAttribute("aria-label", "Muted");
+    icon.innerHTML = BELL_SLASH_ICON_SVG;
+    const anchor = host.querySelector(afterSelector);
+    if (anchor) anchor.after(icon);
+    else host.appendChild(icon);
+}
+
+/** A muted channel's tab is faded, carries the bell-slash and never a badge (PRD 19 B2). */
+function setTabMuted(tab: ChatTab, muted: boolean): void {
+    tab.tabEl.classList.toggle("muted", muted);
+    setMutedIcon(tab.tabEl, muted, "tab-muted-icon", ".tab-label");
 }
 
 /** Shows `n` unread (0 = none, -1 = unknown) on a tab: class, number and aria-label. */
@@ -2959,6 +2991,7 @@ function applyChannelMuteState(channelId: string): void {
     if (!el) return;
     const muted = isChannelMuted(channelId);
     el.classList.toggle("muted", muted);
+    setMutedIcon(el, muted, "ch-muted-icon", ".ch-name"); // PRD 19 B2
 
     const showUnread = hasChannelUnread(channelId) && !muted;
     el.classList.toggle("unread", showUnread);
@@ -3067,6 +3100,8 @@ function renderChannel(node: TreeNode, siblings: TreeNode[]): HTMLDivElement {
         ${timerBadge}
         ${countBadge}
     `;
+
+    if (!isVoice && isChannelMuted(node.id)) setMutedIcon(channel, true, "ch-muted-icon", ".ch-name"); // PRD 19 B2
 
     // Viewing highlight (PRD 16.3) — appended last so it sits at the far right.
     if (!isVoice && node.id === activeTabId) {
