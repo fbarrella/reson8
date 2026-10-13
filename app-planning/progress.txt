@@ -2724,3 +2724,56 @@ Feature/Fix: Tab bar overflow (PRD 19 C8)
       the bar, which the pane-width change exercises).
 
   Next Step: PRD 19 C9 — voice room tab: people.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Voice room tab — people (PRD 19 C9)
+
+  Problem: the people in your voice room were only visible as small rows in
+  the tree; there was no room view.
+
+  Solution:
+    - One `voiceTab` object (id `voice-room`), deliberately not a ChatTab: no
+      scroll keeper, no sentinels, never preview/kept, never replaced. It
+      opens from a new "Expand voice room" button in the voice dock and by
+      clicking the voice row you are in; joining a channel opens it too
+      (join-then-open). Its ✕ closes only the tab; leaving voice, a kick or a
+      deleted channel closes it (updateVoiceUI), going to the first text tab
+      or the Server Log.
+    - Header: room name, "{n} / {cap}" (maxUsers; "{n}" when unlimited — the
+      tree node now carries maxUsers) and a Mosaic | Featured toggle saved in
+      reson8-voice-layout. While anyone shares, Featured is forced, Mosaic is
+      disabled with the SPEC tooltip and the saved choice is not overwritten.
+    - Mosaic: everyone, 4:3 tiles sized by fitVoiceTiles() (pure; picks the
+      column count that maximises the tile, capped at 420 px) inside a
+      ResizeObserver on the stage, no scrolling; small tiles get .tile-sm
+      (smaller name, no volume readout). Featured: five tiles then
+      "…and {n} more" (everyone when it would hide just one); the block opens
+      a popover with avatar, name, marks, right-click = the shared menu.
+    - Tiles are keyed by user id: presence adds/removes tiles and updates
+      marks in place, an avatar is rebuilt only when its size bucket changes,
+      and active-speakers / the local halo go through speakingEls() which
+      toggles a class on tree rows and tiles alike. Right-click opens B8's
+      menu (buildOccupantMenuModel -> renderOccupantMenu); local volume/mute
+      changes refresh the tile marks (refreshOccupantMarks).
+    - The composer is hidden on the voice tab like on the Server Log.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts, index.html
+
+  Verification:
+    - tsc client clean; lint exit 0.
+    - Real client in the Lobby with 15 bots: the tab opened and focused on
+      join, header "Lobby 16", Mosaic showed all 16 tiles inside the stage
+      with no scrolling (149 px tiles, .tile-sm), Featured showed 5 tiles and
+      "…and 11 more" with 11 rows in the popover and saved
+      reson8-voice-layout=featured; the speaking class landed on the same tile
+      element; the tile menu offered Volume and Mute locally; a bot leaving
+      removed one tile; ✕ closed the tab with voice still connected, a click
+      on the Lobby row reopened it, and Leave voice removed it and returned to
+      the Server Log. Screenshot reviewed.
+    - Not driven: the menu's Kick item on a tile (the model is B8's, tested
+      there), a real mediasoup speaking indicator (bots send no audio), and
+      the forced-Featured state while someone shares (C10/C11 own the stage).
+
+  Next Step: PRD 19 C10 — in-app stream stage with an optional pop-out.

@@ -3842,6 +3842,8 @@ interface TreeNode {
     iconUrl?: string | null;
     children: TreeNode[];
     occupants: { userId: string; nickname: string; isMuted?: boolean; isDeafened?: boolean; isSharingScreen?: boolean }[];
+    /** Voice rooms: the user limit, null/absent = unlimited (PRD 19 C9's "{n} / {cap}"). */
+    maxUsers?: number | null;
     /** Voice rooms (PRD 19 A3): when the running session began (ISO); absent for an empty room or an older server. */
     sessionStartedAt?: string;
 }
@@ -4921,6 +4923,7 @@ function renderOccupantMenu(model: OccupantMenuModel, x: number, y: number, anch
  * mark and the locally-muted icon.
  */
 function refreshOccupantMarks(userId: string): void {
+    refreshVoiceTileMarks(userId); // PRD 19 C9
     const myId = api.getInstanceId();
     const locallyMuted = userId !== myId && getSavedLocalMute(userId);
     const savedVolume = userId !== myId ? getSavedLocalVolume(userId) : 100;
@@ -5118,8 +5121,11 @@ async function handleChannelClick(node: TreeNode): Promise<void> {
     if (!requireServerAccess()) return; // PRD 18.18
 
     if (node.type === "VOICE") {
-        // If already in this voice channel, do nothing
-        if (currentChannelId === node.id && isInVoice) return;
+        // Already in this channel: the click opens the room tab (PRD 19 C9).
+        if (currentChannelId === node.id && isInVoice) {
+            openVoiceTab();
+            return;
+        }
 
         isJoiningChannel = true;
 
@@ -5187,6 +5193,7 @@ async function handleChannelClick(node: TreeNode): Promise<void> {
                 updateVoiceUI(node.name);
                 log(`Joined voice channel: ${node.name}`, "success");
                 SoundAlert.play("joining-channel.mp3");
+                openVoiceTab(); // PRD 19 C9: join-then-open
             } else {
                 log(`Failed to join voice: ${result.error}`, "error");
                 currentChannelId = null;
@@ -5225,11 +5232,398 @@ async function deleteChannel(channelId: string): Promise<void> {
     }
 }
 
+// ── Voice room tab (PRD 19 C9) ────────────────────────────────────────────────
+// ONE tab for the room you are in, deliberately NOT a ChatTab (no scroll
+// keeper, no sentinels, no unread). Its × closes the tab and never leaves
+// voice; leaving voice closes it. Tiles are keyed by user id: a speaking
+// update only toggles a class, a presence update adds or removes tiles.
+
+const VOICE_TAB_ID = "voice-room";
+const VOICE_LAYOUT_KEY = "reson8-voice-layout";
+type VoiceLayout = "mosaic" | "featured";
+const VOICE_FEATURED_SLOTS = 5;
+
+interface VoiceTab {
+    tabEl: HTMLElement;
+    contentEl: HTMLElement;
+    nameEl: HTMLElement;
+    countEl: HTMLElement;
+    btnMosaic: HTMLButtonElement;
+    btnFeatured: HTMLButtonElement;
+    grid: HTMLElement;
+    stage: HTMLElement;
+    observer: ResizeObserver;
+    tiles: Map<string, HTMLElement>;
+    moreBlock: HTMLButtonElement;
+    channelId: string;
+}
+let voiceTab: VoiceTab | null = null;
+let voiceMoreMenuEl: HTMLDivElement | null = null;
+
+function readVoiceLayoutPref(): VoiceLayout {
+    try {
+        return localStorage.getItem(VOICE_LAYOUT_KEY) === "featured" ? "featured" : "mosaic";
+    } catch {
+        return "mosaic";
+    }
+}
+
+function writeVoiceLayoutPref(layout: VoiceLayout): void {
+    try {
+        localStorage.setItem(VOICE_LAYOUT_KEY, layout);
+    } catch {
+        /* storage unavailable — the choice just won't be remembered */
+    }
+}
+
+/** Elements for a user's halo/marks: tree rows and room tiles alike. */
+function speakingEls(userId: string): NodeListOf<Element> {
+    const id = CSS.escape(userId);
+    return document.querySelectorAll(`.tree-occupant[data-user-id="${id}"], .voice-tile[data-user-id="${id}"]`);
+}
+
+/** The columns and tile size (4:3) that make the tiles as large as possible without scrolling. Pure. */
+function fitVoiceTiles(count: number, width: number, height: number, gap: number): { cols: number; w: number; h: number } {
+    let best = { cols: 1, w: 0, h: 0 };
+    for (let cols = 1; cols <= Math.max(1, count); cols++) {
+        const rows = Math.ceil(count / cols);
+        const byWidth = (width - gap * (cols - 1)) / cols;
+        const byHeight = ((height - gap * (rows - 1)) / rows) * (4 / 3);
+        const w = Math.floor(Math.min(byWidth, byHeight, 420));
+        if (w > best.w) best = { cols, w, h: Math.floor((w * 3) / 4) };
+    }
+    return best;
+}
+
+function voiceRoomNode(): TreeNode | null {
+    return isInVoice && currentChannelId ? findChannelNodeById(currentTree, currentChannelId) : null;
+}
+
+function anyoneSharingInRoom(node: TreeNode | null): boolean {
+    return !!node && node.occupants.some((o) => o.isSharingScreen);
+}
+
+/** The layout actually drawn: Featured is forced while anyone shares (the saved choice is untouched). */
+function effectiveVoiceLayout(node: TreeNode | null): VoiceLayout {
+    return anyoneSharingInRoom(node) ? "featured" : readVoiceLayoutPref();
+}
+
+function createVoiceTab(): VoiceTab {
+    const tabEl = document.createElement("div");
+    tabEl.className = "tab";
+    tabEl.dataset.tabId = VOICE_TAB_ID;
+    fillTabElement(tabEl, `<i class="ph ph-waveform" aria-hidden="true"></i>`, "Voice room");
+    tabEl.addEventListener("click", (e) => {
+        if ((e.target as HTMLElement).classList.contains("tab-close")) closeVoiceTab();
+        else switchTab(VOICE_TAB_ID);
+    });
+    insertTabElement(tabEl, null);
+
+    const contentEl = document.createElement("div");
+    contentEl.className = "tab-content";
+    contentEl.dataset.tabId = VOICE_TAB_ID;
+    contentEl.innerHTML =
+        `<div class="voice-room">` +
+        `<div class="voice-room-header">` +
+        `<span class="voice-room-name"></span><span class="voice-room-count"></span>` +
+        `<div class="voice-layout-toggle" role="group" aria-label="Layout">` +
+        `<button type="button" data-layout="mosaic">Mosaic</button>` +
+        `<button type="button" data-layout="featured">Featured</button>` +
+        `</div></div>` +
+        `<div class="voice-room-stage"><div class="voice-grid"></div></div>` +
+        `</div>`;
+    tabContentArea.appendChild(contentEl);
+
+    const stage = contentEl.querySelector(".voice-room-stage") as HTMLElement;
+    const moreBlock = document.createElement("button");
+    moreBlock.type = "button";
+    moreBlock.className = "voice-more";
+    moreBlock.addEventListener("click", (e) => {
+        e.stopPropagation();
+        openVoiceMoreMenu(moreBlock);
+    });
+
+    const vt: VoiceTab = {
+        tabEl,
+        contentEl,
+        nameEl: contentEl.querySelector(".voice-room-name") as HTMLElement,
+        countEl: contentEl.querySelector(".voice-room-count") as HTMLElement,
+        btnMosaic: contentEl.querySelector('[data-layout="mosaic"]') as HTMLButtonElement,
+        btnFeatured: contentEl.querySelector('[data-layout="featured"]') as HTMLButtonElement,
+        grid: contentEl.querySelector(".voice-grid") as HTMLElement,
+        stage,
+        observer: new ResizeObserver(() => layoutVoiceTiles()),
+        tiles: new Map(),
+        moreBlock,
+        channelId: currentChannelId ?? "",
+    };
+    vt.observer.observe(stage);
+    const choose = (layout: VoiceLayout): void => {
+        if (anyoneSharingInRoom(voiceRoomNode())) return; // forced Featured; nothing to choose
+        writeVoiceLayoutPref(layout);
+        renderVoiceRoom();
+    };
+    vt.btnMosaic.addEventListener("click", () => choose("mosaic"));
+    vt.btnFeatured.addEventListener("click", () => choose("featured"));
+    return vt;
+}
+
+/** Opens (and by default focuses) the room tab; only while you are in voice. */
+function openVoiceTab(opts: { focus?: boolean } = {}): void {
+    if (!isInVoice || !currentChannelId) return;
+    if (!voiceTab) voiceTab = createVoiceTab();
+    renderVoiceRoom();
+    if (opts.focus !== false) switchTab(VOICE_TAB_ID);
+}
+
+/** Closes the room tab. It never leaves voice. */
+function closeVoiceTab(): void {
+    closeVoiceMoreMenu();
+    if (!voiceTab) return;
+    const vt = voiceTab;
+    voiceTab = null;
+    vt.observer.disconnect();
+    vt.tabEl.remove();
+    vt.contentEl.remove();
+    scheduleTabOverflow();
+    if (activeTabId === VOICE_TAB_ID) {
+        // The first text tab, else the Server Log.
+        const next = Array.from(tabBar.querySelectorAll<HTMLElement>(".tab"))
+            .map((el) => el.dataset.tabId ?? "")
+            .find((id) => chatTabs.has(id));
+        switchTab(next ?? "server-log");
+    }
+}
+
+function voiceMarksHtml(occ: TreeNode["occupants"][number]): string {
+    const myId = api.getInstanceId();
+    const locallyMuted = occ.userId !== myId && getSavedLocalMute(occ.userId);
+    const volume = occ.userId !== myId ? getSavedLocalVolume(occ.userId) : 100;
+    return (
+        `${occ.isMuted ? OCC_MUTED_ICON : ""}` +
+        `${occ.isDeafened ? OCC_DEAFENED_ICON : ""}` +
+        `${locallyMuted ? `<span class="occ-local-muted">${OCC_LOCALLY_MUTED_ICON}</span>` : ""}` +
+        `${!locallyMuted && volume !== 100 ? `<span class="occ-local-volume">${volume}%</span>` : ""}`
+    );
+}
+
+function buildVoiceTile(occ: TreeNode["occupants"][number], node: TreeNode): HTMLElement {
+    const el = document.createElement("div");
+    el.className = "voice-tile";
+    el.dataset.userId = occ.userId;
+    const name = document.createElement("div");
+    name.className = "voice-tile-name";
+    const marks = document.createElement("div");
+    marks.className = "voice-tile-marks";
+    el.append(name, marks);
+    el.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const current = voiceRoomNode() ?? node;
+        const live = current.occupants.find((o) => o.userId === occ.userId) ?? occ;
+        renderOccupantMenu(buildOccupantMenuModel(live, current), e.clientX, e.clientY, el);
+    });
+    return el;
+}
+
+/** Fills a tile's changeable parts (name, marks, LIVE badge, speaking) without rebuilding it. */
+function updateVoiceTile(el: HTMLElement, occ: TreeNode["occupants"][number], node: TreeNode): void {
+    const myId = api.getInstanceId();
+    const nameEl = el.querySelector(".voice-tile-name") as HTMLElement;
+    const label = occ.userId === myId ? `${occ.nickname} (you)` : occ.nickname;
+    if (nameEl.textContent !== label) nameEl.textContent = label;
+    (el.querySelector(".voice-tile-marks") as HTMLElement).innerHTML = voiceMarksHtml(occ);
+
+    let badge = el.querySelector<HTMLElement>(".sharing-badge");
+    if (occ.isSharingScreen && !badge) {
+        badge = document.createElement("span");
+        badge.className = "sharing-badge";
+        badge.textContent = "LIVE";
+        badge.addEventListener("click", (e) => {
+            e.stopPropagation();
+            pendingWatchShare = { userId: occ.userId, nickname: occ.nickname, channelId: node.id };
+            watchShareConfirmNickname.textContent = occ.nickname;
+            watchShareConfirmModal.classList.add("visible");
+        });
+        el.appendChild(badge);
+    } else if (!occ.isSharingScreen && badge) {
+        badge.remove();
+    }
+
+    el.classList.toggle("speaking", activeSpeakers.has(occ.userId) || (occ.userId === myId && isLocalSpeaking));
+}
+
+/** Local volume/mute marks changed for one user (called with the tree's own refresh). */
+function refreshVoiceTileMarks(userId: string): void {
+    if (!voiceTab) return;
+    const node = voiceRoomNode();
+    const el = voiceTab.tiles.get(userId);
+    const occ = node?.occupants.find((o) => o.userId === userId);
+    if (el && occ && node) updateVoiceTile(el, occ, node);
+}
+
+/** Keyed add/remove of tiles, the header and the layout. Never rebuilds a tile that stays. */
+function renderVoiceRoom(): void {
+    if (!voiceTab) return;
+    const node = voiceRoomNode();
+    if (!node) {
+        closeVoiceTab();
+        return;
+    }
+    const vt = voiceTab;
+    vt.channelId = node.id;
+    vt.nameEl.textContent = node.name;
+    const count = node.occupants.length;
+    vt.countEl.textContent = node.maxUsers ? `${count} / ${node.maxUsers}` : String(count);
+    const label = vt.tabEl.querySelector(".tab-label") as HTMLElement;
+    if (label.textContent !== node.name) {
+        label.textContent = node.name;
+        invalidateTabWidth(vt.tabEl);
+    }
+
+    const present = new Set(node.occupants.map((o) => o.userId));
+    for (const [userId, el] of vt.tiles) {
+        if (!present.has(userId)) {
+            el.remove();
+            vt.tiles.delete(userId);
+        }
+    }
+    for (const occ of node.occupants) {
+        let el = vt.tiles.get(occ.userId);
+        if (!el) {
+            el = buildVoiceTile(occ, node);
+            vt.tiles.set(occ.userId, el);
+        }
+        updateVoiceTile(el, occ, node);
+    }
+
+    const sharing = anyoneSharingInRoom(node);
+    const layout = effectiveVoiceLayout(node);
+    vt.btnMosaic.classList.toggle("active", layout === "mosaic");
+    vt.btnFeatured.classList.toggle("active", layout === "featured");
+    vt.btnMosaic.disabled = sharing;
+    vt.btnMosaic.title = sharing ? "Mosaic is only available when no one is sharing a screen" : "";
+    layoutVoiceTiles();
+}
+
+/** Places and sizes the tiles for the current layout; called on every render and stage resize. */
+function layoutVoiceTiles(): void {
+    if (!voiceTab) return;
+    const vt = voiceTab;
+    const node = voiceRoomNode();
+    if (!node) return;
+    const people = node.occupants;
+    const layout = effectiveVoiceLayout(node);
+
+    // Featured: five tiles then a "…and n more" block (everyone, when it would
+    // only hide one person). Mosaic: everyone.
+    const overflowing = layout === "featured" && people.length > VOICE_FEATURED_SLOTS + 1;
+    const shown = overflowing ? people.slice(0, VOICE_FEATURED_SLOTS) : people;
+    const hiddenCount = people.length - shown.length;
+    const slots = shown.length + (hiddenCount > 0 ? 1 : 0);
+
+    const rect = vt.stage.getBoundingClientRect();
+    const gap = 12;
+    const fit = fitVoiceTiles(Math.max(1, slots), Math.max(0, rect.width - 32), Math.max(0, rect.height - 32), gap);
+
+    const ordered: HTMLElement[] = [];
+    for (const occ of shown) {
+        const el = vt.tiles.get(occ.userId);
+        if (el) ordered.push(el);
+    }
+    for (const [userId, el] of vt.tiles) {
+        el.style.display = shown.some((o) => o.userId === userId) ? "" : "none";
+    }
+    vt.moreBlock.style.display = hiddenCount > 0 ? "" : "none";
+    vt.moreBlock.textContent = `…and ${hiddenCount} more`;
+
+    const bucket = fit.w < 160 ? 32 : fit.w < 260 ? 48 : fit.w < 380 ? 64 : 80;
+    for (const el of ordered) {
+        el.style.width = `${fit.w}px`;
+        el.style.height = `${fit.h}px`;
+        el.classList.toggle("tile-sm", fit.w < 170);
+        // The avatar is rebuilt only when its size bucket changes.
+        const occ = people.find((o) => o.userId === el.dataset.userId);
+        const current = el.querySelector<HTMLElement>(".avatar");
+        if (occ && (!current || current.dataset.avatarPx !== String(bucket))) {
+            current?.remove();
+            el.insertBefore(createAvatarElement(occ.userId, occ.nickname, bucket), el.firstChild);
+        }
+    }
+    vt.moreBlock.style.width = `${fit.w}px`;
+    vt.moreBlock.style.height = `${fit.h}px`;
+    vt.grid.style.gridTemplateColumns = `repeat(${fit.cols}, ${fit.w}px)`;
+    vt.grid.append(...ordered, vt.moreBlock);
+    if (voiceMoreMenuEl) buildVoiceMoreMenu();
+}
+
+function closeVoiceMoreMenu(): void {
+    voiceMoreMenuEl?.remove();
+    voiceMoreMenuEl = null;
+}
+
+/** The people who didn't get a tile: avatar, name, marks; right-click opens the shared menu. */
+function buildVoiceMoreMenu(): void {
+    if (!voiceMoreMenuEl) return;
+    const node = voiceRoomNode();
+    const menu = voiceMoreMenuEl;
+    menu.replaceChildren();
+    if (!node) return;
+    const myId = api.getInstanceId();
+    for (const occ of node.occupants.slice(VOICE_FEATURED_SLOTS)) {
+        const row = document.createElement("div");
+        row.className = "voice-more-row";
+        row.dataset.userId = occ.userId;
+        row.appendChild(createAvatarElement(occ.userId, occ.nickname, 28));
+        const name = document.createElement("div");
+        name.className = "voice-tile-name";
+        name.textContent = occ.userId === myId ? `${occ.nickname} (you)` : occ.nickname;
+        row.appendChild(name);
+        const marks = document.createElement("div");
+        marks.className = "voice-tile-marks";
+        marks.innerHTML = voiceMarksHtml(occ);
+        row.appendChild(marks);
+        row.addEventListener("contextmenu", (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            renderOccupantMenu(buildOccupantMenuModel(occ, node), e.clientX, e.clientY, row);
+        });
+        menu.appendChild(row);
+    }
+}
+
+function openVoiceMoreMenu(anchor: HTMLElement): void {
+    if (voiceMoreMenuEl) {
+        closeVoiceMoreMenu();
+        return;
+    }
+    closeMenu();
+    const menu = document.createElement("div");
+    menu.className = "voice-more-menu";
+    document.body.appendChild(menu);
+    voiceMoreMenuEl = menu;
+    buildVoiceMoreMenu();
+    const rect = anchor.getBoundingClientRect();
+    menu.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - 268))}px`;
+    menu.style.top = `${Math.min(rect.bottom + 6, window.innerHeight - 330)}px`;
+}
+
+document.addEventListener("pointerdown", (e) => {
+    if (voiceMoreMenuEl && !voiceMoreMenuEl.contains(e.target as Node) && !(e.target as HTMLElement).closest?.(".voice-more")) {
+        closeVoiceMoreMenu();
+    }
+});
+document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeVoiceMoreMenu();
+});
+document.getElementById("btn-expand-voice")?.addEventListener("click", () => openVoiceTab());
+
 // ── Voice Controls ────────────────────────────────────────────────────────
 
 function updateVoiceUI(channelName?: string): void {
     refreshLocalSpeakingHalo();
     if (isInVoice) {
+        renderVoiceRoom(); // PRD 19 C9 (a joined or switched room)
         voicePanel.classList.add("visible");
         if (channelName) {
             voiceChannelName.textContent = `Voice: ${channelName}`;
@@ -5242,6 +5636,7 @@ function updateVoiceUI(channelName?: string): void {
         btnDeafen.classList.toggle("active", isDeafened);
         updateShareScreenButton();
     } else {
+        closeVoiceTab(); // PRD 19 C9: leaving voice, a kick or a deleted channel closes the room tab
         voicePanel.classList.remove("visible");
         isSharingScreen = false;
         // Leaving voice while sharing (Leave Voice, a kick, a disconnect)
@@ -6131,6 +6526,7 @@ api.on("user-kicked", (data: { channelId: string }) => {
         previousSharingIds = new Set();
         voiceChannelName.textContent = "";
         voicePanel.classList.remove("in-voice");
+        updateVoiceUI(); // PRD 19 C9: closes the room tab
     }
 });
 
@@ -6297,8 +6693,7 @@ api.on("active-speakers", (data: { channelId: string; speakers: string[] }) => {
                     activeSpeakers.delete(userId);
                     speakerHoldTimers.delete(userId);
                     // Remove .speaking class from DOM
-                    const els = document.querySelectorAll(`.tree-occupant[data-user-id="${userId}"]`);
-                    els.forEach((el) => el.classList.remove("speaking"));
+                    speakingEls(userId).forEach((el) => el.classList.remove("speaking"));
                 }, 300);
                 speakerHoldTimers.set(userId, timer);
             }
@@ -6315,8 +6710,7 @@ api.on("active-speakers", (data: { channelId: string; speakers: string[] }) => {
         }
         activeSpeakers.add(userId);
         // Add .speaking class to DOM
-        const els = document.querySelectorAll(`.tree-occupant[data-user-id="${userId}"]`);
-        els.forEach((el) => el.classList.add("speaking"));
+        speakingEls(userId).forEach((el) => el.classList.add("speaking"));
     }
 });
 
@@ -6396,6 +6790,7 @@ function updateOccupants(channelId: string, occupants: any[]): void {
     if (walk(currentTree)) {
         renderTree(currentTree);
         updateShareScreenButton(); // PRD 19 A4: the room's free stream slots changed
+        if (channelId === currentChannelId) renderVoiceRoom(); // PRD 19 C9: keyed add/remove of tiles
     }
 }
 
@@ -7063,7 +7458,7 @@ function switchTab(tabId: string): void {
     scheduleTabOverflow(); // PRD 19 C8: the active tab must stay visible
 
     // Show/hide the composer (attachment tray + input bar)
-    if (tabId === "server-log") {
+    if (tabId === "server-log" || tabId === VOICE_TAB_ID) {
         chatComposer.classList.remove("visible");
     } else {
         chatComposer.classList.add("visible");
@@ -14903,8 +15298,7 @@ function refreshLocalSpeakingHalo(): void {
 
 function setLocalSpeakingClass(speaking: boolean): void {
     const myId = api.getInstanceId();
-    document.querySelectorAll(`.tree-occupant[data-user-id="${myId}"]`)
-        .forEach((el) => el.classList.toggle("speaking", speaking));
+    speakingEls(myId).forEach((el) => el.classList.toggle("speaking", speaking));
 }
 
 function startMicLevelMeter(): void {
