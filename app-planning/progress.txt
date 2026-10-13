@@ -2109,3 +2109,50 @@ Feature/Fix: Update state machine, logic part (PRD 19 B12)
   Next Step: end of P2. Before 3.0.0-beta.1 (PRD): the user confirms the P1/P2
   items, the full suites pass (done below), a smoke run against a v2.7.0 and a
   3.0.0-beta.1 server, then /bump-version 3.0.0-beta.1.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Nocturne tokens, legacy names aliased (PRD 19 F1)
+
+  Problem: the app used a hand-picked blue palette defined by ~16 variables;
+  the new design system needs its tokens, and every screen must shift palette
+  in one step without a per-screen rewrite.
+
+  Solution (index.html only):
+    - :root gains the Nocturne tokens verbatim from the design system:
+      --color-bg/surface/text/accent/divider, the accent and neutral 100-900
+      ramps, --space-1..8 (2.8px steps), --radius-sm/md/lg, --shadow-sm/md/lg;
+      plus the status colours from the README (--color-success, -danger-text,
+      -danger-border, -live, -warning-text, -warning-bg).
+    - Every old variable is now an alias per the README mapping (--bg-primary ->
+      --color-bg, --bg-secondary -> --color-surface, --bg-tertiary ->
+      --color-accent-900, --bg-input -> 60% mix, --text-* -> text/neutral-400/
+      neutral-500, --accent* -> accent/accent-400/accent-800, --border ->
+      divider, --success/--danger/--warning -> the status colours,
+      --radius -> --radius-md, --voice-icon/--text-icon -> neutral-400).
+      The pinned bar's --pin-* family is retinted from the warning amber
+      (oklch 0.82 0.1 80) with color-mix, replacing the old #ffd54f family.
+    - app-planning/phase19-hardcoded-colours.md: the inventory R6 works from
+      (index.html 144 lines / 152 occurrences / 79 distinct values;
+      renderer.ts 2; viewer.html 13), nothing changed yet.
+    - Pitfall found: a CSS comment containing "nocturne-*/styles.css" ends
+      the comment at "*/" and silently swallowed the next declaration
+      (--color-bg came out empty and the whole palette fell back to
+      transparent). Fixed; do not write "*/" inside comments.
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html
+    app-planning/phase19-hardcoded-colours.md (NEW)
+
+  Verification:
+    - tsc client clean; lint exit 0; the packaged-style CSS parses.
+    - Real built client: oklch() and color-mix() render in Electron 34 (a
+      swatch resolves to oklch(0.78 0.14 150) and oklch(0.82 0.1 80 / 0.08));
+      computed --color-bg #161826, --bg-primary #161826, --danger
+      oklch(0.65 0.2 22).
+    - Screenshots (disconnected, connected, chat, Settings) reviewed: the
+      whole app moved to the blurple/indigo palette in one step; chat, tree,
+      unread pills, modals and buttons remain legible. Palette only, per the
+      item; shapes and spacing change in later items.
+
+  Next Step: PRD 19 F2 — vendored Inter and Phosphor.

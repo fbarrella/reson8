@@ -22,31 +22,85 @@
     }
 
     :root {
-      --bg-primary: #1a1a2e;
-      --bg-secondary: #16213e;
-      --bg-tertiary: #0f3460;
-      --bg-input: #0d1b2a;
-      --text-primary: #e0e0e0;
-      --text-secondary: #a0a0b0;
-      --text-muted: #6a6a7a;
-      --accent: #4fc3f7;
-      --accent-hover: #29b6f6;
-      --accent-dim: #1a5276;
-      --success: #66bb6a;
-      --danger: #ef5350;
-      --warning: #ffa726;
-      --border: #2a2a4a;
-      --voice-icon: #4fc3f7;
-      --text-icon: #ffa726;
-      --radius: 6px;
+      /* ── Nocturne tokens (PRD 19 F1) — copied from the design system's
+         :root block (the nocturne styles.css under design/_ds) ─────── */
+      --color-bg: #161826;
+      --color-surface: #232532;
+      --color-text: #e9e9ed;
+      --color-accent: #9184d9;
+      --color-divider: color-mix(in srgb, #e9e9ed 16%, transparent);
+
+      --color-neutral-100: #f3f5fe;
+      --color-neutral-200: #e4e7f5;
+      --color-neutral-300: #cfd3e5;
+      --color-neutral-400: #b2b6ca;
+      --color-neutral-500: #9397ab;
+      --color-neutral-600: #75798c;
+      --color-neutral-700: #595d6c;
+      --color-neutral-800: #3f424d;
+      --color-neutral-900: #292b31;
+
+      --color-accent-100: #f5f4ff;
+      --color-accent-200: #e7e5fe;
+      --color-accent-300: #d2cefd;
+      --color-accent-400: #b5abfc;
+      --color-accent-500: #968ae0;
+      --color-accent-600: #796cbf;
+      --color-accent-700: #5d5294;
+      --color-accent-800: #423a6a;
+      --color-accent-900: #2b2741;
+
+      --space-1: 2.8px;
+      --space-2: 5.6px;
+      --space-3: 8.4px;
+      --space-4: 11.2px;
+      --space-6: 16.8px;
+      --space-8: 22.4px;
+
+      --radius-sm: 4px;
+      --radius-md: 8px;
+      --radius-lg: 14px;
+
+      --shadow-sm: 0 0 0 1px #3f424d;
+      --shadow-md: 0 0 0 1px #595d6c, 0 6px 18px rgba(0, 0, 0, 0.55);
+      --shadow-lg: 0 0 0 1px #9397ab, 0 16px 40px rgba(0, 0, 0, 0.65);
+
+      /* Status colours the study uses (README), not in the token sheet. */
+      --color-success: oklch(0.78 0.14 150);
+      --color-danger-text: oklch(0.8 0.12 22);
+      --color-danger-border: oklch(0.55 0.14 22);
+      --color-live: oklch(0.65 0.2 22);
+      --color-warning-text: oklch(0.86 0.08 80);
+      --color-warning-bg: color-mix(in oklch, oklch(0.82 0.1 80) 8%, transparent);
+
+      /* ── Legacy names, aliased per the README's mapping table (PRD 19 F1).
+         Kept during the migration; R6 removes them. ─────────────────── */
+      --bg-primary: var(--color-bg);
+      --bg-secondary: var(--color-surface);
+      --bg-tertiary: var(--color-accent-900);
+      --bg-input: color-mix(in srgb, var(--color-bg) 60%, transparent);
+      --text-primary: var(--color-text);
+      --text-secondary: var(--color-neutral-400);
+      --text-muted: var(--color-neutral-500);
+      --accent: var(--color-accent);
+      --accent-hover: var(--color-accent-400);
+      --accent-dim: var(--color-accent-800);
+      --success: var(--color-success);
+      --danger: var(--color-live);
+      --warning: oklch(0.82 0.1 80);
+      --border: var(--color-divider);
+      /* Icons are no longer colour-coded by type. */
+      --voice-icon: var(--color-neutral-400);
+      --text-icon: var(--color-neutral-400);
+      --radius: var(--radius-md);
       --font: 'Reson8 Emoji', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-      /* Pinned message bar (PRD 15.5) — dark amber so it stands apart from
-         the blue chrome; text/background contrast measured at 9.8:1. */
-      --pin-bg: #4a3b0a;
-      --pin-bg-hover: #5c4a0e;
-      --pin-text: #fff3c4;
-      --pin-accent: #ffd54f;
-      --pin-border: #b8860b;
+      /* Pinned message bar (PRD 15.5) — the amber family, retinted from the
+         Nocturne warning amber (oklch 0.82 0.1 80) instead of the old #ffd54f. */
+      --pin-bg: color-mix(in oklch, oklch(0.82 0.1 80) 14%, var(--color-bg));
+      --pin-bg-hover: color-mix(in oklch, oklch(0.82 0.1 80) 22%, var(--color-bg));
+      --pin-text: oklch(0.92 0.05 85);
+      --pin-accent: oklch(0.82 0.1 80);
+      --pin-border: oklch(0.6 0.09 80);
     }
 
     /* Form controls don't inherit font-family by default and fall back to the
