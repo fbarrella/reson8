@@ -1249,3 +1249,42 @@ Feature/Fix: Cap of 5 concurrent screen shares per room (PRD 19 A4)
 
   Next Step: PRD 19 A5 — unread counts for channels.
   Reminder: P11 and P12 (PRD "Pre-Existing Issues") still need a decision.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Unread counts for channels (PRD 19 A5)
+
+  Problem: the join-time tree only told a client THAT a text channel had
+  unread messages (hasUnread), not how many; the new tab badges need a number.
+
+  Solution:
+    Shared types: IChannelTreeNode.unreadCount? (capped at 100; join-time tree
+    only, like hasUnread; deletions are not subtracted live).
+    Server: services/unread.service.ts (NEW): countUnreadByChannel() is ONE raw
+    query (tagged template, parameters bound) with a LATERAL subquery bounded
+    by LIMIT 100 per channel; applyUnreadCounts() (pure) sets the field on
+    nodes with a count > 0. annotateUnreadChannels() keeps its hasUnread logic
+    byte-for-byte and counts only the channels that came out unread.
+    Client: nothing (B1 uses it).
+
+  Key Files Modified:
+    packages/shared-types/src/models.ts
+    apps/server/src/services/unread.service.ts (NEW)
+    apps/server/src/handlers/connection.handler.ts
+    apps/server/src/__tests__/unread.service.test.ts (NEW)
+
+  Verification:
+    - tsc server/client clean; lint exit 0 (73 warnings, unchanged); server
+      tests 29 files pass (5 new: tree application, cap, no query for no
+      channels, clamping, parameters never reach the SQL text).
+    - SQL on a throwaway database (all migrations applied, then dropped):
+        5 messages with the cursor after 2 → 3; 150 unread → 100; never-read
+        channel with 7 messages → 7; cursor after the last message → 0; only
+        my own messages → 0; an unknown channel id → 0; 1 ms for 5 channels.
+    - Real server: a writer sent 4 messages; the reader's join tree had
+      { hasUnread: true, unreadCount: 4 }; after MARK_CHANNEL_READ the next join
+      tree had hasUnread false and no unreadCount; the author's own tree has
+      neither.
+
+  Next Step: PRD 19 A6 — category delete with children.
+  Reminder: P11 / P12 still need a decision.

@@ -43,6 +43,7 @@ import { getUserPermissions } from "../services/permissions.service.js";
 import { hasServerAccess, rolesToGrant } from "../services/access.service.js";
 import { membersRoom } from "../services/access-change.js";
 import { annotateSessionStarts, voiceSessionStartedAt } from "../services/voice-session.service.js";
+import { applyUnreadCounts, countUnreadByChannel } from "../services/unread.service.js";
 import {
     INVITE_FAIL_WINDOW_SECONDS,
     INVITE_MESSAGES,
@@ -168,17 +169,23 @@ async function annotateUnreadChannels(
     }
     const lastReadMap = new Map(readCursors.map((r) => [r.channelId, r.lastReadAt]));
 
+    const unreadIds: string[] = [];
     function walk(nodes: IChannelTreeNode[]): void {
         for (const node of nodes) {
             const latest = latestMap.get(node.id);
             if (latest) {
                 const lastRead = lastReadMap.get(node.id);
                 node.hasUnread = !lastRead || latest > lastRead;
+                if (node.hasUnread) unreadIds.push(node.id);
             }
             if (node.children.length > 0) walk(node.children);
         }
     }
     walk(tree);
+
+    // PRD 19 A5: the capped number behind the boolean, for the channels that
+    // have one. `hasUnread` itself is unchanged (older clients read it).
+    applyUnreadCounts(tree, await countUnreadByChannel(app.prisma, userId, unreadIds));
 }
 
 /**

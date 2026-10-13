@@ -99,6 +99,13 @@ export interface IChannelTreeNode extends IChannel {
      */
     hasUnread?: boolean;
     /**
+     * Text channels (PRD 19 A5): how many messages by others are after the
+     * user's read cursor, CAPPED at 100 (the client shows "99+" from 100).
+     * Only set (when > 0) on the join-time tree, like `hasUnread`; deletions
+     * are not subtracted live. Absent from an older server.
+     */
+    unreadCount?: number;
+    /**
      * Voice channels only (PRD 19 A3): when the room's current session began
      * (ISO), set while the room is occupied — the same value PRESENCE_UPDATE
      * carries as `sessionStartedAt`. Absent for an empty room, and from an
