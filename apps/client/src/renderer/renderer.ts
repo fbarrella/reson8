@@ -3279,6 +3279,184 @@ function setSavedLocalMute(userId: string, muted: boolean): void {
     localStorage.setItem(`reson8-local-mute-${userId}`, muted ? "1" : "0");
 }
 
+// ── Occupant menu (PRD 19 B8) ────────────────────────────────────────────────
+
+/** A menu as plain data: C9 draws the same model on voice tiles, F3 swaps the renderer. */
+type OccupantMenuModel =
+    | { kind: "self"; userId: string }
+    | {
+          kind: "other";
+          userId: string;
+          nickname: string;
+          channelId: string;
+          channelName: string;
+          volume: { value: number; min: number; max: number; step: number; ticks: number[] };
+          localMuted: boolean;
+          canKick: boolean;
+      };
+
+/**
+ * What the menu holds for `occ` in `channelNode`. Yourself: one item (Voice
+ * settings…). Someone else: local volume, local mute and — only with
+ * KICK_USER (the server's real requirement; the old gate was MANAGE_ROLES) or,
+ * on an older server that sends no permissions, today's isAdminUser — Kick.
+ */
+function buildOccupantMenuModel(occ: { userId: string; nickname: string }, channelNode: TreeNode): OccupantMenuModel {
+    if (occ.userId === api.getInstanceId()) return { kind: "self", userId: occ.userId };
+    const kickPerm = hasPerm(PERM.KICK_USER);
+    return {
+        kind: "other",
+        userId: occ.userId,
+        nickname: occ.nickname,
+        channelId: channelNode.id,
+        channelName: channelNode.name,
+        volume: { value: api.getLocalUserVolume(occ.userId), min: 0, max: 200, step: 5, ticks: [0, 100, 200] },
+        localMuted: api.getLocalUserMute(occ.userId),
+        canKick: kickPerm === null ? isAdminUser : kickPerm,
+    };
+}
+
+/** Opens Settings on the Voice & Shortcuts tab (PRD 19 B8's "Voice settings…"). */
+function openVoiceSettings(): void {
+    void openSettingsPanel();
+    (document.querySelector('.settings-tab-btn[data-settings-tab="voice"]') as HTMLElement | null)?.click();
+}
+
+/** Today's .occupant-ctx-menu renderer for an OccupantMenuModel. */
+function renderOccupantMenu(model: OccupantMenuModel, x: number, y: number): void {
+    document.querySelector(".occupant-ctx-menu")?.remove();
+    const menu = document.createElement("div");
+    menu.className = "occupant-ctx-menu";
+    menu.style.left = `${x}px`;
+    menu.style.top = `${y}px`;
+
+    if (model.kind === "self") {
+        const item = document.createElement("button");
+        item.className = "channel-ctx-menu-item ctx-voice-settings-btn";
+        item.textContent = "Voice settings…";
+        item.addEventListener("click", () => {
+            menu.remove();
+            openVoiceSettings();
+        });
+        menu.appendChild(item);
+    } else {
+        const volumeRow = document.createElement("div");
+        volumeRow.className = "ctx-volume-row";
+        const label = document.createElement("span");
+        label.className = "ctx-volume-label";
+        label.append("Volume ");
+        const readout = document.createElement("span");
+        readout.className = "ctx-volume-value";
+        readout.textContent = `${model.volume.value}%`;
+        label.appendChild(readout);
+        const slider = document.createElement("input");
+        slider.type = "range";
+        slider.className = "ctx-volume-slider";
+        slider.min = String(model.volume.min);
+        slider.max = String(model.volume.max);
+        slider.step = String(model.volume.step);
+        slider.value = String(model.volume.value);
+        const ticks = document.createElement("div");
+        ticks.className = "ctx-volume-ticks";
+        for (const t of model.volume.ticks) {
+            const tick = document.createElement("span");
+            tick.textContent = `${t}%`;
+            ticks.appendChild(tick);
+        }
+        volumeRow.append(label, slider, ticks);
+        // Live: the audio and the readout only. Saved (and the tree mark
+        // refreshed) once, when the drag ends — not on every step.
+        slider.addEventListener("input", () => {
+            const percent = parseInt(slider.value, 10);
+            readout.textContent = `${percent}%`;
+            api.setLocalUserVolume(model.userId, percent);
+        });
+        slider.addEventListener("change", () => {
+            setSavedLocalVolume(model.userId, parseInt(slider.value, 10));
+            refreshOccupantMarks(model.userId);
+        });
+        menu.appendChild(volumeRow);
+
+        const divider = document.createElement("div");
+        divider.className = "ctx-menu-divider";
+        menu.appendChild(divider);
+
+        const muteBtn = document.createElement("button");
+        muteBtn.className = `ctx-mute-btn${model.localMuted ? " active" : ""}`;
+        const setMuteLabel = (muted: boolean): void => {
+            muteBtn.textContent = muted ? "🔇 Unmute locally" : "🔊 Mute locally";
+            muteBtn.classList.toggle("active", muted);
+        };
+        setMuteLabel(model.localMuted);
+        const hint = document.createElement("span");
+        hint.className = "ctx-menu-hint";
+        hint.textContent = "Only for you";
+        muteBtn.addEventListener("click", () => {
+            const nowMuted = !muteBtn.classList.contains("active");
+            api.setLocalUserMute(model.userId, nowMuted);
+            setSavedLocalMute(model.userId, nowMuted);
+            setMuteLabel(nowMuted);
+            refreshOccupantMarks(model.userId); // targeted: collapsed categories survive
+        });
+        menu.append(muteBtn, hint);
+
+        if (model.canKick) {
+            const divider2 = document.createElement("div");
+            divider2.className = "ctx-menu-divider";
+            const modLabel = document.createElement("div");
+            modLabel.className = "ctx-menu-label";
+            modLabel.textContent = "Moderate";
+            const kickBtn = document.createElement("button");
+            kickBtn.className = "ctx-kick-btn";
+            kickBtn.textContent = "🚫 Kick from channel";
+            kickBtn.addEventListener("click", async () => {
+                menu.remove();
+                const result = await api.kickUser(model.userId, model.channelId);
+                if (result.success) {
+                    showToast(`${escapeHtml(model.nickname)} was kicked from ${escapeHtml(model.channelName)}`);
+                } else {
+                    log(`Failed to kick: ${result.error}`, "error");
+                    if (result.error && /permission|denied/i.test(result.error)) SoundAlert.play("insufficient_perms.mp3");
+                }
+            });
+            menu.append(divider2, modLabel, kickBtn);
+        }
+    }
+
+    document.body.appendChild(menu);
+
+    // Close on click outside (but not while dragging the slider)
+    const closeCtx = (ev: MouseEvent) => {
+        if (!menu.contains(ev.target as Node)) {
+            menu.remove();
+            document.removeEventListener("click", closeCtx, true);
+        }
+    };
+    setTimeout(() => document.addEventListener("click", closeCtx, true), 0);
+}
+
+/**
+ * Updates every tree occupant element of `userId` in place (PRD 19 B8/B9): no
+ * renderTree(), so collapsed categories survive. B9 adds the volume mark here.
+ */
+function refreshOccupantMarks(userId: string): void {
+    const myId = api.getInstanceId();
+    const locallyMuted = userId !== myId && getSavedLocalMute(userId);
+    for (const el of document.querySelectorAll<HTMLElement>(`.tree-occupant[data-user-id="${CSS.escape(userId)}"]`)) {
+        const existing = el.querySelector(".occ-local-muted");
+        if (locallyMuted && !existing) {
+            const holder = document.createElement("span");
+            holder.className = "occ-local-muted";
+            holder.innerHTML = OCC_LOCALLY_MUTED_ICON;
+            const badge = el.querySelector(".sharing-badge");
+            if (badge) badge.before(holder);
+            else el.appendChild(holder);
+        } else if (!locallyMuted && existing) {
+            existing.remove();
+        }
+    }
+}
+
 function renderOccupants(container: HTMLElement, node: TreeNode): void {
     const myId = api.getInstanceId();
 
@@ -3295,7 +3473,7 @@ function renderOccupants(container: HTMLElement, node: TreeNode): void {
         el.setAttribute("data-user-id", occ.userId);
         const isLocallyMuted = occ.userId !== myId && getSavedLocalMute(occ.userId);
         const voiceStateIcons =
-            `${occ.isMuted ? OCC_MUTED_ICON : ""}${occ.isDeafened ? OCC_DEAFENED_ICON : ""}${isLocallyMuted ? OCC_LOCALLY_MUTED_ICON : ""}`;
+            `${occ.isMuted ? OCC_MUTED_ICON : ""}${occ.isDeafened ? OCC_DEAFENED_ICON : ""}${isLocallyMuted ? `<span class="occ-local-muted">${OCC_LOCALLY_MUTED_ICON}</span>` : ""}`;
         const sharingBadge = occ.isSharingScreen ? `<span class="sharing-badge">LIVE</span>` : "";
         el.innerHTML = `<span class="occ-dot"></span>${escapeHtml(occ.nickname)}${voiceStateIcons}${sharingBadge}`;
 
@@ -3319,74 +3497,12 @@ function renderOccupants(container: HTMLElement, node: TreeNode): void {
             api.setLocalUserMute(occ.userId, getSavedLocalMute(occ.userId));
         }
 
-        // Right-click → per-user local volume/mute (everyone) + Kick (admins only)
+        // Right-click → the occupant menu (PRD 19 B8): built as plain data by
+        // buildOccupantMenuModel() and drawn by renderOccupantMenu().
         el.addEventListener("contextmenu", (e) => {
-            const targetId = occ.userId;
-            if (targetId === myId) return;
             e.preventDefault();
             e.stopPropagation();
-
-            // Remove any existing context menu
-            document.querySelector(".occupant-ctx-menu")?.remove();
-
-            const menu = document.createElement("div");
-            menu.className = "occupant-ctx-menu";
-            menu.style.left = `${e.clientX}px`;
-            menu.style.top = `${e.clientY}px`;
-
-            const currentVolume = api.getLocalUserVolume(targetId);
-            const currentMuted = api.getLocalUserMute(targetId);
-
-            menu.innerHTML = `
-                <div class="ctx-volume-row">
-                    <span class="ctx-volume-label">Volume <span class="ctx-volume-value">${currentVolume}%</span></span>
-                    <input type="range" class="ctx-volume-slider" min="0" max="200" step="5" value="${currentVolume}">
-                </div>
-                <button class="ctx-mute-btn${currentMuted ? " active" : ""}">${currentMuted ? "🔇 Unmute Locally" : "🔊 Mute Locally"}</button>
-                ${isAdminUser ? `<button class="ctx-kick-btn">🚫 Kick from Channel</button>` : ""}
-            `;
-
-            const volumeSlider = menu.querySelector(".ctx-volume-slider") as HTMLInputElement;
-            const volumeValue = menu.querySelector(".ctx-volume-value") as HTMLSpanElement;
-            volumeSlider.addEventListener("input", () => {
-                const percent = parseInt(volumeSlider.value, 10);
-                volumeValue.textContent = `${percent}%`;
-                api.setLocalUserVolume(targetId, percent);
-                setSavedLocalVolume(targetId, percent);
-            });
-
-            const muteBtn = menu.querySelector(".ctx-mute-btn") as HTMLButtonElement;
-            muteBtn.addEventListener("click", () => {
-                const nowMuted = !muteBtn.classList.contains("active");
-                api.setLocalUserMute(targetId, nowMuted);
-                setSavedLocalMute(targetId, nowMuted);
-                muteBtn.classList.toggle("active", nowMuted);
-                muteBtn.textContent = nowMuted ? "🔇 Unmute Locally" : "🔊 Mute Locally";
-                if (currentTree.length > 0) renderTree(currentTree);
-            });
-
-            const kickBtn = menu.querySelector(".ctx-kick-btn") as HTMLButtonElement | null;
-            kickBtn?.addEventListener("click", async () => {
-                menu.remove();
-                const result = await api.kickUser(targetId, node.id);
-                if (result.success) {
-                    log(`Kicked ${escapeHtml(occ.nickname)} from channel`, "success");
-                } else {
-                    log(`Failed to kick: ${result.error}`, "error");
-                    if (result.error && /permission|denied/i.test(result.error)) SoundAlert.play("insufficient_perms.mp3");
-                }
-            });
-
-            document.body.appendChild(menu);
-
-            // Close on click outside (but not while dragging the slider)
-            const closeCtx = (ev: MouseEvent) => {
-                if (!menu.contains(ev.target as Node)) {
-                    menu.remove();
-                    document.removeEventListener("click", closeCtx, true);
-                }
-            };
-            setTimeout(() => document.addEventListener("click", closeCtx, true), 0);
+            renderOccupantMenu(buildOccupantMenuModel(occ, node), e.clientX, e.clientY);
         });
 
         container.appendChild(el);

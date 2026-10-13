@@ -1922,3 +1922,51 @@ Feature/Fix: Deleting a voice channel says who is affected (PRD 19 B7)
       existing handler path, unchanged).
 
   Next Step: PRD 19 B8 — occupant menu.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Occupant menu — one model, targeted updates, KICK_USER gate, self menu (PRD 19 B8)
+
+  Problem: the occupant menu saved the volume on every `input` event, a local
+  mute ran a full renderTree() (collapsed categories reset), Kick was gated on
+  MANAGE_ROLES while the server requires KICK_USER, the result only went to the
+  log, and yourself had no menu.
+
+  Solution (renderer + index.html):
+    - buildOccupantMenuModel(occ, channelNode) returns plain data
+      (kind "self" | "other": volume {0-200 step 5, ticks 0/100/200},
+      localMuted, canKick); renderOccupantMenu(model, x, y) draws it with
+      today's .occupant-ctx-menu styles (F3 replaces the renderer; C9 reuses the
+      model). Labels are set with textContent.
+    - Volume: `input` -> api.setLocalUserVolume + the live "{n}%" readout only;
+      `change` -> setSavedLocalVolume + refreshOccupantMarks().
+    - "Mute locally / Unmute locally" + the hint "Only for you": api call +
+      saved state + refreshOccupantMarks(); NOT renderTree().
+    - "Moderate" label + "Kick from channel" (red, last): shown when
+      hasPerm(KICK_USER) is true, or, on an older server (null), isAdminUser.
+      Success -> toast "{nick} was kicked from {channel}" (both escaped);
+      failure keeps the log line and the insufficient-perms sound.
+    - Yourself: one item, "Voice settings…" (openVoiceSettings(): opens the
+      Settings panel and selects the Voice & Shortcuts tab).
+    - refreshOccupantMarks(userId) updates every .tree-occupant[data-user-id]
+      in place (the locally-muted icon is now wrapped in .occ-local-muted so it
+      can be found); B9 adds the volume mark to it.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts, index.html
+
+  Verification:
+    - tsc client clean; lint exit 0.
+    - Real client over CDP: a member's menu on an occupant -> Volume (100%,
+      ticks 0%/100%/200%), divider, Mute locally, "Only for you", no Moderate;
+      slider `input` to 135 -> readout 135%, nothing saved; `change` -> 135
+      saved; Mute locally -> tree mark appears, unmute -> gone (no re-render);
+      a role with KICK_USER (71, no MANAGE_ROLES; inserted into the throwaway
+      dev database for the test and left there) assigned live -> permissions 71,
+      isAdminUser false, menu gains Moderate + Kick; clicking Kick -> toast
+      "Sitter was kicked from Lobby" and the bot received USER_KICKED; the self
+      model -> "Voice settings…" only, and it opens Settings on the voice tab.
+    - Test-script traps recorded: `const` in repeated Runtime.evaluate calls
+      silently fails (use an IIFE) and clicking outside closes the menu.
+
+  Next Step: PRD 19 B9 — tree marks for local volume and mute.
