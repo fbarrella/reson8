@@ -12880,6 +12880,11 @@ async function checkForWhatsNew(currentVersion: string): Promise<void> {
     const notes = await api.fetchReleaseNotes(currentVersion);
     if (!notes) return; // try again next launch
 
+    // The fetch can finish after the user has already connected (or started to):
+    // the modal must never appear over a live session (PRD 19 B11). Return
+    // WITHOUT marking the version as seen, so the notes show at the next launch.
+    if (isConnected || connectInProgress) return;
+
     pendingWhatsNewVersion = currentVersion;
     pendingWhatsNewUrl = notes.htmlUrl;
     whatsNewTitle.textContent = `🎉 What's New in ${notes.name || `v${currentVersion}`}`;

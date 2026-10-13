@@ -2023,3 +2023,29 @@ Feature/Fix: Voice row count pill — icon and tooltip (PRD 19 B10)
       00:59 / 01:01 / 1:01:01; the room emptied -> no pill, no timer.
 
   Next Step: PRD 19 B11 — What's New only before connecting.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: What's New only before connecting (PRD 19 B11)
+
+  Problem: checkForWhatsNew() awaits a GitHub fetch; a user who connected
+  before it returned got the modal over a live session.
+
+  Solution (renderer): right after fetchReleaseNotes resolves,
+  `if (isConnected || connectInProgress) return;` WITHOUT marking the version
+  as seen, so the notes show at the next launch. Unchanged: isExistingInstall,
+  "only Got it marks the version as seen", "a backdrop click doesn't".
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts
+
+  Verification:
+    - tsc client clean; lint exit 0.
+    - Real client over CDP (last-seen forced to 0.0.1): while connected,
+      checkForWhatsNew('2.7.0') resolved its fetch and did NOT show the modal,
+      and reson8-last-seen-version stayed 0.0.1; after disconnecting the same
+      call showed the modal (so the guard, not a failed fetch, was what held it
+      back). The GitHub fetch itself was not delayed with CDP Fetch (it runs in
+      the main process), the guard was exercised by timing instead.
+
+  Next Step: PRD 19 B12 — update state machine, logic part.
