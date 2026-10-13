@@ -1584,6 +1584,8 @@ const btnModalCreate = document.getElementById("btn-modal-create") as HTMLButton
 
 const deleteChannelModal = document.getElementById("delete-channel-modal") as HTMLDivElement;
 const deleteChannelNameEl = document.getElementById("delete-channel-name") as HTMLElement;
+const deleteChannelTailEl = document.getElementById("delete-channel-tail") as HTMLElement;
+const deleteChannelAffectedEl = document.getElementById("delete-channel-affected") as HTMLElement;
 const btnDeleteCancel = document.getElementById("btn-delete-cancel") as HTMLButtonElement;
 const btnDeleteConfirm = document.getElementById("btn-delete-confirm") as HTMLButtonElement;
 
@@ -4012,7 +4014,29 @@ btnModalCreate.addEventListener("click", async () => {
 function showDeleteModal(channelId: string, channelName: string): void {
     pendingDeleteChannelId = channelId;
     deleteChannelNameEl.textContent = channelName;
+    refreshDeleteModalAffected();
     deleteChannelModal.classList.add("visible");
+}
+
+/**
+ * For a VOICE channel with people in it, says who is affected (PRD 19 B7).
+ * Recomputed when the modal opens and whenever a presence update for that
+ * channel arrives while it is open. Any other channel keeps the plain text.
+ */
+function refreshDeleteModalAffected(): void {
+    const node = pendingDeleteChannelId ? findChannelNodeById(currentTree, pendingDeleteChannelId) : null;
+    const n = node && node.type === "VOICE" ? node.occupants.length : 0;
+    if (n > 0) {
+        deleteChannelAffectedEl.textContent =
+            `The ${n} ${n === 1 ? "person" : "people"} in it will be disconnected. ` +
+            `The channel is removed for everyone on the server. This can't be undone.`;
+        deleteChannelAffectedEl.style.display = "";
+        deleteChannelTailEl.textContent = ""; // the sentence above already says it
+    } else {
+        deleteChannelAffectedEl.textContent = "";
+        deleteChannelAffectedEl.style.display = "none";
+        deleteChannelTailEl.textContent = " This cannot be undone.";
+    }
 }
 
 btnDeleteCancel.addEventListener("click", () => {
@@ -4562,6 +4586,8 @@ api.on("presence", (data: { channelId: string; occupants: any[]; sessionStartedA
 
     // Update occupants in the current tree
     updateOccupants(data.channelId, data.occupants);
+    // A delete dialog that is open for this channel shows the new head count (PRD 19 B7).
+    if (pendingDeleteChannelId === data.channelId) refreshDeleteModalAffected();
 
     // Detect user join/leave in YOUR current voice channel
     if (isInVoice && data.channelId === currentChannelId) {

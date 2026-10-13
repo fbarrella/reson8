@@ -5547,7 +5547,8 @@
   <div id="delete-channel-modal">
     <div class="modal-content">
       <h3>Delete Channel</h3>
-      <p>Are you sure you want to delete <strong id="delete-channel-name"></strong>? This cannot be undone.</p>
+      <p>Are you sure you want to delete <strong id="delete-channel-name"></strong>?<span id="delete-channel-tail"> This cannot be undone.</span></p>
+      <p id="delete-channel-affected" style="display: none"></p>
       <div class="modal-actions">
         <button class="btn btn-cancel" id="btn-delete-cancel">Cancel</button>
         <button class="btn btn-disconnect" id="btn-delete-confirm">Delete</button>

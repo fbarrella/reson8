@@ -1888,3 +1888,37 @@ Feature/Fix: Channel menu gated by permissions, grouped (PRD 19 B6)
       as `!== false`).
 
   Next Step: PRD 19 B7 — deleting a voice channel says who is affected.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Deleting a voice channel says who is affected (PRD 19 B7)
+
+  Problem: the delete dialog was the same for every channel, though deleting an
+  occupied voice room disconnects the people in it.
+
+  Solution (renderer + index.html): the dialog gained #delete-channel-affected
+  (and a #delete-channel-tail span for the generic "This cannot be undone.").
+  refreshDeleteModalAffected() reads the node from currentTree when the modal
+  opens: for a VOICE channel with n > 0 occupants it sets, via textContent,
+  "The {n} people in it will be disconnected. The channel is removed for
+  everyone on the server. This can't be undone." ("The 1 person…" for one) and
+  clears the generic tail; any other channel keeps today's text. The presence
+  handler calls it when an update for the channel being deleted arrives while
+  the modal is open. The exit for the deleting user is the existing
+  channel-deleted handler (leaves voice, hides the panel); nothing else until
+  C9 adds the voice room tab.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts, index.html
+
+  Verification:
+    - tsc client clean; lint exit 0.
+    - Real client over CDP (admin role granted live): a room with one person ->
+      "The 1 person in it…"; a second person joins while the dialog is open ->
+      "The 2 people in it…" without reopening; a text channel -> the original
+      sentence only; confirming deletes the room (gone from the tree). The
+      server side of the occupants leaving voice is A6's verified teardown.
+    - NOT checked: the deleting user being inside the room themself (the
+      existing handler path, unchanged).
+
+  Next Step: PRD 19 B8 — occupant menu.
