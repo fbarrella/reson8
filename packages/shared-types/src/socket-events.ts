@@ -24,6 +24,7 @@ import type {
     IReactionSummary,
     IAvatarSelection,
     IUserProfile,
+    IServerSummary,
     IIdentityEvent,
     IObservedAuthHost,
     IBannedAddress,
@@ -787,6 +788,18 @@ export interface ClientToServerEvents {
     ) => void;
 
     /**
+     * Member-visible facts about the server for About and the header (PRD 19 A1):
+     * name, member and online counts (per userId), the admins and which features
+     * are on. Open to every signed-in user, restricted users included. Never
+     * carries admin-only data (addresses, fingerprints, key material, the
+     * identity-policy details). An older server doesn't know the event — the
+     * client treats a timeout/error as "no summary".
+     */
+    GET_SERVER_SUMMARY: (
+        ack: (response: { success: boolean; summary?: IServerSummary; error?: string }) => void,
+    ) => void;
+
+    /**
      * Updates server-wide settings. Requires ADMIN. Each field is optional so
      * a single toggle (e.g. just Nudge) can be updated without touching the
      * other — the handler only writes whichever fields are present in the
@@ -969,7 +982,15 @@ export interface ServerToClientEvents {
     NUDGE_RECEIVED: (payload: { fromUserId: string; fromNickname: string }) => void;
 
     /** Broadcasts a server settings change so every connected client updates live. */
-    SERVER_SETTINGS_UPDATED: (payload: { nudgeEnabled: boolean; screenShareEnabled: boolean; maxMessageLength: number }) => void;
+    SERVER_SETTINGS_UPDATED: (payload: {
+        nudgeEnabled: boolean;
+        screenShareEnabled: boolean;
+        maxMessageLength: number;
+        /** PRD 19 A1 — the join gates in effect (env overrides included). Absent from an older server = unchanged. */
+        requireApproval?: boolean;
+        requireInvite?: boolean;
+        requireSignedIdentity?: boolean;
+    }) => void;
 
     /**
      * Notifies a channel's occupants that their voice session was force-closed

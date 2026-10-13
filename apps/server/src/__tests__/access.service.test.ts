@@ -50,7 +50,7 @@ describe("EVENT_ACCESS", () => {
         }
     });
     it("leaves the tree, presence, profile and own-settings reads open", () => {
-        for (const e of ["GET_ONLINE_USERS", "GET_USER_PROFILE", "GET_SERVER_SETTINGS", "PING_LATENCY", "SET_AVATAR", "USER_LEAVE_SERVER"]) {
+        for (const e of ["GET_ONLINE_USERS", "GET_USER_PROFILE", "GET_SERVER_SETTINGS", "GET_SERVER_SUMMARY", "PING_LATENCY", "SET_AVATAR", "USER_LEAVE_SERVER"]) {
             expect(requiresAccess(e), e).toBe(false);
         }
     });

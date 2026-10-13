@@ -835,3 +835,132 @@ Feature/Fix: Beta release pipeline — prereleases, update channel, version comp
   a database setup first.
 
   Next Step: PRD 19 A1 — member-visible server summary.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Member-visible server summary — GET_SERVER_SUMMARY (PRD 19 A1)
+
+  Problem: Nothing gave an ordinary member (or a restricted user) the server's
+  admins, member total, online count or feature switches — About and the
+  Nocturne header (C3/C4) need them. SERVER_SETTINGS_UPDATED also carried none
+  of the join gates, so a feature list could not update live.
+
+  Solution:
+    Shared types:
+      - IServerSummary (models.ts): name, memberCount, onlineCount, admins[],
+        features{nudge, screenShare, requireApproval, requireInvite,
+        requireSignedIdentity}, optional iconUrl (A2 fills it).
+      - ClientToServerEvents.GET_SERVER_SUMMARY(ack); SERVER_SETTINGS_UPDATED
+        gains optional requireApproval/requireInvite/requireSignedIdentity.
+    Server:
+      - services/server-summary.ts: pure buildServerSummary(). Members =
+        user_servers rows whose aggregated permissions pass hasServerAccess()
+        and who are not banned; admins = members with the ADMIN bit, sorted by
+        lower-cased nickname (userId as tie-break); online = online ids ∩
+        counted members.
+      - permissions.service.ts: new exported pure aggregatePermissions(roles,
+        serverId) (only that server's roles); getUserPermissions() now uses it.
+      - nudge.handler.ts: GET_SERVER_SUMMARY next to GET_SERVER_SETTINGS — one
+        query for members+roles, one for bans, the Redis online set, the server
+        row; features are the values IN EFFECT (env overrides included) via the
+        config getters. Any error acks "Failed to load the server summary".
+        Never includes addresses, fingerprints, public keys, unprotected counts
+        or the allowed-host lists.
+      - access.service.ts: EVENT_ACCESS.GET_SERVER_SUMMARY = "open" (restricted
+        users may open About, like the tree and presence).
+      - UPDATE_SERVER_SETTINGS's broadcast adds the three join gates, read from
+        the same getters after the update.
+    Client:
+      - preload.getServerSummary(): socket.timeout(5000); error/timeout → null
+        (a v2.7.0 server never answers); iconUrl goes through resolveMediaUrl().
+      - renderer: serverSummary state; refreshServerSummary() with a 2 s
+        trailing debounce, triggered on connected, user-joined, user-left and
+        server-settings-updated; a response that arrives after a disconnect or
+        server change is dropped; clearServerSummary() on disconnect; ONE
+        getOnlineCountForDisplay() (summary.onlineCount, else the online
+        entries of the last GET_ONLINE_USERS read, cached by updateOnlineDot()).
+        No UI yet (C3/C4), no debug logging.
+    Deviation: the PRD also lists "A8's permissions change" as a refresh
+    trigger; A8 does not exist yet, so that trigger is added with A8.
+
+  Key Files Modified:
+    packages/shared-types/src/models.ts
+    packages/shared-types/src/socket-events.ts
+    apps/server/src/services/server-summary.ts (NEW)
+    apps/server/src/services/permissions.service.ts
+    apps/server/src/services/access.service.ts
+    apps/server/src/handlers/nudge.handler.ts
+    apps/server/src/__tests__/server-summary.test.ts (NEW)
+    apps/server/src/__tests__/access.service.test.ts
+    apps/client/src/preload.ts
+    apps/client/src/renderer/renderer.ts
+    apps/server/AGENTS.md
+
+  Verification:
+    - npx tsc --noEmit: apps/server and apps/client clean;
+      packages/shared-types built with `npx tsc --build`.
+    - npm run lint (root): exit 0, 0 errors, 73 warnings (was 72): the one
+      new warning is getOnlineCountForDisplay() being unused until C3/C4.
+    - apps/server `npm run test`: 343 tests pass, incl. the new
+      server-summary tests (banned excluded; restricted excluded from total and
+      online; online and offline admin; unknown online id ignored; case-
+      insensitive admin sort; aggregatePermissions ignores other servers'
+      roles) and the EVENT_ACCESS table test (the compiler forced the new
+      entry). 2 suites (auth-hosts.service, prune-orphan-uploads) fail to LOAD
+      here, before and independent of this change: this Windows checkout
+      (core.autocrlf=true) turns scripts/*.mjs into CRLF and their `#!` line
+      then fails to parse ("Invalid or unexpected token"). Not touched.
+    - Real server (port 9801, scratch Redis db 5, ADMIN_INSTANCE_ID set), real
+      socket.io clients, script in the session scratchpad:
+        * a socket that never signed in → { success:false, error:"Not signed in" }
+          (packet gate);
+        * a plain member → success, memberCount 3 / onlineCount 3, one admin;
+        * after the admin removed the Member role from a third user, THAT
+          restricted socket still got success, and the counts dropped to
+          2 / 2 (the restricted user is neither counted nor online);
+        * the summary JSON contains no publicKey/fingerprint/address/host-list
+          keys;
+        * toggling requireApproval as admin: SERVER_SETTINGS_UPDATED carried
+          requireApproval:true and the next summary showed it; toggled back.
+      Relation to GET_ONLINE_USERS: that list omits the caller and INCLUDES
+      restricted users, the summary includes the caller and excludes restricted
+      users. (3 raw online, 1 restricted: list showed Alice + Carol; summary 2.)
+    - Real built client over CDP against that server: connected →
+      serverSummary filled after the 2 s debounce (4 members, 1 online),
+      getOnlineCountForDisplay() = 1, api.getServerSummary() returns the same;
+      after Disconnect serverSummary = null and the count 0.
+    - NOT run: the old-server (v2.7.0) fallback against a real v2.7.0 server —
+      no such build here; it is the 5 s ack timeout → null → last
+      GET_ONLINE_USERS count path, read from the code only. A v2.7.0 CLIENT
+      never emits the event and ignores the extra broadcast fields (additive,
+      optional). No UI change, so no screenshot.
+
+  Environment setup (this machine, needed once for server-backed checks):
+    - Rancher Desktop's Windows docker pipe did not answer ("timed out
+      dialing Hyper-V socket"), but dockerd runs in its WSL distro. Postgres
+      and Redis were started with `wsl -d rancher-desktop -- docker run` using
+      the images and credentials of docker-compose.dev.yml (containers
+      reson8-postgres 16-alpine and reson8-redis 7-alpine, ports 5432/6379
+      reachable from Windows as localhost). Inside WSL the docker CLI's
+      credential helper fails, so pulls ran with a clean environment:
+      `env -i PATH=/usr/bin:/bin HOME=/tmp/h DOCKER_CONFIG=/tmp/dcfg docker …`.
+    - apps/server/.env copied from .env.example (git-ignored);
+      `npm run db:generate`; `npx prisma migrate deploy` (not migrate dev);
+      `npm rebuild mediasoup` downloaded the prebuilt mediasoup-worker.exe;
+      `npm run dev` boots ("mediasoup Workers initialized", listening).
+    - A fresh database needs `npx tsx prisma/seed.ts` (roles/channels) AFTER
+      the server created its Server row, or every join fails on the
+      user_roles FK.
+    - Test servers: PORT=9801 REDIS_URL=redis://localhost:6379/5
+      SERVER_PRIVATE_PASSWORD= ADMIN_INSTANCE_ID=<uuid>; stop by the PID on
+      the port (netstat), never by pattern.
+
+  Noticed, not changed (out of scope):
+    - USER_JOIN_SERVER sets socket.data.userId/serverId before the role
+      upsert; when the upsert threw (unseeded database) the ack was
+      { success:false } yet the packet gate treated the socket as signed in
+      and let it call GET_SERVER_SUMMARY. Only reachable when a join fails on
+      a database error, and the event is "open" anyway, but a failed join
+      should probably clear those fields — worth a look in a later item.
+
+  Next Step: PRD 19 A2 — server icon.

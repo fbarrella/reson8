@@ -28,6 +28,7 @@ import type {
     IPinnedMessage,
     IIdentityEvent,
     IInvite,
+    IServerSummary,
 } from "@reson8/shared-types";
 import { VoiceService, VoiceSignaling } from "./services/voice.service";
 import { createHash } from "crypto";
@@ -2035,6 +2036,29 @@ const api = {
                 return;
             }
             socket.emit("GET_SERVER_SETTINGS", resolve);
+        });
+    },
+
+    /**
+     * Member-visible server facts for About and the header (PRD 19 A1).
+     * Resolves null on an error or timeout — a v2.7.0 server doesn't know the
+     * event and never answers — so callers fall back to GET_ONLINE_USERS.
+     */
+    getServerSummary(): Promise<IServerSummary | null> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve(null);
+                return;
+            }
+            socket.timeout(5000).emit("GET_SERVER_SUMMARY", (err, res) => {
+                if (err || !res?.success || !res.summary) {
+                    resolve(null);
+                    return;
+                }
+                const summary = res.summary;
+                if (summary.iconUrl) summary.iconUrl = resolveMediaUrl(summary.iconUrl);
+                resolve(summary);
+            });
         });
     },
 

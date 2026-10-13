@@ -80,6 +80,22 @@ interface UserProfile {
     isOnline: boolean;
 }
 
+/** Member-visible server facts (PRD 19 A1) — mirrors shared-types' IServerSummary. */
+interface ServerSummary {
+    name: string;
+    memberCount: number;
+    onlineCount: number;
+    admins: { userId: string; nickname: string; isOnline: boolean; avatarUrl: string | null }[];
+    features: {
+        nudge: boolean;
+        screenShare: boolean;
+        requireApproval: boolean;
+        requireInvite: boolean;
+        requireSignedIdentity: boolean;
+    };
+    iconUrl?: string | null;
+}
+
 interface DirectMessage {
     id: string;
     senderId: string;
@@ -1032,6 +1048,8 @@ interface Reson8Api {
         observedAuthHosts?: { host: string; joins: number; lastSeen: string | null }[];
         error?: string;
     }>;
+    /** null on an error/timeout (a v2.7.0 server doesn't know the event) — PRD 19 A1. */
+    getServerSummary(): Promise<ServerSummary | null>;
     updateServerSettings(
         settings: {
             nudgeEnabled?: boolean;
@@ -1252,6 +1270,47 @@ let isSharingScreen = false;
 let serverMaxMessageLength = 4000;
 /** The currently-connected server's display name, once fetched via getServerSettings() — null until then / after disconnect. */
 let connectedServerName: string | null = null;
+
+// ── Server summary (PRD 19 A1) ───────────────────────────────────────────
+// Member-visible server facts for the header and About. Null until fetched,
+// after disconnect, and on a v2.7.0 server (which has no GET_SERVER_SUMMARY).
+let serverSummary: ServerSummary | null = null;
+/** Online count from the last GET_ONLINE_USERS read — the old-server fallback for getOnlineCountForDisplay(). */
+let lastOnlineUsersCount: number | null = null;
+let serverSummaryTimer: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * The ONE online count the header and About both show: the summary's
+ * (members with access only) or, on an old server, the online entries of the
+ * last user list. 0 until either has arrived.
+ */
+function getOnlineCountForDisplay(): number {
+    if (serverSummary) return serverSummary.onlineCount;
+    return lastOnlineUsersCount ?? 0;
+}
+
+/** Re-reads the summary, coalescing bursts (joins/leaves/settings) into one request 2 s after the last trigger. */
+function refreshServerSummary(): void {
+    if (serverSummaryTimer) clearTimeout(serverSummaryTimer);
+    serverSummaryTimer = setTimeout(async () => {
+        serverSummaryTimer = null;
+        if (!isConnected) return;
+        const serverIdAtRequest = currentServerId;
+        const summary = await api.getServerSummary();
+        // A disconnect or a switch to another server while the request was in
+        // flight must not leave the old server's facts behind.
+        if (!isConnected || currentServerId !== serverIdAtRequest) return;
+        serverSummary = summary;
+    }, 2000);
+}
+
+/** Forgets the summary and any pending refresh (disconnect). */
+function clearServerSummary(): void {
+    if (serverSummaryTimer) clearTimeout(serverSummaryTimer);
+    serverSummaryTimer = null;
+    serverSummary = null;
+    lastOnlineUsersCount = null;
+}
 
 /**
  * Composes the OS window title bar text — "Reson8" (or "Reson8 -
@@ -3973,6 +4032,7 @@ api.on("connected", (data: { serverId: string; instanceId: string; secure?: bool
     statusText.classList.add("connected");
     statusInstance.textContent = `ID: ${data.instanceId}`;
     renderConnectionSecurity(); // PRD 18.3: lock icon / "not encrypted" warning
+    refreshServerSummary(); // PRD 19 A1
     hideApprovalScreen(); // PRD 18.8: a waiting identity that was just let in
     clearInviteField(); // PRD 18.9: a code is single-purpose
     if (lastDisconnectAt !== null) {
@@ -4062,6 +4122,7 @@ api.on("disconnected", (data?: { reason?: string }) => {
     previousOccupantIds = new Set();
     previousSharingIds = new Set();
     connectedServerName = null;
+    clearServerSummary(); // PRD 19 A1
     updateWindowTitle();
     activeSpeakers.clear();
     for (const timer of speakerHoldTimers.values()) clearTimeout(timer);
@@ -4303,12 +4364,14 @@ api.on("presence", (data: { channelId: string; occupants: any[]; sessionStartedA
 api.on("user-joined", (data: { userId: string; nickname: string }) => {
     log(`${data.nickname} joined the server`, "info");
     updateOnlineDot();
+    refreshServerSummary(); // PRD 19 A1
     if (data.userId === profileUserId && profileIsOnline !== null) setProfilePresence(true); // PRD 17.3
 });
 
 api.on("user-left", (data: { userId: string }) => {
     log(`A user left the server`, "info");
     updateOnlineDot();
+    refreshServerSummary(); // PRD 19 A1
     if (data.userId === profileUserId && profileIsOnline !== null) setProfilePresence(false); // PRD 17.3
 });
 
@@ -7707,6 +7770,7 @@ async function updateOnlineDot(): Promise<void> {
         return;
     }
     const result = await api.getOnlineUsers();
+    if (result.success && result.users) lastOnlineUsersCount = result.users.filter((u) => u.isOnline).length;
     if (result.success && result.users && result.users.some((u) => u.isOnline)) {
         onlineDot.classList.add("active");
     } else {
@@ -10802,8 +10866,17 @@ api.on("custom-emoji-approved", (data: { serverId: string; emoji: CustomEmoji })
 
 // ── Nudge (PRD 4.14) ─────────────────────────────────────────────────────
 
-api.on("server-settings-updated", (data: { nudgeEnabled: boolean; screenShareEnabled: boolean; maxMessageLength: number }) => {
+api.on("server-settings-updated", (data: {
+    nudgeEnabled: boolean;
+    screenShareEnabled: boolean;
+    maxMessageLength: number;
+    // PRD 19 A1 — absent from a v2.7.0 server: undefined means "unchanged".
+    requireApproval?: boolean;
+    requireInvite?: boolean;
+    requireSignedIdentity?: boolean;
+}) => {
     serverNudgeEnabled = data.nudgeEnabled;
+    refreshServerSummary();
     // If the Online Users modal is open, re-render so Nudge buttons appear/disappear live.
     if (onlineUsersModal.classList.contains("visible")) {
         api.getOnlineUsers().then((res) => {

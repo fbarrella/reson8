@@ -2,7 +2,7 @@
  * Nudge Handler — attention-grabbing pings between online users, plus the
  * server-wide setting that gates the feature.
  *
- * Handles: NUDGE_USER, GET_SERVER_SETTINGS, UPDATE_SERVER_SETTINGS.
+ * Handles: NUDGE_USER, GET_SERVER_SETTINGS, GET_SERVER_SUMMARY, UPDATE_SERVER_SETTINGS.
  *
  * The 30-second cooldown is tracked in memory, keyed per (sender, target)
  * pair — nudging one person doesn't throttle nudging someone else. This is
@@ -21,7 +21,8 @@ import type {
 } from "@reson8/shared-types";
 import { PermissionFlags } from "@reson8/shared-types";
 import { requirePermission } from "../middleware/permissions.middleware.js";
-import { getUserPermissions, isAdmin } from "../services/permissions.service.js";
+import { aggregatePermissions, getUserPermissions, isAdmin } from "../services/permissions.service.js";
+import { buildServerSummary } from "../services/server-summary.js";
 import {
     authAllowedHosts,
     authAllowedHostsLockedByEnv,
@@ -126,6 +127,78 @@ export function registerNudgeHandlers(
             } catch (err) {
                 app.log.error({ err }, "Error in GET_SERVER_SETTINGS");
                 ack({ success: false });
+            }
+        });
+
+        // ── GET_SERVER_SUMMARY (PRD 19 A1) ──────────────────────────────────
+        // Member-visible facts for About and the header. Open to restricted
+        // users too (EVENT_ACCESS "open"); the packet guard already refused
+        // sockets that haven't signed in. Only counts, admins' public profile
+        // fields and the feature switches — nothing admin-only.
+        socket.on("GET_SERVER_SUMMARY", async (ack) => {
+            try {
+                const { serverId } = socket.data;
+                if (!serverId) {
+                    ack({ success: false, error: "Not signed in" });
+                    return;
+                }
+                const [server, users, banned, onlineIds] = await Promise.all([
+                    app.prisma.server.findUnique({
+                        where: { id: serverId },
+                        select: { name: true, nudgeEnabled: true, screenShareEnabled: true },
+                    }),
+                    app.prisma.user.findMany({
+                        where: { servers: { some: { serverId } } },
+                        select: {
+                            id: true,
+                            nickname: true,
+                            avatarUrl: true,
+                            roles: {
+                                select: {
+                                    role: { select: { serverId: true, permissions: true } },
+                                },
+                            },
+                        },
+                    }),
+                    app.prisma.bannedUser.findMany({
+                        where: { serverId },
+                        select: { userId: true },
+                    }),
+                    presence.getOnlineUsers(serverId),
+                ]);
+                if (!server) {
+                    ack({ success: false, error: "Failed to load the server summary" });
+                    return;
+                }
+
+                ack({
+                    success: true,
+                    summary: buildServerSummary({
+                        name: server.name,
+                        members: users.map((u) => ({
+                            id: u.id,
+                            nickname: u.nickname,
+                            avatarUrl: u.avatarUrl,
+                            perms: aggregatePermissions(
+                                u.roles.map((r) => r.role),
+                                serverId,
+                            ),
+                        })),
+                        bannedIds: new Set(banned.map((b) => b.userId)),
+                        onlineIds: new Set(onlineIds),
+                        // The values in effect — environment overrides included.
+                        features: {
+                            nudge: server.nudgeEnabled,
+                            screenShare: server.screenShareEnabled,
+                            requireApproval: requireApproval(),
+                            requireInvite: requireInvite(),
+                            requireSignedIdentity: isSignedIdentityRequired(),
+                        },
+                    }),
+                });
+            } catch (err) {
+                app.log.error({ err }, "Error in GET_SERVER_SUMMARY");
+                ack({ success: false, error: "Failed to load the server summary" });
             }
         });
 
@@ -259,6 +332,11 @@ export function registerNudgeHandlers(
                     nudgeEnabled: updated.nudgeEnabled,
                     screenShareEnabled: updated.screenShareEnabled,
                     maxMessageLength: updated.maxMessageLength,
+                    // The join gates in effect (env overrides included), so About
+                    // updates live (PRD 19 A1). Read after the setters above.
+                    requireApproval: requireApproval(),
+                    requireInvite: requireInvite(),
+                    requireSignedIdentity: isSignedIdentityRequired(),
                 });
 
                 app.log.info(

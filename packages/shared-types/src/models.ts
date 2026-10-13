@@ -143,6 +143,29 @@ export interface IUserProfile {
 }
 
 /**
+ * Member-visible facts about the server (PRD 19 A1) — what About and the
+ * server header show. Counts are per userId (= per install), not per person.
+ */
+export interface IServerSummary {
+    name: string;
+    /** user_servers members whose permissions include CONNECT or ADMIN, minus banned users. */
+    memberCount: number;
+    /** Distinct userIds present on the server right now, limited to the members counted above. */
+    onlineCount: number;
+    /** Members whose aggregated permissions include ADMIN, sorted by nickname (case-insensitive). */
+    admins: { userId: string; nickname: string; isOnline: boolean; avatarUrl: string | null }[];
+    features: {
+        nudge: boolean;
+        screenShare: boolean;
+        requireApproval: boolean;
+        requireInvite: boolean;
+        requireSignedIdentity: boolean;
+    };
+    /** Filled in by PRD 19 A2; server-relative for local disk — resolve with resolveMediaUrl(). */
+    iconUrl?: string | null;
+}
+
+/**
  * One row of the identity log (PRD 18.4) — a key being bound, an admin
  * resetting it, or a join refused for identity reasons. ADMIN-only.
  */

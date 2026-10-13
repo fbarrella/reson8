@@ -58,13 +58,23 @@ export async function getUserPermissions(
         include: { role: true },
     });
 
-    // Filter to roles belonging to this server and OR together
+    return aggregatePermissions(userRoles.map((ur) => ur.role), serverId);
+}
+
+/**
+ * ORs together the permissions of the roles that belong to `serverId` — roles
+ * of other servers are ignored. Pure: shared by getUserPermissions() and the
+ * server summary (PRD 19 A1), which aggregates many users from one query.
+ */
+export function aggregatePermissions(
+    roles: ReadonlyArray<{ serverId: string; permissions: bigint }>,
+    serverId: string,
+): bigint {
     let combined = 0n;
-    for (const ur of userRoles) {
-        if (ur.role.serverId === serverId) {
-            combined |= ur.role.permissions;
+    for (const role of roles) {
+        if (role.serverId === serverId) {
+            combined |= role.permissions;
         }
     }
-
     return combined;
 }
