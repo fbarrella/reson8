@@ -1293,7 +1293,7 @@ function setUnreadPill(host: Element, n: number, pillClass: string, after: strin
     }
     if (!pill) {
         pill = document.createElement("span");
-        pill.className = pillClass;
+        pill.className = `${pillClass} count-pill`; // the shared badge look (PRD 19 F4)
         const anchor = host.querySelector(after);
         if (anchor) anchor.after(pill);
         else host.appendChild(pill);
@@ -2298,7 +2298,7 @@ function fillTabElement(tabEl: HTMLElement, icon: string, name: string): void {
         `<span class="tab-icon" aria-hidden="true">${icon}</span>` +
         `<span class="tab-kept-icon">${TAB_KEPT_ICON_SVG}</span>` +
         `<span class="tab-label"></span>` +
-        `<span class="tab-unread-count" aria-hidden="true"></span>` +
+        `<span class="tab-unread-count count-pill" aria-hidden="true"></span>` +
         `<span class="tab-close" role="button" aria-label="Close tab">✕</span>`;
     (tabEl.querySelector(".tab-label") as HTMLElement).textContent = name;
 }
@@ -3110,7 +3110,7 @@ function renderChannel(node: TreeNode, siblings: TreeNode[]): HTMLDivElement {
         else if (hasChannelUnread(node.id)) channel.classList.add("unread");
     }
     const unreadDot = !isVoice && hasChannelUnread(node.id) && !isChannelMuted(node.id)
-        ? `<span class="unread-count">${formatUnreadCount(channelUnread(node.id))}</span>`
+        ? `<span class="unread-count count-pill">${formatUnreadCount(channelUnread(node.id))}</span>`
         : "";
 
     channel.innerHTML = `

@@ -2263,3 +2263,46 @@ Feature/Fix: One menu builder for every context menu (PRD 19 F3)
       are not focusable; no caller passes it yet).
 
   Next Step: PRD 19 F4 — base component styles.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Base component styles (PRD 19 F4)
+
+  Problem: the new surfaces and restyled screens need shared buttons, inputs,
+  badges and dialogs written to the design system's visual rules.
+
+  Solution (index.html + two renderer touch-ups):
+    - Buttons: .btn-primary (outlined: 1 px accent border, transparent fill,
+      accent-900/800 hover/pressed), .btn-secondary, .btn-ghost, .btn-icon
+      (square; the identity-log .btn-reset-key.btn-icon keeps its more specific
+      rule), .btn-danger (secondary with red text and border); every button and
+      .btn gets :focus-visible { outline: 2px solid var(--color-accent);
+      outline-offset: 2px }. The existing .btn/.btn-cancel/.btn-create/
+      .btn-disconnect are untouched (R1-R5 migrate the rest).
+    - Small components: .tag, .input (bg-input, divider border, accent focus),
+      .count-pill (16 px, accent-800 fill, accent-200 text, 10.5 px / 600),
+      .section-label (11 px, 600, 0.08em, uppercase, neutral-500).
+    - Dialogs: .dialog (surface, shadow-lg, radius-lg) with .dialog-title
+      (19 px / 500), .dialog-subtitle (13 px neutral-400) and right-aligned
+      .modal-actions; .toast moved onto the surface/shadow-md/radius tokens.
+    - Applied: the B1 pills (tree and tab) now carry .count-pill (the old red
+      pill CSS is gone); the Rename and Delete channel dialogs use .dialog,
+      .input, .btn-secondary / .btn-primary / .btn-danger, keeping every id.
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html, renderer.ts
+
+  Verification:
+    - tsc client clean; lint exit 0.
+    - Real client: the unread pill computes background rgb(66,58,106)
+      (accent-800), text rgb(231,229,254) (accent-200), 16 px; the Rename and
+      Delete dialogs compared with frames 6c and 14c: title, label, field,
+      secondary Cancel + outlined primary / red-bordered destructive confirm
+      match (the category "keep or delete" radio cards belong to C6); a
+      keyboard Tab onto a button gives solid 2 px rgb(145,132,217), the accent;
+      the toast uses the new surface. Screenshots reviewed.
+    - Note: a script focus() right after a pointer interaction does not show
+      the ring (focus-visible heuristics); keyboard focus does.
+
+  Next Step: P3 complete. P4 starts with C1 (saved servers, welcome screen and
+  the server rail).
