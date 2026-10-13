@@ -3068,7 +3068,13 @@ function renderChannel(node: TreeNode, siblings: TreeNode[]): HTMLDivElement {
         : `<span class="ch-icon ${iconClass}">${icon}</span>`;
 
     const count = node.occupants.length;
-    const countBadge = count > 0 ? `<span class="ch-count">${count}</span>` : "";
+    // Count pill (PRD 19 B10): a person icon before the number and a tooltip.
+    // Inline SVG until F2 swaps in Phosphor's ph-user.
+    const countBadge =
+        count > 0
+            ? `<span class="ch-count" title="${count === 1 ? "1 person connected" : `${count} people connected`}">` +
+              `<svg class="ch-count-icon" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>${count}</span>`
+            : "";
 
     // Session timer badge for active voice sessions. Text is computed
     // synchronously here (not left blank for the setInterval tick below to

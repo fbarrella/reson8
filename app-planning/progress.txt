@@ -1998,3 +1998,28 @@ Feature/Fix: Tree marks for local volume and mute (PRD 19 B9)
       taken (b9-marks.png).
 
   Next Step: PRD 19 B10 — voice row count tooltip and icon.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Voice row count pill — icon and tooltip (PRD 19 B10)
+
+  Problem: the voice row's occupant count was a bare number.
+
+  Solution (renderer + index.html): the .ch-count pill gets a person icon
+  (inline SVG until F2's ph-user) before the number and a tooltip "{n} people
+  connected" ("1 person connected" for one). Confirmed, unchanged: the timer
+  format (formatDuration: mm:ss, h:mm:ss from one hour), the timer being
+  absent for an empty room (A3's tree seeding deletes it), and the single
+  global 1 s interval.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts, index.html
+
+  Verification:
+    - tsc client clean; lint exit 0.
+    - Real client over CDP: a room occupied before connecting shows count 1,
+      title "1 person connected", icon, and a running timer at once (A3); a
+      second person -> "2 people connected"; formatDuration(59s/61s/3661s) =
+      00:59 / 01:01 / 1:01:01; the room emptied -> no pill, no timer.
+
+  Next Step: PRD 19 B11 — What's New only before connecting.
