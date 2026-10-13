@@ -2391,3 +2391,45 @@ Feature/Fix: Saved servers, welcome screen and the server rail (PRD 19 C1)
       localStorage).
 
   Next Step: PRD 19 C2 — title-bar pill, switcher and status bar.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Title-bar server pill, switcher and status bar (PRD 19 C2)
+
+  Problem: the connection state and the server's name lived in a toolbar that
+  C1 removed, and there was no quick way to switch or disconnect.
+
+  Solution (renderer + index.html):
+    - The pill in #titlebar reads "Not connected" or the server's name with a
+      green dot; renderServerPill() runs from updateWindowTitle() (so it
+      follows every change of the server name), connected and disconnected
+      (guarded: updateWindowTitle can run before the saved-servers state
+      exists at script start-up).
+    - Click -> openServerSwitcher() built with F3's openMenu: a "Servers"
+      heading, one row per saved server (avatar, name, address as a monospace
+      second line, a tick on the active one), a divider, "Disconnect" (danger,
+      when connected) and "Add a server…". MenuItem gained optional avatar,
+      sublabel and checked (the menu builder stays the one implementation).
+    - Status bar: 28 px on --color-bg with a divider. It keeps the connection
+      dot, "Connected as {nickname}", the EXISTING 3-second latency poll (no
+      new ping loop) and the existing lock / "Not encrypted" indicator; new
+      "Client {version}" on the right from api.getAppVersion(); the ID and Copy
+      button are unchanged.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts, index.html
+
+  Verification:
+    - tsc client clean; lint exit 0.
+    - Real client: disconnected -> pill "Not connected", grey dot, bar 28 px
+      with "Disconnected", "Client 3.0.0-beta.1", the ID and Copy; connected ->
+      the server's name and a green dot, "Connected as Pill Check", "1ms",
+      "Not encrypted"; the switcher lists the three saved entries with a tick on
+      the active one, Disconnect and Add a server…; clicking Disconnect returns
+      to the welcome screen with the pill back to "Not connected". Screenshot
+      reviewed.
+    - The text dumps in the check script showed mangled letters because of a
+      regex-escaping slip in the script, not in the app (the screenshot is
+      correct).
+
+  Next Step: PRD 19 C3 — server header and dropdown.

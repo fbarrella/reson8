@@ -2768,13 +2768,27 @@
     #status-bar {
       display: flex;
       align-items: center;
-      padding: 4px 12px;
-      background: var(--bg-tertiary);
-      border-top: 1px solid var(--border);
+      justify-content: space-between;
+      height: 28px;
+      padding: 0 12px;
+      background: var(--color-bg);
+      border-top: 1px solid var(--color-divider);
       font-size: 11px;
-      color: var(--text-secondary);
+      color: var(--color-neutral-400);
       flex-shrink: 0;
       gap: 12px;
+    }
+
+    #status-bar > div {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    #status-client-version {
+      color: var(--color-neutral-500);
+      white-space: nowrap;
     }
 
     #status-bar .status-dot {
@@ -2789,8 +2803,7 @@
     }
 
     #status-bar .status-text {
-      flex: 1;
-      color: var(--danger);
+      color: var(--color-neutral-400);
     }
 
     #status-bar .status-text.connected {
@@ -4931,6 +4944,37 @@
       text-overflow: ellipsis;
     }
 
+    .menu-item.has-avatar {
+      height: 44px;
+    }
+
+    .menu-item-text {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      min-width: 0;
+      line-height: 1.25;
+    }
+
+    .menu-item-text .menu-item-label {
+      flex: none;
+    }
+
+    .menu-item-sub {
+      font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+      font-size: 11px;
+      color: var(--color-neutral-500);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .menu-item-check {
+      color: var(--color-accent);
+      font-size: 14px;
+      flex-shrink: 0;
+    }
+
     .menu-item-hint {
       flex-shrink: 0;
       font-size: 11px;
@@ -6024,6 +6068,7 @@
       <span class="conn-security" id="conn-security" hidden></span>
     </div>
     <div id="status-instance-area">
+      <span id="status-client-version"></span>
       <span id="status-instance"></span>
       <button id="btn-copy-id" title="Copy Instance ID">Copy</button>
     </div>

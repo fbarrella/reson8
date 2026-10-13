@@ -1431,6 +1431,11 @@ function clearServerSummary(): void {
  * the string.
  */
 function updateWindowTitle(): void {
+    try {
+        renderServerPill(); // PRD 19 C2: the title-bar pill follows the same inputs
+    } catch {
+        /* called before the saved-servers state exists (script start-up) */
+    }
     const base = connectedServerName ? `Reson8 - ${connectedServerName}` : "Reson8";
     document.title = isSharingScreen ? `🔴 ${base}` : base;
 }
@@ -3104,6 +3109,49 @@ function onSavedServerDisconnected(): void {
     if (next) setTimeout(() => connectSavedServer(next), 50); // after the disconnect fully settled
 }
 
+// ── Title-bar server pill and switcher (PRD 19 C2) ───────────────────────────
+
+/** Reflects the connection in the pill: "Not connected", or the server's name with a green dot. */
+function renderServerPill(): void {
+    const text = document.getElementById("server-pill-text");
+    const dot = document.getElementById("server-pill-dot");
+    if (!text || !dot) return;
+    const saved = activeSavedServerId ? savedServerById(activeSavedServerId) : undefined;
+    text.textContent = isConnected
+        ? connectedServerName || saved?.name || (currentConnection ? displayAddress(currentConnection.host, currentConnection.port) : "Connected")
+        : "Not connected";
+    dot.classList.toggle("connected", isConnected);
+}
+
+/** The popover under the pill: saved servers (active ticked), Disconnect, Add a server… */
+function openServerSwitcher(): void {
+    const pill = document.getElementById("server-pill") as HTMLElement;
+    const rect = pill.getBoundingClientRect();
+    const items: MenuItem[] = [];
+    if (savedServers.length > 0) {
+        items.push({ heading: "Servers" });
+        for (const entry of savedServers) {
+            items.push({
+                label: entry.name,
+                sublabel: entry.address,
+                avatar: { name: entry.name, url: entry.iconThumb ?? entry.iconUrl },
+                checked: isConnected && activeSavedServerId === entry.id,
+                onClick: () => connectSavedServer(entry.id),
+            });
+        }
+        items.push({ divider: true });
+    }
+    if (isConnected) {
+        items.push({ label: "Disconnect", icon: "ph-plugs", danger: true, onClick: () => api.disconnect() });
+    }
+    items.push({
+        label: "Add a server…",
+        icon: "ph-plus",
+        onClick: () => (document.getElementById("rail-add") as HTMLButtonElement).click(),
+    });
+    openMenu(items, rect.left, rect.bottom + 6, { anchor: pill });
+}
+
 /** One-time move of the single remembered server (v2.7.0 and older) into the list. */
 function migrateLegacyRememberedServer(): void {
     try {
@@ -3167,6 +3215,7 @@ function initSavedServers(): void {
             if (e.key === "Enter") void startConnect();
         });
     }
+    document.getElementById("server-pill")?.addEventListener("click", () => openServerSwitcher());
     document.getElementById("rail-add")?.addEventListener("click", () => {
         if (isConnected) {
             // Adding another server: disconnect first, then land on the empty form.
@@ -3689,6 +3738,12 @@ type MenuItem =
           hint?: string;
           danger?: boolean;
           disabled?: boolean;
+          /** A second line under the label (monospace) — the server switcher's address. */
+          sublabel?: string;
+          /** A leading server-style avatar instead of an icon (PRD 19 C2). */
+          avatar?: { name: string; url?: string | null };
+          /** A trailing tick (the active entry). */
+          checked?: boolean;
       }
     | { heading: string }
     | { divider: true }
@@ -3808,7 +3863,10 @@ function openMenu(
             btn.className = "menu-item" + (item.danger ? " danger" : "");
             btn.setAttribute("role", "menuitem");
             btn.tabIndex = -1;
-            if (item.icon) {
+            if (item.avatar) {
+                btn.classList.add("has-avatar");
+                btn.appendChild(serverAvatarElement(item.avatar.name, item.avatar.url, 30));
+            } else if (item.icon) {
                 const ic = document.createElement("i");
                 ic.className = `ph ${item.icon} menu-item-icon`;
                 ic.setAttribute("aria-hidden", "true");
@@ -3817,7 +3875,23 @@ function openMenu(
             const lab = document.createElement("span");
             lab.className = "menu-item-label";
             lab.textContent = item.label;
-            btn.appendChild(lab);
+            if (item.sublabel) {
+                const text = document.createElement("span");
+                text.className = "menu-item-text";
+                const sub = document.createElement("span");
+                sub.className = "menu-item-sub";
+                sub.textContent = item.sublabel;
+                text.append(lab, sub);
+                btn.appendChild(text);
+            } else {
+                btn.appendChild(lab);
+            }
+            if (item.checked) {
+                const tick = document.createElement("i");
+                tick.className = "ph ph-check menu-item-check";
+                tick.setAttribute("aria-hidden", "true");
+                btn.appendChild(tick);
+            }
             if (item.hint) {
                 const hint = document.createElement("span");
                 hint.className = "menu-item-hint";
@@ -4990,6 +5064,7 @@ api.on("connected", (data: { serverId: string; instanceId: string; secure?: bool
     document.body.classList.add("is-connected");
     document.body.classList.remove("is-approving");
     onSavedServerConnected(); // PRD 19 C1
+    renderServerPill(); // PRD 19 C2
     statusDot.classList.add("connected");
     statusText.textContent = `Connected as ${nicknameInput.value.trim() || "User"}`;
     statusText.classList.add("connected");
@@ -5102,6 +5177,7 @@ api.on("disconnected", (data?: { reason?: string }) => {
     serverPasswordInput.disabled = false;
     document.body.classList.remove("is-connected", "is-approving");
     onSavedServerDisconnected(); // PRD 19 C1
+    renderServerPill(); // PRD 19 C2
     renderConnectionSecurity(); // isConnected is false → hides the lock and the warning (PRD 18.3)
     hideApprovalScreen(); // PRD 18.8
     pendingApprovals = [];
@@ -13542,6 +13618,8 @@ btnUpdateNotes.addEventListener("click", async () => {
 
 api.getAppVersion().then((version) => {
     aboutVersion.textContent = `Version ${version}`;
+    const clientVersion = document.getElementById("status-client-version");
+    if (clientVersion) clientVersion.textContent = `Client ${version}`; // PRD 19 C2
     setUpdateState({ current: version });
     checkForWhatsNew(version);
 });
