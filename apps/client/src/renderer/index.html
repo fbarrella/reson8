@@ -5,12 +5,15 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy"
-    content="default-src 'self'; script-src 'self' blob:; connect-src 'self' file: ws: wss: http: https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; media-src 'self' blob: http: https: reson8-media:; img-src 'self' blob: http: https: data:; frame-src https:;">
+    content="default-src 'self'; script-src 'self' blob:; connect-src 'self' file: ws: wss: http: https:; style-src 'self' 'unsafe-inline'; font-src 'self'; media-src 'self' blob: http: https: reson8-media:; img-src 'self' blob: http: https: data:; frame-src https:;">
   <title>Reson8</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <!-- Vendored Noto Color Emoji (PRD 15.8) — same relative-path convention as the sound alerts / deepfilternet assets -->
   <link href="../../assets/fonts/noto-color-emoji/noto-color-emoji.css" rel="stylesheet">
+  <!-- Vendored Inter (PRD 19 F2) — replaces the Google Fonts CDN; the emoji family stays first in --font -->
+  <link href="../../assets/fonts/inter/inter.css" rel="stylesheet">
+  <!-- Vendored Phosphor icons, regular + fill (PRD 19 F2) -->
+  <link href="../../assets/icons/phosphor/regular/style.css" rel="stylesheet">
+  <link href="../../assets/icons/phosphor/fill/style.css" rel="stylesheet">
   <style>
     /* ── Reset & Variables ─────────────────────────────────────────────── */
     *,
@@ -2867,6 +2870,21 @@
       align-items: center;
       flex-shrink: 0;
       color: var(--text-muted);
+    }
+
+    /* Phosphor glyph sizes (PRD 19 F2). */
+    .ch-muted-icon .ph,
+    .tab-muted-icon .ph,
+    .occ-local-muted .ph {
+      font-size: 12px;
+    }
+
+    .ch-count-icon {
+      font-size: 10px;
+    }
+
+    .tab .tab-icon .ph {
+      font-size: 14px;
     }
 
     .tab.muted:not(.active) {

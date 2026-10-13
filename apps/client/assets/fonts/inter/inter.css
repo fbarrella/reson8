@@ -1,0 +1,29 @@
+/*
+ * Inter, vendored (PRD 19 F2) — the variable WOFF2 builds from the official
+ * release, so no request leaves the app for fonts.
+ *
+ *   Source:  https://github.com/rsms/inter/releases/tag/v4.1  (Inter-4.1.zip, web/)
+ *   Version: 4.1
+ *   License: SIL Open Font License 1.1 (LICENSE.txt in this folder)
+ *
+ *   SHA-256  InterVariable.woff2         693b77d4f32ee9b8bfc995589b5fad5e99adf2832738661f5402f9978429a8e3
+ *   SHA-256  InterVariable-Italic.woff2  e564f652916db6c139570fefb9524a77c4d48f30c92928de9db19b6b5c7a262a
+ *
+ * Relative URLs, like the emoji font next to it, so the same path works in dev
+ * and inside the packaged app.asar.
+ */
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("./InterVariable.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Inter";
+  font-style: italic;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("./InterVariable-Italic.woff2") format("woff2");
+}

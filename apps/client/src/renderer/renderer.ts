@@ -2326,11 +2326,10 @@ function refreshTabUnread(channelId: string): void {
 }
 
 /**
- * Bell-with-a-slash for a muted channel (PRD 19 B2). An inline SVG until F2
- * vendors Phosphor, which swaps it for `ph-bell-slash`.
+ * Bell-with-a-slash for a muted channel (PRD 19 B2), a vendored Phosphor
+ * glyph (F2).
  */
-const BELL_SLASH_ICON_SVG =
-    `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13.73 21a2 2 0 0 1-3.46 0"/><path d="M18.63 13A17.89 17.89 0 0 1 18 8"/><path d="M6.26 6.26A5.86 5.86 0 0 0 6 8c0 7-3 9-3 9h14"/><path d="M18 8a6 6 0 0 0-9.33-5"/><line x1="1" y1="1" x2="23" y2="23"/></svg>`;
+const BELL_SLASH_ICON_HTML = `<i class="ph ph-bell-slash" aria-hidden="true"></i>`;
 
 /** Adds or removes the bell-slash inside `host`, right after `afterSelector` (or at the end). */
 function setMutedIcon(host: Element, muted: boolean, iconClass: string, afterSelector: string): void {
@@ -2344,7 +2343,7 @@ function setMutedIcon(host: Element, muted: boolean, iconClass: string, afterSel
     icon.className = iconClass;
     icon.title = "Muted";
     icon.setAttribute("aria-label", "Muted");
-    icon.innerHTML = BELL_SLASH_ICON_SVG;
+    icon.innerHTML = BELL_SLASH_ICON_HTML;
     const anchor = host.querySelector(afterSelector);
     if (anchor) anchor.after(icon);
     else host.appendChild(icon);
@@ -3072,11 +3071,11 @@ function renderChannel(node: TreeNode, siblings: TreeNode[]): HTMLDivElement {
 
     const count = node.occupants.length;
     // Count pill (PRD 19 B10): a person icon before the number and a tooltip.
-    // Inline SVG until F2 swaps in Phosphor's ph-user.
+    // A vendored Phosphor glyph (F2).
     const countBadge =
         count > 0
             ? `<span class="ch-count" title="${count === 1 ? "1 person connected" : `${count} people connected`}">` +
-              `<svg class="ch-count-icon" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>${count}</span>`
+              `<i class="ph ph-user ch-count-icon" aria-hidden="true"></i>${count}</span>`
             : "";
 
     // Session timer badge for active voice sessions. Text is computed
@@ -3265,7 +3264,7 @@ const OCC_DEAFENED_ICON =
 // the occupant (PRD 4.1/4.2's "Mute Locally"), distinct from the red
 // server-broadcast mute icon since only the local viewer sees this one.
 const OCC_LOCALLY_MUTED_ICON =
-    `<svg class="occ-voice-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" title="Muted for you only"><line x1="1" y1="1" x2="23" y2="23"/><path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"/><path d="M17 16.95A7 7 0 0 1 5 12v-2M19 10v2a7 7 0 0 1-.11 1.23"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>`;
+    `<i class="ph ph-microphone-slash occ-voice-icon" title="Muted for you only" aria-hidden="true"></i>`;
 
 // Client-local (never sent to the server) per-remote-user volume/mute overrides —
 // see PRD 4.1/4.2. Persisted per target userId so a preference sticks across
@@ -5812,7 +5811,7 @@ function openDmTab(
     const tabEl = document.createElement("div");
     tabEl.className = "tab";
     tabEl.dataset.tabId = tabKey;
-    fillTabElement(tabEl, "✉️", nickname);
+    fillTabElement(tabEl, `<i class="ph ph-at" aria-hidden="true"></i>`, nickname);
 
     tabEl.addEventListener("click", (e) => {
         if ((e.target as HTMLElement).classList.contains("tab-close")) {

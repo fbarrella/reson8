@@ -2156,3 +2156,57 @@ Feature/Fix: Nocturne tokens, legacy names aliased (PRD 19 F1)
       item; shapes and spacing change in later items.
 
   Next Step: PRD 19 F2 — vendored Inter and Phosphor.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Vendored Inter and Phosphor icons (PRD 19 F2)
+
+  Problem: Inter came from the Google Fonts CDN (a request leaves the app on
+  every launch, and the CSP allowed two external hosts); there was no icon font
+  and B2/B9/B10 used temporary inline SVGs.
+
+  Solution:
+    - Inter 4.1 (official release, rsms/inter): InterVariable.woff2 and
+      InterVariable-Italic.woff2 + LICENSE.txt (OFL) + inter.css with relative
+      @font-face URLs under apps/client/assets/fonts/inter/; version and the
+      SHA-256 of each file are in the CSS header.
+    - Phosphor 2.1.2 (npm pack @phosphor-icons/web@2.1.2, NOT a dependency):
+      regular and fill weights under assets/icons/phosphor/, woff2 + woff only
+      (the ttf/svg entries were trimmed from the @font-face rules), MIT LICENSE,
+      README.md with the version, hashes and usage. The CSS references its fonts
+      by relative path; `.ph` only sets the icon font on the icon element, so
+      the emoji font stays first for text.
+    - index.html: both fonts.googleapis.com links removed; style-src and
+      font-src lost https://fonts.googleapis.com / https://fonts.gstatic.com
+      ('self' only); the three vendored stylesheets are linked after the emoji
+      CSS. --font stays 'Reson8 Emoji', 'Inter', ….
+    - Swapped to Phosphor: the muted-channel bell-slash (ph-bell-slash, B2),
+      the locally-muted occupant mark (ph-microphone-slash, B9), the voice
+      count pill's person (ph-user, B10) and the DM tab's icon (ph-at, was ✉️).
+      The server-broadcast mute/deafen SVGs and the kept-tab bookmark were not
+      in scope and stay.
+    - viewer.html: has no CSP and its own variables, and no icons yet — it is
+      linked to the vendored fonts when C10 adds its buttons.
+
+  Key Files Modified:
+    apps/client/assets/fonts/inter/* (NEW)
+    apps/client/assets/icons/phosphor/* (NEW)
+    apps/client/src/renderer/index.html
+    apps/client/src/renderer/renderer.ts
+
+  Verification:
+    - tsc client clean; lint exit 0.
+    - Real client (dev): document.fonts.check true for Inter, Phosphor and the
+      emoji family; body font-family "Reson8 Emoji", Inter, …; a .ph element
+      computes font-family Phosphor with a glyph; performance entries show no
+      non-file resource (nothing fetched from the network). Screenshot: the
+      DM tab shows "@", the muted Chat row the bell-slash, the Lobby pill the
+      person icon.
+    - PACKAGED build: `electron-builder --win --dir` (unsigned, output in the
+      scratchpad): the assets are inside app.asar (inter and both phosphor
+      folders); launching the packaged Reson8.exe with a debug port, Inter,
+      Phosphor and Phosphor-Fill all load (document.fonts: loaded). This is
+      the Windows analogue of the PRD's AppImage check; Linux/macOS packages
+      were not built here.
+
+  Next Step: PRD 19 F3 — one menu builder.
