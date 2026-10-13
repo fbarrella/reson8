@@ -1411,6 +1411,7 @@ function refreshServerSummary(): void {
         // flight must not leave the old server's facts behind.
         if (!isConnected || currentServerId !== serverIdAtRequest) return;
         serverSummary = summary;
+        renderServerHeader(); // PRD 19 C3: the online count and the icon
     }, 2000);
 }
 
@@ -1433,6 +1434,7 @@ function clearServerSummary(): void {
 function updateWindowTitle(): void {
     try {
         renderServerPill(); // PRD 19 C2: the title-bar pill follows the same inputs
+        renderServerHeader(); // PRD 19 C3
     } catch {
         /* called before the saved-servers state exists (script start-up) */
     }
@@ -3152,6 +3154,92 @@ function openServerSwitcher(): void {
     openMenu(items, rect.left, rect.bottom + 6, { anchor: pill });
 }
 
+// ── Server header and its menu (PRD 19 C3) ───────────────────────────────────
+
+/** The server's icon URL as the client may use it: the live summary's, else the saved entry's. */
+function currentServerIcon(): string | null {
+    if (serverSummary?.iconUrl) return serverSummary.iconUrl;
+    const saved = activeSavedServerId ? savedServerById(activeSavedServerId) : undefined;
+    return saved?.iconThumb ?? saved?.iconUrl ?? null;
+}
+
+/** Icon (or initials), name and "{host} · {N} online" in the sidebar header. */
+function renderServerHeader(): void {
+    const avatarSlot = document.getElementById("header-avatar");
+    const nameEl = document.getElementById("header-name");
+    const subEl = document.getElementById("header-sub");
+    const caret = document.getElementById("header-caret") as HTMLButtonElement | null;
+    if (!avatarSlot || !nameEl || !subEl || !caret) return;
+
+    if (!isConnected) {
+        avatarSlot.replaceChildren(serverAvatarElement("Reson8", null, 38));
+        nameEl.textContent = "Reson8";
+        subEl.textContent = "Not connected";
+        caret.disabled = true;
+        return;
+    }
+    const saved = activeSavedServerId ? savedServerById(activeSavedServerId) : undefined;
+    const name = connectedServerName || saved?.name || (currentConnection ? currentConnection.host : "Server");
+    avatarSlot.replaceChildren(serverAvatarElement(name, currentServerIcon(), 38));
+    nameEl.textContent = name;
+    const host = currentConnection ? displayAddress(currentConnection.host, currentConnection.port) : "";
+    subEl.textContent = `${host ? host + " · " : ""}${getOnlineCountForDisplay()} online`;
+    caret.disabled = false;
+}
+
+/** Which Settings pages the user can reach (PRD 19 C3, decision D3): any of these four rights. */
+function canSeeServerSettings(): boolean {
+    const flags = [PERM.ADMIN, PERM.MANAGE_ROLES, PERM.BAN_USER, PERM.MANAGE_EMOJIS];
+    const answers = flags.map((f) => hasPerm(f));
+    if (answers.every((a) => a === null)) return true; // an older server: today's behaviour (the pages gate themselves)
+    return answers.some((a) => a === true);
+}
+
+/** Opens Settings on the first server page the user may use. */
+function openServerSettings(): void {
+    void openSettingsPanel();
+    for (const id of ["settings-tab-server", "settings-tab-roles", "settings-tab-emojis"]) {
+        const btn = document.getElementById(id) as HTMLButtonElement | null;
+        if (btn && btn.style.display !== "none") {
+            btn.click();
+            return;
+        }
+    }
+}
+
+function openServerHeaderMenu(): void {
+    const caret = document.getElementById("header-caret") as HTMLElement;
+    const rect = caret.getBoundingClientRect();
+    const items: MenuItem[] = [];
+    // (About {server} joins this list with C4.)
+    items.push({
+        label: "Copy server address",
+        icon: "ph-copy",
+        onClick: () => {
+            const saved = activeSavedServerId ? savedServerById(activeSavedServerId) : undefined;
+            const address = saved?.address ?? serverUrlInput.value.trim();
+            void api.copyText(address).then((ok) => showToast(ok ? "Server address copied" : "Couldn't copy the address"));
+        },
+    });
+    items.push({ label: "Online users", icon: "ph-users", onClick: () => btnOnlineUsers.click() });
+
+    const canCreate = hasPerm(PERM.CREATE_CHANNEL);
+    const showSettings = canSeeServerSettings();
+    if (canCreate !== false || showSettings) items.push({ divider: true });
+    if (canCreate !== false) {
+        items.push({ label: "Create channel", icon: "ph-plus-circle", onClick: () => btnCreateChannel.click() });
+    }
+    if (showSettings) {
+        items.push({
+            label: "Server settings",
+            icon: "ph-sliders",
+            hint: pendingApprovals.length > 0 ? String(pendingApprovals.length) : undefined,
+            onClick: () => openServerSettings(),
+        });
+    }
+    openMenu(items, Math.max(8, rect.right - 220), rect.bottom + 6, { anchor: caret });
+}
+
 /** One-time move of the single remembered server (v2.7.0 and older) into the list. */
 function migrateLegacyRememberedServer(): void {
     try {
@@ -3216,6 +3304,8 @@ function initSavedServers(): void {
         });
     }
     document.getElementById("server-pill")?.addEventListener("click", () => openServerSwitcher());
+    document.getElementById("header-caret")?.addEventListener("click", () => openServerHeaderMenu());
+    renderServerHeader();
     document.getElementById("rail-add")?.addEventListener("click", () => {
         if (isConnected) {
             // Adding another server: disconnect first, then land on the empty form.
@@ -5065,6 +5155,7 @@ api.on("connected", (data: { serverId: string; instanceId: string; secure?: bool
     document.body.classList.remove("is-approving");
     onSavedServerConnected(); // PRD 19 C1
     renderServerPill(); // PRD 19 C2
+    renderServerHeader(); // PRD 19 C3
     statusDot.classList.add("connected");
     statusText.textContent = `Connected as ${nicknameInput.value.trim() || "User"}`;
     statusText.classList.add("connected");
@@ -5178,6 +5269,7 @@ api.on("disconnected", (data?: { reason?: string }) => {
     document.body.classList.remove("is-connected", "is-approving");
     onSavedServerDisconnected(); // PRD 19 C1
     renderServerPill(); // PRD 19 C2
+    renderServerHeader(); // PRD 19 C3
     renderConnectionSecurity(); // isConnected is false → hides the lock and the warning (PRD 18.3)
     hideApprovalScreen(); // PRD 18.8
     pendingApprovals = [];
@@ -8964,6 +9056,7 @@ async function updateOnlineDot(): Promise<void> {
     }
     const result = await api.getOnlineUsers();
     if (result.success && result.users) lastOnlineUsersCount = result.users.filter((u) => u.isOnline).length;
+    renderServerHeader(); // PRD 19 C3 (the fallback count for an older server)
     if (result.success && result.users && result.users.some((u) => u.isOnline)) {
         onlineDot.classList.add("active");
     } else {
@@ -9181,8 +9274,8 @@ function setPendingBadges(count: number): void {
         el.textContent = String(count);
         el.style.display = count > 0 ? "" : "none";
     }
-    const tip = count > 0 ? `${count} ${count === 1 ? "person is" : "people are"} waiting for approval` : "Server Settings";
-    (document.getElementById("btn-server-settings") as HTMLElement).title = tip;
+    const tip = count > 0 ? `${count} ${count === 1 ? "person is" : "people are"} waiting for approval` : "Server menu";
+    (document.getElementById("header-caret") as HTMLElement).title = tip;
 }
 
 /** Loads the queue (BAN_USER/ADMIN only — anyone else just gets a refusal and nothing shows). */

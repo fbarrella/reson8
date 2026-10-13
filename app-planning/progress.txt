@@ -2433,3 +2433,49 @@ Feature/Fix: Title-bar server pill, switcher and status bar (PRD 19 C2)
       correct).
 
   Next Step: PRD 19 C3 — server header and dropdown.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Server header and dropdown (PRD 19 C3)
+
+  Problem: the sidebar header was a small-caps "Channels" strip with three
+  icon buttons (online users, settings, create channel).
+
+  Solution (renderer + index.html):
+    - #tree-header is now: the 38 px server avatar (icon, else initials on
+      accent-900, through serverAvatarElement), the name, "{host} · {N} online"
+      (N from getOnlineCountForDisplay(), the one shared count) and a caret
+      button. renderServerHeader() runs on connected/disconnected, name changes
+      (updateWindowTitle), each summary refresh and the old-server fallback
+      count.
+    - Caret menu (F3's openMenu): Copy server address (the address as typed,
+      toast "Server address copied"), Online users (TEMPORARY: it opens the old
+      modal until C7's DM sidebar replaces it), a divider, Create channel
+      (only when hasPerm(CREATE_CHANNEL) !== false — V25: CREATE_CHANNEL, not
+      MANAGE_CHANNELS), Server settings (when the user has ADMIN, MANAGE_ROLES,
+      BAN_USER or MANAGE_EMOJIS — decision D3; on an older server it shows as
+      today; it opens Settings on the first server page they may use). About
+      {server} joins the list with C4.
+    - The pending-approvals badge element (#pending-badge-gear, id kept so
+      refreshPendingApprovals() is untouched) moved onto the caret; the menu
+      item carries the count; the caret's tooltip says who is waiting.
+    - #btn-online-users and #btn-create-channel stay in the DOM, hidden,
+      because their handlers drive the old online list and the create dialog.
+    - The rail's gear is the client Settings entry (its update dot is B12's).
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts, index.html
+
+  Verification:
+    - tsc client clean; lint exit 0.
+    - Real client (a throwaway "Mod" role with BAN_USER+Member, id role-ban,
+      inserted into the dev database for the test and left there): header
+      "Reson8 Server" / "127.0.0.1:9800 · 2 online" / initials "RS"; member menu
+      = Copy server address, Online users only; with BAN_USER (perms 135, live)
+      Server settings appears (with the pending count) and the badge sits on
+      the caret; admin menu adds Create channel; a third user joined and the
+      header count went 2 -> 3, equal to the summary's onlineCount, after the
+      2 s debounce; Copy server address toasts "Server address copied".
+      Screenshot taken (c3-header.png).
+
+  Next Step: PRD 19 C4 — About {server}.

@@ -663,16 +663,68 @@
     }
 
     #tree-header {
-      padding: 10px 12px;
-      font-weight: 600;
-      font-size: 11px;
-      text-transform: uppercase;
-      letter-spacing: 1px;
-      color: var(--text-muted);
-      border-bottom: 1px solid var(--border);
       display: flex;
-      justify-content: space-between;
       align-items: center;
+      gap: 10px;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--color-divider);
+      flex-shrink: 0;
+    }
+
+    #tree-header .header-text {
+      flex: 1;
+      min-width: 0;
+    }
+
+    #tree-header .header-name {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--color-text);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    #tree-header .header-sub {
+      font-size: 11.5px;
+      color: var(--color-neutral-500);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .header-caret {
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 28px;
+      height: 28px;
+      border: 1px solid transparent;
+      border-radius: var(--radius-md);
+      background: none;
+      color: var(--color-neutral-400);
+      font-size: 15px;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+
+    .header-caret:hover:not(:disabled),
+    .header-caret.menu-open {
+      background: var(--color-neutral-900);
+      color: var(--color-text);
+    }
+
+    .header-caret:disabled {
+      opacity: 0.35;
+      cursor: default;
+    }
+
+    .header-caret .pending-badge {
+      position: absolute;
+      top: -4px;
+      right: -4px;
+      margin: 0;
     }
 
     #btn-create-channel,
@@ -4492,12 +4544,7 @@
       vertical-align: middle;
     }
 
-    #btn-server-settings .pending-badge {
-      position: absolute;
-      top: -4px;
-      right: -4px;
-      margin: 0;
-    }
+
 
     .pending-approval-row {
       display: flex;
@@ -5883,7 +5930,7 @@
     <div id="rail-server-list"></div>
     <button type="button" class="rail-btn" id="rail-add" title="Add a server" aria-label="Add a server"><i class="ph ph-plus" aria-hidden="true"></i></button>
     <div class="rail-spacer"></div>
-    <button id="btn-server-settings" class="rail-btn" title="Settings" aria-label="Settings"><span class="pending-badge" id="pending-badge-gear" style="display:none;"></span><i class="ph ph-gear" aria-hidden="true"></i></button>
+    <button id="btn-server-settings" class="rail-btn" title="Settings" aria-label="Settings"><i class="ph ph-gear" aria-hidden="true"></i></button>
   </nav>
 
   <!-- ── Welcome screen: shown while not connected (PRD 19 C1) ───────── -->
@@ -5938,16 +5985,16 @@
     <!-- Left Pane: Channel Tree -->
     <div id="left-pane">
       <div id="tree-header">
-        <span>Channels</span>
-        <div style="display:flex; gap:4px;">
-          <button id="btn-online-users" title="Online Users" style="display:none;"><svg width="14" height="14"
-              viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
-              stroke-linejoin="round">
-              <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
-              <circle cx="9" cy="7" r="4" />
-              <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
-              <path d="M16 3.13a4 4 0 0 1 0 7.75" />
-            </svg><span class="online-indicator" id="online-dot"></span></button>
+        <span class="server-avatar-slot" id="header-avatar"></span>
+        <div class="header-text">
+          <div class="header-name" id="header-name">Reson8</div>
+          <div class="header-sub" id="header-sub"></div>
+        </div>
+        <button type="button" class="header-caret" id="header-caret" title="Server menu" aria-label="Server menu" aria-haspopup="menu" disabled><i class="ph ph-caret-down" aria-hidden="true"></i><span class="pending-badge" id="pending-badge-gear" style="display:none;"></span></button>
+        <!-- Kept (hidden) because their handlers drive the create-channel dialog and the online list;
+             the header menu and the DM sidebar (PRD 19 C3/C7) are the way in. -->
+        <div style="display:none;">
+          <button id="btn-online-users" title="Online Users"><span class="online-indicator" id="online-dot"></span></button>
           <button id="btn-create-channel" title="Create Channel">+</button>
         </div>
       </div>
