@@ -910,7 +910,7 @@ interface Reson8Api {
         orderedChannelIds: string[],
     ): Promise<{ success: boolean; error?: string }>;
     moveChannel(channelId: string, newParentId: string | null): Promise<{ success: boolean; error?: string }>;
-    deleteChannel(channelId: string): Promise<{ success: boolean; error?: string }>;
+    deleteChannel(channelId: string, children?: "keep" | "delete"): Promise<{ success: boolean; error?: string; deletedChannelIds?: string[] }>;
     sendMessage(channelId: string, content: string, attachments?: UploadResult[], replyToId?: string): Promise<{ success: boolean; messageId?: string; error?: string }>;
     deleteMessage(messageId: string): Promise<{ success: boolean; error?: string }>;
     editMessage(messageId: string, content: string): Promise<{ success: boolean; error?: string }>;
@@ -3738,6 +3738,9 @@ function attachChannelDragHandlers(el: HTMLElement, node: TreeNode, siblings: Tr
     });
 }
 
+/** Categories the user collapsed, for this session (PRD 19 C6). */
+const collapsedCategoryIds = new Set<string>();
+
 function renderCategory(node: TreeNode, siblings: TreeNode[]): HTMLDivElement {
     const category = document.createElement("div");
     category.className = "tree-category";
@@ -3755,11 +3758,16 @@ function renderCategory(node: TreeNode, siblings: TreeNode[]): HTMLDivElement {
     const label = document.createElement("div");
     label.className = "tree-category-label";
     label.innerHTML = `<span class="arrow">▾</span> ${escapeHtml(node.name)}${badge}`;
+    // A rebuilt tree (a rename, a presence change) must not re-expand what the
+    // user collapsed, so the state lives in a set keyed by channel id (PRD 19 C6).
+    if (collapsedCategoryIds.has(node.id)) category.classList.add("collapsed");
     label.addEventListener("click", () => {
-        category.classList.toggle("collapsed");
+        const collapsed = category.classList.toggle("collapsed");
+        if (collapsed) collapsedCategoryIds.add(node.id);
+        else collapsedCategoryIds.delete(node.id);
     });
     attachChannelDragHandlers(label, node, siblings);
-    attachChannelContextMenu(label, node);
+    attachCategoryContextMenu(label, node);
     category.appendChild(label);
 
     const children = document.createElement("div");
@@ -4070,6 +4078,237 @@ function attachChannelContextMenu(el: HTMLElement, node: TreeNode, canMute = fal
         openMenu(items, e.clientX, e.clientY, { anchor: el });
     });
 }
+
+// ── Category menu and dialogs (PRD 19 C6) ────────────────────────────────────
+
+/** Right-click on a category row: Manage category › Rename… / Delete…, for channel managers only. */
+function attachCategoryContextMenu(el: HTMLElement, node: TreeNode): void {
+    el.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        // `null` = an older server that can't say: show it and let the server refuse (as B6 does).
+        if (hasPerm(PERM.MANAGE_CHANNELS) === false) {
+            closeMenu();
+            return;
+        }
+        openMenu(
+            [
+                { heading: "Manage category" },
+                { label: "Rename category…", icon: "ph-pencil-simple", onClick: () => openRenameCategory(node.id) },
+                { divider: true },
+                { label: "Delete category…", icon: "ph-trash", danger: true, onClick: () => openDeleteCategory(node.id) },
+            ],
+            e.clientX,
+            e.clientY,
+            { anchor: el },
+        );
+    });
+}
+
+const renameCategoryModal = document.getElementById("rename-category-modal") as HTMLDivElement;
+const renameCategoryInput = document.getElementById("rename-category-input") as HTMLInputElement;
+const renameCategoryError = document.getElementById("rename-category-error") as HTMLDivElement;
+const btnRenameCategoryConfirm = document.getElementById("btn-rename-category-confirm") as HTMLButtonElement;
+let renameCategoryId: string | null = null;
+let renameCategoryOriginal = "";
+
+/** The names of every other category (nodes with children), lower-cased. */
+function otherCategoryNames(exceptId: string): Set<string> {
+    const names = new Set<string>();
+    const walk = (nodes: TreeNode[]): void => {
+        for (const n of nodes) {
+            if (n.children.length > 0 && n.id !== exceptId) names.add(n.name.trim().toLowerCase());
+            walk(n.children);
+        }
+    };
+    walk(currentTree);
+    return names;
+}
+
+/** Returns the inline error for the current input, or "" when it can be saved. */
+function validateRenameCategory(): string {
+    const name = renameCategoryInput.value.trim();
+    if (!name) return "Give the category a name.";
+    if (renameCategoryId && otherCategoryNames(renameCategoryId).has(name.toLowerCase())) {
+        return "Another category is already called that.";
+    }
+    return "";
+}
+
+function refreshRenameCategory(): void {
+    const error = validateRenameCategory();
+    renameCategoryError.textContent = error;
+    btnRenameCategoryConfirm.disabled = !!error || renameCategoryInput.value.trim() === renameCategoryOriginal;
+}
+
+function closeRenameCategory(): void {
+    renameCategoryModal.classList.remove("visible");
+    renameCategoryId = null;
+}
+
+function openRenameCategory(categoryId: string): void {
+    const node = findChannelNodeById(currentTree, categoryId);
+    if (!node) return;
+    renameCategoryId = categoryId;
+    renameCategoryOriginal = node.name;
+    renameCategoryInput.value = node.name;
+    refreshRenameCategory();
+    renameCategoryError.textContent = ""; // no complaint before the user has typed anything
+    renameCategoryModal.classList.add("visible");
+    renameCategoryInput.focus();
+    renameCategoryInput.select();
+}
+
+async function submitRenameCategory(): Promise<void> {
+    if (!renameCategoryId || btnRenameCategoryConfirm.disabled) return;
+    const id = renameCategoryId;
+    const name = renameCategoryInput.value.trim();
+    btnRenameCategoryConfirm.disabled = true;
+    const result = await api.updateChannel(id, { name });
+    if (result.success) {
+        closeRenameCategory();
+        return;
+    }
+    renameCategoryError.textContent = result.error ?? "The category couldn't be renamed.";
+    if (result.error && /permission|denied/i.test(result.error)) SoundAlert.play("insufficient_perms.mp3");
+    btnRenameCategoryConfirm.disabled = false;
+}
+
+renameCategoryInput.addEventListener("input", refreshRenameCategory);
+renameCategoryInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+        e.preventDefault();
+        void submitRenameCategory();
+    } else if (e.key === "Escape") {
+        e.preventDefault();
+        closeRenameCategory();
+    }
+});
+btnRenameCategoryConfirm.addEventListener("click", () => void submitRenameCategory());
+document.getElementById("btn-rename-category-cancel")?.addEventListener("click", closeRenameCategory);
+renameCategoryModal.addEventListener("click", (e) => {
+    if (e.target === renameCategoryModal) closeRenameCategory();
+});
+
+const deleteCategoryModal = document.getElementById("delete-category-modal") as HTMLDivElement;
+const btnDeleteCategoryConfirm = document.getElementById("btn-delete-category-confirm") as HTMLButtonElement;
+let deleteCategoryId: string | null = null;
+
+/** Every descendant of a node (not the node itself), as one flat list. */
+function descendantsOf(node: TreeNode): TreeNode[] {
+    const out: TreeNode[] = [];
+    const walk = (n: TreeNode): void => {
+        for (const c of n.children) {
+            out.push(c);
+            walk(c);
+        }
+    };
+    walk(node);
+    return out;
+}
+
+function deleteCategoryMode(): "keep" | "delete" {
+    const checked = deleteCategoryModal.querySelector<HTMLInputElement>('input[name="delete-category-mode"]:checked');
+    return checked?.value === "delete" ? "delete" : "keep";
+}
+
+/** Rebuilds the counts, the voice warning and the confirm label from the live tree. */
+function refreshDeleteCategory(): void {
+    const node = deleteCategoryId ? findChannelNodeById(currentTree, deleteCategoryId) : null;
+    if (!node) {
+        // The category vanished (someone else deleted it): nothing left to confirm.
+        deleteCategoryModal.classList.remove("visible");
+        deleteCategoryId = null;
+        return;
+    }
+    const all = descendantsOf(node);
+    const text = all.filter((c) => c.type === "TEXT").length;
+    const voice = all.filter((c) => c.type === "VOICE").length;
+    const oldServer = serverSummary === null;
+
+    (document.getElementById("delete-category-title") as HTMLElement).textContent = `Delete ${node.name}?`;
+    const summary = document.getElementById("delete-category-summary") as HTMLElement;
+    if (all.length === 0) {
+        summary.textContent = "The category is empty, so nothing else changes.";
+    } else {
+        const t = `${text} text ${text === 1 ? "channel" : "channels"}`;
+        const v = `${voice} voice ${voice === 1 ? "channel" : "channels"}`;
+        summary.textContent = `It holds ${t} and ${v}. Choose what happens to them.`;
+    }
+    (document.getElementById("delete-category-options") as HTMLElement).style.display = all.length === 0 ? "none" : "";
+    // An older server has no "delete the subtree" mode, so the option isn't offered.
+    (document.getElementById("delete-category-card-delete") as HTMLElement).style.display = oldServer ? "none" : "";
+    (document.getElementById("delete-category-old-note") as HTMLElement).style.display = oldServer && all.length > 0 ? "" : "none";
+    if (oldServer) {
+        const keep = deleteCategoryModal.querySelector<HTMLInputElement>('input[value="keep"]');
+        if (keep) keep.checked = true;
+    }
+
+    const mode = all.length === 0 ? "keep" : deleteCategoryMode();
+    document.getElementById("delete-category-card-keep")?.classList.toggle("selected", mode === "keep");
+    document.getElementById("delete-category-card-delete")?.classList.toggle("selected", mode === "delete");
+
+    const voicePeople = all.reduce((sum, c) => sum + (c.type === "VOICE" ? c.occupants.length : 0), 0);
+    const voiceNote = document.getElementById("delete-category-voice") as HTMLElement;
+    if (voicePeople > 0 && all.length > 0) {
+        voiceNote.textContent =
+            `${voicePeople} ${voicePeople === 1 ? "person is" : "people are"} in its voice channels right now and will be disconnected. ` +
+            `This only applies if the channels are deleted.`;
+        voiceNote.style.display = "";
+    } else {
+        voiceNote.style.display = "none";
+    }
+
+    btnDeleteCategoryConfirm.textContent =
+        mode === "delete" && all.length > 0 ? `Delete category and ${all.length} ${all.length === 1 ? "channel" : "channels"}` : "Delete category";
+}
+
+async function openDeleteCategory(categoryId: string): Promise<void> {
+    if (!findChannelNodeById(currentTree, categoryId)) return;
+    // A summary that is still missing right after connect would wrongly look like an older server.
+    if (serverSummary === null && isConnected) {
+        const fresh = await api.getServerSummary();
+        if (fresh) serverSummary = fresh;
+    }
+    deleteCategoryId = categoryId;
+    const keep = deleteCategoryModal.querySelector<HTMLInputElement>('input[value="keep"]');
+    if (keep) keep.checked = true;
+    refreshDeleteCategory();
+    deleteCategoryModal.classList.add("visible");
+}
+
+function closeDeleteCategory(): void {
+    deleteCategoryModal.classList.remove("visible");
+    deleteCategoryId = null;
+}
+
+deleteCategoryModal.addEventListener("change", () => refreshDeleteCategory());
+document.getElementById("btn-delete-category-cancel")?.addEventListener("click", closeDeleteCategory);
+deleteCategoryModal.addEventListener("click", (e) => {
+    if (e.target === deleteCategoryModal) closeDeleteCategory();
+});
+deleteCategoryModal.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeDeleteCategory();
+});
+btnDeleteCategoryConfirm.addEventListener("click", async () => {
+    if (!deleteCategoryId) return;
+    const id = deleteCategoryId;
+    const node = findChannelNodeById(currentTree, id);
+    const hasChildren = !!node && node.children.length > 0;
+    const mode = hasChildren ? deleteCategoryMode() : undefined;
+    btnDeleteCategoryConfirm.disabled = true;
+    const result = await api.deleteChannel(id, serverSummary === null ? undefined : mode);
+    btnDeleteCategoryConfirm.disabled = false;
+    if (result.success) {
+        closeDeleteCategory();
+        log("Category deleted", "success");
+        SoundAlert.play("channel_deleted.mp3");
+    } else {
+        log(`Failed to delete category: ${result.error}`, "error");
+        if (result.error && /permission|denied/i.test(result.error)) SoundAlert.play("insufficient_perms.mp3");
+        closeDeleteCategory();
+    }
+});
 
 // Inline SVGs shown next to an occupant's name when they've muted or deafened
 // themselves, so it doesn't look like they're simply ignoring everyone else.
@@ -5764,6 +6003,7 @@ api.on("presence", (data: { channelId: string; occupants: any[]; sessionStartedA
     updateOccupants(data.channelId, data.occupants);
     // A delete dialog that is open for this channel shows the new head count (PRD 19 B7).
     if (pendingDeleteChannelId === data.channelId) refreshDeleteModalAffected();
+    if (deleteCategoryId) refreshDeleteCategory(); // PRD 19 C6: the voice line stays live
 
     // Detect user join/leave in YOUR current voice channel
     if (isInVoice && data.channelId === currentChannelId) {

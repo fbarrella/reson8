@@ -2816,6 +2816,91 @@
       box-shadow: 0 4px 40px rgba(0, 0, 0, 0.5);
     }
 
+    /* ── Category dialogs (PRD 19 C6) ─────────────────────────────────── */
+    .cat-modal {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0, 0, 0, 0.6);
+      -webkit-app-region: no-drag;
+    }
+
+    .cat-modal.visible {
+      display: flex;
+    }
+
+    .cat-dialog {
+      max-width: calc(100vw - 32px);
+    }
+
+    .cat-error {
+      min-height: 18px;
+      margin-top: 6px;
+      font-size: 12px;
+      color: var(--color-danger-text);
+    }
+
+    .dialog label.cat-card {
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+      margin: 0 0 var(--space-3);
+      padding: 12px;
+      border: 1px solid var(--color-neutral-700);
+      border-radius: var(--radius-md);
+      cursor: pointer;
+    }
+
+    .cat-card input {
+      margin-top: 3px;
+    }
+
+    .cat-card-text {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .cat-card-title {
+      font-size: 13.5px;
+      font-weight: 500;
+      color: var(--color-text);
+    }
+
+    .cat-card-desc {
+      font-size: 12px;
+      color: var(--color-neutral-400);
+    }
+
+    .cat-card-keep.selected {
+      border-color: var(--color-accent);
+      box-shadow: 0 0 0 1px var(--color-accent);
+    }
+
+    .cat-card-delete.selected {
+      border-color: var(--color-danger-border);
+      box-shadow: 0 0 0 1px var(--color-danger-border);
+    }
+
+    .cat-note {
+      margin: 0 0 var(--space-3);
+      font-size: 12px;
+      color: var(--color-neutral-400);
+    }
+
+    .cat-voice-note {
+      margin: 0 0 var(--space-3);
+      padding: 8px 10px;
+      border: 1px solid #6b5316;
+      border-radius: var(--radius-md);
+      background: rgba(234, 179, 8, 0.08);
+      font-size: 12.5px;
+      color: #e8c15a;
+    }
+
     /* ── Server icon dialog (PRD 19 C5) ───────────────────────────────── */
     #server-icon-modal {
       display: none;
@@ -6529,6 +6614,50 @@
       <div class="modal-actions">
         <button class="btn btn-secondary" id="btn-rename-cancel">Cancel</button>
         <button class="btn btn-primary" id="btn-rename-confirm">Rename</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Category dialogs (PRD 19 C6) ─────────────────────────────────── -->
+  <div id="rename-category-modal" class="cat-modal" role="dialog" aria-modal="true" aria-labelledby="rename-category-title">
+    <div class="dialog cat-dialog" style="width:400px;">
+      <h3 class="dialog-title" id="rename-category-title">Rename category</h3>
+      <p class="dialog-subtitle">Its channels stay where they are.</p>
+      <label for="rename-category-input">Category name</label>
+      <input type="text" id="rename-category-input" class="input" maxlength="32" autocomplete="off">
+      <div id="rename-category-error" class="cat-error" role="alert"></div>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" id="btn-rename-category-cancel">Cancel</button>
+        <button class="btn btn-primary" id="btn-rename-category-confirm" disabled>Rename</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="delete-category-modal" class="cat-modal" role="dialog" aria-modal="true" aria-labelledby="delete-category-title">
+    <div class="dialog cat-dialog" style="width:460px;">
+      <h3 class="dialog-title" id="delete-category-title">Delete category?</h3>
+      <p class="dialog-subtitle" id="delete-category-summary"></p>
+      <div id="delete-category-options">
+        <label class="cat-card cat-card-keep selected" id="delete-category-card-keep">
+          <input type="radio" name="delete-category-mode" value="keep" checked>
+          <span class="cat-card-text">
+            <span class="cat-card-title">Keep the channels</span>
+            <span class="cat-card-desc">They move to the top of the list, outside any category, and nothing is lost.</span>
+          </span>
+        </label>
+        <label class="cat-card cat-card-delete" id="delete-category-card-delete">
+          <input type="radio" name="delete-category-mode" value="delete">
+          <span class="cat-card-text">
+            <span class="cat-card-title">Delete the channels too</span>
+            <span class="cat-card-desc">Every message, pin and attachment in them is deleted for everyone. This can't be undone.</span>
+          </span>
+        </label>
+      </div>
+      <p id="delete-category-old-note" class="cat-note" style="display:none;">This server is on an older version, so its channels always move to the top of the list.</p>
+      <p id="delete-category-voice" class="cat-voice-note" style="display:none;"></p>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" id="btn-delete-category-cancel">Cancel</button>
+        <button class="btn btn-danger" id="btn-delete-category-confirm">Delete category</button>
       </div>
     </div>
   </div>

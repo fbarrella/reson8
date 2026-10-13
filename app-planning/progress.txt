@@ -2571,3 +2571,55 @@ Feature/Fix: Server icon UI (PRD 19 C5)
       (the cropper object exists; same code path as the server dialog).
 
   Next Step: PRD 19 C6 — category menu and rename/delete dialogs.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Category menu, rename and delete dialogs (PRD 19 C6)
+
+  Problem: a category (a channel with children) shared the channel menu and
+  the plain delete confirmation, so there was no way to choose what happens to
+  its channels, and a rebuilt tree re-expanded every collapsed category.
+
+  Solution:
+    - A dedicated category menu (attachCategoryContextMenu): "Manage
+      category", Rename category…, divider, Delete category…; hidden when
+      hasPerm(MANAGE_CHANNELS) is false (null = older server: shown, the
+      server refuses, as B6 does).
+    - Rename dialog (400 px, 32 chars): inline errors for empty and for a
+      duplicate among categories (case-insensitive); Enter saves, Esc
+      cancels; the button is disabled with an error or an unchanged name.
+      The server has no name length limit beyond non-empty, so 32 stands.
+    - Delete dialog (460 px): "Delete {name}?", live counts of text and voice
+      descendants from currentTree, two radio cards (Keep — accent ring,
+      default; Delete the channels too — red ring), the amber line with the
+      number of people in its voice channels (recomputed on every presence
+      event), "nothing else changes" for an empty category, the confirm label
+      "Delete category" / "Delete category and {n} channels". Sends
+      DELETE_CHANNEL { children } (preload.deleteChannel gained the param).
+    - Old-server guard: serverSummary === null (after one fresh fetch) hides
+      the "delete the channels too" card and shows the note; the request then
+      carries no children mode.
+    - Collapsed state: a session-long Set (collapsedCategoryIds) applied in
+      renderCategory — the tree used to re-expand every category on each
+      rebuild.
+
+  Key Files Modified:
+    apps/client/src/preload.ts
+    apps/client/src/renderer/renderer.ts, index.html
+
+  Verification:
+    - tsc client clean; lint exit 0.
+    - Real client as a channel manager: menu = Manage category / Rename
+      category… / Delete category…; collapsing then renaming kept the
+      category collapsed; empty, duplicate (General, gaming) and unchanged
+      names gave the right error/disabled state, a new name enabled Rename
+      and Enter saved it; the delete dialog showed "1 text channel and 1
+      voice channel", the amber "1 person is in…" line with a guest in voice
+      (gone when the guest left), the "…and 2 channels" label on the delete
+      card, and Keep moved both children to the top level; with the summary
+      missing the delete card was hidden and the note shown. Screenshot
+      reviewed; the radio/card layout was corrected after it.
+    - Not driven: "Delete the channels too" against the server end to end
+      (A6's server tests cover that branch).
+
+  Next Step: PRD 19 C7 — DM sidebar.

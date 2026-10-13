@@ -1017,13 +1017,14 @@ const api = {
 
     deleteChannel(
         channelId: string,
-    ): Promise<{ success: boolean; error?: string }> {
+        children?: "keep" | "delete",
+    ): Promise<{ success: boolean; error?: string; deletedChannelIds?: string[] }> {
         return new Promise((resolve) => {
             if (!socket?.connected) {
                 resolve({ success: false, error: "Not connected" });
                 return;
             }
-            socket.emit("DELETE_CHANNEL", { channelId }, resolve);
+            socket.emit("DELETE_CHANNEL", children ? { channelId, children } : { channelId }, resolve);
         });
     },
 
