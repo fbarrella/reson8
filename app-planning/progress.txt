@@ -3273,3 +3273,49 @@ Feature/Fix: Dialogs restyle (PRD 19 R5)
       6c–6g.
 
   Next Step: PRD 19 R6 — hard-coded colours and alias removal.
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Hard-coded colours and alias removal (PRD 19 R6)
+
+  Problem: after the Nocturne tokens landed (F1), the renderer still carried
+  ~150 colour literals (many of them the old light-blue accent and
+  pre-Nocturne reds/ambers) and every rule used the legacy alias names.
+
+  Solution:
+    - Every var(--bg-primary/-secondary/-tertiary/-input), --text-primary/
+      -secondary/-muted, --accent/-hover/-dim, --border, --success, --danger,
+      --warning, --radius, --voice-icon, --text-icon in index.html and
+      renderer.ts (inline styles and SVG strings) now names the token it
+      stood for; the alias block is deleted. --font and the --pin-* family
+      (not in the alias list) stay.
+    - Colour literals outside the token block are gone: rgba() becomes
+      color-mix(in srgb, var(token) N%, transparent) and hex values map to a
+      token — the old light-blue and indigo accents to --color-accent, the old
+      reds to --color-live, ambers to --color-warning(-text), greens to
+      --color-success, the stray darks to --color-bg / --color-surface mixes.
+      New tokens, documented in :root: --color-warning, --color-field (the
+      input background the --bg-input alias held), --color-black and
+      --color-white (overlays, shadows, text on solid colour).
+    - viewer.html: its own pre-Nocturne palette replaced by the Nocturne
+      subset it uses.
+    - Two SVG strings in renderer.ts now set stroke/fill through style="" so
+      var()/color-mix() are parsed as CSS.
+    - app-planning/phase19-hardcoded-colours.md (the F1 inventory) deleted.
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html, renderer.ts, viewer.html
+    app-planning/phase19-hardcoded-colours.md (deleted)
+
+  Verification:
+    - tsc client clean; lint exit 0; a script check: no alias use left in any
+      of the three files and no colour literal outside index.html's :root.
+    - Screenshot pass (welcome, chat with a reply and a preview card, the
+      voice room, the DM sidebar, Settings) — the same look as before; the
+      only intended shifts are places that still used the old light-blue
+      accent, now the Nocturne accent.
+    - The full TEST_STATES pass is part of the beta.3 gate (owner).
+
+  Next Step: end of P5 — the beta.3 gate (TEST_STATES checked or marked for
+  the owner), then /bump-version 3.0.0-beta.3, the AGENTS.md/README update
+  and condensing progress.txt into a Phase 19 block.

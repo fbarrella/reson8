@@ -7,15 +7,18 @@
   <link href="../../assets/icons/phosphor/regular/style.css" rel="stylesheet">
   <style>
     :root {
-      --bg-primary: #1a1a2e;
-      --bg-secondary: #16213e;
-      --text-primary: #e0e0e0;
-      --text-secondary: #a0a0b0;
-      --text-muted: #6a6a7a;
-      --accent: #4fc3f7;
-      --accent-hover: #29b6f6;
-      --border: #2a2a4a;
-      --danger: #e57373;
+      /* Nocturne tokens (PRD 19 F1/R6) — the subset this window uses. */
+      --color-bg: #161826;
+      --color-surface: #232532;
+      --color-text: #e9e9ed;
+      --color-neutral-400: #b2b6ca;
+      --color-neutral-500: #9397ab;
+      --color-accent: #9184d9;
+      --color-accent-400: #b5abfc;
+      --color-divider: color-mix(in srgb, #e9e9ed 16%, transparent);
+      --color-live: oklch(0.65 0.2 22);
+      --color-black: #000;
+      --color-white: #fff;
     }
 
     * {
@@ -27,8 +30,8 @@
       margin: 0;
       padding: 0;
       height: 100%;
-      background: #000;
-      color: var(--text-primary);
+      background: var(--color-black);
+      color: var(--color-text);
       font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       overflow: hidden;
     }
@@ -46,9 +49,9 @@
       gap: 8px;
       height: 38px;
       padding: 0 12px;
-      background: #161826;
-      border-bottom: 1px solid var(--border);
-      color: var(--text-primary);
+      background: var(--color-bg);
+      border-bottom: 1px solid var(--color-divider);
+      color: var(--color-text);
       font-size: 13px;
       flex-shrink: 0;
       -webkit-app-region: drag;
@@ -86,7 +89,7 @@
     #video-container {
       flex: 1;
       position: relative;
-      background: #000;
+      background: var(--color-black);
       display: flex;
       align-items: center;
       justify-content: center;
@@ -106,7 +109,7 @@
       align-items: center;
       justify-content: center;
       gap: 8px;
-      background: rgba(26, 26, 46, 0.92);
+      background: color-mix(in srgb, var(--color-bg) 92%, transparent);
       text-align: center;
       padding: 24px;
     }
@@ -118,16 +121,16 @@
     #status-title {
       font-size: 15px;
       font-weight: 600;
-      color: var(--text-primary);
+      color: var(--color-text);
     }
 
     #status-message {
       font-size: 13px;
-      color: var(--text-secondary);
+      color: var(--color-neutral-400);
     }
 
     #status-overlay.error #status-title {
-      color: var(--danger);
+      color: var(--color-live);
     }
 
     #controls-bar {
@@ -135,14 +138,14 @@
       align-items: center;
       gap: 12px;
       padding: 8px 14px;
-      background: var(--bg-secondary);
-      border-top: 1px solid var(--border);
+      background: var(--color-surface);
+      border-top: 1px solid var(--color-divider);
       flex-shrink: 0;
     }
 
     #controls-bar .nickname {
       font-size: 13px;
-      color: var(--text-secondary);
+      color: var(--color-neutral-400);
       margin-right: auto;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -152,7 +155,7 @@
     #controls-bar button {
       background: transparent;
       border: none;
-      color: var(--text-secondary);
+      color: var(--color-neutral-400);
       cursor: pointer;
       display: flex;
       align-items: center;
@@ -162,12 +165,12 @@
     }
 
     #controls-bar button:hover {
-      background: var(--border);
-      color: var(--text-primary);
+      background: var(--color-divider);
+      color: var(--color-text);
     }
 
     #controls-bar button.active {
-      color: var(--accent);
+      color: var(--color-accent);
     }
 
     /* Mute button: blue by default (sound is on), opaque grey once muted —
@@ -178,11 +181,11 @@
        `#controls-bar button`/`button.active` rules above, same reasoning
        as `#btn-exit-stream` below. */
     #controls-bar #btn-mute {
-      color: var(--accent);
+      color: var(--color-accent);
     }
 
     #controls-bar #btn-mute.muted {
-      color: var(--text-muted);
+      color: var(--color-neutral-500);
     }
 
     #btn-mute .icon-muted {
@@ -199,13 +202,13 @@
 
     #volume-slider {
       width: 110px;
-      accent-color: var(--accent);
+      accent-color: var(--color-accent);
     }
 
     #volume-readout {
       min-width: 38px;
       font-size: 12px;
-      color: var(--text-secondary);
+      color: var(--color-neutral-400);
       text-align: right;
     }
 
@@ -217,8 +220,8 @@
       width: auto;
       gap: 6px;
       padding: 6px 10px;
-      border: 1px solid var(--border);
-      color: var(--text-primary);
+      border: 1px solid var(--color-divider);
+      color: var(--color-text);
       font-size: 12px;
     }
 
@@ -231,13 +234,13 @@
       width: auto;
       gap: 6px;
       padding: 6px 10px;
-      border: 1px solid var(--danger);
-      color: var(--danger);
+      border: 1px solid var(--color-live);
+      color: var(--color-live);
     }
 
     #controls-bar #btn-exit-stream:hover {
-      background: var(--danger);
-      color: #fff;
+      background: var(--color-live);
+      color: var(--color-white);
     }
   </style>
 </head>

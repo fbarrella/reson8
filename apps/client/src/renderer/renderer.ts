@@ -4177,7 +4177,7 @@ function renderTree(tree: TreeNode[]): void {
 
     if (tree.length === 0) {
         channelTree.innerHTML = `
-            <div style="padding: 20px 12px; color: var(--text-muted); font-size: 12px; text-align: center;">
+            <div style="padding: 20px 12px; color: var(--color-neutral-500); font-size: 12px; text-align: center;">
                 No channels found
             </div>
         `;
@@ -4833,9 +4833,9 @@ btnDeleteCategoryConfirm.addEventListener("click", async () => {
 // Inline SVGs shown next to an occupant's name when they've muted or deafened
 // themselves, so it doesn't look like they're simply ignoring everyone else.
 const OCC_MUTED_ICON =
-    `<svg class="occ-voice-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" title="Muted"><line x1="1" y1="1" x2="23" y2="23"/><path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"/><path d="M17 16.95A7 7 0 0 1 5 12v-2M19 10v2a7 7 0 0 1-.11 1.23"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>`;
+    `<svg class="occ-voice-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" style="stroke: var(--color-live)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" title="Muted"><line x1="1" y1="1" x2="23" y2="23"/><path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"/><path d="M17 16.95A7 7 0 0 1 5 12v-2M19 10v2a7 7 0 0 1-.11 1.23"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>`;
 const OCC_DEAFENED_ICON =
-    `<svg class="occ-voice-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" title="Deafened"><line x1="1" y1="1" x2="23" y2="23"/><path d="M3 18v-6a9 9 0 0 1 15.34-6.36M21 12v2.5"/><path d="M21 16v2a2 2 0 0 1-2 2h-1"/><path d="M3 18v2a2 2 0 0 0 2 2h1v-4H4a1 1 0 0 0-1 1z"/></svg>`;
+    `<svg class="occ-voice-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" style="stroke: var(--color-live)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" title="Deafened"><line x1="1" y1="1" x2="23" y2="23"/><path d="M3 18v-6a9 9 0 0 1 15.34-6.36M21 12v2.5"/><path d="M21 16v2a2 2 0 0 1-2 2h-1"/><path d="M3 18v2a2 2 0 0 0 2 2h1v-4H4a1 1 0 0 0-1 1z"/></svg>`;
 // Same mic-slash shape as OCC_MUTED_ICON but in the muted text colour (PRD 19
 // B9: it was the accent) — shown only to this client when they've locally muted
 // the occupant (PRD 4.1/4.2's "Mute Locally"), distinct from the red
@@ -7352,7 +7352,7 @@ api.on("disconnected", (data?: { reason?: string }) => {
     resetDmSidebar(); // PRD 19 C7
     updateVoiceUI();
     channelTree.innerHTML = `
-        <div style="padding: 20px 12px; color: var(--text-muted); font-size: 12px; text-align: center;">
+        <div style="padding: 20px 12px; color: var(--color-neutral-500); font-size: 12px; text-align: center;">
             Connect to a server to see channels
         </div>
     `;
@@ -8095,7 +8095,7 @@ function createPreviewCard(data: LinkPreviewData): HTMLDivElement {
         // Play button overlay
         const playBtn = document.createElement("div");
         playBtn.className = "lpc-play-overlay";
-        playBtn.innerHTML = `<svg width="48" height="48" viewBox="0 0 48 48" fill="none"><circle cx="24" cy="24" r="24" fill="rgba(0,0,0,0.6)"/><polygon points="18,14 36,24 18,34" fill="white"/></svg>`;
+        playBtn.innerHTML = `<svg width="48" height="48" viewBox="0 0 48 48" fill="none"><circle cx="24" cy="24" r="24" style="fill: color-mix(in srgb, var(--color-black) 60%, transparent)"/><polygon points="18,14 36,24 18,34" fill="white"/></svg>`;
         mediaWrap.appendChild(playBtn);
 
         mediaWrap.addEventListener("click", (e) => {
@@ -8258,7 +8258,7 @@ function renderAdminUsers(users: any[]): void {
                     badge.style.borderColor = role.color;
                     if (userRoleIds.has(role.id)) {
                         badge.style.background = role.color;
-                        badge.style.color = "#fff";
+                        badge.style.color = "var(--color-white)";
                     }
                 }
 
@@ -12802,15 +12802,15 @@ const btnPttMode = document.getElementById("btn-ptt-mode") as HTMLButtonElement;
 
 function updatePttModeUI(): void {
     if (pttModeEnabled) {
-        btnPttMode.style.borderColor = "var(--accent)";
-        btnPttMode.style.color = "var(--accent)";
-        btnVoiceActivation.style.borderColor = "var(--border)";
-        btnVoiceActivation.style.color = "var(--text-secondary)";
+        btnPttMode.style.borderColor = "var(--color-accent)";
+        btnPttMode.style.color = "var(--color-accent)";
+        btnVoiceActivation.style.borderColor = "var(--color-divider)";
+        btnVoiceActivation.style.color = "var(--color-neutral-400)";
     } else {
-        btnVoiceActivation.style.borderColor = "var(--accent)";
-        btnVoiceActivation.style.color = "var(--accent)";
-        btnPttMode.style.borderColor = "var(--border)";
-        btnPttMode.style.color = "var(--text-secondary)";
+        btnVoiceActivation.style.borderColor = "var(--color-accent)";
+        btnVoiceActivation.style.color = "var(--color-accent)";
+        btnPttMode.style.borderColor = "var(--color-divider)";
+        btnPttMode.style.color = "var(--color-neutral-400)";
     }
 }
 

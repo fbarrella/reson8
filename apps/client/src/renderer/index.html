@@ -75,27 +75,14 @@
       --color-live: oklch(0.65 0.2 22);
       --color-warning-text: oklch(0.86 0.08 80);
       --color-warning-bg: color-mix(in oklch, oklch(0.82 0.1 80) 8%, transparent);
+      --color-warning: oklch(0.82 0.1 80);
+      /* Input fields: the background, lifted (was the --bg-input alias). */
+      --color-field: color-mix(in srgb, var(--color-bg) 60%, transparent);
+      /* Pure black and white, for overlays, shadows and text on solid colour
+         (PRD 19 R6: no colour literal outside this block). */
+      --color-black: #000;
+      --color-white: #fff;
 
-      /* ── Legacy names, aliased per the README's mapping table (PRD 19 F1).
-         Kept during the migration; R6 removes them. ─────────────────── */
-      --bg-primary: var(--color-bg);
-      --bg-secondary: var(--color-surface);
-      --bg-tertiary: var(--color-accent-900);
-      --bg-input: color-mix(in srgb, var(--color-bg) 60%, transparent);
-      --text-primary: var(--color-text);
-      --text-secondary: var(--color-neutral-400);
-      --text-muted: var(--color-neutral-500);
-      --accent: var(--color-accent);
-      --accent-hover: var(--color-accent-400);
-      --accent-dim: var(--color-accent-800);
-      --success: var(--color-success);
-      --danger: var(--color-live);
-      --warning: oklch(0.82 0.1 80);
-      --border: var(--color-divider);
-      /* Icons are no longer colour-coded by type. */
-      --voice-icon: var(--color-neutral-400);
-      --text-icon: var(--color-neutral-400);
-      --radius: var(--radius-md);
       --font: 'Reson8 Emoji', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
       /* Pinned message bar (PRD 15.5) — the amber family, retinted from the
          Nocturne warning amber (oklch 0.82 0.1 80) instead of the old #ffd54f. */
@@ -118,8 +105,8 @@
 
     body {
       font-family: var(--font);
-      background: var(--bg-primary);
-      color: var(--text-primary);
+      background: var(--color-bg);
+      color: var(--color-text);
       font-size: 13px;
       height: 100vh;
       overflow: hidden;
@@ -194,7 +181,7 @@
     }
 
     .server-pill-dot.failed {
-      background: var(--color-danger, #e5484d);
+      background: var(--color-danger, var(--color-live));
     }
 
     /* ── Integrated title bar (PRD 19 R7) ─────────────────────────────── */
@@ -236,7 +223,7 @@
       padding: 3px 10px;
       border: 1px solid var(--color-danger-border);
       border-radius: 999px;
-      background: color-mix(in srgb, var(--color-danger, #e5484d) 14%, transparent);
+      background: color-mix(in srgb, var(--color-danger, var(--color-live)) 14%, transparent);
       color: var(--color-danger-text);
       font-size: 12px;
       font-weight: 500;
@@ -261,7 +248,7 @@
       width: 7px;
       height: 7px;
       border-radius: 50%;
-      background: var(--color-danger, #e5484d);
+      background: var(--color-danger, var(--color-live));
     }
 
     /* ── Shell: rail | (welcome | main) ────────────────────────────────── */
@@ -417,7 +404,7 @@
     .welcome-logo {
       width: 52px;
       height: 52px;
-      filter: drop-shadow(0 0 18px rgba(245, 158, 11, 0.35));
+      filter: drop-shadow(0 0 18px color-mix(in srgb, var(--color-warning) 35%, transparent));
     }
 
     .welcome-title {
@@ -470,7 +457,7 @@
     }
 
     .welcome-form input#invite-code.invite-needed {
-      border-color: var(--warning);
+      border-color: var(--color-warning);
     }
 
     .welcome-remember {
@@ -748,7 +735,7 @@
     }
 
     .connect-steps li.warn {
-      color: #e8c15a;
+      color: var(--color-warning-text);
     }
 
     .connect-steps .spinning {
@@ -821,7 +808,7 @@
     .btn {
       padding: 5px 12px;
       border: none;
-      border-radius: var(--radius);
+      border-radius: var(--radius-md);
       font-size: 12px;
       font-family: var(--font);
       font-weight: 500;
@@ -830,17 +817,17 @@
     }
 
     .btn-connect {
-      background: var(--accent);
-      color: #000;
+      background: var(--color-accent);
+      color: var(--color-black);
     }
 
     .btn-connect:hover {
-      background: var(--accent-hover);
+      background: var(--color-accent-400);
     }
 
     .btn-disconnect {
-      background: var(--danger);
-      color: #fff;
+      background: var(--color-live);
+      color: var(--color-white);
     }
 
     .btn-disconnect:hover {
@@ -934,7 +921,7 @@
       padding: 7px 10px;
       border: 1px solid var(--color-divider);
       border-radius: var(--radius-md);
-      background: var(--bg-input);
+      background: var(--color-field);
       color: var(--color-text);
       font: inherit;
     }
@@ -1014,8 +1001,8 @@
     #left-pane {
       width: 280px;
       min-width: 220px;
-      background: var(--bg-secondary);
-      border-right: 1px solid var(--border);
+      background: var(--color-surface);
+      border-right: 1px solid var(--color-divider);
       display: flex;
       flex-direction: column;
       overflow: hidden;
@@ -1088,11 +1075,11 @@
 
     #btn-create-channel {
       background: none;
-      border: 1px solid var(--border);
-      color: var(--text-secondary);
+      border: 1px solid var(--color-divider);
+      color: var(--color-neutral-400);
       width: 22px;
       height: 22px;
-      border-radius: var(--radius);
+      border-radius: var(--radius-md);
       cursor: pointer;
       font-size: 14px;
       display: flex;
@@ -1102,8 +1089,8 @@
     }
 
     #btn-create-channel:hover {
-      border-color: var(--accent);
-      color: var(--accent);
+      border-color: var(--color-accent);
+      color: var(--color-accent);
     }
 
     #channel-tree {
@@ -1126,13 +1113,13 @@
       font-weight: 600;
       text-transform: uppercase;
       letter-spacing: 0.5px;
-      color: var(--text-muted);
+      color: var(--color-neutral-500);
       cursor: pointer;
       user-select: none;
     }
 
     .tree-category-label:hover {
-      color: var(--text-secondary);
+      color: var(--color-neutral-400);
     }
 
     .tree-category-label .arrow {
@@ -1149,8 +1136,8 @@
       align-items: center;
       font-size: 9px;
       font-weight: 700;
-      color: var(--text-muted);
-      border: 1px solid var(--border);
+      color: var(--color-neutral-500);
+      border: 1px solid var(--color-divider);
       border-radius: 3px;
       padding: 0 4px;
       margin-left: 6px;
@@ -1178,7 +1165,7 @@
     }
 
     .tree-channel:hover {
-      background: rgba(79, 195, 247, 0.08);
+      background: color-mix(in srgb, var(--color-accent) 8%, transparent);
     }
 
     .draggable-channel {
@@ -1190,13 +1177,13 @@
     }
 
     .draggable-channel.drag-over {
-      box-shadow: inset 0 2px 0 var(--accent);
-      background: rgba(79, 195, 247, 0.12);
+      box-shadow: inset 0 2px 0 var(--color-accent);
+      background: color-mix(in srgb, var(--color-accent) 12%, transparent);
     }
 
     .tree-channel.active {
-      background: var(--accent-dim);
-      color: #fff;
+      background: var(--color-accent-800);
+      color: var(--color-white);
     }
 
     /* The text channel whose chat tab is currently shown (PRD 16.3). One
@@ -1204,14 +1191,14 @@
        separate from .active, which only ever means "connected voice channel". */
     .tree-channel.viewing,
     .tree-channel.viewing:hover {
-      background: rgba(79, 195, 247, 0.12);
+      background: color-mix(in srgb, var(--color-accent) 12%, transparent);
     }
 
     .tree-channel .ch-viewing-icon {
       display: inline-flex;
       align-items: center;
       flex-shrink: 0;
-      color: var(--text-muted);
+      color: var(--color-neutral-500);
       opacity: 0.75;
     }
 
@@ -1221,11 +1208,11 @@
     }
 
     .tree-channel .ch-icon.voice {
-      color: var(--voice-icon);
+      color: var(--color-neutral-400);
     }
 
     .tree-channel .ch-icon.text {
-      color: var(--text-icon);
+      color: var(--color-neutral-400);
     }
 
     /* Custom uploaded text-channel icon (PRD 14.7) — same footprint as the
@@ -1255,15 +1242,15 @@
       align-items: center;
       gap: 3px;
       font-size: 10px;
-      color: var(--text-secondary);
-      background: rgba(255, 255, 255, 0.1);
+      color: var(--color-neutral-400);
+      background: color-mix(in srgb, var(--color-white) 10%, transparent);
       padding: 1px 5px;
       border-radius: 8px;
     }
 
     .tree-channel.unread .ch-name {
       font-weight: 700;
-      color: var(--text-primary);
+      color: var(--color-text);
     }
 
     /* Unread count pill (PRD 19 B1): the number, "99+" from 100, or a dot-sized
@@ -1277,7 +1264,7 @@
       gap: 6px;
       padding: 2px 12px 2px 40px;
       font-size: 12px;
-      color: var(--text-secondary);
+      color: var(--color-neutral-400);
       cursor: pointer;
     }
 
@@ -1285,15 +1272,15 @@
       width: 6px;
       height: 6px;
       border-radius: 50%;
-      background: var(--success);
+      background: var(--color-success);
       flex-shrink: 0;
       transition: box-shadow 0.2s ease, background 0.2s ease;
     }
 
     .tree-occupant.speaking .occ-dot {
-      background: var(--accent);
-      box-shadow: 0 0 0 3px rgba(79, 195, 247, 0.3),
-                  0 0 8px rgba(79, 195, 247, 0.4);
+      background: var(--color-accent);
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 30%, transparent),
+                  0 0 8px color-mix(in srgb, var(--color-accent) 40%, transparent);
       animation: speaking-pulse 1.2s ease-in-out infinite;
     }
 
@@ -1302,7 +1289,7 @@
       margin-left: 6px;
       font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
       font-size: 10px;
-      color: var(--text-muted);
+      color: var(--color-neutral-500);
     }
 
     .occ-voice-icon {
@@ -1311,24 +1298,24 @@
     }
 
     @keyframes speaking-pulse {
-      0%, 100% { box-shadow: 0 0 0 2px rgba(79, 195, 247, 0.3), 0 0 6px rgba(79, 195, 247, 0.3); }
-      50% { box-shadow: 0 0 0 4px rgba(79, 195, 247, 0.15), 0 0 12px rgba(79, 195, 247, 0.5); }
+      0%, 100% { box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 30%, transparent), 0 0 6px color-mix(in srgb, var(--color-accent) 30%, transparent); }
+      50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-accent) 15%, transparent), 0 0 12px color-mix(in srgb, var(--color-accent) 50%, transparent); }
     }
 
     .tree-occupant.speaking {
-      color: var(--accent);
+      color: var(--color-accent);
     }
 
     .session-timer {
       font-size: 9px;
-      color: var(--text-secondary);
+      color: var(--color-neutral-400);
       margin-left: 4px;
       font-variant-numeric: tabular-nums;
     }
 
     /* ── Voice Controls (bottom of left pane) ─────────────────────────── */
     #voice-panel {
-      border-top: 1px solid var(--border);
+      border-top: 1px solid var(--color-divider);
       padding: 8px 12px;
       display: none;
       flex-direction: column;
@@ -1342,7 +1329,7 @@
     /* Voice-level connection failure being auto-recovered (PRD 11.1) —
        the panel stays visible but signals something's temporarily wrong. */
     #voice-panel.reconnecting .voice-info .dot {
-      background: var(--warning, #e0a030);
+      background: var(--color-warning);
       animation: pulse 0.8s infinite;
     }
 
@@ -1355,8 +1342,8 @@
       display: none;
       flex-direction: column;
       gap: 6px;
-      background: var(--danger);
-      border-radius: var(--radius);
+      background: var(--color-live);
+      border-radius: var(--radius-md);
       padding: 8px 10px;
     }
 
@@ -1365,17 +1352,17 @@
     }
 
     #screen-share-alert-banner .screen-share-alert-text {
-      color: #fff;
+      color: var(--color-white);
       font-weight: 700;
       font-size: 12px;
       text-align: center;
     }
 
     #screen-share-alert-banner button {
-      background: #fff;
-      color: var(--danger);
+      background: var(--color-white);
+      color: var(--color-live);
       border: none;
-      border-radius: var(--radius);
+      border-radius: var(--radius-md);
       padding: 7px 0;
       font-weight: 700;
       font-size: 12px;
@@ -1383,7 +1370,7 @@
     }
 
     #screen-share-alert-banner button:hover {
-      background: rgba(255, 255, 255, 0.85);
+      background: color-mix(in srgb, var(--color-white) 85%, transparent);
     }
 
     /* Self-hear mic monitor banner (PRD 14.10) — same shape as the
@@ -1394,8 +1381,8 @@
       display: none;
       flex-direction: column;
       gap: 6px;
-      background: var(--accent);
-      border-radius: var(--radius);
+      background: var(--color-accent);
+      border-radius: var(--radius-md);
       padding: 8px 10px;
     }
 
@@ -1404,17 +1391,17 @@
     }
 
     #self-hear-banner .self-hear-banner-text {
-      color: #072b3a;
+      color: var(--color-accent-900);
       font-weight: 700;
       font-size: 12px;
       text-align: center;
     }
 
     #self-hear-banner button {
-      background: #fff;
-      color: var(--accent-hover);
+      background: var(--color-white);
+      color: var(--color-accent-400);
       border: none;
-      border-radius: var(--radius);
+      border-radius: var(--radius-md);
       padding: 7px 0;
       font-weight: 700;
       font-size: 12px;
@@ -1422,12 +1409,12 @@
     }
 
     #self-hear-banner button:hover {
-      background: rgba(255, 255, 255, 0.85);
+      background: color-mix(in srgb, var(--color-white) 85%, transparent);
     }
 
     #voice-panel .voice-info {
       font-size: 11px;
-      color: var(--success);
+      color: var(--color-success);
       display: flex;
       align-items: center;
       gap: 6px;
@@ -1437,7 +1424,7 @@
       width: 8px;
       height: 8px;
       border-radius: 50%;
-      background: var(--success);
+      background: var(--color-success);
       animation: pulse 2s infinite;
     }
 
@@ -1468,23 +1455,23 @@
       align-items: center;
       justify-content: center;
       padding: 6px 0;
-      border: 1px solid var(--border);
-      background: var(--bg-input);
-      color: var(--text-secondary);
-      border-radius: var(--radius);
+      border: 1px solid var(--color-divider);
+      background: var(--color-field);
+      color: var(--color-neutral-400);
+      border-radius: var(--radius-md);
       cursor: pointer;
       transition: all 0.15s;
     }
 
     .voice-btn:hover {
-      border-color: var(--accent);
-      color: var(--accent);
+      border-color: var(--color-accent);
+      color: var(--color-accent);
     }
 
     .voice-btn.active {
-      background: var(--danger);
-      border-color: var(--danger);
-      color: #fff;
+      background: var(--color-live);
+      border-color: var(--color-live);
+      color: var(--color-white);
     }
 
     /* Share-screen button: "stop sharing" (crossed-out monitor) icon only
@@ -1508,13 +1495,13 @@
     }
 
     .voice-btn.leave {
-      border-color: var(--danger);
-      color: var(--danger);
+      border-color: var(--color-live);
+      color: var(--color-live);
     }
 
     .voice-btn.leave:hover {
-      background: var(--danger);
-      color: #fff;
+      background: var(--color-live);
+      color: var(--color-white);
     }
 
     .voice-btn:disabled {
@@ -1523,8 +1510,8 @@
     }
 
     .voice-btn:disabled:hover {
-      border-color: var(--border);
-      color: var(--text-secondary);
+      border-color: var(--color-divider);
+      color: var(--color-neutral-400);
     }
 
     /* ── Right Pane (Tabbed Log / Chat) ──────────────────────────────── */
@@ -1539,8 +1526,8 @@
       display: flex;
       align-items: center;
       gap: 0;
-      background: var(--bg-secondary);
-      border-bottom: 1px solid var(--border);
+      background: var(--color-surface);
+      border-bottom: 1px solid var(--color-divider);
       flex-shrink: 0;
       overflow: hidden;
     }
@@ -1657,7 +1644,7 @@
     }
 
     .tab-overflow-close:hover {
-      background: rgba(255, 255, 255, 0.1);
+      background: color-mix(in srgb, var(--color-white) 10%, transparent);
       color: var(--color-text);
     }
 
@@ -1668,7 +1655,7 @@
       padding: 8px 14px;
       font-size: 11px;
       font-weight: 500;
-      color: var(--text-muted);
+      color: var(--color-neutral-500);
       cursor: pointer;
       border-bottom: 2px solid transparent;
       white-space: nowrap;
@@ -1677,13 +1664,13 @@
     }
 
     .tab:hover {
-      color: var(--text-secondary);
-      background: rgba(79, 195, 247, 0.04);
+      color: var(--color-neutral-400);
+      background: color-mix(in srgb, var(--color-accent) 4%, transparent);
     }
 
     .tab.active {
-      color: var(--accent);
-      border-bottom-color: var(--accent);
+      color: var(--color-accent);
+      border-bottom-color: var(--color-accent);
     }
 
     .tab .tab-close {
@@ -1704,7 +1691,7 @@
 
     .tab .tab-close:hover {
       opacity: 1;
-      background: rgba(255, 255, 255, 0.1);
+      background: color-mix(in srgb, var(--color-white) 10%, transparent);
     }
 
     /* Preview & kept tabs (PRD 17.5). A preview tab's title is italic (the
@@ -1716,7 +1703,7 @@
 
     .tab .tab-kept-icon {
       display: none;
-      color: var(--accent);
+      color: var(--color-accent);
     }
 
     .tab.kept .tab-kept-icon {
@@ -1735,7 +1722,7 @@
     }
 
     .tab.has-unread {
-      color: var(--text-primary);
+      color: var(--color-text);
       font-weight: 600;
     }
 
@@ -1805,23 +1792,23 @@
     }
 
     .log-entry {
-      color: var(--text-secondary);
+      color: var(--color-neutral-400);
     }
 
     .log-entry.success {
-      color: var(--success);
+      color: var(--color-success);
     }
 
     .log-entry.error {
-      color: var(--danger);
+      color: var(--color-live);
     }
 
     .log-entry.info {
-      color: var(--accent);
+      color: var(--color-accent);
     }
 
     .log-entry .timestamp {
-      color: var(--text-muted);
+      color: var(--color-neutral-500);
       margin-right: 8px;
       font-size: 10px;
     }
@@ -1847,7 +1834,7 @@
     }
 
     .chat-msg:hover {
-      background: rgba(255, 255, 255, 0.03);
+      background: color-mix(in srgb, var(--color-white) 3%, transparent);
     }
 
     /* Header line = nickname + HH:MM (PRD 16.6); the text always sits on its
@@ -1891,18 +1878,18 @@
       text-align: center;
       font-size: 10px;
       line-height: 1.4;
-      color: var(--text-muted);
+      color: var(--color-neutral-500);
       pointer-events: none;
     }
 
     .chat-msg .msg-time {
-      color: var(--text-muted);
+      color: var(--color-neutral-500);
       font-size: 10px;
     }
 
     .chat-msg .msg-nick {
       font-weight: 600;
-      color: var(--accent);
+      color: var(--color-accent);
     }
 
     .chat-msg.msg-continuation .msg-header {
@@ -1926,7 +1913,7 @@
     }
 
     .chat-msg .msg-text {
-      color: var(--text-primary);
+      color: var(--color-text);
     }
 
     /* A message that's nothing but a single emoji renders ~4x size (PRD
@@ -1970,8 +1957,8 @@
     .msg-text blockquote {
       margin: 0.2em 0;
       padding: 0 0 0 10px;
-      border-left: 3px solid var(--accent-dim);
-      color: var(--text-secondary);
+      border-left: 3px solid var(--color-accent-800);
+      color: var(--color-neutral-400);
     }
 
     .msg-text ul,
@@ -1996,15 +1983,15 @@
       font-size: 0.92em;
       padding: 1px 4px;
       border-radius: 4px;
-      background: var(--bg-input);
+      background: var(--color-field);
     }
 
     .msg-text pre {
       margin: 0.3em 0;
       padding: 8px 10px;
-      border-radius: var(--radius);
-      background: var(--bg-input);
-      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      background: var(--color-field);
+      border: 1px solid var(--color-divider);
       overflow-x: auto;
     }
 
@@ -2025,12 +2012,12 @@
          edge the way a plain block button would. */
       display: block;
       width: fit-content;
-      background: rgba(255, 255, 255, 0.08);
-      border: 1px solid var(--border);
+      background: color-mix(in srgb, var(--color-white) 8%, transparent);
+      border: 1px solid var(--color-divider);
       border-radius: 999px;
       padding: 2px 10px;
       margin-top: 4px;
-      color: var(--accent);
+      color: var(--color-accent);
       font-size: 10px;
       font-family: var(--font);
       font-weight: 600;
@@ -2041,14 +2028,14 @@
     }
 
     .btn-see-more:hover {
-      background: rgba(255, 255, 255, 0.15);
-      border-color: var(--accent);
+      background: color-mix(in srgb, var(--color-white) 15%, transparent);
+      border-color: var(--color-accent);
     }
 
     /* "(edited)" trails the message text (PRD 16.6) — a continuation has no
        header to carry it, so the end of the text is the one consistent spot. */
     .msg-edited {
-      color: var(--text-muted);
+      color: var(--color-neutral-500);
       font-size: 10px;
       margin-left: 4px;
       font-style: italic;
@@ -2061,10 +2048,10 @@
     .msg-edit-input {
       display: block;
       width: 100%;
-      background: var(--bg-input);
-      border: 1px solid var(--accent);
-      border-radius: var(--radius);
-      color: var(--text-primary);
+      background: var(--color-field);
+      border: 1px solid var(--color-accent);
+      border-radius: var(--radius-md);
+      color: var(--color-text);
       font-size: 13px;
       font-family: inherit;
       padding: 4px 6px;
@@ -2132,8 +2119,8 @@
       justify-content: center;
       gap: 6px;
       padding: 10px;
-      background: rgba(0, 0, 0, 0.45);
-      color: #fff;
+      background: color-mix(in srgb, var(--color-black) 45%, transparent);
+      color: var(--color-white);
       text-align: center;
       font-size: 11px;
       font-weight: 500;
@@ -2160,9 +2147,9 @@
       align-items: center;
       padding: 3px 8px;
       border-radius: 12px;
-      border: 1px solid var(--border);
+      border: 1px solid var(--color-divider);
       background: transparent;
-      color: var(--text-muted);
+      color: var(--color-neutral-500);
       cursor: pointer;
       transition: all 0.15s;
     }
@@ -2173,9 +2160,9 @@
     }
 
     .reaction-add-btn:hover {
-      border-color: var(--accent);
-      color: var(--accent);
-      background: rgba(99, 102, 241, 0.1);
+      border-color: var(--color-accent);
+      color: var(--color-accent);
+      background: color-mix(in srgb, var(--color-accent) 10%, transparent);
     }
 
     .reaction-pill {
@@ -2184,9 +2171,9 @@
       gap: 4px;
       padding: 2px 8px;
       border-radius: 12px;
-      border: 1px solid var(--border);
+      border: 1px solid var(--color-divider);
       background: transparent;
-      color: var(--text-secondary);
+      color: var(--color-neutral-400);
       font-size: 15px;
       cursor: pointer;
       transition: all 0.15s;
@@ -2194,13 +2181,13 @@
     }
 
     .reaction-pill:hover {
-      border-color: var(--accent);
-      background: rgba(99, 102, 241, 0.1);
+      border-color: var(--color-accent);
+      background: color-mix(in srgb, var(--color-accent) 10%, transparent);
     }
 
     .reaction-pill.mine {
-      border-color: var(--accent);
-      background: rgba(99, 102, 241, 0.2);
+      border-color: var(--color-accent);
+      background: color-mix(in srgb, var(--color-accent) 20%, transparent);
     }
 
     /* ── Emoji autocomplete card (PRD 16.7) ────────────────────────────
@@ -2215,9 +2202,9 @@
       flex-direction: column;
       overflow: hidden;
       border-radius: 8px;
-      background: #0e1626;
-      border: 1px solid var(--border);
-      box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
+      background: var(--color-bg);
+      border: 1px solid var(--color-divider);
+      box-shadow: 0 6px 24px color-mix(in srgb, var(--color-black) 45%, transparent);
       -webkit-app-region: no-drag;
     }
 
@@ -2232,7 +2219,7 @@
       font-weight: 700;
       letter-spacing: 0.5px;
       text-transform: uppercase;
-      color: var(--text-muted);
+      color: var(--color-neutral-500);
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -2253,7 +2240,7 @@
     }
 
     .emoji-ac-item.active {
-      background: rgba(79, 195, 247, 0.16);
+      background: color-mix(in srgb, var(--color-accent) 16%, transparent);
     }
 
     .emoji-ac-glyph {
@@ -2277,7 +2264,7 @@
       text-overflow: ellipsis;
       white-space: nowrap;
       font-size: 13px;
-      color: var(--text-primary);
+      color: var(--color-text);
     }
 
     /* ── Reaction hover card (PRD 15.11) ───────────────────────────── */
@@ -2290,10 +2277,10 @@
       max-width: 340px;
       padding: 10px 14px;
       border-radius: 10px;
-      background: #0e1626;
-      border: 1px solid var(--border);
-      box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
-      color: var(--text-primary);
+      background: var(--color-bg);
+      border: 1px solid var(--color-divider);
+      box-shadow: 0 6px 24px color-mix(in srgb, var(--color-black) 45%, transparent);
+      color: var(--color-text);
       pointer-events: none;
       opacity: 0;
       visibility: hidden;
@@ -2330,22 +2317,22 @@
 
     .reaction-card-text strong {
       font-weight: 600;
-      color: #fff;
+      color: var(--color-white);
     }
 
     .reaction-card-others {
-      color: var(--accent);
+      color: var(--color-accent);
       font-weight: 600;
     }
 
     .reaction-card-name {
-      color: var(--text-secondary);
+      color: var(--color-neutral-400);
     }
 
     .reaction-count {
       font-size: 12px;
       font-variant-numeric: tabular-nums;
-      color: var(--text-muted);
+      color: var(--color-neutral-500);
     }
 
     /* ── Floating message action toolbar (PRD 16.5) ───────────────────
@@ -2361,10 +2348,10 @@
       display: flex;
       gap: 2px;
       padding: 2px;
-      background: var(--bg-secondary);
-      border: 1px solid var(--border);
+      background: var(--color-surface);
+      border: 1px solid var(--color-divider);
       border-radius: 6px;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+      box-shadow: 0 2px 8px color-mix(in srgb, var(--color-black) 35%, transparent);
       opacity: 0;
       pointer-events: none;
       transition: opacity 0.12s;
@@ -2392,7 +2379,7 @@
       background: none;
       border: none;
       border-radius: 4px;
-      color: var(--text-muted);
+      color: var(--color-neutral-500);
       cursor: pointer;
       transition: all 0.15s;
     }
@@ -2403,17 +2390,17 @@
     }
 
     .msg-actions button:hover {
-      color: var(--accent);
-      background: rgba(255, 255, 255, 0.08);
+      color: var(--color-accent);
+      background: color-mix(in srgb, var(--color-white) 8%, transparent);
     }
 
     .msg-actions .btn-delete-msg:hover {
-      color: var(--danger);
-      background: rgba(239, 83, 80, 0.1);
+      color: var(--color-live);
+      background: color-mix(in srgb, var(--color-live) 10%, transparent);
     }
 
     .msg-actions .btn-pin-msg.active {
-      color: var(--accent);
+      color: var(--color-accent);
     }
 
     /* The toolbar is hidden until hover, so a pinned message keeps a small
@@ -2423,7 +2410,7 @@
       position: absolute;
       top: 5px;
       right: 8px;
-      color: var(--accent);
+      color: var(--color-accent);
       opacity: 0.8;
     }
 
@@ -2445,7 +2432,7 @@
     /* Brief flash applied when jumping to a message via the pinned bar. */
     @keyframes msg-highlight-flash {
       0%, 100% { background: transparent; }
-      25% { background: rgba(99, 102, 241, 0.25); }
+      25% { background: color-mix(in srgb, var(--color-accent) 25%, transparent); }
     }
 
     .msg-highlight {
@@ -2455,7 +2442,7 @@
 
     /* ── Link Preview Card ─────────────────────────────────────── */
     .msg-link {
-      color: var(--accent);
+      color: var(--color-accent);
       text-decoration: none;
       word-break: break-all;
     }
@@ -2469,10 +2456,10 @@
       flex-direction: column;
       max-width: 420px;
       margin-top: 6px;
-      background: var(--bg-input);
-      border: 1px solid var(--border);
-      border-left: 3px solid var(--accent);
-      border-radius: var(--radius);
+      background: var(--color-field);
+      border: 1px solid var(--color-divider);
+      border-left: 3px solid var(--color-accent);
+      border-radius: var(--radius-md);
       cursor: pointer;
       overflow: hidden;
       transition: filter 0.15s, opacity 0.3s;
@@ -2498,7 +2485,7 @@
 
     .lpc-site-name {
       font-size: 10px;
-      color: var(--text-muted);
+      color: var(--color-neutral-500);
       text-transform: uppercase;
       letter-spacing: 0.3px;
     }
@@ -2506,7 +2493,7 @@
     .lpc-title {
       font-size: 14px;
       font-weight: 600;
-      color: var(--accent);
+      color: var(--color-accent);
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -2514,7 +2501,7 @@
 
     .lpc-desc {
       font-size: 12px;
-      color: var(--text-secondary);
+      color: var(--color-neutral-400);
       display: -webkit-box;
       -webkit-line-clamp: 3;
       line-clamp: 3;
@@ -2532,7 +2519,7 @@
 
     /* A link that is itself an image (PRD 18.10). */
     .link-preview-card.lpc-direct { max-width: 420px; }
-    .lpc-direct-image { max-height: 300px; object-fit: contain; cursor: zoom-in; background: var(--bg-input); }
+    .lpc-direct-image { max-height: 300px; object-fit: contain; cursor: zoom-in; background: var(--color-field); }
 
     /* Blurred previews (PRD 18.11). The wrap/overlay always exist; these rules decide
        whether the blur is active: a reason applies (NSFW tab / site-marked adult) AND
@@ -2547,8 +2534,8 @@
       justify-content: center;
       gap: 6px;
       padding: 10px;
-      background: rgba(0, 0, 0, 0.45);
-      color: #fff;
+      background: color-mix(in srgb, var(--color-black) 45%, transparent);
+      color: var(--color-white);
       text-align: center;
       font-size: 11px;
       font-weight: 500;
@@ -2579,7 +2566,7 @@
       aspect-ratio: 16 / 9; /* a known box before the first frame (PRD 18.12); an inline style overrides it */
       max-height: 300px;
       display: block;
-      background: #000;
+      background: var(--color-black);
     }
 
     .lpc-media-wrap {
@@ -2603,7 +2590,7 @@
 
     .lpc-domain {
       font-size: 10px;
-      color: var(--text-muted);
+      color: var(--color-neutral-500);
       padding: 4px 12px 8px;
     }
 
@@ -2625,18 +2612,18 @@
       align-items: flex-end; /* the input grows upward-aligned with the buttons (PRD 15.10) */
       gap: 8px;
       padding: 8px 12px;
-      border-top: 1px solid var(--border);
-      background: var(--bg-secondary);
+      border-top: 1px solid var(--color-divider);
+      background: var(--color-surface);
       flex-shrink: 0;
     }
 
     #chat-input {
       flex: 1;
-      background: var(--bg-input);
-      border: 1px solid var(--border);
-      color: var(--text-primary);
+      background: var(--color-field);
+      border: 1px solid var(--color-divider);
+      color: var(--color-text);
       padding: 7px 12px;
-      border-radius: var(--radius);
+      border-radius: var(--radius-md);
       font-size: 12px;
       font-family: var(--font);
       line-height: 1.25;
@@ -2648,15 +2635,15 @@
     }
 
     #chat-input:focus {
-      border-color: var(--accent);
+      border-color: var(--color-accent);
     }
 
     #btn-send {
       padding: 7px 16px;
-      background: var(--accent);
-      color: #000;
+      background: var(--color-accent);
+      color: var(--color-black);
       border: none;
-      border-radius: var(--radius);
+      border-radius: var(--radius-md);
       font-size: 12px;
       font-family: var(--font);
       font-weight: 500;
@@ -2665,15 +2652,15 @@
     }
 
     #btn-send:hover {
-      background: var(--accent-hover);
+      background: var(--color-accent-400);
     }
 
     #btn-attach {
       padding: 7px 10px;
-      background: var(--bg-input);
-      border: 1px solid var(--border);
-      color: var(--text-secondary);
-      border-radius: var(--radius);
+      background: var(--color-field);
+      border: 1px solid var(--color-divider);
+      color: var(--color-neutral-400);
+      border-radius: var(--radius-md);
       cursor: pointer;
       transition: all 0.15s;
       display: flex;
@@ -2683,8 +2670,8 @@
     }
 
     #btn-attach:hover {
-      border-color: var(--accent);
-      color: var(--accent);
+      border-color: var(--color-accent);
+      color: var(--color-accent);
     }
 
     /* ── Reply mode (PRD 16.11) ─────────────────────────────────────────── */
@@ -2694,10 +2681,10 @@
       justify-content: space-between;
       gap: 8px;
       padding: 6px 12px;
-      background: var(--bg-tertiary);
-      border-top: 1px solid var(--border);
+      background: var(--color-accent-900);
+      border-top: 1px solid var(--color-divider);
       font-size: 12px;
-      color: var(--text-secondary);
+      color: var(--color-neutral-400);
       flex-shrink: 0;
     }
 
@@ -2706,7 +2693,7 @@
     }
 
     .reply-bar-nick {
-      color: var(--accent);
+      color: var(--color-accent);
       font-weight: 600;
     }
 
@@ -2720,20 +2707,20 @@
       background: none;
       border: none;
       border-radius: 4px;
-      color: var(--text-muted);
+      color: var(--color-neutral-500);
       cursor: pointer;
       transition: all 0.15s;
     }
 
     #btn-reply-cancel:hover {
-      color: var(--text-primary);
-      background: rgba(255, 255, 255, 0.08);
+      color: var(--color-text);
+      background: color-mix(in srgb, var(--color-white) 8%, transparent);
     }
 
     /* The message being answered, while the reply bar is up. */
     .chat-msg.msg-reply-target {
-      background: rgba(79, 195, 247, 0.08);
-      box-shadow: inset 3px 0 0 var(--accent);
+      background: color-mix(in srgb, var(--color-accent) 8%, transparent);
+      box-shadow: inset 3px 0 0 var(--color-accent);
     }
 
     /* The snippet above a reply (PRD 16.11): who it answers + one line of
@@ -2749,7 +2736,7 @@
       margin: -1px 0 5px 0;
       font-size: 12px;
       line-height: 1.4;
-      color: var(--text-secondary);
+      color: var(--color-neutral-400);
       cursor: pointer;
       /* Faded like a muted channel (PRD 16.4) — it's context, not a message. */
       opacity: 0.55;
@@ -2771,15 +2758,15 @@
       top: 50%;
       width: calc(var(--msg-gutter) - 30px);
       height: calc(50% + 6px);
-      border-left: 2px solid var(--border);
-      border-top: 2px solid var(--border);
+      border-left: 2px solid var(--color-divider);
+      border-top: 2px solid var(--color-divider);
       border-top-left-radius: 6px;
       pointer-events: none;
     }
 
     .msg-reply-nick {
       flex-shrink: 0;
-      color: var(--accent);
+      color: var(--color-accent);
       font-weight: 600;
     }
 
@@ -2792,7 +2779,7 @@
     }
 
     .msg-reply:hover .msg-reply-text {
-      color: var(--text-primary);
+      color: var(--color-text);
     }
 
     .msg-reply-text.attachment {
@@ -2810,7 +2797,7 @@
     .msg-reply.deleted {
       cursor: default;
       font-style: italic;
-      color: var(--text-muted);
+      color: var(--color-neutral-500);
     }
 
     .msg-reply.deleted:hover {
@@ -2818,7 +2805,7 @@
     }
 
     .msg-reply.deleted:hover .msg-reply-text {
-      color: var(--text-muted);
+      color: var(--color-neutral-500);
     }
 
     #btn-send.blocked {
@@ -2838,8 +2825,8 @@
       display: none;
       gap: 8px;
       padding: 8px 12px;
-      background: var(--bg-tertiary);
-      border-top: 1px solid var(--border);
+      background: var(--color-accent-900);
+      border-top: 1px solid var(--color-divider);
       overflow-x: auto;
       flex-shrink: 0;
     }
@@ -2856,20 +2843,20 @@
       flex-direction: column;
       gap: 6px;
       padding: 8px;
-      background: var(--bg-secondary);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
+      background: var(--color-surface);
+      border: 1px solid var(--color-divider);
+      border-radius: var(--radius-md);
     }
 
     .attach-card.failed {
-      border-color: var(--danger);
+      border-color: var(--color-live);
     }
 
     .attach-card-thumb {
       position: relative;
       height: 140px;
-      border-radius: var(--radius);
-      background: var(--bg-input);
+      border-radius: var(--radius-md);
+      background: var(--color-field);
       overflow: hidden;
     }
 
@@ -2903,8 +2890,8 @@
     .attach-card-spinner {
       width: 22px;
       height: 22px;
-      border: 3px solid var(--border);
-      border-top-color: var(--accent);
+      border: 3px solid var(--color-divider);
+      border-top-color: var(--color-accent);
       border-radius: 50%;
       animation: attachment-spin 0.7s linear infinite;
     }
@@ -2915,7 +2902,7 @@
 
     .attach-card-warn {
       display: none;
-      color: var(--danger);
+      color: var(--color-live);
     }
 
     .attach-card.failed .attach-card-warn {
@@ -2924,7 +2911,7 @@
 
     .attach-card-name {
       font-size: 11px;
-      color: var(--text-secondary);
+      color: var(--color-neutral-400);
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -2938,10 +2925,10 @@
       display: flex;
       gap: 2px;
       padding: 2px;
-      background: var(--bg-secondary);
-      border: 1px solid var(--border);
+      background: var(--color-surface);
+      border: 1px solid var(--color-divider);
       border-radius: 6px;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+      box-shadow: 0 2px 8px color-mix(in srgb, var(--color-black) 35%, transparent);
       opacity: 0;
       transition: opacity 0.12s;
     }
@@ -2962,14 +2949,14 @@
       background: none;
       border: none;
       border-radius: 4px;
-      color: var(--text-secondary);
+      color: var(--color-neutral-400);
       cursor: pointer;
       transition: all 0.15s;
     }
 
     .attach-card-actions button:hover {
-      color: var(--accent);
-      background: rgba(255, 255, 255, 0.08);
+      color: var(--color-accent);
+      background: color-mix(in srgb, var(--color-white) 8%, transparent);
     }
 
     .attach-card-actions button[hidden] {
@@ -2977,8 +2964,8 @@
     }
 
     .attach-card-actions .attach-remove:hover {
-      color: var(--danger);
-      background: rgba(239, 83, 80, 0.1);
+      color: var(--color-live);
+      background: color-mix(in srgb, var(--color-live) 10%, transparent);
     }
 
     /* ── Drop zone (PRD 16.10) ─────────────────────────────────────────── */
@@ -2991,10 +2978,10 @@
       align-items: center;
       justify-content: center;
       gap: 10px;
-      background: rgba(15, 20, 35, 0.88);
-      border: 2px dashed var(--accent);
-      border-radius: var(--radius);
-      color: var(--accent);
+      background: color-mix(in srgb, var(--color-bg) 88%, transparent);
+      border: 2px dashed var(--color-accent);
+      border-radius: var(--radius-md);
+      color: var(--color-accent);
       font-size: 14px;
       font-weight: 600;
       pointer-events: none; /* never intercepts the drag, so no enter/leave flicker */
@@ -3045,7 +3032,7 @@
       left: 0;
       right: 0;
       bottom: 0;
-      background: rgba(0, 0, 0, 0.85);
+      background: color-mix(in srgb, var(--color-black) 85%, transparent);
       z-index: 200;
       cursor: pointer;
       -webkit-app-region: no-drag;
@@ -3075,7 +3062,7 @@
       cursor: default;
       user-select: none;
       -webkit-user-drag: none;
-      box-shadow: 0 4px 40px rgba(0, 0, 0, 0.5);
+      box-shadow: 0 4px 40px color-mix(in srgb, var(--color-black) 50%, transparent);
       opacity: 0;
       transition: opacity 0.12s;
     }
@@ -3098,9 +3085,9 @@
     .lightbox-zoom-indicator {
       position: fixed;
       z-index: 202;
-      background: rgba(30, 30, 40, 0.92);
-      border: 1px solid rgba(255, 255, 255, 0.12);
-      color: #e8e8f0;
+      background: color-mix(in srgb, var(--color-surface) 92%, transparent);
+      border: 1px solid color-mix(in srgb, var(--color-white) 12%, transparent);
+      color: var(--color-text);
       -webkit-app-region: no-drag;
       cursor: default;
     }
@@ -3137,13 +3124,13 @@
 
     .lightbox-toolbar button:hover:not(:disabled),
     .lightbox-close:hover {
-      background: rgba(255, 255, 255, 0.14);
-      color: #fff;
+      background: color-mix(in srgb, var(--color-white) 14%, transparent);
+      color: var(--color-white);
     }
 
     .lightbox-toolbar button:focus-visible,
     .lightbox-close:focus-visible {
-      outline: 2px solid var(--accent);
+      outline: 2px solid var(--color-accent);
       outline-offset: 1px;
     }
 
@@ -3156,7 +3143,7 @@
       width: 1px;
       height: 18px;
       margin: 0 3px;
-      background: rgba(255, 255, 255, 0.18);
+      background: color-mix(in srgb, var(--color-white) 18%, transparent);
     }
 
     /* Close is separate from the toolbar pill, at the far top-right. */
@@ -3186,12 +3173,12 @@
     }
 
     .lightbox-sender strong {
-      color: #fff;
+      color: var(--color-white);
       font-weight: 600;
     }
 
     .lightbox-sender .lightbox-sent-at {
-      color: var(--text-secondary);
+      color: var(--color-neutral-400);
       margin-left: 6px;
     }
 
@@ -3222,8 +3209,8 @@
       transform: translateX(-50%);
       padding: 4px 8px;
       border-radius: 6px;
-      background: #000;
-      color: #fff;
+      background: var(--color-black);
+      color: var(--color-white);
       font-size: 11px;
       font-weight: 500;
       white-space: nowrap;
@@ -3254,7 +3241,7 @@
       left: 0;
       right: 0;
       bottom: 0;
-      background: rgba(0, 0, 0, 0.9);
+      background: color-mix(in srgb, var(--color-black) 90%, transparent);
       z-index: 200;
       align-items: center;
       justify-content: center;
@@ -3281,7 +3268,7 @@
       max-height: 90vh;
       border-radius: 8px;
       cursor: default;
-      box-shadow: 0 4px 40px rgba(0, 0, 0, 0.5);
+      box-shadow: 0 4px 40px color-mix(in srgb, var(--color-black) 50%, transparent);
     }
 
     /* ── Voice room tab (PRD 19 C9) ───────────────────────────────────── */
@@ -3366,7 +3353,7 @@
       display: none;
       flex: 1;
       min-height: 0;
-      background: #000;
+      background: var(--color-black);
     }
 
     .voice-room.has-stream .voice-stream {
@@ -3475,7 +3462,7 @@
       width: 8px;
       height: 8px;
       border-radius: 50%;
-      background: var(--color-danger, #e5484d);
+      background: var(--color-danger, var(--color-live));
       flex-shrink: 0;
     }
 
@@ -3488,7 +3475,7 @@
       gap: 12px;
       justify-content: center;
       align-content: center;
-      background: #000;
+      background: var(--color-black);
     }
 
     .voice-stream.is-grid .voice-stream-main,
@@ -3505,7 +3492,7 @@
       min-width: 0;
       overflow: hidden;
       border-radius: var(--radius-md);
-      background: #0b0b10;
+      background: color-mix(in srgb, var(--color-bg) 60%, var(--color-black));
     }
 
     .voice-grid-video {
@@ -3528,8 +3515,8 @@
       max-width: 70%;
       padding: 2px 8px;
       border-radius: var(--radius-md);
-      background: rgba(0, 0, 0, 0.6);
-      color: #fff;
+      background: color-mix(in srgb, var(--color-black) 60%, transparent);
+      color: var(--color-white);
       font-size: 12px;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -3558,8 +3545,8 @@
       height: 26px;
       border: none;
       border-radius: var(--radius-md);
-      background: rgba(0, 0, 0, 0.6);
-      color: #fff;
+      background: color-mix(in srgb, var(--color-black) 60%, transparent);
+      color: var(--color-white);
       cursor: pointer;
     }
 
@@ -3606,9 +3593,9 @@
       gap: 8px;
       padding: 4px 8px;
       border-radius: var(--radius-md);
-      background: rgba(0, 0, 0, 0.55);
+      background: color-mix(in srgb, var(--color-black) 55%, transparent);
       font-size: 12px;
-      color: #fff;
+      color: var(--color-white);
       max-width: 60%;
     }
 
@@ -3631,8 +3618,8 @@
       gap: 6px;
       padding: 4px 6px;
       border-radius: var(--radius-md);
-      background: rgba(0, 0, 0, 0.55);
-      color: #fff;
+      background: color-mix(in srgb, var(--color-black) 55%, transparent);
+      color: var(--color-white);
     }
 
     .voice-stream-controls button {
@@ -3650,7 +3637,7 @@
     }
 
     .voice-stream-controls button:hover {
-      background: rgba(255, 255, 255, 0.15);
+      background: color-mix(in srgb, var(--color-white) 15%, transparent);
     }
 
     .voice-stream-controls input[type="range"] {
@@ -3892,7 +3879,7 @@
       flex: 1;
       height: 4px;
       border-radius: 2px;
-      background: var(--color-neutral-800, #2a2a35);
+      background: var(--color-neutral-800, var(--color-neutral-900));
       overflow: hidden;
     }
 
@@ -3916,12 +3903,12 @@
       gap: 8px;
       margin-top: 12px;
       padding: 8px 10px;
-      border: 1px solid #6b5316;
+      border: 1px solid color-mix(in oklch, var(--color-warning) 40%, var(--color-bg));
       border-radius: var(--radius-md);
-      background: rgba(234, 179, 8, 0.08);
+      background: color-mix(in srgb, var(--color-warning) 8%, transparent);
       font-size: 12.5px;
       line-height: 1.4;
-      color: #e8c15a;
+      color: var(--color-warning-text);
     }
 
     .update-card-call .ph {
@@ -4248,7 +4235,7 @@
       z-index: 100;
       align-items: center;
       justify-content: center;
-      background: rgba(0, 0, 0, 0.6);
+      background: color-mix(in srgb, var(--color-black) 60%, transparent);
       -webkit-app-region: no-drag;
     }
 
@@ -4318,11 +4305,11 @@
     .cat-voice-note {
       margin: 0 0 var(--space-3);
       padding: 8px 10px;
-      border: 1px solid #6b5316;
+      border: 1px solid color-mix(in oklch, var(--color-warning) 40%, var(--color-bg));
       border-radius: var(--radius-md);
-      background: rgba(234, 179, 8, 0.08);
+      background: color-mix(in srgb, var(--color-warning) 8%, transparent);
       font-size: 12.5px;
-      color: #e8c15a;
+      color: var(--color-warning-text);
     }
 
     /* ── Server icon dialog (PRD 19 C5) ───────────────────────────────── */
@@ -4333,7 +4320,7 @@
       z-index: 110;
       align-items: center;
       justify-content: center;
-      background: rgba(0, 0, 0, 0.6);
+      background: color-mix(in srgb, var(--color-black) 60%, transparent);
       -webkit-app-region: no-drag;
     }
 
@@ -4462,7 +4449,7 @@
       z-index: 100;
       align-items: center;
       justify-content: center;
-      background: rgba(0, 0, 0, 0.6);
+      background: color-mix(in srgb, var(--color-black) 60%, transparent);
       -webkit-app-region: no-drag;
     }
 
@@ -4678,11 +4665,11 @@
       width: 8px;
       height: 8px;
       border-radius: 50%;
-      background: var(--danger);
+      background: var(--color-live);
     }
 
     #status-bar .status-dot.connected {
-      background: var(--success);
+      background: var(--color-success);
     }
 
     #status-bar .status-text {
@@ -4690,7 +4677,7 @@
     }
 
     #status-bar .status-text.connected {
-      color: var(--success);
+      color: var(--color-success);
     }
 
     .status-latency {
@@ -4701,9 +4688,9 @@
       opacity: 0.85;
     }
 
-    .status-latency.good { color: var(--success); }
-    .status-latency.warn { color: #f0ad4e; }
-    .status-latency.bad { color: var(--danger); }
+    .status-latency.good { color: var(--color-success); }
+    .status-latency.warn { color: var(--color-warning); }
+    .status-latency.bad { color: var(--color-live); }
 
     /* ── Encrypted connections (PRD 18.3) ──────────────────────────────── */
     .conn-security {
@@ -4712,23 +4699,23 @@
       gap: 4px;
       margin-left: 8px;
       font-size: 10px;
-      color: var(--text-muted);
+      color: var(--color-neutral-500);
       cursor: default;
       vertical-align: middle;
     }
 
     .conn-security[hidden] { display: none; }
-    .conn-security.secure { color: var(--success); }
-    .conn-security.insecure { color: var(--warning); }
+    .conn-security.secure { color: var(--color-success); }
+    .conn-security.insecure { color: var(--color-warning); }
 
     #tls-warning-banner {
       display: none;
       align-items: center;
       gap: 10px;
       padding: 6px 12px;
-      background: rgba(255, 167, 38, 0.12);
-      border-bottom: 1px solid var(--warning);
-      color: var(--text-primary);
+      background: color-mix(in srgb, var(--color-warning) 12%, transparent);
+      border-bottom: 1px solid var(--color-warning);
+      color: var(--color-text);
       font-size: 12px;
       flex-shrink: 0;
     }
@@ -4738,23 +4725,23 @@
 
     #tls-warning-banner button {
       background: transparent;
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      color: var(--text-secondary);
+      border: 1px solid var(--color-divider);
+      border-radius: var(--radius-md);
+      color: var(--color-neutral-400);
       cursor: pointer;
       font-size: 11px;
       padding: 3px 8px;
     }
 
-    #tls-warning-banner button:hover { color: var(--text-primary); border-color: var(--text-muted); }
+    #tls-warning-banner button:hover { color: var(--color-text); border-color: var(--color-neutral-500); }
 
     .tls-fingerprint {
       display: block;
       padding: 8px 10px;
       margin: 8px 0;
-      background: var(--bg-input);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
+      background: var(--color-field);
+      border: 1px solid var(--color-divider);
+      border-radius: var(--radius-md);
       font-family: monospace;
       font-size: 12px;
       line-height: 1.5;
@@ -4770,50 +4757,50 @@
       font-size: 12px;
     }
 
-    .tls-detail-grid dt { color: var(--text-muted); }
-    .tls-detail-grid dd { margin: 0; word-break: break-word; color: var(--text-primary); }
+    .tls-detail-grid dt { color: var(--color-neutral-500); }
+    .tls-detail-grid dd { margin: 0; word-break: break-word; color: var(--color-text); }
 
     #tls-trust-modal .profile-hint { margin: 10px 0 16px; }
 
     .tls-modal-warning {
       margin: 10px 0 0;
       padding: 8px 10px;
-      border-left: 3px solid var(--danger);
-      background: rgba(239, 83, 80, 0.08);
+      border-left: 3px solid var(--color-live);
+      background: color-mix(in srgb, var(--color-live) 8%, transparent);
       font-size: 12px;
-      color: var(--text-primary);
+      color: var(--color-text);
     }
 
     .tls-trusted-empty,
     .tls-trusted-row {
       padding: 8px 10px;
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      background: var(--bg-input);
+      border: 1px solid var(--color-divider);
+      border-radius: var(--radius-md);
+      background: var(--color-field);
       font-size: 12px;
       margin-bottom: 6px;
     }
 
-    .tls-trusted-empty { color: var(--text-muted); }
+    .tls-trusted-empty { color: var(--color-neutral-500); }
     .tls-trusted-row { display: flex; align-items: center; gap: 10px; }
     .tls-trusted-row .tls-trusted-info { flex: 1; min-width: 0; }
     .tls-trusted-row .tls-trusted-host { font-weight: 600; word-break: break-all; }
-    .tls-trusted-row .tls-trusted-meta { color: var(--text-muted); font-size: 11px; word-break: break-all; }
+    .tls-trusted-row .tls-trusted-meta { color: var(--color-neutral-500); font-size: 11px; word-break: break-all; }
 
     #status-instance-area {
       display: flex;
       align-items: center;
       gap: 6px;
       font-family: 'Reson8 Emoji', monospace;
-      color: var(--text-muted);
+      color: var(--color-neutral-500);
       font-size: 10px;
       user-select: text;
     }
 
     #btn-copy-id {
       background: none;
-      border: 1px solid var(--text-muted);
-      color: var(--text-secondary);
+      border: 1px solid var(--color-neutral-500);
+      color: var(--color-neutral-400);
       font-size: 9px;
       padding: 1px 6px;
       border-radius: 4px;
@@ -4822,8 +4809,8 @@
     }
 
     #btn-copy-id:hover {
-      border-color: var(--accent);
-      color: var(--accent);
+      border-color: var(--color-accent);
+      color: var(--color-accent);
     }
 
     /* ── Modals ────────────────────────────────────────────────────────── */
@@ -4857,7 +4844,7 @@
       left: 0;
       right: 0;
       bottom: 0;
-      background: rgba(0, 0, 0, 0.6);
+      background: color-mix(in srgb, var(--color-black) 60%, transparent);
       z-index: 100;
       align-items: center;
       justify-content: center;
@@ -4909,7 +4896,7 @@
       padding-right: 4px;
       font-size: 13px;
       line-height: 1.6;
-      color: var(--text-secondary);
+      color: var(--color-neutral-400);
       word-break: break-word;
     }
 
@@ -4919,7 +4906,7 @@
     #whats-new-modal .whats-new-body h1,
     #whats-new-modal .whats-new-body h2,
     #whats-new-modal .whats-new-body h3 {
-      color: var(--text-primary);
+      color: var(--color-text);
       font-size: 14px;
       font-weight: 600;
       margin: 14px 0 6px;
@@ -4946,12 +4933,12 @@
     }
 
     #whats-new-modal .whats-new-body strong {
-      color: var(--text-primary);
+      color: var(--color-text);
       font-weight: 600;
     }
 
     #whats-new-modal .whats-new-body a {
-      color: var(--accent);
+      color: var(--color-accent);
       text-decoration: none;
     }
 
@@ -4960,8 +4947,8 @@
     }
 
     #whats-new-modal .whats-new-body code {
-      background: var(--bg-input);
-      border: 1px solid var(--border);
+      background: var(--color-field);
+      border: 1px solid var(--color-divider);
       border-radius: 3px;
       padding: 1px 4px;
       font-size: 12px;
@@ -4969,15 +4956,15 @@
 
     #whats-new-modal .whats-new-body hr {
       border: none;
-      border-top: 1px solid var(--border);
+      border-top: 1px solid var(--color-divider);
       margin: 12px 0;
     }
 
     #whats-new-modal .whats-new-body blockquote {
       margin: 0 0 10px;
       padding-left: 10px;
-      border-left: 2px solid var(--border);
-      color: var(--text-muted);
+      border-left: 2px solid var(--color-divider);
+      color: var(--color-neutral-500);
     }
 
     /* ── Screen Share Selection Modal (PRD 12.10) ─────────────────────── */
@@ -4992,7 +4979,7 @@
       font-weight: 600;
       text-transform: uppercase;
       letter-spacing: 0.04em;
-      color: var(--text-muted);
+      color: var(--color-neutral-500);
       margin: 12px 0 6px;
     }
 
@@ -5007,9 +4994,9 @@
     }
 
     .source-share-card {
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      background: var(--bg-input);
+      border: 1px solid var(--color-divider);
+      border-radius: var(--radius-md);
+      background: var(--color-field);
       cursor: pointer;
       overflow: hidden;
       text-align: left;
@@ -5018,12 +5005,12 @@
     }
 
     .source-share-card:hover {
-      border-color: var(--accent-dim);
+      border-color: var(--color-accent-800);
     }
 
     .source-share-card.selected {
-      border-color: var(--accent);
-      box-shadow: 0 0 0 1px var(--accent);
+      border-color: var(--color-accent);
+      box-shadow: 0 0 0 1px var(--color-accent);
     }
 
     .source-share-card-thumb {
@@ -5031,7 +5018,7 @@
       aspect-ratio: 16 / 9;
       object-fit: cover;
       display: block;
-      background: var(--bg-tertiary);
+      background: var(--color-accent-900);
     }
 
     .source-share-card-name {
@@ -5040,7 +5027,7 @@
       gap: 6px;
       padding: 6px 8px;
       font-size: 11px;
-      color: var(--text-secondary);
+      color: var(--color-neutral-400);
     }
 
     .source-share-card-name span {
@@ -5059,7 +5046,7 @@
     .source-share-empty {
       padding: 20px;
       text-align: center;
-      color: var(--text-muted);
+      color: var(--color-neutral-500);
       font-size: 12px;
     }
 
@@ -5068,8 +5055,8 @@
       align-items: center;
       font-size: 9px;
       font-weight: 700;
-      color: var(--danger);
-      border: 1px solid var(--danger);
+      color: var(--color-live);
+      border: 1px solid var(--color-live);
       border-radius: 3px;
       padding: 0 4px;
       margin-left: 4px;
@@ -5086,8 +5073,8 @@
       align-items: center;
       font-size: 9px;
       font-weight: 700;
-      color: #fff;
-      background: var(--danger);
+      color: var(--color-white);
+      background: var(--color-live);
       border-radius: 3px;
       padding: 0 4px;
       margin-left: 4px;
@@ -5117,7 +5104,7 @@
       display: inline-flex;
       align-items: center;
       flex-shrink: 0;
-      color: var(--text-muted);
+      color: var(--color-neutral-500);
     }
 
     /* Phosphor glyph sizes (PRD 19 F2). */
@@ -5141,8 +5128,8 @@
 
 
     .modal-content {
-      background: var(--bg-secondary);
-      border: 1px solid var(--border);
+      background: var(--color-surface);
+      border: 1px solid var(--color-divider);
       border-radius: 8px;
       padding: 20px;
       width: 320px;
@@ -5183,7 +5170,7 @@
       align-items: center;
       justify-content: space-between;
       padding: 8px 10px;
-      border-bottom: 1px solid var(--border);
+      border-bottom: 1px solid var(--color-divider);
       gap: 10px;
     }
 
@@ -5199,7 +5186,7 @@
     .admin-user-nickname {
       font-size: 12px;
       font-weight: 600;
-      color: var(--text-primary);
+      color: var(--color-text);
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -5208,9 +5195,9 @@
     /* A member without CONNECT/ADMIN: connected but restricted (PRD 18.18). */
     .user-no-access-badge {
       display: inline-block;
-      background: rgba(255, 167, 38, 0.18);
-      color: var(--warning);
-      border: 1px solid var(--warning);
+      background: color-mix(in srgb, var(--color-warning) 18%, transparent);
+      color: var(--color-warning);
+      border: 1px solid var(--color-warning);
       font-size: 9px;
       font-weight: 700;
       letter-spacing: 0.3px;
@@ -5223,9 +5210,9 @@
     /* A member who holds no roles (PRD 18.17) — muted, unlike BANNED. */
     .user-no-roles-badge {
       display: inline-block;
-      background: var(--bg-secondary);
-      color: var(--text-muted);
-      border: 1px solid var(--border);
+      background: var(--color-surface);
+      color: var(--color-neutral-500);
+      border: 1px solid var(--color-divider);
       font-size: 9px;
       font-weight: 600;
       letter-spacing: 0.3px;
@@ -5237,8 +5224,8 @@
 
     .user-banned-badge {
       display: inline-block;
-      background: #e74c3c;
-      color: #fff;
+      background: var(--color-live);
+      color: var(--color-white);
       font-size: 9px;
       font-weight: 700;
       letter-spacing: 0.3px;
@@ -5251,7 +5238,7 @@
     .admin-user-id {
       font-size: 9px;
       font-family: 'Reson8 Emoji', monospace;
-      color: var(--text-muted);
+      color: var(--color-neutral-500);
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -5272,11 +5259,11 @@
       font-size: 11px;
       padding: 2px 6px;
       border-radius: 8px;
-      border: 1px solid var(--border);
+      border: 1px solid var(--color-divider);
       cursor: pointer;
       transition: all 0.15s;
       user-select: none;
-      color: var(--text-muted);
+      color: var(--color-neutral-500);
       background: transparent;
       text-align: center;
       max-width: 100%;
@@ -5284,13 +5271,13 @@
     }
 
     .role-badge.active {
-      background: var(--accent);
-      color: var(--bg-primary);
-      border-color: var(--accent);
+      background: var(--color-accent);
+      color: var(--color-bg);
+      border-color: var(--color-accent);
     }
 
     .role-badge:hover {
-      border-color: var(--accent);
+      border-color: var(--color-accent);
     }
 
     .emoji-pending-thumb {
@@ -5298,7 +5285,7 @@
       height: 32px;
       object-fit: contain;
       border-radius: 4px;
-      background: repeating-conic-gradient(#2a2a35 0% 25%, #232330 0% 50%) 50% / 8px 8px;
+      background: repeating-conic-gradient(var(--color-neutral-900) 0% 25%, var(--color-surface) 0% 50%) 50% / 8px 8px;
       flex-shrink: 0;
     }
 
@@ -5312,34 +5299,34 @@
     .btn-emoji-reject {
       font-size: 11px;
       padding: 4px 10px;
-      border-radius: var(--radius);
+      border-radius: var(--radius-md);
       cursor: pointer;
-      border: 1px solid var(--border);
+      border: 1px solid var(--color-divider);
       background: transparent;
       transition: all 0.15s;
     }
 
     .btn-emoji-approve {
-      color: var(--success);
+      color: var(--color-success);
     }
 
     .btn-emoji-approve:hover {
-      border-color: var(--success);
-      background: rgba(46, 204, 113, 0.12);
+      border-color: var(--color-success);
+      background: color-mix(in srgb, var(--color-success) 12%, transparent);
     }
 
     .btn-emoji-reject {
-      color: var(--danger);
+      color: var(--color-live);
     }
 
     .btn-emoji-reject:hover {
-      border-color: var(--danger);
-      background: rgba(239, 83, 80, 0.12);
+      border-color: var(--color-live);
+      background: color-mix(in srgb, var(--color-live) 12%, transparent);
     }
 
     .admin-empty {
       text-align: center;
-      color: var(--text-muted);
+      color: var(--color-neutral-500);
       font-size: 12px;
       padding: 20px;
     }
@@ -5348,7 +5335,7 @@
     .settings-tab-bar {
       display: flex;
       gap: 0;
-      border-bottom: 1px solid var(--border);
+      border-bottom: 1px solid var(--color-divider);
       margin-bottom: 12px;
       /* More tabs than fit at once (PRD 13.17 added a longer label) —
          scroll horizontally instead of squishing/wrapping tab labels,
@@ -5365,7 +5352,7 @@
       overflow-y: hidden;
       flex-shrink: 0;
       scrollbar-width: thin;
-      scrollbar-color: var(--border) transparent;
+      scrollbar-color: var(--color-divider) transparent;
     }
 
     .settings-tab-bar::-webkit-scrollbar {
@@ -5377,18 +5364,18 @@
     }
 
     .settings-tab-bar::-webkit-scrollbar-thumb {
-      background: var(--border);
+      background: var(--color-divider);
       border-radius: 3px;
     }
 
     .settings-tab-bar::-webkit-scrollbar-thumb:hover {
-      background: var(--text-muted);
+      background: var(--color-neutral-500);
     }
 
     .settings-tab-btn {
       background: none;
       border: none;
-      color: var(--text-muted);
+      color: var(--color-neutral-500);
       font-size: 11px;
       line-height: 1.8;
       padding: 6px 14px;
@@ -5400,16 +5387,16 @@
     }
 
     .settings-tab-btn.active {
-      color: var(--accent);
-      border-bottom-color: var(--accent);
+      color: var(--color-accent);
+      border-bottom-color: var(--color-accent);
     }
 
     .settings-tab-btn:hover {
-      color: var(--text-primary);
+      color: var(--color-text);
     }
 
     .settings-tab-btn:disabled {
-      color: var(--text-muted);
+      color: var(--color-neutral-500);
       opacity: 0.4;
       cursor: default;
     }
@@ -5446,40 +5433,40 @@
     .shortcut-input {
       flex: 1;
       padding: 5px 8px;
-      background: var(--bg-primary);
-      color: var(--text-primary);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
+      background: var(--color-bg);
+      color: var(--color-text);
+      border: 1px solid var(--color-divider);
+      border-radius: var(--radius-md);
       font-size: 11px;
       text-align: center;
       cursor: default;
     }
 
     .shortcut-input.listening {
-      border-color: var(--accent);
-      color: var(--accent);
+      border-color: var(--color-accent);
+      color: var(--color-accent);
     }
 
     .settings-select {
       width: 100%;
       margin-bottom: 12px;
       padding: 6px;
-      background: var(--bg-primary);
-      color: var(--text-primary);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
+      background: var(--color-bg);
+      color: var(--color-text);
+      border: 1px solid var(--color-divider);
+      border-radius: var(--radius-md);
       font-size: 12px;
     }
 
     .modal-content h3 {
       font-size: 14px;
       margin-bottom: 14px;
-      color: var(--text-primary);
+      color: var(--color-text);
     }
 
     .modal-content label {
       font-size: 11px;
-      color: var(--text-secondary);
+      color: var(--color-neutral-400);
       display: block;
       margin-bottom: 4px;
     }
@@ -5488,10 +5475,10 @@
     .modal-content select {
       width: 100%;
       padding: 6px 10px;
-      background: var(--bg-input);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      color: var(--text-primary);
+      background: var(--color-field);
+      border: 1px solid var(--color-divider);
+      border-radius: var(--radius-md);
+      color: var(--color-text);
       font-size: 12px;
       font-family: var(--font);
       margin-bottom: 12px;
@@ -5500,11 +5487,11 @@
     .modal-content input:focus,
     .modal-content select:focus {
       outline: none;
-      border-color: var(--accent);
+      border-color: var(--color-accent);
     }
 
     .modal-content p {
-      color: var(--text-secondary);
+      color: var(--color-neutral-400);
       font-size: 13px;
       margin-bottom: 16px;
       line-height: 1.5;
@@ -5524,8 +5511,8 @@
       height: 40px;
       border-radius: 50%;
       overflow: hidden;
-      background: var(--avatar-bg, var(--bg-tertiary));
-      color: #fff;
+      background: var(--avatar-bg, var(--color-accent-900));
+      color: var(--color-white);
       font-weight: 600;
       font-size: 15px;
       line-height: 1;
@@ -5551,7 +5538,7 @@
 
     .avatar .avatar-initials {
       letter-spacing: 0.3px;
-      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+      text-shadow: 0 1px 2px color-mix(in srgb, var(--color-black) 35%, transparent);
     }
 
     /* Profile section (Settings → Application). Scoped selectors on purpose:
@@ -5562,9 +5549,9 @@
       gap: 16px;
       padding: 14px;
       margin-bottom: 10px;
-      border-radius: var(--radius);
-      background: var(--bg-input);
-      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      background: var(--color-field);
+      border: 1px solid var(--color-divider);
     }
 
     .profile-avatar-col {
@@ -5580,7 +5567,7 @@
       width: 96px;
       height: 96px;
       font-size: 34px;
-      box-shadow: 0 0 0 3px var(--bg-secondary), 0 0 0 4px var(--border);
+      box-shadow: 0 0 0 3px var(--color-surface), 0 0 0 4px var(--color-divider);
     }
 
     .profile-avatar-status {
@@ -5588,11 +5575,11 @@
       font-size: 11px;
       line-height: 1.3;
       text-align: center;
-      color: var(--text-muted);
+      color: var(--color-neutral-500);
     }
 
     .profile-avatar-status.found {
-      color: var(--success);
+      color: var(--color-success);
     }
 
     .profile-fields {
@@ -5611,7 +5598,7 @@
 
     .profile-field-label {
       font-size: 11px;
-      color: var(--text-secondary);
+      color: var(--color-neutral-400);
     }
 
     .modal-content input.profile-email-input {
@@ -5619,13 +5606,13 @@
     }
 
     .modal-content input.profile-email-input.invalid {
-      border-color: var(--danger);
+      border-color: var(--color-live);
     }
 
     .profile-field-error {
       min-height: 0;
       font-size: 11px;
-      color: var(--danger);
+      color: var(--color-live);
     }
 
     .profile-field-error:empty {
@@ -5636,9 +5623,9 @@
       display: inline-flex;
       align-self: flex-start;
       padding: 2px;
-      border-radius: var(--radius);
-      background: var(--bg-primary);
-      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      background: var(--color-bg);
+      border: 1px solid var(--color-divider);
     }
 
     .segmented-option {
@@ -5646,7 +5633,7 @@
       border: none;
       border-radius: 4px;
       background: transparent;
-      color: var(--text-secondary);
+      color: var(--color-neutral-400);
       font-size: 12px;
       font-weight: 500;
       cursor: pointer;
@@ -5654,16 +5641,16 @@
     }
 
     .segmented-option:hover {
-      color: var(--text-primary);
+      color: var(--color-text);
     }
 
     .segmented-option[aria-checked="true"] {
-      background: var(--accent-dim);
-      color: var(--text-primary);
+      background: var(--color-accent-800);
+      color: var(--color-text);
     }
 
     .segmented-option:focus-visible {
-      outline: 2px solid var(--accent);
+      outline: 2px solid var(--color-accent);
       outline-offset: 1px;
     }
 
@@ -5674,7 +5661,7 @@
       margin: 0;
       font-size: 11px;
       line-height: 1.45;
-      color: var(--text-muted);
+      color: var(--color-neutral-500);
     }
 
     .profile-hint svg {
@@ -5683,7 +5670,7 @@
     }
 
     .profile-provider-link {
-      color: var(--accent);
+      color: var(--color-accent);
       text-decoration: none;
     }
 
@@ -5711,8 +5698,8 @@
     .profile-actions .btn-create:disabled,
     .profile-actions .btn-create:disabled:hover {
       opacity: 1;
-      background: var(--bg-tertiary);
-      color: var(--text-muted);
+      background: var(--color-accent-900);
+      color: var(--color-neutral-500);
     }
 
     .modal-actions {
@@ -5726,21 +5713,21 @@
     }
 
     .btn-cancel {
-      background: var(--bg-input);
-      color: var(--text-secondary);
+      background: var(--color-field);
+      color: var(--color-neutral-400);
     }
 
     .btn-cancel:hover {
-      background: var(--border);
+      background: var(--color-divider);
     }
 
     .btn-create {
-      background: var(--accent);
-      color: #000;
+      background: var(--color-accent);
+      color: var(--color-black);
     }
 
     .btn-create:hover {
-      background: var(--accent-hover);
+      background: var(--color-accent-400);
     }
 
     /* Scrollbar */
@@ -5753,16 +5740,16 @@
     }
 
     ::-webkit-scrollbar-thumb {
-      background: var(--border);
+      background: var(--color-divider);
       border-radius: 3px;
     }
 
     ::-webkit-scrollbar-thumb:hover {
-      background: var(--text-muted);
+      background: var(--color-neutral-500);
     }
 
     #remember-me {
-      accent-color: var(--accent);
+      accent-color: var(--color-accent);
       cursor: pointer;
     }
 
@@ -5771,7 +5758,7 @@
       display: none;
       position: fixed;
       inset: 0;
-      background: rgba(0, 0, 0, 0.6);
+      background: color-mix(in srgb, var(--color-black) 60%, transparent);
       z-index: 100;
       align-items: center;
       justify-content: center;
@@ -5786,11 +5773,11 @@
       position: relative;
       width: 340px;
       max-width: calc(100vw - 32px);
-      background: var(--bg-secondary);
-      border: 1px solid var(--border);
+      background: var(--color-surface);
+      border: 1px solid var(--color-divider);
       border-radius: 12px;
       overflow: hidden;
-      box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+      box-shadow: 0 16px 48px color-mix(in srgb, var(--color-black) 50%, transparent);
       animation: user-profile-in 0.14s ease-out;
     }
 
@@ -5805,7 +5792,7 @@
       position: relative;
       height: 76px;
       background:
-        linear-gradient(135deg, var(--profile-tint, var(--accent-dim)) 0%, var(--bg-tertiary) 100%);
+        linear-gradient(135deg, var(--profile-tint, var(--color-accent-800)) 0%, var(--color-accent-900) 100%);
     }
 
     .user-profile-close {
@@ -5819,20 +5806,20 @@
       justify-content: center;
       border: none;
       border-radius: 50%;
-      background: rgba(0, 0, 0, 0.35);
-      color: #fff;
+      background: color-mix(in srgb, var(--color-black) 35%, transparent);
+      color: var(--color-white);
       cursor: pointer;
       transition: background 0.15s;
     }
 
     .user-profile-close:hover {
-      background: rgba(0, 0, 0, 0.55);
+      background: color-mix(in srgb, var(--color-black) 55%, transparent);
     }
 
     .user-profile-close:focus-visible,
     .user-profile-retry:focus-visible,
     .user-profile-actions button:focus-visible {
-      outline: 2px solid var(--accent);
+      outline: 2px solid var(--color-accent);
       outline-offset: 2px;
     }
 
@@ -5847,7 +5834,7 @@
       width: 96px;
       height: 96px;
       font-size: 34px;
-      box-shadow: 0 0 0 6px var(--bg-secondary);
+      box-shadow: 0 0 0 6px var(--color-surface);
     }
 
     .user-profile-presence {
@@ -5857,12 +5844,12 @@
       width: 20px;
       height: 20px;
       border-radius: 50%;
-      background: var(--text-muted);
-      box-shadow: 0 0 0 4px var(--bg-secondary);
+      background: var(--color-neutral-500);
+      box-shadow: 0 0 0 4px var(--color-surface);
     }
 
     .user-profile-presence.online {
-      background: var(--success);
+      background: var(--color-success);
     }
 
     .user-profile-presence.unknown {
@@ -5877,7 +5864,7 @@
       margin: 0;
       font-size: 20px;
       font-weight: 700;
-      color: var(--text-primary);
+      color: var(--color-text);
       overflow-wrap: anywhere;
     }
 
@@ -5885,7 +5872,7 @@
       margin-top: 2px;
       min-height: 17px;
       font-size: 12px;
-      color: var(--text-secondary);
+      color: var(--color-neutral-400);
     }
 
     .user-profile-section {
@@ -5898,7 +5885,7 @@
       font-weight: 600;
       letter-spacing: 0.5px;
       text-transform: uppercase;
-      color: var(--text-muted);
+      color: var(--color-neutral-500);
     }
 
     .user-profile-roles {
@@ -5914,22 +5901,22 @@
       gap: 6px;
       padding: 3px 9px;
       border-radius: 999px;
-      background: var(--bg-input);
-      border: 1px solid var(--border);
+      background: var(--color-field);
+      border: 1px solid var(--color-divider);
       font-size: 12px;
-      color: var(--text-primary);
+      color: var(--color-text);
     }
 
     .user-profile-role-dot {
       width: 8px;
       height: 8px;
       border-radius: 50%;
-      background: var(--role-color, var(--text-muted));
+      background: var(--role-color, var(--color-neutral-500));
     }
 
     .user-profile-empty {
       font-size: 12px;
-      color: var(--text-muted);
+      color: var(--color-neutral-500);
     }
 
     .user-profile-status {
@@ -5938,18 +5925,18 @@
       gap: 8px;
       min-height: 18px;
       font-size: 13px;
-      color: var(--text-primary);
+      color: var(--color-text);
     }
 
     .user-profile-status-dot {
       width: 8px;
       height: 8px;
       border-radius: 50%;
-      background: var(--text-muted);
+      background: var(--color-neutral-500);
     }
 
     .user-profile-status-dot.online {
-      background: var(--success);
+      background: var(--color-success);
     }
 
     /* Skeleton bars while the profile loads. */
@@ -5957,7 +5944,7 @@
       display: inline-block;
       height: 12px;
       border-radius: 6px;
-      background: linear-gradient(90deg, var(--bg-input) 0%, var(--border) 50%, var(--bg-input) 100%);
+      background: linear-gradient(90deg, var(--color-field) 0%, var(--color-divider) 50%, var(--color-field) 100%);
       background-size: 200% 100%;
       animation: user-profile-shimmer 1.2s linear infinite;
     }
@@ -5974,11 +5961,11 @@
       gap: 8px;
       margin-top: 16px;
       padding: 8px 10px;
-      border-radius: var(--radius);
-      background: rgba(239, 83, 80, 0.1);
-      border: 1px solid rgba(239, 83, 80, 0.35);
+      border-radius: var(--radius-md);
+      background: color-mix(in srgb, var(--color-live) 10%, transparent);
+      border: 1px solid color-mix(in srgb, var(--color-live) 35%, transparent);
       font-size: 12px;
-      color: var(--text-primary);
+      color: var(--color-text);
     }
 
     .user-profile-error[hidden] {
@@ -5988,10 +5975,10 @@
     .user-profile-retry {
       flex-shrink: 0;
       padding: 3px 10px;
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      background: var(--bg-input);
-      color: var(--text-primary);
+      border: 1px solid var(--color-divider);
+      border-radius: var(--radius-md);
+      background: var(--color-field);
+      color: var(--color-text);
       font-size: 12px;
       cursor: pointer;
     }
@@ -6024,30 +6011,30 @@
       justify-content: space-between;
       gap: 8px;
       font-size: 12px;
-      color: var(--text-secondary);
+      color: var(--color-neutral-400);
     }
 
     .user-profile-self button {
       padding: 6px 12px;
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      background: var(--bg-input);
-      color: var(--text-primary);
+      border: 1px solid var(--color-divider);
+      border-radius: var(--radius-md);
+      background: var(--color-field);
+      color: var(--color-text);
       font-size: 12px;
       cursor: pointer;
     }
 
     .user-profile-self button:hover {
-      border-color: var(--accent);
+      border-color: var(--color-accent);
     }
 
     /* ── Identity (PRD 17.12) ─────────────────────────────────────────── */
     .identity-row {
       margin-top: 18px;
       padding: 12px;
-      border-radius: var(--radius);
-      background: var(--bg-input);
-      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      background: var(--color-field);
+      border: 1px solid var(--color-divider);
     }
 
     .identity-row-label {
@@ -6055,7 +6042,7 @@
       font-weight: 600;
       letter-spacing: 0.5px;
       text-transform: uppercase;
-      color: var(--text-muted);
+      color: var(--color-neutral-500);
       margin-bottom: 6px;
     }
 
@@ -6069,10 +6056,10 @@
     .identity-row-storage {
       margin-top: 8px;
       font-size: 11px;
-      color: var(--text-secondary);
+      color: var(--color-neutral-400);
     }
 
-    .identity-row-storage.warn { color: var(--warning); }
+    .identity-row-storage.warn { color: var(--color-warning); }
 
     .identity-actions {
       display: flex;
@@ -6087,7 +6074,7 @@
       min-height: 16px;
       margin: -4px 0 8px;
       font-size: 11px;
-      color: var(--danger);
+      color: var(--color-live);
     }
 
     .identity-compare {
@@ -6098,8 +6085,8 @@
       font-size: 12px;
     }
 
-    .identity-compare dt { color: var(--text-muted); }
-    .identity-compare dd { margin: 0; word-break: break-all; color: var(--text-primary); }
+    .identity-compare dt { color: var(--color-neutral-500); }
+    .identity-compare dd { margin: 0; word-break: break-all; color: var(--color-text); }
     .identity-compare code { font-size: 11px; }
 
     .identity-row-value code {
@@ -6107,14 +6094,14 @@
       min-width: 0;
       overflow-wrap: anywhere;
       font-size: 11px;
-      color: var(--text-primary);
+      color: var(--color-text);
     }
 
     .identity-row-hint {
       margin-top: 6px;
       font-size: 11px;
       line-height: 1.4;
-      color: var(--text-muted);
+      color: var(--color-neutral-500);
     }
 
     .user-key-badge {
@@ -6126,10 +6113,10 @@
     .btn-reset-key {
       flex-shrink: 0;
       padding: 4px 10px;
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      background: var(--bg-input);
-      color: var(--text-secondary);
+      border: 1px solid var(--color-divider);
+      border-radius: var(--radius-md);
+      background: var(--color-field);
+      color: var(--color-neutral-400);
       font-size: 11px;
       cursor: pointer;
     }
@@ -6141,14 +6128,14 @@
     }
 
     .btn-reset-key:hover {
-      border-color: var(--warning);
-      color: var(--text-primary);
+      border-color: var(--color-warning);
+      color: var(--color-text);
     }
 
     .btn-reset-key.armed {
-      border-color: var(--danger);
-      background: rgba(239, 83, 80, 0.15);
-      color: var(--text-primary);
+      border-color: var(--color-live);
+      background: color-mix(in srgb, var(--color-live) 15%, transparent);
+      color: var(--color-text);
     }
 
     /* ── Identity log (PRD 18.4) ───────────────────────────────────────── */
@@ -6159,7 +6146,7 @@
       gap: 10px;
       margin-bottom: 10px;
       font-size: 12px;
-      color: var(--text-muted);
+      color: var(--color-neutral-500);
     }
 
     .identity-log-bar .btn,
@@ -6171,7 +6158,7 @@
       gap: 10px;
       margin-bottom: 10px;
       font-size: 12px;
-      color: var(--text-secondary);
+      color: var(--color-neutral-400);
     }
 
     .identity-log-head .identity-log-filter { flex: 1; min-width: 0; }
@@ -6182,9 +6169,9 @@
       gap: 4px 12px;
       padding: 8px 10px;
       margin-bottom: 6px;
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      background: var(--bg-input);
+      border: 1px solid var(--color-divider);
+      border-radius: var(--radius-md);
+      background: var(--color-field);
       font-size: 12px;
     }
 
@@ -6201,50 +6188,50 @@
       white-space: nowrap;
     }
 
-    .identity-log-kind.bound { color: var(--success); }
-    .identity-log-kind.reset { color: var(--accent); }
-    .identity-log-kind.refused { color: var(--danger); }
+    .identity-log-kind.bound { color: var(--color-success); }
+    .identity-log-kind.reset { color: var(--color-accent); }
+    .identity-log-kind.refused { color: var(--color-live); }
 
     .identity-log-who { font-weight: 600; word-break: break-word; }
-    .identity-log-who .identity-log-now { font-weight: 400; color: var(--text-muted); }
+    .identity-log-who .identity-log-now { font-weight: 400; color: var(--color-neutral-500); }
 
     .identity-log-privileged {
       margin-left: 6px;
       padding: 0 5px;
       border-radius: 3px;
-      border: 1px solid var(--warning);
-      color: var(--warning);
+      border: 1px solid var(--color-warning);
+      color: var(--color-warning);
       font-size: 9px;
       font-weight: 700;
       text-transform: uppercase;
       vertical-align: middle;
     }
 
-    .identity-log-time { color: var(--text-muted); font-size: 11px; white-space: nowrap; text-align: right; }
+    .identity-log-time { color: var(--color-neutral-500); font-size: 11px; white-space: nowrap; text-align: right; }
 
     .identity-log-detail {
       grid-column: 2 / 4;
-      color: var(--text-secondary);
+      color: var(--color-neutral-400);
       font-size: 11px;
       line-height: 1.5;
       word-break: break-word;
     }
 
-    .identity-log-detail code { font-size: 10px; color: var(--text-muted); }
+    .identity-log-detail code { font-size: 10px; color: var(--color-neutral-500); }
 
     .toggle-row-note {
       display: block;
       margin-top: 4px;
       font-size: 11px;
-      color: var(--warning);
+      color: var(--color-warning);
     }
 
-    .toggle-row-note.safe { color: var(--success); }
+    .toggle-row-note.safe { color: var(--color-success); }
 
     /* ── Ban dialog + banned addresses (PRD 18.7) ───────────────────────── */
     .modal-content fieldset.ban-scope {
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
+      border: 1px solid var(--color-divider);
+      border-radius: var(--radius-md);
       padding: 8px 12px 4px;
       margin: 0 0 12px;
     }
@@ -6252,7 +6239,7 @@
     .modal-content fieldset.ban-scope legend {
       padding: 0 6px;
       font-size: 11px;
-      color: var(--text-muted);
+      color: var(--color-neutral-500);
     }
 
     .modal-content fieldset.ban-scope label.ban-scope-option {
@@ -6261,7 +6248,7 @@
       gap: 8px;
       margin: 0 0 6px;
       font-size: 12px;
-      color: var(--text-primary);
+      color: var(--color-text);
       cursor: pointer;
     }
 
@@ -6282,7 +6269,7 @@
       z-index: 50;
       align-items: center;
       justify-content: center;
-      background: var(--bg-primary);
+      background: var(--color-bg);
       padding: 24px;
     }
 
@@ -6306,15 +6293,15 @@
     #approval-screen .approval-ident {
       margin: 0 0 18px;
       padding: 10px 12px;
-      border-radius: var(--radius);
-      background: var(--bg-input);
-      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      background: var(--color-field);
+      border: 1px solid var(--color-divider);
       text-align: left;
       font-size: 12px;
-      color: var(--text-secondary);
+      color: var(--color-neutral-400);
     }
 
-    #approval-screen .approval-ident code { display: block; margin-top: 4px; word-break: break-all; color: var(--text-primary); }
+    #approval-screen .approval-ident code { display: block; margin-top: 4px; word-break: break-all; color: var(--color-text); }
 
     .pending-badge {
       display: inline-flex;
@@ -6325,8 +6312,8 @@
       padding: 0 4px;
       margin-left: 6px;
       border-radius: 8px;
-      background: var(--danger);
-      color: #fff;
+      background: var(--color-live);
+      color: var(--color-white);
       font-size: 10px;
       font-weight: 700;
       line-height: 1;
@@ -6341,15 +6328,15 @@
       gap: 10px;
       padding: 8px 10px;
       margin-bottom: 6px;
-      border: 1px solid var(--warning);
-      border-radius: var(--radius);
-      background: rgba(255, 167, 38, 0.07);
+      border: 1px solid var(--color-warning);
+      border-radius: var(--radius-md);
+      background: color-mix(in srgb, var(--color-warning) 7%, transparent);
       font-size: 12px;
     }
 
     .pending-approval-row .pending-approval-info { flex: 1; min-width: 0; }
-    .pending-approval-row .pending-approval-name { font-weight: 600; color: var(--text-primary); word-break: break-word; }
-    .pending-approval-row .pending-approval-meta { margin-top: 2px; font-size: 11px; color: var(--text-muted); word-break: break-all; }
+    .pending-approval-row .pending-approval-name { font-weight: 600; color: var(--color-text); word-break: break-word; }
+    .pending-approval-row .pending-approval-meta { margin-top: 2px; font-size: 11px; color: var(--color-neutral-500); word-break: break-all; }
     .pending-approval-row .pending-approval-actions { display: flex; gap: 6px; flex-shrink: 0; }
     .pending-approval-row button { padding: 4px 8px; font-size: 11px; }
 
@@ -6357,17 +6344,17 @@
     .invite-row {
       padding: 7px 10px;
       margin-bottom: 6px;
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      background: var(--bg-input);
+      border: 1px solid var(--color-divider);
+      border-radius: var(--radius-md);
+      background: var(--color-field);
       font-size: 12px;
     }
 
     .invite-row .invite-main { display: flex; align-items: center; gap: 10px; }
     .invite-row .invite-info { flex: 1; min-width: 0; }
-    .invite-row .invite-title { color: var(--text-primary); font-weight: 600; word-break: break-word; }
-    .invite-row .invite-title code { font-weight: 400; color: var(--text-secondary); margin-right: 6px; }
-    .invite-row .invite-meta { margin-top: 2px; font-size: 11px; color: var(--text-muted); word-break: break-word; }
+    .invite-row .invite-title { color: var(--color-text); font-weight: 600; word-break: break-word; }
+    .invite-row .invite-title code { font-weight: 400; color: var(--color-neutral-400); margin-right: 6px; }
+    .invite-row .invite-meta { margin-top: 2px; font-size: 11px; color: var(--color-neutral-500); word-break: break-word; }
     .invite-row .invite-actions { display: flex; gap: 6px; flex-shrink: 0; }
     .invite-row .invite-actions button { padding: 4px 8px; font-size: 11px; }
     .invite-row.invite-inactive { opacity: 0.6; }
@@ -6381,18 +6368,18 @@
       font-weight: 600;
       text-transform: uppercase;
       letter-spacing: 0.4px;
-      background: var(--bg-secondary);
-      color: var(--text-secondary);
+      background: var(--color-surface);
+      color: var(--color-neutral-400);
     }
 
-    .invite-status.active { background: rgba(76, 175, 80, 0.18); color: #66bb6a; }
+    .invite-status.active { background: color-mix(in srgb, var(--color-success) 18%, transparent); color: var(--color-success); }
 
     .invite-uses {
       margin: 8px 0 2px;
       padding-top: 6px;
-      border-top: 1px solid var(--border);
+      border-top: 1px solid var(--color-divider);
       font-size: 11px;
-      color: var(--text-secondary);
+      color: var(--color-neutral-400);
     }
 
     .invite-uses div { padding: 1px 0; }
@@ -6401,18 +6388,18 @@
       display: block;
       margin: 10px 0;
       padding: 12px;
-      border-radius: var(--radius);
-      border: 1px solid var(--border);
-      background: var(--bg-input);
+      border-radius: var(--radius-md);
+      border: 1px solid var(--color-divider);
+      background: var(--color-field);
       font-family: var(--font-mono, monospace);
       font-size: 20px;
       letter-spacing: 2px;
       text-align: center;
-      color: var(--text-primary);
+      color: var(--color-text);
       user-select: all;
     }
 
-    .modal-content .invite-field { display: block; margin: 10px 0 4px; font-size: 12px; color: var(--text-secondary); }
+    .modal-content .invite-field { display: block; margin: 10px 0 4px; font-size: 12px; color: var(--color-neutral-400); }
     .modal-content .invite-field + input,
     .modal-content .invite-field + select { width: 100%; }
 
@@ -6421,8 +6408,8 @@
     .about-header { text-align: center; padding: 10px 0 18px; }
     .about-header img { width: 56px; height: 56px; margin-bottom: 8px; }
     .about-header .about-name { font-size: 15px; font-weight: 600; }
-    .about-header #about-version { font-size: 12px; color: var(--text-muted); }
-    .about-tagline { font-size: 12px; color: var(--text-secondary); margin-bottom: 16px; text-align: center; }
+    .about-header #about-version { font-size: 12px; color: var(--color-neutral-500); }
+    .about-tagline { font-size: 12px; color: var(--color-neutral-400); margin-bottom: 16px; text-align: center; }
     /* A dot on the gear while an update is available or ready (PRD 19 B12). */
     #btn-server-settings.has-update::after {
       content: "";
@@ -6432,7 +6419,7 @@
       width: 7px;
       height: 7px;
       border-radius: 50%;
-      background: var(--accent);
+      background: var(--color-accent);
     }
 
     /* Restricted user: connected, but without the Member role (PRD 18.18). */
@@ -6441,9 +6428,9 @@
       padding: 8px 14px;
       font-size: 12px;
       line-height: 1.4;
-      color: var(--text-primary);
-      background: rgba(255, 167, 38, 0.12);
-      border-bottom: 1px solid var(--warning);
+      color: var(--color-text);
+      background: color-mix(in srgb, var(--color-warning) 12%, transparent);
+      border-bottom: 1px solid var(--color-warning);
     }
 
     body.no-access #access-banner { display: block; }
@@ -6462,7 +6449,7 @@
       font-weight: 600;
       letter-spacing: 0.5px;
       text-transform: uppercase;
-      color: var(--text-muted);
+      color: var(--color-neutral-500);
     }
 
     .banned-address-row {
@@ -6471,38 +6458,38 @@
       gap: 10px;
       padding: 7px 10px;
       margin-bottom: 6px;
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      background: var(--bg-input);
+      border: 1px solid var(--color-divider);
+      border-radius: var(--radius-md);
+      background: var(--color-field);
       font-size: 12px;
     }
 
     .banned-address-row .banned-address-info { flex: 1; min-width: 0; }
-    .banned-address-row code { font-size: 12px; color: var(--text-primary); }
-    .banned-address-row .banned-address-meta { color: var(--text-muted); font-size: 11px; margin-top: 2px; word-break: break-word; }
+    .banned-address-row code { font-size: 12px; color: var(--color-text); }
+    .banned-address-row .banned-address-meta { color: var(--color-neutral-500); font-size: 11px; margin-top: 2px; word-break: break-word; }
 
     /* ── Connection names / relay protection (PRD 18.5) ─────────────────── */
     .relay-hosts {
       padding: 10px 12px;
-      border-radius: var(--radius);
-      background: var(--bg-input);
-      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      background: var(--color-field);
+      border: 1px solid var(--color-divider);
       margin-bottom: 10px;
     }
 
-    .relay-hosts-title { font-size: 12px; font-weight: 500; color: var(--text-primary); }
+    .relay-hosts-title { font-size: 12px; font-weight: 500; color: var(--color-text); }
     /* `.modal-content p` would otherwise win on specificity. */
-    .relay-hosts .relay-hosts-desc { font-size: 10px; color: var(--text-muted); line-height: 1.4; margin: 4px 0 8px; }
-    .relay-hosts .relay-hosts-desc strong { color: var(--text-secondary); }
+    .relay-hosts .relay-hosts-desc { font-size: 10px; color: var(--color-neutral-500); line-height: 1.4; margin: 4px 0 8px; }
+    .relay-hosts .relay-hosts-desc strong { color: var(--color-neutral-400); }
 
     .relay-hosts-status {
       font-size: 11px;
       font-weight: 600;
       margin-bottom: 8px;
-      color: var(--text-secondary);
+      color: var(--color-neutral-400);
     }
 
-    .relay-hosts-status.on { color: var(--success); }
+    .relay-hosts-status.on { color: var(--color-success); }
 
     /* The settings modal styles every `label` and `input` generically
        (display:block, width:100%, margins), so the row needs the extra
@@ -6514,7 +6501,7 @@
       margin: 0;
       padding: 5px 0;
       font-size: 12px;
-      color: var(--text-primary);
+      color: var(--color-text);
       cursor: pointer;
     }
 
@@ -6526,13 +6513,13 @@
     }
 
     .relay-hosts-row .relay-hosts-name { flex: 1; min-width: 0; word-break: break-all; }
-    .relay-hosts-row .relay-hosts-meta { color: var(--text-muted); font-size: 10px; white-space: nowrap; }
-    .relay-hosts-empty { color: var(--text-muted); font-size: 11px; padding: 4px 0; }
+    .relay-hosts-row .relay-hosts-meta { color: var(--color-neutral-500); font-size: 10px; white-space: nowrap; }
+    .relay-hosts-empty { color: var(--color-neutral-500); font-size: 11px; padding: 4px 0; }
 
     .relay-hosts-add { display: flex; gap: 6px; margin-top: 8px; }
     .relay-hosts-add input { flex: 1; min-width: 0; margin-bottom: 0; }
 
-    .relay-hosts-error { min-height: 14px; margin-top: 4px; font-size: 11px; color: var(--danger); }
+    .relay-hosts-error { min-height: 14px; margin-top: 4px; font-size: 11px; color: var(--color-live); }
     .relay-hosts-actions { display: flex; justify-content: flex-end; margin-top: 6px; }
 
     /* Message avatars and nicknames open the card (PRD 17.3). */
@@ -6552,12 +6539,12 @@
     }
 
     .btn-dm {
-      background: var(--accent);
-      border: 1px solid var(--accent);
-      color: #000;
+      background: var(--color-accent);
+      border: 1px solid var(--color-accent);
+      color: var(--color-black);
       font-size: 12px;
       padding: 6px 16px;
-      border-radius: var(--radius);
+      border-radius: var(--radius-md);
       cursor: pointer;
       transition: all 0.15s;
       flex-shrink: 0;
@@ -6565,8 +6552,8 @@
     }
 
     .btn-dm:hover {
-      background: var(--accent-hover);
-      border-color: var(--accent-hover);
+      background: var(--color-accent-400);
+      border-color: var(--color-accent-400);
     }
 
     /* Pill-shaped to match the role-badge pills beside it in the User
@@ -6580,25 +6567,25 @@
       font-weight: 700;
       padding: 2px 6px;
       border-radius: 8px;
-      border: 2px solid #e74c3c;
+      border: 2px solid var(--color-live);
       cursor: pointer;
       transition: all 0.15s;
       user-select: none;
-      color: #e74c3c;
+      color: var(--color-live);
       background: transparent;
       flex-shrink: 0;
     }
 
     .btn-ban:not(:disabled):hover {
-      background: #e74c3c;
-      color: #fff;
+      background: var(--color-live);
+      color: var(--color-white);
     }
 
     /* Your own row (PRD 15.4): shown but inert, so the rows stay visually
        consistent instead of the button vanishing. */
     .btn-ban:disabled {
-      color: var(--text-muted);
-      border-color: var(--border);
+      color: var(--color-neutral-500);
+      border-color: var(--color-divider);
       background: transparent;
       cursor: not-allowed;
       opacity: 0.6;
@@ -6606,11 +6593,11 @@
 
     .btn-nudge {
       background: var(--surface);
-      border: 1px solid var(--border);
-      color: var(--text-secondary);
+      border: 1px solid var(--color-divider);
+      color: var(--color-neutral-400);
       font-size: 12px;
       padding: 6px 12px;
-      border-radius: var(--radius);
+      border-radius: var(--radius-md);
       cursor: pointer;
       /* Was `transition: all`, which — combined with no fixed width below
          — animated the button's own width every time its label switched
@@ -6632,33 +6619,33 @@
     }
 
     .btn-nudge:hover {
-      border-color: var(--accent);
-      color: var(--accent);
+      border-color: var(--color-accent);
+      color: var(--color-accent);
     }
 
     .btn-nudge:disabled {
       opacity: 0.5;
       cursor: default;
-      border-color: var(--border);
-      color: var(--text-muted);
+      border-color: var(--color-divider);
+      color: var(--color-neutral-500);
     }
 
     .btn-unban {
       font-size: 11px;
       padding: 2px 6px;
       border-radius: 8px;
-      border: 1px solid var(--border);
+      border: 1px solid var(--color-divider);
       cursor: pointer;
       transition: all 0.15s;
       user-select: none;
-      color: var(--text-muted);
+      color: var(--color-neutral-500);
       background: transparent;
       flex-shrink: 0;
     }
 
     .btn-unban:hover {
-      border-color: var(--accent);
-      color: var(--accent);
+      border-color: var(--color-accent);
+      color: var(--color-accent);
     }
 
     /* ── Menus (PRD 19 F3) — the one menu look: surface, shadow-lg, 5px
@@ -6838,14 +6825,14 @@
       content: '';
       flex: 1;
       height: 1px;
-      background: var(--accent);
+      background: var(--color-accent);
       opacity: 0.5;
     }
 
     .unread-separator span {
       font-size: 10px;
       font-weight: 600;
-      color: var(--accent);
+      color: var(--color-accent);
       text-transform: uppercase;
       letter-spacing: 0.5px;
       white-space: nowrap;
@@ -6865,13 +6852,13 @@
       content: '';
       flex: 1;
       height: 1px;
-      background: var(--border);
+      background: var(--color-divider);
     }
 
     .date-separator span {
       font-size: 10px;
       font-weight: 600;
-      color: var(--text-muted);
+      color: var(--color-neutral-500);
       text-transform: uppercase;
       letter-spacing: 0.5px;
       white-space: nowrap;
@@ -6883,7 +6870,7 @@
       min-height: 1px;
       text-align: center;
       font-size: 10px;
-      color: var(--text-muted);
+      color: var(--color-neutral-500);
       user-select: none;
     }
 
@@ -6905,16 +6892,16 @@
       display: flex;
       align-items: center;
       gap: 6px;
-      background: var(--bg-secondary);
-      border: 1px solid var(--border);
+      background: var(--color-surface);
+      border: 1px solid var(--color-divider);
       border-radius: 999px;
       padding: 6px 14px;
-      color: var(--accent);
+      color: var(--color-accent);
       font-size: 11px;
       font-family: var(--font);
       font-weight: 600;
       cursor: pointer;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+      box-shadow: 0 2px 8px color-mix(in srgb, var(--color-black) 30%, transparent);
       opacity: 0;
       pointer-events: none;
       transition: opacity 0.15s ease, transform 0.15s ease;
@@ -6928,8 +6915,8 @@
     }
 
     .jump-to-recent-btn:hover {
-      background: rgba(255, 255, 255, 0.1);
-      border-color: var(--accent);
+      background: color-mix(in srgb, var(--color-white) 10%, transparent);
+      border-color: var(--color-accent);
     }
 
     /* "Don't ask again" switch row inside a confirmation modal (PRD 16.1).
@@ -6945,9 +6932,9 @@
       gap: 12px;
       margin: 0 0 16px;
       padding: 10px 12px;
-      border-radius: var(--radius);
-      background: var(--bg-input);
-      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      background: var(--color-field);
+      border: 1px solid var(--color-divider);
     }
 
     .modal-content .modal-switch-text {
@@ -6956,7 +6943,7 @@
       margin: 0;
       font-size: 12px;
       line-height: 1.4;
-      color: var(--text-secondary);
+      color: var(--color-neutral-400);
       cursor: pointer;
       user-select: none;
     }
@@ -6974,7 +6961,7 @@
     }
 
     .modal-content .modal-switch-row .toggle-switch input:focus-visible + .toggle-slider {
-      outline: 2px solid var(--accent);
+      outline: 2px solid var(--color-accent);
       outline-offset: 2px;
     }
 
@@ -6984,9 +6971,9 @@
       align-items: center;
       justify-content: space-between;
       padding: 10px 12px;
-      border-radius: var(--radius);
-      background: var(--bg-input);
-      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      background: var(--color-field);
+      border: 1px solid var(--color-divider);
       margin-bottom: 10px;
       transition: border-color 0.2s;
     }
@@ -7004,11 +6991,11 @@
       justify-content: space-between;
       gap: 12px;
       padding-top: 10px;
-      border-top: 1px solid var(--border);
+      border-top: 1px solid var(--color-divider);
     }
 
         .toggle-row:hover {
-      border-color: var(--accent-dim);
+      border-color: var(--color-accent-800);
     }
 
     .toggle-row-info {
@@ -7023,12 +7010,12 @@
       width: 28px;
       height: 28px;
       border-radius: 6px;
-      background: var(--bg-tertiary);
+      background: var(--color-accent-900);
       display: flex;
       align-items: center;
       justify-content: center;
       flex-shrink: 0;
-      color: var(--text-secondary);
+      color: var(--color-neutral-400);
     }
 
     .toggle-row-text {
@@ -7041,12 +7028,12 @@
     .toggle-row-title {
       font-size: 12px;
       font-weight: 500;
-      color: var(--text-primary);
+      color: var(--color-text);
     }
 
     .toggle-row-desc {
       font-size: 10px;
-      color: var(--text-muted);
+      color: var(--color-neutral-500);
       line-height: 1.3;
     }
 
@@ -7068,7 +7055,7 @@
     .toggle-slider {
       position: absolute;
       inset: 0;
-      background: var(--border);
+      background: var(--color-divider);
       border-radius: 10px;
       cursor: pointer;
       transition: background 0.25s, box-shadow 0.25s;
@@ -7081,19 +7068,19 @@
       height: 14px;
       left: 3px;
       top: 3px;
-      background: var(--text-muted);
+      background: var(--color-neutral-500);
       border-radius: 50%;
       transition: transform 0.25s, background 0.25s;
     }
 
     .toggle-switch input:checked + .toggle-slider {
-      background: var(--accent);
-      box-shadow: 0 0 8px rgba(79, 195, 247, 0.3);
+      background: var(--color-accent);
+      box-shadow: 0 0 8px color-mix(in srgb, var(--color-accent) 30%, transparent);
     }
 
     .toggle-switch input:checked + .toggle-slider::before {
       transform: translateX(16px);
-      background: #fff;
+      background: var(--color-white);
     }
 
     /* ── Unified switch+slider settings card (Voice & Shortcuts) ─────────
@@ -7106,15 +7093,15 @@
        the checkbox's own :checked state via :has() (Chromium 105+, well
        within Electron's baseline) — no JS visibility toggling needed. */
     .settings-toggle-card {
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      background: var(--bg-input);
+      border: 1px solid var(--color-divider);
+      border-radius: var(--radius-md);
+      background: var(--color-field);
       margin-bottom: 10px;
       transition: border-color 0.2s;
     }
 
     .settings-toggle-card:hover {
-      border-color: var(--accent-dim);
+      border-color: var(--color-accent-800);
     }
 
     .settings-toggle-card .toggle-row {
@@ -7144,7 +7131,7 @@
     #mic-sensitivity-toggle-row:has(#chk-mic-sensitivity:checked) + .settings-toggle-card-expand .settings-toggle-card-expand-inner,
     #noise-cancel-toggle-row:has(#chk-noise-cancel:checked) + .settings-toggle-card-expand .settings-toggle-card-expand-inner {
       padding: 10px 12px 12px;
-      border-top: 1px solid var(--border);
+      border-top: 1px solid var(--color-divider);
     }
 
     /* A prominent divider for a standalone settings section (currently just
@@ -7154,19 +7141,19 @@
       display: block;
       font-size: 14px;
       font-weight: 700;
-      color: var(--text-primary);
+      color: var(--color-text);
       margin: 20px 0 10px;
       padding-top: 14px;
-      border-top: 1px solid var(--border);
+      border-top: 1px solid var(--color-divider);
     }
 
     /* ── Emoji Picker ────────────────────────────────────────────── */
     #btn-emoji {
       padding: 7px 10px;
-      background: var(--bg-input);
-      border: 1px solid var(--border);
-      color: var(--text-secondary);
-      border-radius: var(--radius);
+      background: var(--color-field);
+      border: 1px solid var(--color-divider);
+      color: var(--color-neutral-400);
+      border-radius: var(--radius-md);
       cursor: pointer;
       transition: all 0.15s;
       display: flex;
@@ -7176,14 +7163,14 @@
     }
 
     #btn-emoji:hover {
-      border-color: var(--accent);
-      color: var(--accent);
+      border-color: var(--color-accent);
+      color: var(--color-accent);
     }
 
     #btn-emoji.active {
-      border-color: var(--accent);
-      color: var(--accent);
-      background: var(--accent-dim);
+      border-color: var(--color-accent);
+      color: var(--color-accent);
+      background: var(--color-accent-800);
     }
 
     .emoji-picker {
@@ -7193,10 +7180,10 @@
       left: 8px;
       width: 320px;
       max-height: 380px;
-      background: var(--bg-secondary);
-      border: 1px solid var(--border);
+      background: var(--color-surface);
+      border: 1px solid var(--color-divider);
       border-radius: 10px;
-      box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.35);
+      box-shadow: 0 -4px 24px color-mix(in srgb, var(--color-black) 35%, transparent);
       z-index: 50;
       flex-direction: column;
       overflow: hidden;
@@ -7220,10 +7207,10 @@
     #emoji-search {
       width: 100%;
       padding: 6px 10px;
-      background: var(--bg-input);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      color: var(--text-primary);
+      background: var(--color-field);
+      border: 1px solid var(--color-divider);
+      border-radius: var(--radius-md);
+      color: var(--color-text);
       font-size: 12px;
       font-family: var(--font);
       outline: none;
@@ -7231,7 +7218,7 @@
     }
 
     #emoji-search:focus {
-      border-color: var(--accent);
+      border-color: var(--color-accent);
     }
 
     /* Two zones: a scrollable row of built-in category tabs, and a fixed
@@ -7241,7 +7228,7 @@
     .emoji-tabs-bar {
       display: flex;
       align-items: stretch;
-      border-bottom: 1px solid var(--border);
+      border-bottom: 1px solid var(--color-divider);
       flex-shrink: 0;
     }
 
@@ -7260,7 +7247,7 @@
          reverting to the OS's full-size default, which would look out of
          place in this custom dark UI. */
       scrollbar-width: thin;
-      scrollbar-color: var(--border) transparent;
+      scrollbar-color: var(--color-divider) transparent;
     }
 
     .emoji-category-tabs::-webkit-scrollbar {
@@ -7272,19 +7259,19 @@
     }
 
     .emoji-category-tabs::-webkit-scrollbar-thumb {
-      background: var(--border);
+      background: var(--color-divider);
       border-radius: 3px;
     }
 
     .emoji-category-tabs::-webkit-scrollbar-thumb:hover {
-      background: var(--text-muted);
+      background: var(--color-neutral-500);
     }
 
     .emoji-custom-tab-slot {
       display: flex;
       flex-shrink: 0;
       padding: 2px 6px 2px 2px;
-      border-left: 1px solid var(--border);
+      border-left: 1px solid var(--color-divider);
     }
 
     .emoji-cat-tab {
@@ -7300,7 +7287,7 @@
          browser's initial black with nothing else in the ancestor chain
          setting it, making that one icon nearly invisible on a dark
          background. */
-      color: var(--text-primary);
+      color: var(--color-text);
       padding: 4px 6px;
       font-size: 16px;
       cursor: pointer;
@@ -7316,7 +7303,7 @@
 
     .emoji-cat-tab.active {
       opacity: 1;
-      border-bottom-color: var(--accent);
+      border-bottom-color: var(--color-accent);
     }
 
     .emoji-grid-container {
@@ -7330,7 +7317,7 @@
       font-weight: 600;
       text-transform: uppercase;
       letter-spacing: 0.5px;
-      color: var(--text-muted);
+      color: var(--color-neutral-500);
       padding: 6px 4px 4px;
       user-select: none;
     }
@@ -7356,7 +7343,7 @@
     }
 
     .emoji-item:hover {
-      background: rgba(79, 195, 247, 0.12);
+      background: color-mix(in srgb, var(--color-accent) 12%, transparent);
       transform: scale(1.15);
     }
 
@@ -7366,7 +7353,7 @@
 
     .emoji-no-results {
       text-align: center;
-      color: var(--text-muted);
+      color: var(--color-neutral-500);
       font-size: 12px;
       padding: 24px 8px;
     }
@@ -7384,8 +7371,8 @@
       width: 100%;
       aspect-ratio: 1;
       font-size: 18px;
-      color: var(--text-muted);
-      border: 1px dashed var(--border);
+      color: var(--color-neutral-500);
+      border: 1px dashed var(--color-divider);
       background: none;
       border-radius: 6px;
       cursor: pointer;
@@ -7393,9 +7380,9 @@
     }
 
     .emoji-upload-btn:hover {
-      color: var(--accent);
-      border-color: var(--accent);
-      background: rgba(79, 195, 247, 0.08);
+      color: var(--color-accent);
+      border-color: var(--color-accent);
+      background: color-mix(in srgb, var(--color-accent) 8%, transparent);
     }
 
     .emoji-upload-btn-animated {
@@ -7420,8 +7407,8 @@
       overflow: hidden;
       position: relative;
       border-radius: 8px;
-      border: 1px solid var(--border);
-      background: repeating-conic-gradient(#2a2a35 0% 25%, #232330 0% 50%) 50% / 16px 16px;
+      border: 1px solid var(--color-divider);
+      background: repeating-conic-gradient(var(--color-neutral-900) 0% 25%, var(--color-surface) 0% 50%) 50% / 16px 16px;
       cursor: grab;
     }
 
@@ -7441,13 +7428,13 @@
 
     .emoji-upload-hint {
       font-size: 11px;
-      color: var(--text-muted);
+      color: var(--color-neutral-500);
       margin: 4px 0 12px;
     }
 
     #emoji-crop-zoom {
       width: 100%;
-      accent-color: var(--accent);
+      accent-color: var(--color-accent);
       margin-bottom: 12px;
     }
 
@@ -7461,8 +7448,8 @@
       overflow: hidden;
       position: relative;
       border-radius: 8px;
-      border: 1px solid var(--border);
-      background: repeating-conic-gradient(#2a2a35 0% 25%, #232330 0% 50%) 50% / 16px 16px;
+      border: 1px solid var(--color-divider);
+      background: repeating-conic-gradient(var(--color-neutral-900) 0% 25%, var(--color-surface) 0% 50%) 50% / 16px 16px;
       cursor: grab;
     }
     .icon-crop-viewport.dragging {
@@ -7479,7 +7466,7 @@
     }
     .icon-crop-zoom {
       width: 100%;
-      accent-color: var(--accent);
+      accent-color: var(--color-accent);
       margin-bottom: 12px;
     }
     #channel-icon-emoji-grid {
@@ -7499,7 +7486,7 @@
       -webkit-appearance: none;
       appearance: none;
       height: 4px;
-      background: var(--border);
+      background: var(--color-divider);
       border-radius: 2px;
       outline: none;
       cursor: pointer;
@@ -7511,9 +7498,9 @@
       width: 14px;
       height: 14px;
       border-radius: 50%;
-      background: var(--accent);
+      background: var(--color-accent);
       cursor: pointer;
-      box-shadow: 0 0 6px rgba(79, 195, 247, 0.4);
+      box-shadow: 0 0 6px color-mix(in srgb, var(--color-accent) 40%, transparent);
       transition: transform 0.1s;
     }
 
@@ -7525,14 +7512,14 @@
       display: flex;
       justify-content: space-between;
       font-size: 9px;
-      color: var(--text-muted);
+      color: var(--color-neutral-500);
       margin-top: 4px;
     }
 
     .sensitivity-value {
       font-size: 11px;
       font-weight: 600;
-      color: var(--accent);
+      color: var(--color-accent);
       min-width: 48px;
       text-align: right;
       flex-shrink: 0;
@@ -7540,7 +7527,7 @@
 
     .mic-level-meter {
       height: 10px;
-      background: var(--bg-tertiary);
+      background: var(--color-accent-900);
       border-radius: 5px;
       overflow: hidden;
       margin-top: 10px;
@@ -7549,7 +7536,7 @@
     .mic-level-meter-bar {
       height: 100%;
       width: 0%;
-      background: linear-gradient(90deg, var(--accent), #4caf50);
+      background: linear-gradient(90deg, var(--color-accent), var(--color-success));
       border-radius: 5px;
       transition: width 0.05s linear;
     }
@@ -7573,7 +7560,7 @@
       box-shadow: var(--shadow-md);
       padding: 10px 14px;
       font-size: 12px;
-      color: var(--text-primary);
+      color: var(--color-text);
       max-width: 280px;
       opacity: 0;
       transform: translateX(20px);
@@ -7586,7 +7573,7 @@
     }
 
     .toast strong {
-      color: var(--accent);
+      color: var(--color-accent);
     }
     /* ══ Chat restyle (PRD 19 R2, frames 1a / 3c) ════════════════════════
        Appended last on purpose: it overrides the pre-Nocturne chat rules above
@@ -7603,7 +7590,7 @@
     #right-pane {
       border: 1px solid var(--color-divider);
       border-radius: var(--radius-lg);
-      background: var(--color-surface-2, #1c1e2c);
+      background: var(--color-surface-2, color-mix(in srgb, var(--color-bg) 50%, var(--color-surface)));
     }
 
     #left-pane {
@@ -7725,7 +7712,7 @@
 
     .msg-actions .btn-delete-msg:hover {
       color: var(--color-danger-text);
-      background: color-mix(in srgb, var(--color-danger, #e5484d) 14%, transparent);
+      background: color-mix(in srgb, var(--color-danger, var(--color-live)) 14%, transparent);
     }
 
     .msg-actions .btn-pin-msg.active {
@@ -8386,7 +8373,7 @@
     }
 
     .btn.btn-disconnect:hover:not(:disabled) {
-      background: color-mix(in srgb, var(--color-danger, #e5484d) 14%, transparent);
+      background: color-mix(in srgb, var(--color-danger, var(--color-live)) 14%, transparent);
     }
 
     .modal-content .btn .ph {
@@ -8594,7 +8581,7 @@
         <div class="approval-ident">
           Requesting as <strong id="approval-nickname"></strong>
           <code id="approval-fingerprint"></code>
-          <span style="display:block; margin-top:6px; font-size:11px; color:var(--text-muted);">A moderator can match this fingerprint with your request.</span>
+          <span style="display:block; margin-top:6px; font-size:11px; color:var(--color-neutral-500);">A moderator can match this fingerprint with your request.</span>
         </div>
         <button class="btn btn-secondary" id="btn-approval-cancel">Cancel request</button>
       </div>
@@ -8616,7 +8603,7 @@
         </div>
       </div>
       <div id="channel-tree">
-        <div style="padding: 20px 12px; color: var(--text-muted); font-size: 12px; text-align: center;">
+        <div style="padding: 20px 12px; color: var(--color-neutral-500); font-size: 12px; text-align: center;">
           Connect to a server to see channels
         </div>
       </div>
@@ -9752,8 +9739,8 @@
           <div class="settings-card">
         <label style="margin-bottom:4px; display:block;">Voice Input Mode</label>
         <div style="display:flex; gap:8px; margin-bottom:14px;">
-          <button class="btn" id="btn-voice-activation" style="flex:1; font-size:11px; padding:5px 0; border:1px solid var(--border); background:var(--bg-input); color:var(--text-secondary); border-radius:var(--radius); cursor:pointer; transition:all 0.15s;">🎤 Voice Activation</button>
-          <button class="btn" id="btn-ptt-mode" style="flex:1; font-size:11px; padding:5px 0; border:1px solid var(--border); background:var(--bg-input); color:var(--text-secondary); border-radius:var(--radius); cursor:pointer; transition:all 0.15s;">🔘 Push-To-Talk</button>
+          <button class="btn" id="btn-voice-activation" style="flex:1; font-size:11px; padding:5px 0; border:1px solid var(--color-divider); background:var(--color-field); color:var(--color-neutral-400); border-radius:var(--radius-md); cursor:pointer; transition:all 0.15s;">🎤 Voice Activation</button>
+          <button class="btn" id="btn-ptt-mode" style="flex:1; font-size:11px; padding:5px 0; border:1px solid var(--color-divider); background:var(--color-field); color:var(--color-neutral-400); border-radius:var(--radius-md); cursor:pointer; transition:all 0.15s;">🔘 Push-To-Talk</button>
         </div>
 
         <!-- Mic Sensitivity / Noise Gate -->
