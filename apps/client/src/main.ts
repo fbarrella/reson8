@@ -1356,6 +1356,9 @@ app.whenReady().then(() => {
         try {
             await autoUpdater.downloadUpdate();
         } catch (err: any) {
+            // The autoUpdater "error" event usually reported this failure already
+            // (and cleared the flag); send it only once.
+            if (!isDownloadingUpdate) return;
             isDownloadingUpdate = false;
             mainWindow?.webContents.send("update-error", { message: err.message });
         }

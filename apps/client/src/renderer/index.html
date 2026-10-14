@@ -1558,6 +1558,19 @@
     /* The room has no free stream slot (PRD 19 A4): still clickable, it explains why. */
     #btn-share-screen.share-full {
       opacity: 0.55;
+      gap: 6px;
+    }
+
+    /* The icon-only button still reads "5/5" when full, like the design's label. */
+    #btn-share-screen .share-full-count {
+      display: none;
+      font-size: 11px;
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+    }
+
+    #btn-share-screen.share-full .share-full-count {
+      display: inline;
     }
 
     #btn-share-screen.active .icon-share-start {
@@ -8733,7 +8746,7 @@
               <line x1="8" y1="21" x2="16" y2="21" />
               <line x1="12" y1="17" x2="12" y2="21" />
               <line x1="3" y1="21" x2="21" y2="3" />
-            </svg></button>
+            </svg><span class="share-full-count" aria-hidden="true">5/5</span></button>
           <button class="voice-btn leave" id="btn-leave-voice" title="Leave Voice"><svg width="14" height="14"
               viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
               stroke-linejoin="round">
@@ -8905,10 +8918,11 @@
     <div class="modal-content dialog">
       <h3 class="dialog-title">Rename channel</h3>
       <label for="rename-channel-input">Channel name</label>
-      <input type="text" id="rename-channel-input" class="input">
+      <input type="text" id="rename-channel-input" class="input" autocomplete="off">
+      <div id="rename-channel-error" class="cat-error" role="alert"></div>
       <div class="modal-actions">
         <button class="btn btn-secondary" id="btn-rename-cancel">Cancel</button>
-        <button class="btn btn-primary" id="btn-rename-confirm">Rename</button>
+        <button class="btn btn-primary" id="btn-rename-confirm" disabled>Rename</button>
       </div>
     </div>
   </div>

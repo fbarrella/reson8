@@ -6997,45 +6997,84 @@ btnDeleteConfirm.addEventListener("click", async () => {
 
 // ── Rename Channel Modal (PRD 4.5) ──────────────────────────────────────────
 
+const renameChannelError = document.getElementById("rename-channel-error") as HTMLDivElement;
+let renameChannelOriginal = "";
+
+/** Lower-cased names of the channel's siblings of the same type (the same list in the tree). */
+function siblingChannelNames(channelId: string): Set<string> {
+    const names = new Set<string>();
+    const self = findChannelNodeById(currentTree, channelId);
+    if (!self) return names;
+    const parent = self.parentId ? findChannelNodeById(currentTree, self.parentId) : null;
+    for (const n of parent ? parent.children : currentTree) {
+        if (n.id !== channelId && n.type === self.type) names.add(n.name.trim().toLowerCase());
+    }
+    return names;
+}
+
+/** Returns the inline error for the current input, or "" when it can be saved. */
+function validateRenameChannel(): string {
+    const name = renameChannelInput.value.trim();
+    if (!name) return "Give the channel a name.";
+    if (pendingRenameChannelId && siblingChannelNames(pendingRenameChannelId).has(name.toLowerCase())) {
+        return "Another channel here is already called that.";
+    }
+    return "";
+}
+
+function refreshRenameChannel(): void {
+    const error = validateRenameChannel();
+    renameChannelError.textContent = error;
+    btnRenameConfirm.disabled = !!error || renameChannelInput.value.trim() === renameChannelOriginal;
+}
+
+function closeRenameChannel(): void {
+    renameChannelModal.classList.remove("visible");
+    pendingRenameChannelId = null;
+}
+
 function showRenameModal(channelId: string, currentName: string): void {
     pendingRenameChannelId = channelId;
+    renameChannelOriginal = currentName;
     renameChannelInput.value = currentName;
+    refreshRenameChannel();
+    renameChannelError.textContent = ""; // no complaint before the user has typed anything
     renameChannelModal.classList.add("visible");
     renameChannelInput.focus();
     renameChannelInput.select();
 }
 
-btnRenameCancel.addEventListener("click", () => {
-    renameChannelModal.classList.remove("visible");
-    pendingRenameChannelId = null;
-});
-
-renameChannelModal.addEventListener("click", (e) => {
-    if (e.target === renameChannelModal) {
-        renameChannelModal.classList.remove("visible");
-        pendingRenameChannelId = null;
-    }
-});
-
-btnRenameConfirm.addEventListener("click", async () => {
-    if (!pendingRenameChannelId) return;
-    const name = renameChannelInput.value.trim();
-    if (!name) {
-        renameChannelInput.focus();
-        return;
-    }
+async function submitRenameChannel(): Promise<void> {
+    if (!pendingRenameChannelId || btnRenameConfirm.disabled) return;
     const channelId = pendingRenameChannelId;
-    renameChannelModal.classList.remove("visible");
-    pendingRenameChannelId = null;
-
+    const name = renameChannelInput.value.trim();
+    btnRenameConfirm.disabled = true;
     const result = await api.updateChannel(channelId, { name });
     if (result.success) {
         log(`Channel renamed to "${name}"`, "success");
-    } else {
-        log(`Failed to rename channel: ${result.error}`, "error");
-        if (result.error && /permission|denied/i.test(result.error)) SoundAlert.play("insufficient_perms.mp3");
+        closeRenameChannel();
+        return;
+    }
+    renameChannelError.textContent = result.error ?? "The channel couldn't be renamed.";
+    if (result.error && /permission|denied/i.test(result.error)) SoundAlert.play("insufficient_perms.mp3");
+    btnRenameConfirm.disabled = false;
+}
+
+renameChannelInput.addEventListener("input", refreshRenameChannel);
+renameChannelInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+        e.preventDefault();
+        void submitRenameChannel();
+    } else if (e.key === "Escape") {
+        e.preventDefault();
+        closeRenameChannel();
     }
 });
+btnRenameCancel.addEventListener("click", closeRenameChannel);
+renameChannelModal.addEventListener("click", (e) => {
+    if (e.target === renameChannelModal) closeRenameChannel();
+});
+btnRenameConfirm.addEventListener("click", () => void submitRenameChannel());
 
 // ── Move Channel Modal (PRD 14.5) ───────────────────────────────────────────
 
@@ -15970,6 +16009,8 @@ interface UpdateState {
     total?: number;
     checkedAt?: number;
     error?: string;
+    /** What the error interrupted: a download (an update was found) or a check. */
+    errorDuring?: "check" | "download";
 }
 let updateState: UpdateState = { phase: "idle", current: "" };
 const updateListeners = new Set<(s: UpdateState) => void>();
@@ -16095,8 +16136,13 @@ function renderUpdateAbout(state: UpdateState): void {
             updateRowNote.textContent = "Downloaded. Restart Reson8 to finish — it takes a few seconds.";
             break;
         case "error":
-            updateRowTitle.textContent = "Couldn't check for updates";
-            updateRowNote.textContent = state.error ? state.error : "Try again later.";
+            if (state.errorDuring === "download") {
+                updateRowTitle.textContent = `Couldn't download ${state.next ?? "the update"}`;
+                updateRowNote.textContent = `${state.error ? `${state.error} · ` : ""}you can download it manually from GitHub`;
+            } else {
+                updateRowTitle.textContent = "Couldn't check for updates";
+                updateRowNote.textContent = state.error ? state.error : "Try again later.";
+            }
             break;
         default:
             updateRowTitle.textContent = "Updates";
@@ -16141,7 +16187,13 @@ function onUpdateDownloaded(): void {
 }
 
 function onUpdateError(data: { message: string }): void {
-    setUpdateState({ phase: "error", error: data.message });
+    const during =
+        updateState.phase === "error"
+            ? (updateState.errorDuring ?? "check") // a repeat of the same failure keeps its kind
+            : updateState.phase === "available" || updateState.phase === "downloading"
+              ? "download"
+              : "check";
+    setUpdateState({ phase: "error", error: data.message, errorDuring: during });
     updateCard.classList.add("visible");
 }
 

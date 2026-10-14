@@ -832,3 +832,67 @@ Feature/Fix: <name>
   Verification:
     ...
   Next Step: ...
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: TEST_STATES sweep — every study state in the real app, three fixes (PRD 20 V4 prep)
+
+  Problem: app-planning/design_handoff_reson8_ui_overhaul/TEST_STATES.md
+    (61 states) had never been run end to end. The sweep found three real
+    defects:
+    - 6c: the channel rename dialog ignored Enter and Esc and accepted a
+      name another channel in the same list already had (the category
+      dialog did all three; the channel one was the old PRD 4.5 dialog).
+    - The 6th sharer: the voice panel's share button is icon-only, so
+      "Share screen · 5/5" existed only as its tooltip.
+    - A failed update download made the About row say "Couldn't check for
+      updates": main.ts sent update-error twice for one failure (the
+      autoUpdater "error" event AND the rejected downloadUpdate() promise),
+      and the second arrived in the error phase, where the row could not
+      tell a failed download from a failed check.
+
+  Solution:
+    - Rename channel now works like Rename category: inline error, Rename
+      disabled while the name is empty, unchanged or a duplicate (same-type
+      siblings in the same list, case-insensitive), Enter saves, Esc and the
+      backdrop cancel, a server refusal stays in the dialog.
+    - #btn-share-screen carries a .share-full-count "5/5" shown only with
+      .share-full.
+    - main.ts's download-update catch sends the error only if the "error"
+      event hasn't already (isDownloadingUpdate still set). UpdateState gets
+      errorDuring ("download" when the error interrupts available/
+      downloading, kept on a repeat); the row then says "Couldn't download
+      {version}" with the manual-download hint, a failed check keeps
+      "Couldn't check for updates".
+    - TEST_STATES.md: all 61 lines checked, with notes on how each odd one
+      was verified and what stays in PRD 20 (V1 sound/second machine, V2
+      macOS/Linux, U1–U3 real releases).
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts — rename channel dialog
+      (siblingChannelNames, validateRenameChannel, submitRenameChannel),
+      UpdateState.errorDuring, renderUpdateAbout error case, onUpdateError
+    apps/client/src/renderer/index.html — #rename-channel-error, Rename
+      disabled by default; .share-full-count
+    apps/client/src/main.ts — download-update sends update-error once
+    app-planning/design_handoff_reson8_ui_overhaul/TEST_STATES.md — results
+
+  Verification:
+    - CDP sweep over 2–6 real Electron instances (admin + member, four
+      extra sharers), Socket.io bots for the 16-person room, the 9800/9801
+      dev servers (they share one database) and a third server on 9802 with
+      its own database (reson8_sweep, dropped afterwards) for the per-server
+      DM list. A screenshot per state (local).
+    - Re-run after the fixes: 6c (pre-selected, empty/duplicate refused with
+      Enter, Enter saves, Esc cancels without saving), the 5/5 tag (shown at
+      5 live shares, gone when one stops), the real failed download in a dev
+      build → one update-error, "Couldn't download 3.0.0-beta.9 … manually
+      from GitHub"; a failed check still "Couldn't check for updates".
+    - Stream frames rendered on the stage on this machine (earlier sessions
+      saw 0×0 tracks).
+    - Client tsc, server tsc + vitest, lint.
+    - Cleanup: the temporary TSweepAdmin role and its scripts removed, the
+      sweep's channels deleted, the scratch database dropped.
+
+  Next Step: the owner's hand checks in PRD 20 (V1–V3), then
+    /bump-version 3.0.0-beta.3.
