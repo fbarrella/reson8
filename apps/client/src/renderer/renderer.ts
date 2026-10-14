@@ -8343,6 +8343,13 @@ function switchTab(tabId: string): void {
     contentEl?.classList.add("active");
     scheduleTabOverflow(); // PRD 19 C8: the active tab must stay visible
 
+    // The composer says where the message goes (PRD 19 R2, frame 1a).
+    const placeholderTab = chatTabs.get(tabId);
+    if (placeholderTab) {
+        chatInput.placeholder =
+            placeholderTab.kind === "dm" ? `Message @${placeholderTab.channelName}` : `Message #${placeholderTab.channelName}`;
+    }
+
     // Show/hide the composer (attachment tray + input bar)
     if (tabId === "server-log" || tabId === VOICE_TAB_ID) {
         chatComposer.classList.remove("visible");
@@ -8486,8 +8493,9 @@ function openChatTab(
     const pinBarEl = document.createElement("div");
     pinBarEl.className = "pinned-bar";
     pinBarEl.innerHTML = `
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a1 1 0 0 0 0-2H8a1 1 0 0 0 0 2h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V17z"/></svg>
-        <span class="pinned-bar-text"></span>
+        <i class="ph-fill ph-push-pin" aria-hidden="true"></i>
+        <div class="pinned-bar-main"><div class="pinned-bar-kicker">Pinned · <span class="pinned-bar-author"></span></div><span class="pinned-bar-text"></span></div>
+        <i class="ph ph-caret-down pinned-bar-caret" aria-hidden="true"></i>
     `;
     pinBarEl.addEventListener("click", () => {
         const msgId = pinBarEl.dataset.pinnedMsgId;
@@ -9435,7 +9443,7 @@ function regroupFrom(startEl: Element | null): void {
 
 // ── Replies (PRD 16.11) ─────────────────────────────────────────────────────
 
-const REPLY_ICON_SVG = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/></svg>`;
+const REPLY_ICON_SVG = `<i class="ph ph-arrow-bend-up-left" aria-hidden="true"></i>`; // PRD 19 R2: Phosphor
 const REPLY_ATTACHMENT_ICON_SVG = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>`;
 
 /** Shows/hides the reply bar for the ACTIVE tab (a reply draft belongs to its own conversation). */
@@ -9599,6 +9607,8 @@ function buildMessageShell(opts: {
     // level with the name even when a reply snippet sits above the header.
     rememberAvatarUrl(opts.ownerId, opts.avatarUrl);
     el.querySelector(".msg-header")?.prepend(createAvatarElement(opts.ownerId, opts.nickname, 40));
+    // The name in its person's colour (PRD 19 R2) — the same hue as their avatar initials.
+    (el.querySelector(".msg-nick") as HTMLElement | null)?.style.setProperty("--nick-color", nickColor(opts.ownerId));
 
     // A reply always opens its own group with its header showing, under the
     // snippet (PRD 16.6 rule 5 / 16.11) — applyGrouping() reads this flag.
@@ -9607,6 +9617,13 @@ function buildMessageShell(opts: {
         el.prepend(buildReplySnippet(opts.replyTo, opts.tabId));
     }
     return el;
+}
+
+/** A readable text colour for a person's name, from the same hue as their avatar (PRD 19 R2). */
+function nickColor(userId: string): string {
+    let h = 0;
+    for (let i = 0; i < userId.length; i++) h = (h * 31 + userId.charCodeAt(i)) >>> 0;
+    return `oklch(0.78 0.12 ${h % 360})`;
 }
 
 /** Adds the "(edited)" label to the end of a message's body if it isn't there yet. */
@@ -13586,7 +13603,7 @@ window.addEventListener("blur", () => {
     for (const [id, t] of chatTabs) if (t.kind === "dm") refreshTabUnread(id);
 });
 
-const REACT_ICON_SVG = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>`;
+const REACT_ICON_SVG = `<i class="ph ph-smiley" aria-hidden="true"></i>`; // PRD 19 R2: Phosphor
 
 /**
  * The reaction strip: only the reaction pills (plus a trailing "add
@@ -13684,7 +13701,7 @@ function buildMessageActions(msgId: string, isDm: boolean, ownerId: string, auth
         const btnDelete = document.createElement("button");
         btnDelete.type = "button";
         btnDelete.className = "btn-delete-msg";
-        btnDelete.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>`;
+        btnDelete.innerHTML = `<i class="ph ph-trash" aria-hidden="true"></i>`;
         btnDelete.title = "Delete message";
         btnDelete.setAttribute("aria-label", "Delete message");
         btnDelete.addEventListener("click", (e) => {
@@ -13785,7 +13802,7 @@ function attachEditButton(toolbar: HTMLDivElement, msg: ChatMessage, el: HTMLDiv
 
     const btnEdit = document.createElement("button");
     btnEdit.className = "btn-edit-msg";
-    btnEdit.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>`;
+    btnEdit.innerHTML = `<i class="ph ph-pencil-simple" aria-hidden="true"></i>`;
     btnEdit.title = "Edit message";
     btnEdit.addEventListener("click", (e) => {
         e.stopPropagation();
@@ -13816,7 +13833,7 @@ function attachEditButton(toolbar: HTMLDivElement, msg: ChatMessage, el: HTMLDiv
 // permission cache (see channel.handler.ts's UPDATE_CHANNEL for the
 // precedent this follows).
 
-const PIN_ICON_SVG = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a1 1 0 0 0 0-2H8a1 1 0 0 0 0 2h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V17z"/></svg>`;
+const PIN_ICON_SVG = `<i class="ph ph-push-pin" aria-hidden="true"></i>`; // PRD 19 R2: Phosphor
 
 let pendingPinReplaceAction: (() => void) | null = null;
 
@@ -13887,6 +13904,8 @@ function updatePinBarUI(tab: ChatTab, pinnedMessage: PinnedMessage | null): void
         const plain = api.markdownToPlainText(pinnedMessage.content);
         const preview = plain.length > 100 ? `${plain.slice(0, 100)}…` : plain;
         textEl.textContent = preview || "(attachment only)";
+        const authorEl = tab.pinBarEl.querySelector(".pinned-bar-author");
+        if (authorEl) authorEl.textContent = pinnedMessage.authorNickname ?? ""; // PRD 19 R2
         tab.pinBarEl.dataset.pinnedMsgId = pinnedMessage.id;
         tab.pinBarEl.classList.add("visible");
     } else {

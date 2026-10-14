@@ -3083,3 +3083,49 @@ Feature/Fix: Connect states restyle (PRD 19 R1)
       owner's key) and a real password-protected server.
 
   Next Step: PRD 19 R2 — chat.
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Chat restyle (PRD 19 R2)
+
+  Problem: the chat still had the pre-Nocturne look — small type, a flat
+  composer row, a bar-style pinned strip and the old NSFW prompt.
+
+  Solution (visual only; no behaviour changed):
+    - One "Chat restyle" block appended last in index.html's stylesheet, so it
+      overrides the older chat rules without editing them (R6 removes what is
+      now dead):
+      the left and right panes as rounded cards on the window background;
+      tabs at 13 px; messages at 14.5 px with rounded hover rows, the time at
+      11.5 px, date dividers in small uppercase; the hover toolbar as a
+      rounded floating box with 32 px buttons; reply snippets with an accent
+      name; image and link-preview cards on tokens.
+    - Names keep their person's colour (nickColor(): a stable hue per user id,
+      oklch 0.78/0.12) instead of every name in accent.
+    - Toolbar icons are Phosphor (smiley, arrow-bend-up-left, pencil, push-pin,
+      trash) — the same buttons, classes and handlers.
+    - Pinned bar: a tinted card with a filled pin, "PINNED · {author}" and the
+      one-line text, and a caret (the author comes from the existing
+      PinnedMessage.authorNickname).
+    - Composer: one rounded box — attach and emoji icons, a divider, the
+      text, and an outlined "Send ➤"; the placeholder names the conversation
+      ("Message #chat" / "Message @name").
+    - The NSFW prompt (3c): "Age-restricted channel" with an NSFW badge, the
+      channel in bold, the "Don't warn me again" switch in its own card, Cancel
+      / Open channel (ids unchanged).
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts, index.html
+
+  Verification:
+    - tsc client clean; lint exit 0; npm run test:markdown passes (rendering
+      unchanged).
+    - Real client at 1440x900 with a bot's messages, a reply and a GitHub link
+      preview: before/after screenshots compared with frame 1a (grouped
+      messages, the reply snippet, the hover toolbar, the preview card, the
+      composer with "Message #Chat"); the pinned bar and the NSFW prompt
+      compared with 1a and 3c.
+    - Not driven: the lightbox (only inherits the tokens) and a blurred NSFW
+      preview card.
+
+  Next Step: PRD 19 R3 — client settings.

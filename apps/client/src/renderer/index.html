@@ -7588,6 +7588,361 @@
     .toast strong {
       color: var(--accent);
     }
+    /* ══ Chat restyle (PRD 19 R2, frames 1a / 3c) ════════════════════════
+       Appended last on purpose: it overrides the pre-Nocturne chat rules above
+       without touching them (R6 removes what becomes dead). */
+
+    /* The two panes as cards on the window background. */
+    #main {
+      gap: 8px;
+      padding: 8px;
+      background: var(--color-bg);
+    }
+
+    #left-pane,
+    #right-pane {
+      border: 1px solid var(--color-divider);
+      border-radius: var(--radius-lg);
+      background: var(--color-surface-2, #1c1e2c);
+    }
+
+    #left-pane {
+      border-right: 1px solid var(--color-divider);
+    }
+
+    #tab-bar {
+      background: transparent;
+      border-bottom: 1px solid var(--color-divider);
+      padding: 0 6px;
+    }
+
+    .tab {
+      padding: 10px 14px;
+      font-size: 13px;
+      color: var(--color-neutral-400);
+    }
+
+    .tab:hover {
+      color: var(--color-neutral-200, var(--color-text));
+      background: transparent;
+    }
+
+    .tab.active {
+      color: var(--color-text);
+      border-bottom-color: var(--color-accent);
+    }
+
+    /* Messages */
+    .chat-messages {
+      padding: 12px 18px;
+    }
+
+    .chat-msg {
+      padding: 4px 10px 4px var(--msg-gutter);
+      margin: 0 -10px;
+      border-radius: var(--radius-md);
+      font-size: 14.5px;
+      line-height: 1.5;
+    }
+
+    .chat-msg:hover,
+    .chat-msg.actions-open {
+      background: color-mix(in srgb, var(--color-neutral-700) 22%, transparent);
+    }
+
+    .chat-msg .msg-header {
+      gap: 8px;
+    }
+
+    .chat-msg .msg-nick {
+      font-size: 14.5px;
+      font-weight: 600;
+      color: var(--nick-color, var(--color-accent-200));
+    }
+
+    .chat-msg .msg-time {
+      font-size: 11.5px;
+      color: var(--color-neutral-500);
+    }
+
+    .chat-msg .msg-text {
+      color: var(--color-text);
+    }
+
+    .chat-msg.msg-continuation:hover::before {
+      font-size: 10.5px;
+      top: 7px;
+      color: var(--color-neutral-500);
+    }
+
+    .chat-msg.msg-group-start {
+      margin-top: 10px;
+      min-height: 50px;
+    }
+
+    .msg-edited {
+      color: var(--color-neutral-500);
+    }
+
+    .date-separator {
+      margin: 14px 0 6px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--color-neutral-500);
+    }
+
+    .date-separator::before,
+    .date-separator::after {
+      background: var(--color-divider);
+    }
+
+    /* The hover toolbar */
+    .msg-actions {
+      top: -18px;
+      right: 12px;
+      gap: 2px;
+      padding: 4px;
+      background: var(--color-surface);
+      border: 1px solid var(--color-divider);
+      border-radius: 10px;
+      box-shadow: var(--shadow-lg);
+    }
+
+    .msg-actions button {
+      width: 32px;
+      height: 30px;
+      border-radius: var(--radius-md);
+      color: var(--color-neutral-300);
+      font-size: 17px;
+    }
+
+    .msg-actions button:hover {
+      color: var(--color-text);
+      background: var(--color-neutral-900);
+    }
+
+    .msg-actions .btn-delete-msg:hover {
+      color: var(--color-danger-text);
+      background: color-mix(in srgb, var(--color-danger, #e5484d) 14%, transparent);
+    }
+
+    .msg-actions .btn-pin-msg.active {
+      color: var(--color-accent-200);
+    }
+
+    /* Reply snippet: ↩ name + one line */
+    .msg-reply {
+      opacity: 0.8;
+      font-size: 12.5px;
+      color: var(--color-neutral-400);
+    }
+
+    .msg-reply-nick {
+      color: var(--color-accent-200);
+      font-weight: 500;
+    }
+
+    .msg-reply-spine {
+      border-color: var(--color-neutral-700);
+    }
+
+    .chat-msg.msg-reply-target {
+      background: var(--color-accent-900);
+      box-shadow: inset 3px 0 0 var(--color-accent);
+    }
+
+    /* Pinned bar: a tinted card under the tabs */
+    .pinned-bar {
+      align-items: center;
+      gap: 12px;
+      margin: 10px 14px 0;
+      padding: 10px 14px;
+      border: 1px solid var(--color-accent-700);
+      border-radius: var(--radius-lg);
+      background: color-mix(in srgb, var(--color-accent) 10%, var(--color-surface));
+      color: var(--color-text);
+    }
+
+    .pinned-bar:hover {
+      background: color-mix(in srgb, var(--color-accent) 16%, var(--color-surface));
+    }
+
+    .pinned-bar > .ph {
+      flex-shrink: 0;
+      font-size: 16px;
+      color: var(--color-accent-200);
+    }
+
+    .pinned-bar-main {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .pinned-bar-kicker {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--color-accent-200);
+    }
+
+    .pinned-bar-text {
+      display: block;
+      font-size: 14px;
+    }
+
+    .pinned-bar-caret {
+      color: var(--color-neutral-400);
+    }
+
+    /* Link previews and images */
+    .link-preview-card {
+      border-color: var(--color-divider);
+      border-left-color: var(--color-accent);
+      border-radius: var(--radius-lg);
+      background: var(--color-surface);
+    }
+
+    .msg-image {
+      border-radius: var(--radius-lg);
+    }
+
+    /* Composer: one rounded box with the tools, the text and Send inside */
+    #chat-input-bar {
+      align-items: center;
+      gap: 6px;
+      margin: 0 14px 14px;
+      padding: 6px 8px;
+      border: 1px solid var(--color-divider);
+      border-radius: var(--radius-lg);
+      background: var(--color-surface);
+    }
+
+    #chat-input-bar:focus-within {
+      border-color: var(--color-accent-700);
+    }
+
+    #btn-attach,
+    #btn-emoji {
+      width: 32px;
+      height: 32px;
+      padding: 0;
+      border: none;
+      border-radius: var(--radius-md);
+      background: none;
+      color: var(--color-neutral-400);
+      font-size: 18px;
+    }
+
+    #btn-attach:hover,
+    #btn-emoji:hover,
+    #btn-emoji.active {
+      background: var(--color-neutral-900);
+      color: var(--color-text);
+    }
+
+    .composer-divider {
+      width: 1px;
+      height: 20px;
+      margin: 0 4px;
+      background: var(--color-divider);
+    }
+
+    #chat-input {
+      padding: 7px 4px;
+      border: none;
+      background: transparent;
+      font-size: 14px;
+      color: var(--color-text);
+    }
+
+    #chat-input:focus {
+      border-color: transparent;
+    }
+
+    #btn-send {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 7px 14px;
+      border: 1px solid var(--color-accent);
+      border-radius: var(--radius-md);
+      background: transparent;
+      color: var(--color-accent-200);
+      font-size: 13.5px;
+    }
+
+    #btn-send:hover {
+      background: var(--color-accent-900);
+    }
+
+    #reply-bar {
+      margin: 0 14px;
+      border: 1px solid var(--color-divider);
+      border-bottom: none;
+      border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+      background: var(--color-surface);
+      color: var(--color-neutral-400);
+    }
+
+    /* The NSFW prompt (frame 3c) */
+    .nsfw-dialog {
+      width: 440px;
+      max-width: calc(100vw - 32px);
+    }
+
+    .nsfw-dialog-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .nsfw-badge {
+      padding: 2px 8px;
+      border: 1px solid var(--color-danger-border);
+      border-radius: 4px;
+      color: var(--color-danger-text);
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+    }
+
+    .nsfw-dialog-text {
+      margin: 8px 0 16px;
+      font-size: 14px;
+      line-height: 1.55;
+      color: var(--color-neutral-300);
+    }
+
+    .nsfw-dialog-text strong {
+      color: var(--color-text);
+    }
+
+    .nsfw-switch-card {
+      padding: 12px 14px;
+      border: 1px solid var(--color-divider);
+      border-radius: var(--radius-md);
+      background: var(--color-bg);
+    }
+
+    .nsfw-switch-card .modal-switch-text {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .nsfw-switch-title {
+      font-weight: 600;
+      color: var(--color-text);
+    }
+
+    .nsfw-switch-desc {
+      font-size: 12px;
+      color: var(--color-neutral-400);
+    }
   </style>
 </head>
 
@@ -7864,10 +8219,11 @@
           <div class="emoji-grid-container" id="emoji-grid-container"></div>
         </div>
         <input type="file" id="file-input" accept="image/jpeg,image/png,image/gif,image/webp" multiple style="display:none;">
-        <button id="btn-attach" title="Attach Image"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></button>
-        <button id="btn-emoji" title="Emoji"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg></button>
+        <button id="btn-attach" title="Attach images" aria-label="Attach images"><i class="ph ph-paperclip" aria-hidden="true"></i></button>
+        <button id="btn-emoji" title="Emoji" aria-label="Emoji"><i class="ph ph-smiley" aria-hidden="true"></i></button>
+        <span class="composer-divider" aria-hidden="true"></span>
         <textarea id="chat-input" rows="1" placeholder="Type a message..."></textarea>
-        <button id="btn-send">Send</button>
+        <button id="btn-send">Send <i class="ph ph-paper-plane-right" aria-hidden="true"></i></button>
       </div>
       </div>
     </div>
@@ -8042,20 +8398,26 @@
   </div>
 
   <!-- ── NSFW Channel Confirmation Modal ─────────────────────────────────── -->
-  <div id="nsfw-confirm-modal">
-    <div class="modal-content">
-      <h3>🔞 NSFW Channel</h3>
-      <p><strong id="nsfw-confirm-channel-name"></strong> is marked as Not Safe For Work. Are you sure you want to open it?</p>
-      <div class="modal-switch-row">
-        <label class="modal-switch-text" for="chk-nsfw-dont-warn">Don't warn me again for NSFW channels</label>
+  <div id="nsfw-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="nsfw-confirm-title">
+    <div class="modal-content dialog nsfw-dialog">
+      <div class="nsfw-dialog-head">
+        <h3 class="dialog-title" id="nsfw-confirm-title">Age-restricted channel</h3>
+        <span class="nsfw-badge">NSFW</span>
+      </div>
+      <p class="nsfw-dialog-text"><strong id="nsfw-confirm-channel-name"></strong> is marked Not Safe For Work and may contain content you don't want on screen in public. Open it anyway?</p>
+      <div class="modal-switch-row nsfw-switch-card">
+        <label class="modal-switch-text" for="chk-nsfw-dont-warn">
+          <span class="nsfw-switch-title">Don't warn me again</span>
+          <span class="nsfw-switch-desc">For every NSFW channel · undo in Settings › Application</span>
+        </label>
         <label class="toggle-switch">
           <input type="checkbox" id="chk-nsfw-dont-warn">
           <span class="toggle-slider"></span>
         </label>
       </div>
       <div class="modal-actions">
-        <button class="btn btn-cancel" id="btn-nsfw-cancel">Cancel</button>
-        <button class="btn btn-disconnect" id="btn-nsfw-confirm">Continue</button>
+        <button class="btn btn-secondary" id="btn-nsfw-cancel">Cancel</button>
+        <button class="btn btn-primary" id="btn-nsfw-confirm">Open channel</button>
       </div>
     </div>
   </div>
