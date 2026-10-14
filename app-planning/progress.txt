@@ -1461,3 +1461,33 @@ Feature/Fix: Choose a channel icon while creating a channel (PRD 20 S3)
       with draft mode off. Test channels deleted afterwards.
 
   Next Step: G2 (Play sound alerts).
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Play sound alerts switch; nudges play with alerts off (PRD 20 G2)
+
+  Problem: The setting read "Mute sound alerts" (checked = silent) while the
+  design (frame 4b) has "Play sound alerts", and a muted profile silenced
+  nudges too.
+
+  Solution: The switch is "Play sound alerts" (#chk-play-alerts, checked =
+  sounds on, with the new description); the stored key reson8-mute-alerts keeps
+  its meaning, so existing profiles with alerts muted open with the switch off.
+  The alert-volume row dims (.is-off) while it is off, a note under Nudge
+  volume says nudges play even with alerts off, and SoundAlert.play() only
+  skips when muted AND the file isn't nudge.mp3. All chkMuteAlerts /
+  chk-mute-alerts references are gone.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts, index.html
+
+  Verification:
+    - Client tsc --noEmit; lint exit 0.
+    - Real app: a profile with reson8-mute-alerts=true opened with the switch
+      off and the alert-volume row dimmed; with Audio.play stubbed, connected.mp3
+      was NOT played and nudge.mp3 WAS while muted; toggling on stored "false",
+      un-dimmed the row and played connected.mp3.
+    - Not exercised: audible output (the check counts play() calls).
+
+  Next Step: group 2 done; next group is the decision-gated items (W2, G1, Q1)
+  and H2.

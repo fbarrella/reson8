@@ -7902,6 +7902,10 @@
       transform: scale(1.2);
     }
 
+    #audio-alert-volume-wrap.is-off {
+      opacity: 0.5;
+    }
+
     .sensitivity-labels {
       display: flex;
       justify-content: space-between;
@@ -10530,12 +10534,12 @@
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>
             </div>
             <div class="toggle-row-text">
-              <span class="toggle-row-title">Mute sound alerts</span>
-              <span class="toggle-row-desc">Silence all notification sounds (connect, disconnect, DM alerts, etc.)</span>
+              <span class="toggle-row-title">Play sound alerts</span>
+              <span class="toggle-row-desc">Connect, disconnect, join, leave and private-message sounds.</span>
             </div>
           </div>
           <label class="toggle-switch">
-            <input type="checkbox" id="chk-mute-alerts">
+            <input type="checkbox" id="chk-play-alerts">
             <span class="toggle-slider"></span>
           </label>
         </div>
@@ -10553,6 +10557,7 @@
             <input type="range" id="audio-nudge-volume-slider" min="0" max="100" value="100" step="5">
             <span class="sensitivity-value" id="audio-nudge-volume-value">100%</span>
           </div>
+          <div class="sensitivity-labels"><span>When someone nudges you. Plays even with alerts off.</span></div>
         </div>
           </div>
         </section>

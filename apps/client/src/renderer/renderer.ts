@@ -1169,7 +1169,7 @@ const SoundAlert = {
     },
 
     play(filename: string): void {
-        if (soundAlertsMuted) return;
+        if (soundAlertsMuted && filename !== "nudge.mp3") return; // nudges play with alerts off (PRD 20 G2)
         const audio = this._getAudio(filename);
         audio.volume = (filename === "nudge.mp3" ? nudgeVolume : alertVolume) / 100;
         audio.currentTime = 0;
@@ -1689,7 +1689,7 @@ const chkMinimizeToTray = document.getElementById("chk-minimize-to-tray") as HTM
 const chkCloseToTray = document.getElementById("chk-close-to-tray") as HTMLInputElement;
 
 // Sound alerts mute checkbox
-const chkMuteAlerts = document.getElementById("chk-mute-alerts") as HTMLInputElement;
+const chkPlayAlerts = document.getElementById("chk-play-alerts") as HTMLInputElement;
 let soundAlertsMuted = localStorage.getItem("reson8-mute-alerts") === "true";
 
 // Audio tab volume sliders (PRD 10.2) — nudge / general alerts / voice chat,
@@ -16174,11 +16174,17 @@ chkCloseToTray.addEventListener("change", () => {
 
 // ── Sound Alerts Mute Preference ──────────────────────────────────────────
 
-chkMuteAlerts.checked = soundAlertsMuted;
+chkPlayAlerts.checked = !soundAlertsMuted;
+document.getElementById("audio-alert-volume-wrap")!.classList.toggle("is-off", soundAlertsMuted);
 
-chkMuteAlerts.addEventListener("change", () => {
-    soundAlertsMuted = chkMuteAlerts.checked;
-    localStorage.setItem("reson8-mute-alerts", String(soundAlertsMuted));
+chkPlayAlerts.addEventListener("change", () => {
+    soundAlertsMuted = !chkPlayAlerts.checked;
+    try {
+        localStorage.setItem("reson8-mute-alerts", String(soundAlertsMuted)); // the stored meaning is unchanged
+    } catch {
+        /* not remembered */
+    }
+    document.getElementById("audio-alert-volume-wrap")!.classList.toggle("is-off", soundAlertsMuted);
 });
 
 // ── Content Preferences (PRD 16.1) ────────────────────────────────────────
