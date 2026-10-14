@@ -3769,7 +3769,7 @@ function openServerSwitcher(): void {
         icon: "ph-plus",
         onClick: () => (document.getElementById("rail-add") as HTMLButtonElement).click(),
     });
-    openMenu(items, rect.left + rect.width / 2, rect.bottom + 6, { anchor: pill, align: "center" });
+    openMenu(items, rect.left + rect.width / 2, rect.bottom + 6, { anchor: pill, align: "center", minWidth: rect.width });
 }
 
 // ── Server header and its menu (PRD 19 C3) ───────────────────────────────────
@@ -4947,7 +4947,7 @@ function openMenu(
     items: MenuItem[],
     x: number,
     y: number,
-    opts: { anchor?: HTMLElement; returnFocusTo?: HTMLElement; placement?: "below" | "above"; align?: "start" | "center" } = {},
+    opts: { anchor?: HTMLElement; returnFocusTo?: HTMLElement; placement?: "below" | "above"; align?: "start" | "center"; minWidth?: number } = {},
 ): void {
     closeMenu();
     if (items.length === 0) return;
@@ -5066,6 +5066,11 @@ function openMenu(
     // Positioned after rendering, measured, then clamped (flip before clamp).
     menu.style.left = "0px";
     menu.style.top = "0px";
+    if (opts.minWidth) {
+        // The .menu CSS caps at 280 px; a wide anchor (the server pill) lifts the cap with it.
+        menu.style.minWidth = `${Math.max(190, Math.round(opts.minWidth))}px`; // never below the .menu CSS minimum
+        menu.style.maxWidth = `${Math.max(280, Math.round(opts.minWidth))}px`;
+    }
     menu.style.visibility = "hidden";
     document.body.appendChild(menu);
     const rect = menu.getBoundingClientRect();

@@ -1133,3 +1133,26 @@ Feature/Fix: Server-pill popover centred under the pill (follow-up to PRD 20 U3)
       connected (no nickname in the pill) and connected with a long nickname.
 
   Next Step: group 2.
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Server-pill popover is at least as wide as the pill (follow-up to PRD 20 U3)
+
+  Problem: With a long nickname the pill grew to ~310 px while its popover
+  stayed at the menu's 190 px minimum, which looked unbalanced.
+
+  Solution: openMenu() takes opts.minWidth: the menu's min-width becomes
+  max(190, minWidth) and its max-width max(280, minWidth) (the .menu CSS
+  caps at 280). openServerSwitcher() passes the pill's width. A pill narrower
+  than the menu minimum ("Not connected") leaves the popover wider, as wanted.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts — openMenu minWidth, openServerSwitcher
+
+  Verification:
+    - apps/client npx tsc --noEmit; npm run lint (0 errors).
+    - Real app, trusted clicks: not connected pill 140 / menu 190; connected
+      pill 308 / menu 308; 80-char nickname pill 311 / menu 311; centres
+      equal (512) in all three.
+
+  Next Step: group 2.
