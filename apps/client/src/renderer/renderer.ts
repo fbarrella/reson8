@@ -2070,7 +2070,7 @@ const sourceShareNameInput = document.getElementById("source-share-name-input") 
 // ── Screen Share Custom Name Modal (Linux/Wayland bypass) ───────────────────
 const streamNameModal = document.getElementById("stream-name-modal") as HTMLDivElement;
 const streamNameInput = document.getElementById("stream-name-input") as HTMLInputElement;
-const btnStreamNameSkip = document.getElementById("btn-stream-name-skip") as HTMLButtonElement;
+const btnStreamNameCancel = document.getElementById("btn-stream-name-cancel") as HTMLButtonElement;
 const btnStreamNameConfirm = document.getElementById("btn-stream-name-confirm") as HTMLButtonElement;
 
 type DesktopSource = {
@@ -6959,13 +6959,24 @@ document.getElementById("titlebar-sharing")?.addEventListener("click", stopShari
  * there's no PID or name to recover from it by any means, not just an
  * unreliable one, so `videoRes.label` here always ends up the generic
  * "your screen" fallback for a window share. `promptForStreamName()`
- * lets the user set their own display name instead, purely a local/UI
+ * (Cancel stops the capture; Change re-opens the portal) lets the user set their own display name instead, purely a local/UI
  * concern (never sent to the OS picker or portal) — a new modal because
  * there's no existing in-app step on this path to attach a field to,
  * unlike the Selection Modal's own name input on other platforms.
  */
+let portalAttempt = 0;
+
 async function startScreenShareViaSystemPicker(): Promise<void> {
+    const attempt = ++portalAttempt;
+    const card = document.getElementById("portal-wait-card") as HTMLElement;
+    card.classList.add("visible");
     const videoRes = await api.startScreenShareViaSystemPicker();
+    card.classList.remove("visible");
+    if (attempt !== portalAttempt) {
+        // Cancelled while the portal was open: drop whatever it returned.
+        if (videoRes.success) await api.stopScreenShare();
+        return;
+    }
     if (!videoRes.success) {
         if (videoRes.errorCode === "SCREEN_SHARE_LIMIT") {
             // The capture was already stopped by the voice service.
@@ -6976,11 +6987,16 @@ async function startScreenShareViaSystemPicker(): Promise<void> {
         return;
     }
 
+    const choice = await promptForStreamName(videoRes.label ?? "");
+    if (choice.action !== "start") {
+        await api.stopScreenShare();
+        if (choice.action === "change") await startScreenShareViaSystemPicker();
+        return;
+    }
+
     isSharingScreen = true;
     updateShareScreenButton();
-
-    const customName = await promptForStreamName();
-    const resolvedName = customName || videoRes.label || "your screen";
+    const resolvedName = choice.name || videoRes.label || "your screen";
     // Sent only once the resolved name is known, so viewers' Viewer window
     // (which reads this back via WATCH_SCREEN_SHARE) shows the exact same
     // name this client's own "Started sharing" log does, not a stale
@@ -6999,39 +7015,64 @@ async function startScreenShareViaSystemPicker(): Promise<void> {
     }
 }
 
+document.getElementById("btn-portal-wait-cancel")!.addEventListener("click", () => {
+    portalAttempt++; // the pending attempt is now stale
+    (document.getElementById("portal-wait-card") as HTMLElement).classList.remove("visible");
+});
+
+type StreamNameChoice = { action: "start"; name: string } | { action: "change" } | { action: "cancel" };
+
 /**
- * Shows `#stream-name-modal` and resolves with the trimmed name the user
- * entered, or `""` if they clicked Skip / clicked outside the modal —
- * callers treat an empty string as "use the default name" (see call site).
+ * Shows `#stream-name-modal` for the Linux portal flow (PRD 20 S2): the chosen
+ * source, a name field and Start sharing / Change / Cancel. Resolves with the
+ * choice; an empty `name` means "use the default name" (see call site).
  */
-function promptForStreamName(): Promise<string> {
+function promptForStreamName(sourceName: string): Promise<StreamNameChoice> {
     return new Promise((resolve) => {
+        const roomName = currentChannelId ? findChannelNodeById(currentTree, currentChannelId)?.name : null;
+        (document.getElementById("stream-name-sub") as HTMLElement).textContent = roomName
+            ? `Everyone in ${roomName} will be able to watch.`
+            : "Everyone in your voice room will be able to watch.";
+        (document.getElementById("stream-name-source") as HTMLElement).textContent = sourceName || "Your screen";
+        const preview = document.getElementById("stream-name-preview") as HTMLElement;
+        const paint = (): void => {
+            preview.textContent = `Others will see: ${streamNameInput.value.trim() || sourceName || "your screen"}`;
+        };
         streamNameInput.value = "";
+        streamNameInput.placeholder = sourceName ? `Leave blank to use \u201c${sourceName}\u201d` : "Leave blank to use the default";
+        paint();
         streamNameModal.classList.add("visible");
         streamNameInput.focus();
-
-        const cleanup = (): void => {
+        const btnChange = document.getElementById("btn-stream-name-change") as HTMLButtonElement;
+        const btnClose = document.getElementById("btn-stream-name-close") as HTMLButtonElement;
+        const finish = (choice: StreamNameChoice): void => {
             streamNameModal.classList.remove("visible");
-            btnStreamNameConfirm.removeEventListener("click", onConfirm);
-            btnStreamNameSkip.removeEventListener("click", onSkip);
-            streamNameModal.removeEventListener("click", onBackdropClick);
+            btnStreamNameConfirm.removeEventListener("click", onStart);
+            btnStreamNameCancel.removeEventListener("click", onCancel);
+            btnClose.removeEventListener("click", onCancel);
+            btnChange.removeEventListener("click", onChange);
+            streamNameModal.removeEventListener("click", onBackdrop);
+            streamNameInput.removeEventListener("input", paint);
+            streamNameInput.removeEventListener("keydown", onKey);
+            resolve(choice);
         };
-        const onConfirm = (): void => {
-            const value = streamNameInput.value.trim();
-            cleanup();
-            resolve(value);
+        const onStart = (): void => finish({ action: "start", name: streamNameInput.value.trim() });
+        const onCancel = (): void => finish({ action: "cancel" });
+        const onChange = (): void => finish({ action: "change" });
+        const onBackdrop = (e: MouseEvent): void => {
+            if (e.target === streamNameModal) onCancel();
         };
-        const onSkip = (): void => {
-            cleanup();
-            resolve("");
+        const onKey = (e: KeyboardEvent): void => {
+            if (e.key === "Enter") onStart();
+            else if (e.key === "Escape") onCancel();
         };
-        const onBackdropClick = (e: MouseEvent): void => {
-            if (e.target === streamNameModal) onSkip();
-        };
-
-        btnStreamNameConfirm.addEventListener("click", onConfirm);
-        btnStreamNameSkip.addEventListener("click", onSkip);
-        streamNameModal.addEventListener("click", onBackdropClick);
+        btnStreamNameConfirm.addEventListener("click", onStart);
+        btnStreamNameCancel.addEventListener("click", onCancel);
+        btnClose.addEventListener("click", onCancel);
+        btnChange.addEventListener("click", onChange);
+        streamNameModal.addEventListener("click", onBackdrop);
+        streamNameInput.addEventListener("input", paint);
+        streamNameInput.addEventListener("keydown", onKey);
     });
 }
 

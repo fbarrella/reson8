@@ -1389,3 +1389,37 @@ Feature/Fix: Share picker with Screens/Windows tabs and process names (PRD 20 S1
       macOS and Linux (the Linux system-picker flow is S2).
 
   Next Step: S2 (Linux system-picker flow).
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Linux portal waiting card and source row in Name your stream (PRD 20 S2)
+
+  Problem: On Linux/Wayland the OS portal picks the source; Reson8 showed
+  nothing while it was open, flagged you as sharing BEFORE the name prompt, and
+  the prompt's only exits were Skip (start anyway) and Start.
+
+  Solution: A waiting card ("Waiting for your system's screen picker", Cancel)
+  shows while api.startScreenShareViaSystemPicker() is pending; Cancel bumps
+  portalAttempt so a capture the portal returns later is stopped at once and
+  nothing is announced. "Name your stream" now shows the chosen source, a
+  Change button (stops the capture, re-opens the portal), × / Cancel / Escape
+  (stop the capture, no share) and Start sharing; promptForStreamName()
+  resolves a start | change | cancel choice. isSharingScreen is only set after
+  Start sharing. Skip (#btn-stream-name-skip) is gone.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts, index.html
+
+  Verification:
+    - Client tsc --noEmit; lint exit 0.
+    - Real app on Windows (this path only runs on Linux Wayland): the card and
+      the dialog were forced over CDP and compared with 1l.png/1m.png;
+      promptForStreamName() resolved start (trimmed name) / cancel (Cancel,
+      ×, Escape) / change (Change) / start (Enter) and hid the dialog each
+      time.
+    - Not exercised: the real portal flow — the owner verifies on Linux
+      Wayland as the PRD says (Cancel then pick in the portal shares nothing;
+      Change re-opens the portal; Start announces LIVE with the typed or
+      default name).
+
+  Next Step: S3 (icon in Create channel).

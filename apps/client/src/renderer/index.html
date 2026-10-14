@@ -8965,6 +8965,93 @@
       overflow: hidden;
       text-overflow: ellipsis;
     }
+    #portal-wait-card {
+      display: none;
+      position: fixed;
+      left: 50%;
+      bottom: 64px;
+      transform: translateX(-50%);
+      z-index: 120;
+      align-items: center;
+      gap: 12px;
+      max-width: min(720px, calc(100vw - 32px));
+      padding: 10px 12px 10px 14px;
+      border-radius: var(--radius-md);
+      background: var(--color-surface);
+      box-shadow: var(--shadow-md);
+      font-size: 13px;
+    }
+
+    #portal-wait-card.visible {
+      display: flex;
+    }
+
+    #portal-wait-card > i {
+      font-size: 18px;
+      color: var(--color-accent);
+    }
+
+    .portal-wait-title {
+      font-weight: 500;
+    }
+
+    .portal-wait-sub {
+      font-size: 12px;
+      color: var(--color-neutral-500);
+    }
+
+    .stream-name-dialog {
+      width: min(440px, calc(100vw - 32px));
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .stream-source-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 12px;
+      border-radius: var(--radius-md);
+      box-shadow: var(--shadow-sm);
+    }
+
+    .stream-source-thumb {
+      width: 64px;
+      height: 40px;
+      flex: none;
+      border-radius: var(--radius-sm);
+      background: repeating-linear-gradient(135deg, var(--color-neutral-900) 0 8px, color-mix(in srgb, var(--color-neutral-900) 55%, var(--color-bg)) 8px 16px);
+      box-shadow: 0 0 0 1px var(--color-accent-700);
+    }
+
+    .stream-source-text {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .stream-source-kicker {
+      font-size: 11px;
+      color: var(--color-neutral-500);
+    }
+
+    .stream-source-name {
+      font-size: 13.5px;
+      font-weight: 500;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    #stream-name-preview {
+      flex: 1;
+      min-width: 0;
+      font-size: 12.5px;
+      color: var(--color-neutral-500);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
   </style>
 </head>
 
@@ -9651,16 +9738,30 @@
        source picker to attach this field to, since that step is entirely
        the OS's own) ──────────────────────────────────────────────────── -->
   <div id="stream-name-modal">
-    <div class="modal-content">
-      <h3>Name your stream</h3>
-      <p class="dialog-subtitle">Everyone in your voice room will be able to watch.</p>
+    <div class="modal-content dialog stream-name-dialog">
+      <div class="share-picker-head">
+        <div><h3 class="dialog-title">Name your stream</h3><p class="dialog-subtitle" id="stream-name-sub">Everyone in your voice room will be able to watch.</p></div>
+        <button type="button" class="btn btn-ghost btn-icon" id="btn-stream-name-close" aria-label="Close"><i class="ph ph-x" aria-hidden="true"></i></button>
+      </div>
+      <div class="stream-source-row">
+        <span class="stream-source-thumb" aria-hidden="true"></span>
+        <div class="stream-source-text"><div class="stream-source-kicker">Chosen in the system picker</div><div class="stream-source-name" id="stream-name-source"></div></div>
+        <button type="button" class="btn btn-ghost" id="btn-stream-name-change"><i class="ph ph-arrows-clockwise" aria-hidden="true"></i> Change</button>
+      </div>
       <label for="stream-name-input">Stream name <span class="optional">· optional</span></label>
-      <input type="text" id="stream-name-input" placeholder="Leave blank to use the default" maxlength="64">
-      <div class="modal-actions">
-        <button class="btn btn-secondary" id="btn-stream-name-skip">Skip</button>
+      <input type="text" class="input" id="stream-name-input" placeholder="Leave blank to use the default" maxlength="64">
+      <div class="share-picker-foot">
+        <span id="stream-name-preview"></span>
+        <button class="btn btn-secondary" id="btn-stream-name-cancel">Cancel</button>
         <button class="btn btn-primary" id="btn-stream-name-confirm"><i class="ph ph-screencast" aria-hidden="true"></i> Start sharing</button>
       </div>
     </div>
+  </div>
+
+  <div id="portal-wait-card" role="status" aria-live="polite">
+    <i class="ph ph-arrow-square-up-right" aria-hidden="true"></i>
+    <div><div class="portal-wait-title">Waiting for your system's screen picker</div><div class="portal-wait-sub">On Linux, the desktop (KDE Plasma, GNOME…) asks what to share. Reson8 never sees your screen until you choose.</div></div>
+    <button type="button" class="btn btn-secondary" id="btn-portal-wait-cancel">Cancel</button>
   </div>
 
   <!-- ── Watch Screen Share Confirmation Modal (PRD 12.13) ────────────────── -->
