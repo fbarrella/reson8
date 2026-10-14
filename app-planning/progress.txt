@@ -973,3 +973,46 @@ Feature/Fix: Voice dock card with device split buttons (PRD 20 U1)
     - Not exercised: self-hear (uses the same updateVoiceUI path).
 
   Next Step: U2 (voice room header and call controls).
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Voice room header pills and call bar (PRD 20 U2)
+
+  Problem: The voice room tab had a one-line header (name, count, toggles) and
+  no call controls; the design (11a/11b/1m) has a kicker + 28 px room name,
+  status pills (encryption, people, sharing) and a centred call bar.
+
+  Solution: createVoiceTab() builds the new header (kicker "{category} · Voice
+  room", .room-pill pills, icons on the Focus|Grid and Mosaic|Featured
+  toggles) and a .voice-callbar (mic and headset split buttons, Share screen,
+  Leave). The call bar has no state of its own: its buttons call
+  toggleMuteAndNotify / toggleDeafenAndNotify / btnShareScreen.click() /
+  leaveVoiceAndNotify / openAudioDeviceMenu, and renderCallBar() (called from
+  updateShareScreenButton() on both exits and from renderVoiceRoom()) mirrors
+  the dock's mute/deafen/share state onto it. renderVoiceRoom() fills the
+  kicker, "{n} / {cap}" and the Encrypted / Not encrypted pill;
+  renderSharingHeader() hides the sharing pill when nobody shares.
+
+  Differences from the PRD text: the call bar carets use "ph ph-caret-down"
+  (ph-bold is not vendored — see the U1 entry).
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts — createVoiceTab, renderVoiceRoom,
+      renderSharingHeader, updateShareScreenButton, renderCallBar
+    apps/client/src/renderer/index.html — room header, toggle and call bar CSS
+
+  Verification:
+    - apps/client npx tsc --noEmit; npm run lint (0 errors).
+    - Real app over CDP against the 9800 dev server with 15 Socket.io bots in
+      the room (16 tiles): screenshot compared with 11a.png (kicker, name,
+      "Not encrypted" amber pill, 16, Mosaic active, call bar centred, all 16
+      tiles visible); call bar mic/headset <-> dock mic/headset follow each
+      other both ways; a bot sharing shows "1 / 5 sharing" and disables Mosaic
+      with its tooltip, stopping hides the pill; five bots sharing make the
+      call bar read "Share screen · 5/5" (dimmed) and the click shows the
+      toast; Leave leaves voice and closes the tab; a 79-character room name
+      truncates with an ellipsis at 1024 px and keeps the pills in view; no
+      console errors on load.
+    - Not exercised: the keyboard mute shortcut (same toggleMuteAndNotify).
+
+  Next Step: U3 (title-bar pill).

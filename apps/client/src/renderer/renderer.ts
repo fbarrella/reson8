@@ -5643,16 +5643,19 @@ function createVoiceTab(): VoiceTab {
     contentEl.innerHTML =
         `<div class="voice-room">` +
         `<div class="voice-room-header">` +
-        `<span class="voice-room-name"></span><span class="voice-room-count"></span>` +
-        `<span class="voice-room-sharing"></span>` +
+        `<div class="voice-room-title"><div class="section-label voice-room-kicker"></div><h2 class="voice-room-name"></h2></div>` +
+        `<div class="voice-room-pills">` +
+        `<span class="room-pill voice-room-security"><i class="ph ph-lock-simple" aria-hidden="true"></i><span class="voice-room-security-text"></span></span>` +
+        `<span class="room-pill"><i class="ph ph-users" aria-hidden="true"></i><span class="voice-room-count"></span></span>` +
+        `<span class="room-pill accent voice-room-sharing-pill"><i class="ph ph-screencast" aria-hidden="true"></i><span class="voice-room-sharing"></span></span>` +
         `<div class="voice-layout-toggle voice-stream-layout-toggle" role="group" aria-label="Stream layout">` +
-        `<button type="button" data-stream-layout="focus">Focus</button>` +
-        `<button type="button" data-stream-layout="grid">Grid</button>` +
+        `<button type="button" data-stream-layout="focus" title="One stream large, the rest as previews"><i class="ph ph-square-half" aria-hidden="true"></i>Focus</button>` +
+        `<button type="button" data-stream-layout="grid" title="Every stream at the same size"><i class="ph ph-grid-four" aria-hidden="true"></i>Grid</button>` +
         `</div>` +
         `<div class="voice-layout-toggle" role="group" aria-label="Layout">` +
-        `<button type="button" data-layout="mosaic">Mosaic</button>` +
-        `<button type="button" data-layout="featured">Featured</button>` +
-        `</div></div>` +
+        `<button type="button" data-layout="mosaic"><i class="ph ph-squares-four" aria-hidden="true"></i>Mosaic</button>` +
+        `<button type="button" data-layout="featured"><i class="ph ph-square-split-horizontal" aria-hidden="true"></i>Featured</button>` +
+        `</div></div></div>` +
         `<div class="voice-stream" id="voice-stream">` +
         `<div class="voice-stream-main">` +
         `<div class="voice-stream-video" id="voice-stream-video"></div>` +
@@ -5675,6 +5678,14 @@ function createVoiceTab(): VoiceTab {
         `<div class="voice-streams"></div>` +
         `</div>` +
         `<div class="voice-room-stage"><div class="voice-grid"></div></div>` +
+        `<div class="voice-callbar">` +
+        `<div class="split-btn callbar-split"><button type="button" class="voice-btn split-main" data-call="mute" title="Mute"><i class="ph ph-microphone" aria-hidden="true"></i></button>` +
+        `<button type="button" class="voice-btn split-caret" data-call="input" title="Input device" aria-label="Input device" aria-haspopup="menu"><i class="ph ph-caret-down" aria-hidden="true"></i></button></div>` +
+        `<div class="split-btn callbar-split"><button type="button" class="voice-btn split-main" data-call="deafen" title="Deafen"><i class="ph ph-headphones" aria-hidden="true"></i></button>` +
+        `<button type="button" class="voice-btn split-caret" data-call="output" title="Output device" aria-label="Output device" aria-haspopup="menu"><i class="ph ph-caret-down" aria-hidden="true"></i></button></div>` +
+        `<button type="button" class="voice-btn callbar-pill" data-call="share"><i class="ph ph-screencast" aria-hidden="true"></i><span class="callbar-share-label">Share screen</span></button>` +
+        `<button type="button" class="voice-btn callbar-pill leave" data-call="leave"><i class="ph ph-phone-x" aria-hidden="true"></i>Leave</button>` +
+        `</div>` +
         `</div>`;
     tabContentArea.appendChild(contentEl);
 
@@ -5722,6 +5733,20 @@ function createVoiceTab(): VoiceTab {
     contentEl.querySelector('[data-stream-layout="grid"]')?.addEventListener("click", () => {
         writeStreamLayoutPref("grid");
         void enterStreamGrid();
+    });
+    // The call bar runs the dock's own code paths (PRD 20 U2) — it has no state of its own.
+    const call = (name: string): HTMLButtonElement => contentEl.querySelector(`[data-call="${name}"]`) as HTMLButtonElement;
+    call("mute").addEventListener("click", () => toggleMuteAndNotify());
+    call("deafen").addEventListener("click", () => toggleDeafenAndNotify());
+    call("share").addEventListener("click", () => btnShareScreen.click());
+    call("leave").addEventListener("click", () => leaveVoiceAndNotify());
+    call("input").addEventListener("click", (e) => {
+        e.stopPropagation();
+        void openAudioDeviceMenu("input", call("input"));
+    });
+    call("output").addEventListener("click", (e) => {
+        e.stopPropagation();
+        void openAudioDeviceMenu("output", call("output"));
     });
     return vt;
 }
@@ -5832,8 +5857,16 @@ function renderVoiceRoom(): void {
     const vt = voiceTab;
     vt.channelId = node.id;
     vt.nameEl.textContent = node.name;
+    const parent = node.parentId ? findChannelNodeById(currentTree, node.parentId) : null;
+    (vt.contentEl.querySelector(".voice-room-kicker") as HTMLElement).textContent = parent ? `${parent.name} · Voice room` : "Voice room";
     const count = node.occupants.length;
     vt.countEl.textContent = node.maxUsers ? `${count} / ${node.maxUsers}` : String(count);
+    const secure = currentConnection?.scheme === "https";
+    const sec = vt.contentEl.querySelector(".voice-room-security") as HTMLElement;
+    sec.classList.toggle("insecure", !secure);
+    (sec.querySelector("i") as HTMLElement).className = `ph ${secure ? "ph-lock-simple" : "ph-lock-simple-open"}`;
+    (sec.querySelector(".voice-room-security-text") as HTMLElement).textContent = secure ? "Encrypted" : "Not encrypted";
+    sec.title = secure ? "Encrypted connection" : "This connection is not encrypted";
     const label = vt.tabEl.querySelector(".tab-label") as HTMLElement;
     if (label.textContent !== node.name) {
         label.textContent = node.name;
@@ -5868,8 +5901,10 @@ function renderVoiceRoom(): void {
     vt.btnMosaic.classList.toggle("active", layout === "mosaic");
     vt.btnFeatured.classList.toggle("active", layout === "featured");
     vt.btnMosaic.disabled = sharing;
-    vt.btnMosaic.title = sharing ? "Mosaic is only available when no one is sharing a screen" : "";
+    vt.btnMosaic.title = sharing ? "Mosaic is only available when no one is sharing a screen" : "Everyone, sized to fit";
+    vt.btnFeatured.title = sharing ? "Featured is used while someone is sharing" : "Five people, the rest in a list";
     layoutVoiceTiles();
+    renderCallBar();
 }
 
 /** Places and sizes the tiles for the current layout; called on every render and stage resize. */
@@ -6086,6 +6121,7 @@ function renderSharingHeader(): void {
     const sharers = roomSharers();
     const label = voiceTab.contentEl.querySelector(".voice-room-sharing") as HTMLElement;
     label.textContent = sharers.length > 0 ? `${sharers.length} / ${MAX_SCREEN_SHARES_PER_ROOM} sharing` : "";
+    (voiceTab.contentEl.querySelector(".voice-room-sharing-pill") as HTMLElement).style.display = sharers.length > 0 ? "" : "none";
     const toggle = voiceTab.contentEl.querySelector(".voice-stream-layout-toggle") as HTMLElement;
     toggle.classList.toggle("visible", sharers.length >= 2);
     const grid = stageState === "grid";
@@ -6612,6 +6648,7 @@ function updateShareScreenButton(): void {
     if (api.platform === "darwin") {
         btnShareScreen.title = "Screen sharing isn't available on macOS yet";
         btnShareScreen.disabled = true;
+        renderCallBar();
         return;
     }
     const roomFull = serverScreenShareEnabled && isScreenShareRoomFull();
@@ -6624,6 +6661,32 @@ function updateShareScreenButton(): void {
             ? `Share screen · ${MAX_SCREEN_SHARES_PER_ROOM}/${MAX_SCREEN_SHARES_PER_ROOM}`
             : "Share Screen";
     btnShareScreen.disabled = !serverScreenShareEnabled;
+    renderCallBar();
+}
+
+/** Copies the dock's mute/deafen/share state onto the room tab's call bar (PRD 20 U2). */
+function renderCallBar(): void {
+    if (!voiceTab) return;
+    const root = voiceTab.contentEl;
+    const mute = root.querySelector('[data-call="mute"]') as HTMLButtonElement | null;
+    const deafen = root.querySelector('[data-call="deafen"]') as HTMLButtonElement | null;
+    const share = root.querySelector('[data-call="share"]') as HTMLButtonElement | null;
+    if (!mute || !deafen || !share) return;
+    mute.classList.toggle("active", isMuted);
+    mute.title = isMuted ? "Unmute" : "Mute";
+    mute.querySelector("i")!.className = `ph ${isMuted ? "ph-microphone-slash" : "ph-microphone"}`;
+    deafen.classList.toggle("active", isDeafened);
+    deafen.title = isDeafened ? "Undeafen" : "Deafen";
+    deafen.querySelector("i")!.className = `ph ${isDeafened ? "ph-speaker-slash" : "ph-headphones"}`;
+    share.classList.toggle("active", isSharingScreen);
+    share.classList.toggle("share-full", btnShareScreen.classList.contains("share-full"));
+    share.disabled = btnShareScreen.disabled;
+    share.title = btnShareScreen.title;
+    (share.querySelector(".callbar-share-label") as HTMLElement).textContent = isSharingScreen
+        ? "Stop sharing"
+        : btnShareScreen.classList.contains("share-full")
+          ? `Share screen · ${MAX_SCREEN_SHARES_PER_ROOM}/${MAX_SCREEN_SHARES_PER_ROOM}`
+          : "Share screen";
 }
 
 // Shared mute/deafen/disconnect logic — used by both the button click handlers
