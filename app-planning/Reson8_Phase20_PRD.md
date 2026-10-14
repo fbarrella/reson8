@@ -33,11 +33,11 @@ The owner answers these; the implementer never decides them. An item marked **Ne
 
 | # | Decision | Blocks | Options | Answer |
 |---|---|---|---|---|
-| D1 | Live previews on the "Also live" cards | L1 | (a) build after the owner measures the cost on real machines (3 and 5 sharers: CPU % and inbound kbit/s, previews on vs. static cards); (b) keep static cards. | — |
-| D2 | Message search | Q1 | (a) server-side search per channel/DM with Postgres full-text; (b) not now. | — |
-| D3 | "Get beta updates" in a stable build | G1 | (a) build it as G1 describes; (b) betas stay install-by-hand only. | — |
-| D4 | Typing indicator | W2 | (a) build it, with a "Show others when I'm typing" switch (default on); (a′) build it without the switch; (b) not now. | — |
-| D5 | "Last seen" in Members | M1 step 9 | (a) add `users.lastSeenAt` (written when the user's session finally ends); (b) show only "Online" / "Offline". M1 is built either way; only step 9 depends on this. | — |
+| D1 | Live previews on the "Also live" cards | L1 | (a) build after the owner measures the cost on real machines (3 and 5 sharers: CPU % and inbound kbit/s, previews on vs. static cards); (b) keep static cards. | b -> keep static cards and update it every 10 minutes |
+| D2 | Message search | Q1 | (a) server-side search per channel/DM with Postgres full-text; (b) not now. | a |
+| D3 | "Get beta updates" in a stable build | G1 | (a) build it as G1 describes; (b) betas stay install-by-hand only. | a |
+| D4 | Typing indicator | W2 | (a) build it, with a "Show others when I'm typing" switch (default on); (a′) build it without the switch; (b) not now. | a |
+| D5 | "Last seen" in Members | M1 step 9 | (a) add `users.lastSeenAt` (written when the user's session finally ends); (b) show only "Online" / "Offline". M1 is built either way; only step 9 depends on this. | a |
 
 ---
 
