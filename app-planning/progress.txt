@@ -1552,3 +1552,20 @@ Feature/Fix: Image viewer controls below the window buttons, opaque Close, symme
       62 px from the bottom (644 px high in a 768 px window).
 
   Next Step: owner testing, then the decision-gated group (W2, G1, Q1) and H2.
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Spacing under the Requests label on the Emoji page (follow-up to PRD 20 M3)
+
+  Problem: The "Requests" label sat directly on the request list / empty box:
+  the label lives in .emoji-section-head, which the 8 px rule for
+  ".settings-section > .section-label" doesn't reach.
+
+  Solution: .emoji-section-head carries the 8 px bottom margin itself, centres
+  its content and keeps a 28 px minimum height so the Approve all button
+  doesn't change the spacing when it appears.
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html
+
+  Verification: copied to dist; waiting for the owner's visual check.

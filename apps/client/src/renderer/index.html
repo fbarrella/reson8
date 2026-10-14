@@ -6540,11 +6540,14 @@
       color: var(--color-neutral-500);
     }
 
+    /* Same 8 px under the label as a plain .settings-section > .section-label. */
     .emoji-section-head {
       display: flex;
-      align-items: flex-end;
+      align-items: center;
       justify-content: space-between;
       gap: 12px;
+      min-height: 28px;
+      margin-bottom: 8px;
     }
 
     .emoji-req-img {
