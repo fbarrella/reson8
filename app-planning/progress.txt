@@ -1527,3 +1527,28 @@ Feature/Fix: App content keeps out of the window buttons; transparent window but
       the transparent buttons over its own bar).
 
   Next Step: owner testing, then the decision-gated group (W2, G1, Q1) and H2.
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Image viewer controls below the window buttons, opaque Close, symmetric dialog margins (follow-up)
+
+  Problem: After the window-button safe area, the image viewer's controls were
+  squeezed to the left of the buttons (a broken-looking layout), its Close
+  button was transparent and could be mistaken for a window button, and dialogs
+  had a much bigger margin on top than at the bottom.
+
+  Solution: The viewer's toolbar and Close are back at the right edge, one row
+  below the button band (top: titlebar-h + 8px), together with the sender pill.
+  Close has the toolbar's pill look (surface background + border). Full-window
+  dialog wrappers use padding: var(--titlebar-h) 0, so the gap is the same above
+  and below, and their calc(100vh - …) sizes subtract 2 * --titlebar-h.
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html, apps/client/AGENTS.md
+
+  Verification:
+    - lint exit 0. Real OS window captures: viewer controls on one row under the
+      buttons with an opaque Close; Settings dialog 62 px from the top and
+      62 px from the bottom (644 px high in a 768 px window).
+
+  Next Step: owner testing, then the decision-gated group (W2, G1, Q1) and H2.
