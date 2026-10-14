@@ -3129,3 +3129,54 @@ Feature/Fix: Chat restyle (PRD 19 R2)
       preview card.
 
   Next Step: PRD 19 R3 — client settings.
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Client Settings restyle — left navigation (PRD 19 R3)
+
+  Problem: Settings was one wide box with a row of emoji tabs mixing this
+  device's options with the server's, and pages that were long lists of
+  separately boxed rows.
+
+  Solution:
+    - #admin-modal became a fixed-size (1080 x 740, PRD 14.9 kept) left-nav
+      dialog with two modes: "client" (the gear) — You: Profile & identity;
+      Voice & sound: Voice, Sound, Shortcuts; Client: Privacy & safety,
+      Window, About — and "server" (the header menu's Server settings), whose
+      pages R4 rebuilds. The other mode's buttons are hidden by CSS
+      (data-mode); setSettingsMode() / openClientSettings(page) /
+      openServerSettings() pick the mode and a page of it; a server mode with
+      no page this person may use shows a short "you don't manage anything
+      here" page instead of a blank.
+    - Every existing control was MOVED (same element, id and handler; a
+      script check confirmed no id was lost or duplicated) into the frames'
+      pages: Profile (the avatar card + the identity key block from About),
+      Voice (input device, mic volume, level, Hear yourself; then input mode,
+      noise gate, noise cancelling), Sound (output device, voice chat volume;
+      sound alerts, alert volume, nudge volume), Shortcuts, Privacy & safety
+      (NSFW, link previews with the blur sub-switches, avatars, trusted
+      certificates), Window (tray, the R7 title-bar switch), About (version,
+      updates row, What's new). Each page has a title and a one-line lead,
+      and sections are labelled cards with divided rows.
+    - The close × replaces the footer Close button (same id). "Edit profile"
+      and the occupant menu's "Voice settings…" open their pages in client
+      mode; the NSFW prompt now points at Settings › Privacy & safety.
+    - Not built from the frames (they would be new features, not a restyle):
+      "Get beta updates", an output-device save flow different from today's,
+      and the renamed "Play sound alerts" (today's switch is "Mute sound
+      alerts"; its wording and meaning stay).
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts, index.html
+
+  Verification:
+    - tsc client clean; lint exit 0.
+    - Real client: all seven client pages opened at the same 740 px height;
+      screenshots of Voice, Sound, Shortcuts, Profile, Privacy and About
+      compared with 4a–4h; a dialog opened from Settings (the identity export)
+      is the topmost element at its own position (elementFromPoint); the
+      header menu path opened server mode with the empty page for a member
+      without rights, and the gear went back to client mode.
+    - Not driven here: server mode with an admin (R4 covers it).
+
+  Next Step: PRD 19 R4 — server settings pages.

@@ -3801,8 +3801,46 @@ function canSeeServerSettings(): boolean {
     return answers.some((a) => a === true);
 }
 
+/**
+ * Settings has two modes (PRD 19 R3): "client" (the gear — this device's own
+ * pages) and "server" (the header menu — the server's pages). The tab buttons
+ * of the other mode are hidden by CSS; if the active page belongs to the
+ * other mode, the first page of this one is shown.
+ */
+function setSettingsMode(mode: "client" | "server"): void {
+    adminModal.dataset.mode = mode;
+    (document.getElementById("settings-nav-title") as HTMLElement).textContent = mode === "server" ? "Server settings" : "Settings";
+    (document.getElementById("settings-nav-sub") as HTMLElement).textContent =
+        mode === "server"
+            ? connectedServerName ?? "This server"
+            : "Saved on this device. Server options live in the server menu.";
+    const active = document.querySelector<HTMLElement>(".settings-tab-btn.active");
+    const inMode = (b: Element | null): boolean => b?.closest(".settings-nav-group")?.getAttribute("data-nav-mode") === mode;
+    if (!inMode(active)) {
+        const first = Array.from(document.querySelectorAll<HTMLButtonElement>(`.settings-nav-group[data-nav-mode="${mode}"] .settings-tab-btn`))
+            .find((b) => b.style.display !== "none");
+        if (first) first.click();
+        else showSettingsPanelOnly(mode === "server" ? "server-none" : "voice");
+    }
+}
+
+/** Shows one panel with no tab button active (the server-mode empty state). */
+function showSettingsPanelOnly(key: string): void {
+    document.querySelectorAll(".settings-tab-btn").forEach((b) => b.classList.remove("active"));
+    document.querySelectorAll(".settings-panel").forEach((p) => p.classList.remove("active"));
+    document.querySelector(`.settings-panel[data-settings-panel="${key}"]`)?.classList.add("active");
+}
+
+/** The gear: this device's settings. */
+function openClientSettings(page?: string): void {
+    setSettingsMode("client");
+    void openSettingsPanel();
+    if (page) (document.querySelector(`.settings-tab-btn[data-settings-tab="${page}"]`) as HTMLButtonElement | null)?.click();
+}
+
 /** Opens Settings on the first server page the user may use. */
 function openServerSettings(): void {
+    setSettingsMode("server");
     void openSettingsPanel();
     for (const id of ["settings-tab-server", "settings-tab-roles", "settings-tab-emojis"]) {
         const btn = document.getElementById(id) as HTMLButtonElement | null;
@@ -5120,8 +5158,7 @@ function buildOccupantMenuModel(occ: { userId: string; nickname: string }, chann
 
 /** Opens Settings on the Voice & Shortcuts tab (PRD 19 B8's "Voice settings…"). */
 function openVoiceSettings(): void {
-    void openSettingsPanel();
-    (document.querySelector('.settings-tab-btn[data-settings-tab="voice"]') as HTMLElement | null)?.click();
+    openClientSettings("voice");
 }
 
 /** Draws an OccupantMenuModel with the shared menu builder (PRD 19 F3). */
@@ -11093,8 +11130,7 @@ function renderProfileActions(): void {
         edit.textContent = "Edit profile";
         edit.addEventListener("click", () => {
             closeUserProfile();
-            openSettingsPanel();
-            (document.querySelector('.settings-tab-btn[data-settings-tab="app"]') as HTMLButtonElement | null)?.click();
+            openClientSettings("profile"); // PRD 19 R3
         });
         self.appendChild(edit);
         userProfileActions.appendChild(self);
@@ -11320,10 +11356,17 @@ function applySettingsTabVisibility(): void {
     if (activeTabBtn && activeTabBtn.style.display === "none") {
         settingsTabBtns.forEach((b) => b.classList.remove("active"));
         settingsPanels.forEach((p) => p.classList.remove("active"));
-        const voiceBtn = document.querySelector('.settings-tab-btn[data-settings-tab="voice"]');
-        const voicePanel = document.querySelector('.settings-panel[data-settings-panel="voice"]');
-        voiceBtn?.classList.add("active");
-        voicePanel?.classList.add("active");
+        // The first visible page of the mode on screen (PRD 19 R3); Voice when none is left.
+        const mode = adminModal.dataset.mode === "server" ? "server" : "client";
+        const fallback = Array.from(
+            document.querySelectorAll<HTMLElement>(`.settings-nav-group[data-nav-mode="${mode}"] .settings-tab-btn`),
+        ).find((b) => b.style.display !== "none");
+        if (fallback) {
+            fallback.classList.add("active");
+            document.querySelector(`.settings-panel[data-settings-panel="${fallback.dataset.settingsTab}"]`)?.classList.add("active");
+        } else {
+            showSettingsPanelOnly(mode === "server" ? "server-none" : "voice");
+        }
     }
 }
 
@@ -11470,7 +11513,7 @@ function renderPendingEmojis(emojis: CustomEmoji[]): void {
 }
 
 btnServerSettings.addEventListener("click", () => {
-    openSettingsPanel();
+    openClientSettings(); // PRD 19 R3: the gear is this device's settings
 });
 
 // ── Approve new users (PRD 18.8) ─────────────────────────────────────────

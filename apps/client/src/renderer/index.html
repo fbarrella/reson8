@@ -7943,6 +7943,312 @@
       font-size: 12px;
       color: var(--color-neutral-400);
     }
+    /* ══ Settings (PRD 19 R3, frames 4a–4h) ═════════════════════════════
+       One dialog, two modes: "client" (opened from the gear: You / Voice &
+       sound / Client) and "server" (the header menu's Server settings).
+       Fixed size (PRD 14.9): pages scroll inside, the dialog never resizes. */
+    #admin-modal .modal-content.wide.settings-shell {
+      display: flex;
+      flex-direction: row;
+      width: min(1080px, calc(100vw - 48px));
+      height: min(740px, calc(100vh - 48px));
+      max-height: none;
+      padding: 0;
+      overflow: hidden;
+      border: 1px solid var(--color-divider);
+      border-radius: var(--radius-lg);
+      background: var(--color-surface);
+    }
+
+    .settings-nav {
+      width: 248px;
+      flex-shrink: 0;
+      padding: 22px 12px;
+      overflow-y: auto;
+      background: color-mix(in srgb, var(--color-bg) 55%, var(--color-surface));
+      border-right: 1px solid var(--color-divider);
+    }
+
+    .settings-nav-head {
+      padding: 0 10px 14px;
+    }
+
+    .settings-nav-title {
+      font-size: 20px;
+      font-weight: 600;
+      color: var(--color-text);
+    }
+
+    .settings-nav-sub {
+      margin-top: 6px;
+      font-size: 12.5px;
+      line-height: 1.45;
+      color: var(--color-neutral-400);
+    }
+
+    .settings-nav-group {
+      margin-top: 14px;
+    }
+
+    .settings-nav-group .section-label {
+      padding: 0 10px 6px;
+    }
+
+    #admin-modal[data-mode="client"] .settings-nav-group[data-nav-mode="server"],
+    #admin-modal[data-mode="server"] .settings-nav-group[data-nav-mode="client"] {
+      display: none;
+    }
+
+    .settings-nav .settings-tab-btn {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      width: 100%;
+      margin: 1px 0;
+      padding: 8px 10px;
+      border: none;
+      border-radius: var(--radius-md);
+      background: none;
+      color: var(--color-neutral-300);
+      font-size: 14px;
+      text-align: left;
+      cursor: pointer;
+      position: relative;
+    }
+
+    .settings-nav .settings-tab-btn .ph {
+      font-size: 17px;
+      color: var(--color-neutral-400);
+    }
+
+    .settings-nav .settings-tab-btn:hover {
+      background: var(--color-neutral-900);
+      color: var(--color-text);
+    }
+
+    .settings-nav .settings-tab-btn.active {
+      background: var(--color-accent-900);
+      color: var(--color-text);
+    }
+
+    .settings-nav .settings-tab-btn.active::before {
+      content: "";
+      position: absolute;
+      left: -12px;
+      top: 8px;
+      bottom: 8px;
+      width: 3px;
+      border-radius: 2px;
+      background: var(--color-accent);
+    }
+
+    .settings-nav .settings-tab-btn.active .ph {
+      color: var(--color-accent-200);
+    }
+
+    .settings-nav .settings-tab-btn .pending-badge {
+      margin-left: auto;
+    }
+
+    .settings-main {
+      position: relative;
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      padding: 22px 32px 0;
+    }
+
+    .settings-close {
+      position: absolute;
+      top: 16px;
+      right: 16px;
+      z-index: 2;
+      width: 32px;
+      height: 32px;
+      border: none;
+      border-radius: var(--radius-md);
+      background: none;
+      color: var(--color-neutral-400);
+      font-size: 18px;
+      cursor: pointer;
+    }
+
+    .settings-close:hover {
+      background: var(--color-neutral-900);
+      color: var(--color-text);
+    }
+
+    #admin-modal .settings-panel {
+      padding: 0 12px 28px 0;
+    }
+
+    #admin-modal .settings-panel > * {
+      max-width: 660px;
+    }
+
+    .settings-page-title {
+      margin: 0;
+      font-size: 22px;
+      font-weight: 600;
+      color: var(--color-text);
+    }
+
+    .settings-page-sub {
+      margin: 4px 0 18px;
+      font-size: 13.5px;
+      color: var(--color-neutral-400);
+    }
+
+    .settings-section {
+      margin-bottom: 22px;
+    }
+
+    .settings-section > .section-label {
+      margin-bottom: 8px;
+    }
+
+    .settings-card {
+      padding: 4px 16px;
+      border: 1px solid var(--color-divider);
+      border-radius: var(--radius-lg);
+      background: var(--color-bg);
+    }
+
+    .settings-card > label:not(.toggle-switch),
+    .settings-card .settings-toggle-card-expand-inner > label {
+      display: block;
+      margin: 12px 0 6px;
+      font-size: 13.5px;
+      font-weight: 500;
+      color: var(--color-text);
+    }
+
+    .settings-card .toggle-row,
+    .settings-card .settings-toggle-card {
+      margin: 0;
+      padding-left: 0;
+      padding-right: 0;
+      border: none;
+      border-radius: 0;
+      background: transparent;
+    }
+
+    .settings-card > * + .toggle-row,
+    .settings-card > * + .settings-toggle-card,
+    .settings-card > .settings-toggle-card + *,
+    .settings-card > .toggle-row + * {
+      border-top: 1px solid var(--color-divider);
+    }
+
+    .settings-card .toggle-row {
+      padding-top: 12px;
+      padding-bottom: 12px;
+    }
+
+    .settings-card .toggle-row-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--color-text);
+    }
+
+    .settings-card .toggle-row-desc {
+      font-size: 12.5px;
+      color: var(--color-neutral-400);
+    }
+
+    .settings-card .toggle-row-icon {
+      display: none;
+    }
+
+    .settings-card .settings-toggle-card-expand-inner {
+      padding: 0;
+    }
+
+    .settings-card .settings-select {
+      width: 100%;
+    }
+
+    .settings-card .shortcut-row {
+      margin: 0;
+      padding: 12px 0;
+    }
+
+    .settings-card .shortcut-row + .shortcut-row {
+      border-top: 1px solid var(--color-divider);
+    }
+
+    .settings-card .shortcut-row label {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--color-text);
+    }
+
+    .settings-note {
+      margin: -12px 0 0;
+      font-size: 12.5px;
+      color: var(--color-neutral-400);
+    }
+
+    #admin-modal .profile-card,
+    #admin-modal .identity-row {
+      padding: 16px;
+      border: 1px solid var(--color-divider);
+      border-radius: var(--radius-lg);
+      background: var(--color-bg);
+    }
+
+    #admin-modal .about-header {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      grid-template-rows: auto auto;
+      column-gap: 16px;
+      align-items: center;
+      text-align: left;
+      margin-bottom: 8px;
+    }
+
+    #admin-modal .about-header img {
+      grid-row: span 2;
+      width: 60px;
+      height: 60px;
+    }
+
+    #admin-modal .about-header .about-name {
+      align-self: end;
+      font-size: 22px;
+      font-weight: 600;
+    }
+
+    #admin-modal .about-header #about-version {
+      align-self: start;
+      font-size: 13.5px;
+      color: var(--color-neutral-400);
+    }
+
+    #admin-modal .about-tagline {
+      margin: -2px 0 14px 76px;
+      text-align: left;
+      color: var(--color-neutral-400);
+    }
+
+    .settings-card .shortcut-row .btn {
+      padding: 5px 12px !important;
+      font-size: 12px !important;
+      border: 1px solid var(--color-divider);
+      background: transparent;
+      color: var(--color-neutral-300);
+    }
+
+    .settings-card .shortcut-row .btn:hover {
+      border-color: var(--color-accent-700);
+      color: var(--color-text);
+    }
+
+    .settings-card .shortcut-input {
+      flex: 1;
+      max-width: 240px;
+    }
   </style>
 </head>
 
@@ -8408,7 +8714,7 @@
       <div class="modal-switch-row nsfw-switch-card">
         <label class="modal-switch-text" for="chk-nsfw-dont-warn">
           <span class="nsfw-switch-title">Don't warn me again</span>
-          <span class="nsfw-switch-desc">For every NSFW channel · undo in Settings › Application</span>
+          <span class="nsfw-switch-desc">For every NSFW channel · undo in Settings › Privacy &amp; safety</span>
         </label>
         <label class="toggle-switch">
           <input type="checkbox" id="chk-nsfw-dont-warn">
@@ -8861,21 +9167,50 @@
   </div>
 
   <!-- ── Unified Settings Modal ───────────────────────────────────── -->
-  <div id="admin-modal">
-    <div class="modal-content wide">
-      <h3>⚙ Settings</h3>
-      <div class="settings-tab-bar">
-        <button class="settings-tab-btn active" data-settings-tab="roles" id="settings-tab-roles">🛡️ User Management<span class="pending-badge" id="pending-badge-tab" style="display:none;"></span></button>
-        <button class="settings-tab-btn" data-settings-tab="emojis" id="settings-tab-emojis">😀 Emojis</button>
-        <button class="settings-tab-btn" data-settings-tab="server" id="settings-tab-server">🔔 Server</button>
-        <button class="settings-tab-btn" data-settings-tab="voice">🎤 Voice & Shortcuts</button>
-        <button class="settings-tab-btn" data-settings-tab="app">🖥 Application</button>
-        <button class="settings-tab-btn" data-settings-tab="audio">🔊 Audio</button>
-        <button class="settings-tab-btn" data-settings-tab="about">ℹ️ About</button>
+  <div id="admin-modal" data-mode="client">
+    <div class="modal-content wide settings-shell">
+      <nav class="settings-nav" aria-label="Settings pages">
+        <div class="settings-nav-head">
+          <div class="settings-nav-title" id="settings-nav-title">Settings</div>
+          <div class="settings-nav-sub" id="settings-nav-sub">Saved on this device. Server options live in the server menu.</div>
+        </div>
+        <div class="settings-nav-group" data-nav-mode="client">
+          <div class="section-label">You</div>
+          <button class="settings-tab-btn" data-settings-tab="profile"><i class="ph ph-user-circle" aria-hidden="true"></i>Profile &amp; identity</button>
+        </div>
+        <div class="settings-nav-group" data-nav-mode="client">
+          <div class="section-label">Voice &amp; sound</div>
+          <button class="settings-tab-btn active" data-settings-tab="voice"><i class="ph ph-microphone" aria-hidden="true"></i>Voice</button>
+          <button class="settings-tab-btn" data-settings-tab="sound"><i class="ph ph-speaker-high" aria-hidden="true"></i>Sound</button>
+          <button class="settings-tab-btn" data-settings-tab="shortcuts"><i class="ph ph-keyboard" aria-hidden="true"></i>Shortcuts</button>
+        </div>
+        <div class="settings-nav-group" data-nav-mode="client">
+          <div class="section-label">Client</div>
+          <button class="settings-tab-btn" data-settings-tab="privacy"><i class="ph ph-shield-check" aria-hidden="true"></i>Privacy &amp; safety</button>
+          <button class="settings-tab-btn" data-settings-tab="window"><i class="ph ph-app-window" aria-hidden="true"></i>Window</button>
+          <button class="settings-tab-btn" data-settings-tab="about"><i class="ph ph-info" aria-hidden="true"></i>About</button>
+        </div>
+        <div class="settings-nav-group" data-nav-mode="server">
+          <div class="section-label">Server</div>
+          <button class="settings-tab-btn" data-settings-tab="server" id="settings-tab-server"><i class="ph ph-sliders-horizontal" aria-hidden="true"></i>General</button>
+          <button class="settings-tab-btn" data-settings-tab="roles" id="settings-tab-roles"><i class="ph ph-users" aria-hidden="true"></i>Members<span class="pending-badge" id="pending-badge-tab" style="display:none;"></span></button>
+          <button class="settings-tab-btn" data-settings-tab="emojis" id="settings-tab-emojis"><i class="ph ph-smiley" aria-hidden="true"></i>Emoji</button>
+        </div>
+      </nav>
+
+      <div class="settings-main">
+        <button type="button" class="settings-close" id="btn-admin-close" title="Close" aria-label="Close settings"><i class="ph ph-x" aria-hidden="true"></i></button>
+
+      <!-- Server mode with no page this person may use (an older server answers late) -->
+      <div class="settings-panel" data-settings-panel="server-none">
+        <h2 class="settings-page-title">Server settings</h2>
+        <p class="settings-page-sub">You don't manage anything on this server. The people who do can change its settings here.</p>
       </div>
 
       <!-- Roles Tab -->
-      <div class="settings-panel active" data-settings-panel="roles">
+      <div class="settings-panel" data-settings-panel="roles">
+        <h2 class="settings-page-title">Members</h2>
+        <p class="settings-page-sub">Roles, approvals, invites and bans for the people on this server.</p>
         <!-- Identity log (PRD 18.4) — ADMIN only; the server checks it too. -->
         <div class="identity-log-bar" id="identity-log-bar" style="display:none;">
           <span>Who bound a key, who reset one, and which sign-ins were refused.</span>
@@ -8915,6 +9250,8 @@
 
       <!-- Server Tab (admin-only server-wide settings) -->
       <div class="settings-panel" data-settings-panel="server">
+        <h2 class="settings-page-title">General</h2>
+        <p class="settings-page-sub">How this server looks and what it allows, for everyone on it.</p>
         <div class="server-icon-row" id="server-icon-row">
           <span id="server-icon-row-preview"></span>
           <div class="server-icon-row-text">
@@ -9022,26 +9359,83 @@
 
       <!-- Emojis Tab (pending custom emoji review queue) -->
       <div class="settings-panel" data-settings-panel="emojis">
+        <h2 class="settings-page-title">Emoji</h2>
+        <p class="settings-page-sub">Custom emoji people submitted, waiting for review.</p>
         <div id="emoji-pending-list" class="admin-user-list">
           <div class="admin-empty">Loading pending emojis...</div>
         </div>
       </div>
 
-      <!-- Voice & Shortcuts Tab -->
-      <div class="settings-panel" data-settings-panel="voice">
+      <div class="settings-panel" data-settings-panel="profile">
+        <h2 class="settings-page-title">Profile &amp; identity</h2>
+        <p class="settings-page-sub">How you appear on every server you join.</p>
+        <section class="settings-section">
+          <div class="section-label">Avatar</div>
+        <div class="profile-card" id="profile-card">
+          <div class="profile-avatar-col">
+            <span class="avatar profile-avatar-preview" id="profile-avatar-preview" aria-hidden="true"></span>
+            <span class="profile-avatar-status" id="profile-avatar-status" role="status" aria-live="polite"></span>
+          </div>
+
+          <div class="profile-fields">
+            <div class="profile-field">
+              <span class="profile-field-label" id="profile-provider-label">Avatar source</span>
+              <div class="segmented" role="radiogroup" aria-labelledby="profile-provider-label">
+                <button type="button" class="segmented-option" role="radio" data-avatar-provider="libravatar">Libravatar</button>
+                <button type="button" class="segmented-option" role="radio" data-avatar-provider="gravatar">Gravatar</button>
+              </div>
+            </div>
+
+            <div class="profile-field">
+              <span class="profile-field-label" id="profile-email-label">Email</span>
+              <input type="email" class="profile-email-input" id="profile-email-input" aria-labelledby="profile-email-label"
+                placeholder="you@example.com" autocomplete="email" spellcheck="false" maxlength="254">
+              <span class="profile-field-error" id="profile-email-error" role="alert"></span>
+            </div>
+
+            <p class="profile-hint">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+              <span>Create a free account at <a href="#" class="profile-provider-link" id="profile-provider-link">libravatar.org</a> with this email and upload your picture there. Your email never leaves this computer &mdash; only an anonymous hash of it is shared.</span>
+            </p>
+
+            <div class="profile-actions">
+              <button type="button" class="btn btn-cancel" id="btn-profile-remove">Remove</button>
+              <button type="button" class="btn btn-create" id="btn-profile-save">Save avatar</button>
+            </div>
+          </div>
+        </div>
+        </section>
+        <section class="settings-section">
+          <div class="section-label">Identity</div>
+        <!-- Identity key fingerprint (PRD 17.12) -->
+        <div class="identity-row">
+          <div class="identity-row-label">Identity</div>
+          <div class="identity-row-value">
+            <code id="about-identity-fingerprint">…</code>
+            <button type="button" class="btn btn-cancel" id="btn-copy-fingerprint">Copy</button>
+          </div>
+          <div class="identity-row-hint">Your server admin may ask for this to protect the admin account (<code>ADMIN_KEY_FINGERPRINT</code>).</div>
+          <!-- Where the key is stored, and backup/restore (PRD 18.6) -->
+          <div class="identity-row-storage" id="about-identity-storage"></div>
+          <div class="identity-actions">
+            <button type="button" class="btn btn-cancel" id="btn-identity-export">Export identity…</button>
+            <button type="button" class="btn btn-cancel" id="btn-identity-import">Import identity…</button>
+          </div>
+        </div>
+        </section>
+      </div>
+
+      <div class="settings-panel active" data-settings-panel="voice">
+        <h2 class="settings-page-title">Voice</h2>
+        <p class="settings-page-sub">Your microphone and how it transmits.</p>
+        <section class="settings-section">
+          <div class="section-label">Microphone</div>
+          <div class="settings-card">
         <label for="audio-input-select">Microphone (Input)</label>
         <select id="audio-input-select" class="settings-select">
           <option value="">System Default</option>
         </select>
 
-        <label for="audio-output-select">Speaker (Output)</label>
-        <select id="audio-output-select" class="settings-select">
-          <option value="">System Default</option>
-        </select>
-
-        <button class="btn btn-create" id="btn-save-devices" style="width:100%; margin-bottom:14px; display:none;">💾 Save Audio Devices</button>
-
-        <!-- Mic Volume (PRD 13.3) -->
         <div id="mic-volume-wrap" style="margin-bottom:14px;">
           <label style="display:block; margin-bottom:6px;">Microphone Volume</label>
           <div class="sensitivity-slider-row">
@@ -9052,18 +9446,12 @@
             <span>Scales your outgoing mic signal — 100% is your unprocessed input level. Above 100%, loud peaks are softly limited instead of distorting.</span>
           </div>
         </div>
-
-        <!-- Microphone Level Meter — always visible, independent of the noise
-             gate (previously only shown while the gate was enabled) so any
-             change to mic volume, noise cancelling, or the gate threshold is
-             reflected live. -->
         <div id="mic-level-section" style="margin-bottom:14px;">
           <label style="display:block; margin-bottom:6px;">Microphone Level</label>
           <div class="mic-level-meter">
             <div class="mic-level-meter-bar" id="mic-level-bar"></div>
           </div>
         </div>
-
         <!-- Self-Hear Mic Monitor (PRD 14.10) — switch + slider unified into
              one card that subtly expands to reveal the slider while enabled,
              rather than two visually disconnected boxes. -->
@@ -9092,6 +9480,17 @@
               </div>
             </div>
           </div>
+        </div>
+
+          </div>
+        </section>
+        <section class="settings-section">
+          <div class="section-label">Transmission</div>
+          <div class="settings-card">
+        <label style="margin-bottom:4px; display:block;">Voice Input Mode</label>
+        <div style="display:flex; gap:8px; margin-bottom:14px;">
+          <button class="btn" id="btn-voice-activation" style="flex:1; font-size:11px; padding:5px 0; border:1px solid var(--border); background:var(--bg-input); color:var(--text-secondary); border-radius:var(--radius); cursor:pointer; transition:all 0.15s;">🎤 Voice Activation</button>
+          <button class="btn" id="btn-ptt-mode" style="flex:1; font-size:11px; padding:5px 0; border:1px solid var(--border); background:var(--bg-input); color:var(--text-secondary); border-radius:var(--radius); cursor:pointer; transition:all 0.15s;">🔘 Push-To-Talk</button>
         </div>
 
         <!-- Mic Sensitivity / Noise Gate -->
@@ -9159,13 +9558,79 @@
           </div>
         </div>
 
-        <label style="margin-bottom:4px; display:block;">Voice Input Mode</label>
-        <div style="display:flex; gap:8px; margin-bottom:14px;">
-          <button class="btn" id="btn-voice-activation" style="flex:1; font-size:11px; padding:5px 0; border:1px solid var(--border); background:var(--bg-input); color:var(--text-secondary); border-radius:var(--radius); cursor:pointer; transition:all 0.15s;">🎤 Voice Activation</button>
-          <button class="btn" id="btn-ptt-mode" style="flex:1; font-size:11px; padding:5px 0; border:1px solid var(--border); background:var(--bg-input); color:var(--text-secondary); border-radius:var(--radius); cursor:pointer; transition:all 0.15s;">🔘 Push-To-Talk</button>
+          </div>
+        </section>
+      </div>
+
+      <div class="settings-panel" data-settings-panel="sound">
+        <h2 class="settings-page-title">Sound</h2>
+        <p class="settings-page-sub">What you hear — voice chat and alerts.</p>
+        <section class="settings-section">
+          <div class="section-label">Voice chat</div>
+          <div class="settings-card">
+        <label for="audio-output-select">Speaker (Output)</label>
+        <select id="audio-output-select" class="settings-select">
+          <option value="">System Default</option>
+        </select>
+
+        <button class="btn btn-create" id="btn-save-devices" style="width:100%; margin-bottom:14px; display:none;">💾 Save Audio Devices</button>
+
+        <div id="audio-voice-volume-wrap" style="margin-bottom:14px;">
+          <label style="display:block; margin-bottom:6px;">Global Voice Chat Volume</label>
+          <div class="sensitivity-slider-row">
+            <input type="range" id="audio-voice-volume-slider" min="0" max="100" value="100" step="5">
+            <span class="sensitivity-value" id="audio-voice-volume-value">100%</span>
+          </div>
+          <div class="sensitivity-labels">
+            <span>Master attenuator — combines with each participant's individual volume</span>
+          </div>
+        </div>
+          </div>
+        </section>
+        <section class="settings-section">
+          <div class="section-label">Alerts</div>
+          <div class="settings-card">
+
+        <div class="toggle-row">
+          <div class="toggle-row-info">
+            <div class="toggle-row-icon">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>
+            </div>
+            <div class="toggle-row-text">
+              <span class="toggle-row-title">Mute sound alerts</span>
+              <span class="toggle-row-desc">Silence all notification sounds (connect, disconnect, DM alerts, etc.)</span>
+            </div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="chk-mute-alerts">
+            <span class="toggle-slider"></span>
+          </label>
         </div>
 
-        <label class="settings-section-title">Keyboard Shortcuts</label>
+        <div id="audio-alert-volume-wrap" style="margin-bottom:14px;">
+          <label style="display:block; margin-bottom:6px;">Sound Alerts Volume</label>
+          <div class="sensitivity-slider-row">
+            <input type="range" id="audio-alert-volume-slider" min="0" max="100" value="100" step="5">
+            <span class="sensitivity-value" id="audio-alert-volume-value">100%</span>
+          </div>
+        </div>
+        <div id="audio-nudge-volume-wrap" style="margin-bottom:14px;">
+          <label style="display:block; margin-bottom:6px;">Nudge Volume</label>
+          <div class="sensitivity-slider-row">
+            <input type="range" id="audio-nudge-volume-slider" min="0" max="100" value="100" step="5">
+            <span class="sensitivity-value" id="audio-nudge-volume-value">100%</span>
+          </div>
+        </div>
+          </div>
+        </section>
+      </div>
+
+      <div class="settings-panel" data-settings-panel="shortcuts">
+        <h2 class="settings-page-title">Shortcuts</h2>
+        <p class="settings-page-sub">Global keys for voice, on any server.</p>
+        <section class="settings-section">
+          <div class="section-label">Voice</div>
+          <div class="settings-card">
         <div class="shortcut-row">
           <label>Push-to-Talk</label>
           <input type="text" class="shortcut-input" id="shortcut-ptt" readonly placeholder="Not set">
@@ -9196,117 +9661,17 @@
           <button class="btn btn-cancel" style="font-size:10px; padding:3px 10px;"
             data-shortcut-clear="disconnect">Clear</button>
         </div>
+          </div>
+        </section>
+        <p class="settings-note">Click Set, then press the keys. Shortcuts also work while Reson8 is in the background.</p>
       </div>
 
-      <!-- Application Tab -->
-      <div class="settings-panel" data-settings-panel="app">
-        <!-- Profile (PRD 17.1) — avatar from Libravatar/Gravatar. Client-side
-             preference; only { provider, hash } is ever sent to the server. -->
-        <label style="font-size:11px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px; display:block; margin-bottom:10px;">Profile</label>
-
-        <div class="profile-card" id="profile-card">
-          <div class="profile-avatar-col">
-            <span class="avatar profile-avatar-preview" id="profile-avatar-preview" aria-hidden="true"></span>
-            <span class="profile-avatar-status" id="profile-avatar-status" role="status" aria-live="polite"></span>
-          </div>
-
-          <div class="profile-fields">
-            <div class="profile-field">
-              <span class="profile-field-label" id="profile-provider-label">Avatar source</span>
-              <div class="segmented" role="radiogroup" aria-labelledby="profile-provider-label">
-                <button type="button" class="segmented-option" role="radio" data-avatar-provider="libravatar">Libravatar</button>
-                <button type="button" class="segmented-option" role="radio" data-avatar-provider="gravatar">Gravatar</button>
-              </div>
-            </div>
-
-            <div class="profile-field">
-              <span class="profile-field-label" id="profile-email-label">Email</span>
-              <input type="email" class="profile-email-input" id="profile-email-input" aria-labelledby="profile-email-label"
-                placeholder="you@example.com" autocomplete="email" spellcheck="false" maxlength="254">
-              <span class="profile-field-error" id="profile-email-error" role="alert"></span>
-            </div>
-
-            <p class="profile-hint">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
-              <span>Create a free account at <a href="#" class="profile-provider-link" id="profile-provider-link">libravatar.org</a> with this email and upload your picture there. Your email never leaves this computer &mdash; only an anonymous hash of it is shared.</span>
-            </p>
-
-            <div class="profile-actions">
-              <button type="button" class="btn btn-cancel" id="btn-profile-remove">Remove</button>
-              <button type="button" class="btn btn-create" id="btn-profile-save">Save avatar</button>
-            </div>
-          </div>
-        </div>
-
-        <div class="toggle-row">
-          <div class="toggle-row-info">
-            <div class="toggle-row-icon">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
-            </div>
-            <div class="toggle-row-text">
-              <span class="toggle-row-title">Load avatars from Libravatar/Gravatar</span>
-              <span class="toggle-row-desc">Turn off to show initials instead, with no requests to those services</span>
-            </div>
-          </div>
-          <label class="toggle-switch">
-            <input type="checkbox" id="chk-avatars-external">
-            <span class="toggle-slider"></span>
-          </label>
-        </div>
-
-        <label style="font-size:11px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px; display:block; margin-bottom:10px; margin-top:6px;">System Tray</label>
-
-        <div class="toggle-row">
-          <div class="toggle-row-info">
-            <div class="toggle-row-icon">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 9l7-7 7 7"/><path d="M12 16V2"/><path d="M3 20h18"/></svg>
-            </div>
-            <div class="toggle-row-text">
-              <span class="toggle-row-title">Minimize to system tray</span>
-              <span class="toggle-row-desc">Hide the window from the taskbar when minimized</span>
-            </div>
-          </div>
-          <label class="toggle-switch">
-            <input type="checkbox" id="chk-minimize-to-tray">
-            <span class="toggle-slider"></span>
-          </label>
-        </div>
-
-        <div class="toggle-row">
-          <div class="toggle-row-info">
-            <div class="toggle-row-icon">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-            </div>
-            <div class="toggle-row-text">
-              <span class="toggle-row-title">Close button minimizes to tray</span>
-              <span class="toggle-row-desc">Clicking the X button hides to tray instead of quitting</span>
-            </div>
-          </div>
-          <label class="toggle-switch">
-            <input type="checkbox" id="chk-close-to-tray">
-            <span class="toggle-slider"></span>
-          </label>
-        </div>
-
-        <label style="font-size:11px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px; display:block; margin-bottom:10px; margin-top:6px;">Sound</label>
-
-        <div class="toggle-row">
-          <div class="toggle-row-info">
-            <div class="toggle-row-icon">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>
-            </div>
-            <div class="toggle-row-text">
-              <span class="toggle-row-title">Mute sound alerts</span>
-              <span class="toggle-row-desc">Silence all notification sounds (connect, disconnect, DM alerts, etc.)</span>
-            </div>
-          </div>
-          <label class="toggle-switch">
-            <input type="checkbox" id="chk-mute-alerts">
-            <span class="toggle-slider"></span>
-          </label>
-        </div>
-
-        <label style="font-size:11px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px; display:block; margin-bottom:10px; margin-top:6px;">Content</label>
+      <div class="settings-panel" data-settings-panel="privacy">
+        <h2 class="settings-page-title">Privacy &amp; safety</h2>
+        <p class="settings-page-sub">What Reson8 shows you, and which outside services it contacts.</p>
+        <section class="settings-section">
+          <div class="section-label">NSFW channels</div>
+          <div class="settings-card">
 
         <div class="toggle-row">
           <div class="toggle-row-info">
@@ -9336,6 +9701,27 @@
           </div>
           <label class="toggle-switch">
             <input type="checkbox" id="chk-nsfw-blur">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+
+          </div>
+        </section>
+        <section class="settings-section">
+          <div class="section-label">Link previews</div>
+          <div class="settings-card">
+        <div class="toggle-row">
+          <div class="toggle-row-info">
+            <div class="toggle-row-icon">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+            </div>
+            <div class="toggle-row-text">
+              <span class="toggle-row-title">Show link previews</span>
+              <span class="toggle-row-desc">Each preview makes Reson8 contact the linked website, which can see your IP address.</span>
+            </div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="chk-link-previews">
             <span class="toggle-slider"></span>
           </label>
         </div>
@@ -9373,22 +9759,81 @@
           </div>
         </div>
 
+          </div>
+        </section>
+        <section class="settings-section">
+          <div class="section-label">Avatars</div>
+          <div class="settings-card">
         <div class="toggle-row">
           <div class="toggle-row-info">
             <div class="toggle-row-icon">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
             </div>
             <div class="toggle-row-text">
-              <span class="toggle-row-title">Show link previews</span>
-              <span class="toggle-row-desc">Each preview makes Reson8 contact the linked website, which can see your IP address.</span>
+              <span class="toggle-row-title">Load avatars from Libravatar/Gravatar</span>
+              <span class="toggle-row-desc">Turn off to show initials instead, with no requests to those services</span>
             </div>
           </div>
           <label class="toggle-switch">
-            <input type="checkbox" id="chk-link-previews">
+            <input type="checkbox" id="chk-avatars-external">
             <span class="toggle-slider"></span>
           </label>
         </div>
 
+          </div>
+        </section>
+        <section class="settings-section">
+          <div class="section-label">Trusted certificates</div>
+        <!-- Trusted certificates (PRD 18.3) -->
+        <p class="profile-hint" style="margin-bottom:10px;">Self-signed servers you chose to trust. Reson8 connects to them only while they present exactly this certificate.</p>
+        <div id="tls-trusted-list"></div>
+        </section>
+      </div>
+
+      <div class="settings-panel" data-settings-panel="window">
+        <h2 class="settings-page-title">Window</h2>
+        <p class="settings-page-sub">What happens when you minimize or close Reson8, and how its window looks.</p>
+        <section class="settings-section">
+          <div class="section-label">System tray</div>
+          <div class="settings-card">
+
+        <div class="toggle-row">
+          <div class="toggle-row-info">
+            <div class="toggle-row-icon">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 9l7-7 7 7"/><path d="M12 16V2"/><path d="M3 20h18"/></svg>
+            </div>
+            <div class="toggle-row-text">
+              <span class="toggle-row-title">Minimize to system tray</span>
+              <span class="toggle-row-desc">Hide the window from the taskbar when minimized</span>
+            </div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="chk-minimize-to-tray">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+
+        <div class="toggle-row">
+          <div class="toggle-row-info">
+            <div class="toggle-row-icon">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </div>
+            <div class="toggle-row-text">
+              <span class="toggle-row-title">Close button minimizes to tray</span>
+              <span class="toggle-row-desc">Clicking the X button hides to tray instead of quitting</span>
+            </div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="chk-close-to-tray">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+
+          </div>
+        </section>
+        <section class="settings-section">
+          <div class="section-label">Title bar</div>
+          <div class="settings-card">
         <div class="toggle-row">
           <div class="toggle-row-info">
             <div class="toggle-row-icon"><i class="ph ph-app-window" aria-hidden="true"></i></div>
@@ -9407,46 +9852,13 @@
           <button type="button" class="btn btn-secondary" id="btn-system-titlebar-restart">Restart now</button>
         </div>
 
-        <!-- Trusted certificates (PRD 18.3) -->
-        <label style="font-size:11px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px; display:block; margin-bottom:10px; margin-top:16px;">Trusted certificates</label>
-        <p class="profile-hint" style="margin-bottom:10px;">Self-signed servers you chose to trust. Reson8 connects to them only while they present exactly this certificate.</p>
-        <div id="tls-trusted-list"></div>
+          </div>
+        </section>
       </div>
 
-      <!-- Audio Tab -->
-      <div class="settings-panel" data-settings-panel="audio">
-        <label style="font-size:11px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px; display:block; margin-bottom:10px;">Volume</label>
-
-        <div id="audio-nudge-volume-wrap" style="margin-bottom:14px;">
-          <label style="display:block; margin-bottom:6px;">Nudge Volume</label>
-          <div class="sensitivity-slider-row">
-            <input type="range" id="audio-nudge-volume-slider" min="0" max="100" value="100" step="5">
-            <span class="sensitivity-value" id="audio-nudge-volume-value">100%</span>
-          </div>
-        </div>
-
-        <div id="audio-alert-volume-wrap" style="margin-bottom:14px;">
-          <label style="display:block; margin-bottom:6px;">Sound Alerts Volume</label>
-          <div class="sensitivity-slider-row">
-            <input type="range" id="audio-alert-volume-slider" min="0" max="100" value="100" step="5">
-            <span class="sensitivity-value" id="audio-alert-volume-value">100%</span>
-          </div>
-        </div>
-
-        <div id="audio-voice-volume-wrap" style="margin-bottom:14px;">
-          <label style="display:block; margin-bottom:6px;">Global Voice Chat Volume</label>
-          <div class="sensitivity-slider-row">
-            <input type="range" id="audio-voice-volume-slider" min="0" max="100" value="100" step="5">
-            <span class="sensitivity-value" id="audio-voice-volume-value">100%</span>
-          </div>
-          <div class="sensitivity-labels">
-            <span>Master attenuator — combines with each participant's individual volume</span>
-          </div>
-        </div>
-      </div>
-
-      <!-- About Tab -->
       <div class="settings-panel" data-settings-panel="about">
+        <h2 class="settings-page-title">About</h2>
+        <p class="settings-page-sub">Version, updates and where Reson8 comes from.</p>
         <div class="about-header">
           <img src="logo.png" alt="Reson8 Logo">
           <div class="about-name">Reson8</div>
@@ -9469,25 +9881,8 @@
         </div>
         <button type="button" class="btn btn-ghost update-row-whatsnew" id="btn-about-whats-new">What's new in this version</button>
 
-        <!-- Identity key fingerprint (PRD 17.12) -->
-        <div class="identity-row">
-          <div class="identity-row-label">Identity</div>
-          <div class="identity-row-value">
-            <code id="about-identity-fingerprint">…</code>
-            <button type="button" class="btn btn-cancel" id="btn-copy-fingerprint">Copy</button>
-          </div>
-          <div class="identity-row-hint">Your server admin may ask for this to protect the admin account (<code>ADMIN_KEY_FINGERPRINT</code>).</div>
-          <!-- Where the key is stored, and backup/restore (PRD 18.6) -->
-          <div class="identity-row-storage" id="about-identity-storage"></div>
-          <div class="identity-actions">
-            <button type="button" class="btn btn-cancel" id="btn-identity-export">Export identity…</button>
-            <button type="button" class="btn btn-cancel" id="btn-identity-import">Import identity…</button>
-          </div>
-        </div>
       </div>
 
-      <div class="modal-actions">
-        <button class="btn btn-cancel" id="btn-admin-close">Close</button>
       </div>
     </div>
   </div>
