@@ -637,6 +637,16 @@
       white-space: nowrap;
     }
 
+    .saved-row-ping {
+      font-size: 11.5px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .saved-row-ping.good { color: var(--color-success); }
+    .saved-row-ping.warn { color: var(--color-warning-text); }
+    .saved-row-ping.bad { color: var(--color-danger-text); }
+    .saved-row-ping.offline { color: var(--color-neutral-500); }
+
     .saved-row-actions {
       display: flex;
       align-items: center;

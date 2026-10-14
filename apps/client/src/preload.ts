@@ -1411,6 +1411,11 @@ const api = {
         });
     },
 
+    /** Saved-server latency for the welcome list (PRD 20 W1); null = offline. */
+    probeServerLatency(address: string): Promise<{ ms: number | null }> {
+        return ipcRenderer.invoke("probe-server-latency", address);
+    },
+
     getBannedUsers(): Promise<{ success: boolean; users?: { userId: string; nickname: string; bannedAt: string; bannedByNickname?: string | null; address?: string | null }[]; error?: string }> {
         return new Promise((resolve) => {
             if (!socket?.connected) {

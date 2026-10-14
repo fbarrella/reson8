@@ -41,6 +41,7 @@ import { isValidPassword, isValidSavedServerId } from "./saved-passwords-store.j
 import { TlsTrustStore } from "./tls-store.js";
 import { probeServer } from "./tls-probe.js";
 import { hostKey, isFingerprint, type CertInfo } from "./tls-trust.js";
+import { healthProbeUrl } from "./server-health.js";
 
 // ── Single-instance lock (PRD 13.18) ────────────────────────────────────
 // Requested as early as possible, before any other startup work. Opening
@@ -1220,6 +1221,35 @@ app.whenReady().then(() => {
     });
 
     ipcMain.handle("tls-list-trusted", () => getTlsStore().listPins());
+
+    // ── Saved-server latency (PRD 20 W1) ─────────────────────────────────
+    const healthCache = new Map<string, { at: number; ms: number | null }>();
+    ipcMain.handle("probe-server-latency", async (_event, address: unknown) => {
+        if (typeof address !== "string" || address.length === 0 || address.length > 300) return { ms: null };
+        const cached = healthCache.get(address);
+        if (cached && Date.now() - cached.at < 60_000) return { ms: cached.ms };
+        const store = getTlsStore();
+        const url = healthProbeUrl(address, (key) => store.isHttpsRemembered(key) || store.getPin(key) !== null);
+        let ms: number | null = null;
+        if (url) {
+            const started = performance.now();
+            try {
+                const res = await session.defaultSession.fetch(url, {
+                    signal: AbortSignal.timeout(3000),
+                    cache: "no-store",
+                    redirect: "error",
+                    credentials: "omit",
+                });
+                const body = res.ok ? await res.json().catch(() => null) : null;
+                if (body && body.status === "ok") ms = Math.max(1, Math.round(performance.now() - started));
+            } catch {
+                ms = null;
+            }
+        }
+        healthCache.set(address, { at: Date.now(), ms });
+        if (healthCache.size > 100) healthCache.delete(healthCache.keys().next().value!);
+        return { ms };
+    });
 
     ipcMain.handle("tls-remove-trust", (_event, key: unknown) => {
         return typeof key === "string" && key.length <= 300 ? getTlsStore().removePin(key) : false;

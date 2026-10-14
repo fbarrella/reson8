@@ -968,6 +968,7 @@ interface Reson8Api {
     ): Promise<{ success: boolean; error?: string; warning?: string }>;
     unbanUser(userId: string): Promise<{ success: boolean; error?: string }>;
     getBannedUsers(): Promise<{ success: boolean; users?: { userId: string; nickname: string; bannedAt: string; bannedByNickname?: string | null; address?: string | null }[]; error?: string }>;
+    probeServerLatency(address: string): Promise<{ ms: number | null }>;
     uploadFile(fileBuffer: ArrayBuffer, fileName: string, mimeType: string): Promise<UploadResult>;
     downloadImage(url: string): void;
     setCustomEmojis(list: Array<{ name: string; imageUrl: string }>): void;
@@ -3496,6 +3497,48 @@ function removeSavedServer(id: string): void {
     renderSavedServers();
 }
 
+/** Last probe result per saved address (PRD 20 W1): number = ms, null = offline, undefined = not yet. */
+const savedLatency = new Map<string, number | null>();
+let savedProbeTimer: ReturnType<typeof setInterval> | null = null;
+
+function paintSavedPing(el: HTMLElement, value: number | null | undefined): void {
+    el.classList.remove("good", "warn", "bad", "offline");
+    if (value === undefined) {
+        el.textContent = "";
+        return;
+    }
+    if (value === null) {
+        el.textContent = "Offline";
+        el.classList.add("offline");
+        return;
+    }
+    el.textContent = `${value} ms`;
+    el.classList.add(value <= 80 ? "good" : value <= 150 ? "warn" : "bad");
+}
+
+function probeSavedServers(): void {
+    if (isConnected || connectInProgress) return;
+    for (const entry of savedServers) {
+        void api.probeServerLatency(entry.address).then(({ ms }) => {
+            savedLatency.set(entry.address, ms);
+            document.querySelectorAll<HTMLElement>(".saved-row-ping").forEach((el) => {
+                if (el.dataset.address === entry.address) paintSavedPing(el, ms);
+            });
+        });
+    }
+}
+
+/** Probes now and every 60 s while the welcome screen is up; stops once connected. */
+function startSavedServerProbes(): void {
+    probeSavedServers();
+    if (savedProbeTimer === null) savedProbeTimer = setInterval(probeSavedServers, 60_000);
+}
+
+function stopSavedServerProbes(): void {
+    if (savedProbeTimer !== null) clearInterval(savedProbeTimer);
+    savedProbeTimer = null;
+}
+
 function renderSavedServers(): void {
     // The welcome list
     const list = document.getElementById("saved-server-list") as HTMLElement;
@@ -3531,11 +3574,13 @@ function renderSavedServers(): void {
         // (Edit / Remove) — the frame (2b) shows only Connect (PRD 19 R1).
         const meta = document.createElement("div");
         meta.className = "saved-row-meta";
-        const metaWho = document.createElement("div");
-        metaWho.textContent = `as ${entry.nickname}`;
         const metaWhen = document.createElement("div");
-        metaWhen.textContent = `Last connected ${relativeTime(entry.lastConnected)}`;
-        meta.append(metaWho, metaWhen);
+        metaWhen.textContent = `as ${entry.nickname} · Last connected ${relativeTime(entry.lastConnected)}`;
+        const metaPing = document.createElement("div");
+        metaPing.className = "saved-row-ping";
+        metaPing.dataset.address = entry.address;
+        paintSavedPing(metaPing, savedLatency.get(entry.address));
+        meta.append(metaWhen, metaPing);
 
         const actions = document.createElement("div");
         actions.className = "saved-row-actions";
@@ -4106,6 +4151,7 @@ function initSavedServers(): void {
     savedServers = readSavedServers();
     migrateLegacyRememberedServer();
     renderSavedServers();
+    startSavedServerProbes(); // PRD 20 W1
     // Pre-fill the form from the most recent entry (what "Remember" used to do).
     const latest = savedServers[0];
     if (latest) fillFormFromSaved(latest);
@@ -7372,6 +7418,7 @@ api.on("connected", (data: { serverId: string; instanceId: string; secure?: bool
     document.body.classList.add("is-connected");
     document.body.classList.remove("is-approving");
     connectedNickname = nicknameInput.value.trim() || "User";
+    stopSavedServerProbes(); // PRD 20 W1
     onSavedServerConnected(); // PRD 19 C1
     showWelcomeForm(); // PRD 19 R1: the connect card's job is done
     renderServerPill(); // PRD 19 C2
@@ -7490,6 +7537,7 @@ api.on("disconnected", (data?: { reason?: string }) => {
     serverPasswordInput.disabled = false;
     document.body.classList.remove("is-connected", "is-approving");
     onSavedServerDisconnected(); // PRD 19 C1
+    startSavedServerProbes(); // PRD 20 W1: the welcome list shows latency again
     renderServerPill(); // PRD 19 C2
     renderServerHeader(); // PRD 19 C3
     renderConnectionSecurity(); // isConnected is false → hides the lock and the warning (PRD 18.3)

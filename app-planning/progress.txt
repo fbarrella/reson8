@@ -1303,3 +1303,42 @@ Feature/Fix: Emoji approve-all and the server library with remove (PRD 20 M3, pl
       custom-emoji-approved, which renders from customEmojis).
 
   Next Step: M4 remaining pieces are in M1/M3; then W1.
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Latency or Offline on saved servers (PRD 20 W1)
+
+  Problem: The saved-server rows on the welcome screen showed only "as {name} ·
+  Last connected …"; the design (frame 2b) also shows the server's latency or
+  "Offline".
+
+  Solution: Pure src/server-health.ts healthProbeUrl() (scheme from the
+  address, else https when that host:port was ever reached over https or has a
+  pin; default ports dropped) with scripts/server-health-smoke.mjs
+  (npm run test:server-health). The main process handles
+  "probe-server-latency" through session.defaultSession.fetch (so the pinned
+  certificate verifier applies): GET /health only, 3 s timeout, no cookies, no
+  redirects, cached 60 s per address (100 entries). Preload
+  probeServerLatency(); the renderer probes every saved address on the welcome
+  screen at startup and every 60 s, stops on connect and resumes on
+  disconnect; rows paint "{n} ms" (≤ 80 good, ≤ 150 warn, else bad) or
+  "Offline". savedLatency/paintSavedPing sit above renderSavedServers() (it
+  runs during startup).
+
+  Key Files Modified:
+    apps/client/src/server-health.ts (NEW), scripts/server-health-smoke.mjs (NEW),
+      package.json, src/main.ts, src/preload.ts,
+      src/renderer/renderer.ts, src/renderer/index.html
+
+  Verification:
+    - npm run test:server-health (8 checks); client tsc --noEmit; lint exit 0.
+    - Real app (fresh profile, two saved entries): 127.0.0.1:9800 -> "25 ms"
+      (green), 127.0.0.1:9999 (nothing listening) -> "Offline"; the probe timer
+      is running on the welcome screen, cleared while connected, running again
+      after disconnect. The row stays on one wrapped line in the narrow
+      container layout ("… · Last connected 5 minutes ago · 25 ms").
+    - Not exercised: the server being stopped mid-session ("Offline" within
+      60 s) and counting /health hits in the server log (request logging is
+      off); both follow from the 60 s cache and the timer states above.
+
+  Next Step: S1 (share picker tabs).
