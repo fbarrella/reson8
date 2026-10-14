@@ -6532,6 +6532,11 @@
       background: color-mix(in srgb, var(--color-text) 6%, transparent);
     }
 
+    .ban-cidr {
+      font: 500 13px ui-monospace, Menlo, monospace;
+      color: var(--color-neutral-100);
+    }
+
     .bans-empty {
       padding: 16px;
       border: 1px dashed var(--color-neutral-700);
@@ -6918,22 +6923,6 @@
       color: var(--color-neutral-500);
     }
 
-    .banned-address-row {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      padding: 7px 10px;
-      margin-bottom: 6px;
-      border: 1px solid var(--color-divider);
-      border-radius: var(--radius-md);
-      background: var(--color-field);
-      font-size: 12px;
-    }
-
-    .banned-address-row .banned-address-info { flex: 1; min-width: 0; }
-    .banned-address-row code { font-size: 12px; color: var(--color-text); }
-    .banned-address-row .banned-address-meta { color: var(--color-neutral-500); font-size: 11px; margin-top: 2px; word-break: break-word; }
-
     /* ── Connection names / relay protection (PRD 18.5) ─────────────────── */
     .relay-hosts {
       padding: 10px 12px;
@@ -7059,24 +7048,6 @@
       cursor: default;
       border-color: var(--color-divider);
       color: var(--color-neutral-500);
-    }
-
-    .btn-unban {
-      font-size: 11px;
-      padding: 2px 6px;
-      border-radius: 8px;
-      border: 1px solid var(--color-divider);
-      cursor: pointer;
-      transition: all 0.15s;
-      user-select: none;
-      color: var(--color-neutral-500);
-      background: transparent;
-      flex-shrink: 0;
-    }
-
-    .btn-unban:hover {
-      border-color: var(--color-accent);
-      color: var(--color-accent);
     }
 
     /* ── Menus (PRD 19 F3) — the one menu look: surface, shadow-lg, 5px
@@ -10268,10 +10239,10 @@
           <div class="section-label">Banned people</div>
           <div id="banned-users-list" class="members-list"></div>
         </section>
-        <div id="banned-addresses-section" style="display:none;">
-          <div class="banned-addresses-title">Banned addresses</div>
-          <div id="banned-addresses-list"></div>
-        </div>
+        <section class="settings-section" id="banned-addresses-section" style="display:none;">
+          <div class="section-label">Banned addresses</div>
+          <div id="banned-addresses-list" class="members-list"></div>
+        </section>
       </div>
 
       <div class="settings-panel" data-settings-panel="signin">

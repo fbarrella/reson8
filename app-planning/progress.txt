@@ -1569,3 +1569,22 @@ Feature/Fix: Spacing under the Requests label on the Emoji page (follow-up to PR
     apps/client/src/renderer/index.html
 
   Verification: copied to dist; waiting for the owner's visual check.
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Bans page spacing and banned addresses in the same card style (follow-up to PRD 20 M2)
+
+  Problem: "Banned addresses" was a bare title with no spacing under it and
+  plain bordered rows, unlike the "Banned people" card above it.
+
+  Solution: The addresses block is a .settings-section with a .section-label
+  (the same 8 px under the label) and renders into the same .members-list
+  card: prohibit icon, the CIDR in monospace, "Banned with {name} · {date}"
+  and a secondary Unban button; the empty state is the dashed .bans-empty box.
+  Dead CSS removed (.banned-address-row*, .btn-unban).
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts, index.html
+
+  Verification: client tsc --noEmit; lint exit 0; rebuilt into dist. Waiting for
+  the owner's visual check.

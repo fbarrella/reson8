@@ -12640,28 +12640,39 @@ async function renderBannedAddresses(): Promise<void> {
     bannedAddressesList.textContent = "";
     if (res.addresses.length === 0) {
         const empty = document.createElement("div");
-        empty.className = "admin-empty";
+        empty.className = "bans-empty";
         empty.textContent = "No banned addresses.";
         bannedAddressesList.appendChild(empty);
         return;
     }
     for (const entry of res.addresses) {
+        // Same card rows as "Banned people" (PRD 20 M2).
         const row = document.createElement("div");
-        row.className = "banned-address-row";
+        row.className = "member-row";
+        const icon = document.createElement("i");
+        icon.className = "ph ph-prohibit ban-row-icon";
+        icon.setAttribute("aria-hidden", "true");
         const info = document.createElement("div");
-        info.className = "banned-address-info";
-        const code = document.createElement("code");
+        info.className = "member-main";
+        const nameLine = document.createElement("div");
+        nameLine.className = "member-name";
+        const code = document.createElement("span");
+        code.className = "ban-cidr";
         code.textContent = entry.cidr;
+        nameLine.appendChild(code);
         const meta = document.createElement("div");
-        meta.className = "banned-address-meta";
+        meta.className = "member-sub";
         const when = new Date(entry.createdAt);
         const whenText = Number.isNaN(when.getTime())
             ? ""
             : when.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
-        meta.textContent = `${entry.nickname ? `Banned with ${entry.nickname}` : "Banned on its own"}${whenText ? ` · ${whenText}` : ""}`;
-        info.append(code, meta);
+        const metaText = document.createElement("span");
+        metaText.textContent = `${entry.nickname ? `Banned with ${entry.nickname}` : "Banned on its own"}${whenText ? ` · ${whenText}` : ""}`;
+        meta.appendChild(metaText);
+        info.append(nameLine, meta);
         const unban = document.createElement("button");
-        unban.className = "btn-unban";
+        unban.type = "button";
+        unban.className = "btn btn-secondary";
         unban.textContent = "Unban";
         unban.addEventListener("click", async () => {
             unban.disabled = true;
@@ -12674,7 +12685,7 @@ async function renderBannedAddresses(): Promise<void> {
                 log(`Failed to lift the address ban: ${escapeHtml(r.error ?? "unknown error")}`, "error");
             }
         });
-        row.append(info, unban);
+        row.append(icon, info, unban);
         bannedAddressesList.appendChild(row);
     }
 }
