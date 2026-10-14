@@ -95,6 +95,7 @@ export const EVENT_ACCESS: Record<keyof ClientToServerEvents, "open" | "member">
     REJECT_USER: "open",
     GET_PENDING_EMOJIS: "open",
     REVIEW_CUSTOM_EMOJI: "open",
+    DELETE_CUSTOM_EMOJI: "open", // MANAGE_EMOJIS (PRD 20 M3)
     UPDATE_SERVER_SETTINGS: "open",
 
     // Text channels

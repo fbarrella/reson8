@@ -618,6 +618,12 @@ export interface ClientToServerEvents {
         ack: (response: { success: boolean; error?: string }) => void,
     ) => void;
 
+    /** Removes an APPROVED custom emoji (MANAGE_EMOJIS) (PRD 20 M3). Messages that used it show `:name:` as text. */
+    DELETE_CUSTOM_EMOJI: (
+        payload: { emojiId: string },
+        ack: (response: { success: boolean; error?: string }) => void,
+    ) => void;
+
     /**
      * Lightweight ping for client-side latency measurement. The ack carries
      * the server's own current timestamp (ms since epoch) so the client can
@@ -1036,6 +1042,9 @@ export interface ServerToClientEvents {
 
     /** Broadcasts a newly-approved custom emoji so every connected picker updates live. */
     CUSTOM_EMOJI_APPROVED: (payload: { serverId: string; emoji: ICustomEmoji }) => void;
+
+    /** A custom emoji was removed from the server (PRD 20 M3); pickers drop it live. */
+    CUSTOM_EMOJI_REMOVED: (payload: { serverId: string; emojiId: string }) => void;
 
     /** A user's avatar changed (PRD 17.1); `null` = back to the default avatar. */
     USER_AVATAR_UPDATED: (payload: { userId: string; avatarUrl: string | null }) => void;

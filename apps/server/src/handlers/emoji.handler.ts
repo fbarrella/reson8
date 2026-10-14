@@ -2,7 +2,7 @@
  * Emoji Handler — custom server emoji upload + admin approval queue.
  *
  * Handles: CREATE_CUSTOM_EMOJI, GET_APPROVED_EMOJIS, GET_PENDING_EMOJIS,
- *          REVIEW_CUSTOM_EMOJI.
+ *          REVIEW_CUSTOM_EMOJI, DELETE_CUSTOM_EMOJI (PRD 20 M3).
  *
  * Any user may upload; the emoji sits PENDING until an admin (MANAGE_EMOJIS)
  * approves it, at which point it's broadcast to every connected client so
@@ -246,6 +246,39 @@ export function registerEmojiHandlers(
             } catch (err) {
                 app.log.error({ err }, "Error in REVIEW_CUSTOM_EMOJI");
                 ack({ success: false, error: "Failed to review emoji" });
+            }
+        });
+
+        // ── DELETE_CUSTOM_EMOJI (PRD 20 M3) ──────────────────────────────────
+        socket.on("DELETE_CUSTOM_EMOJI", async (payload, ack) => {
+            try {
+                const allowed = await requirePermission(app, socket, BigInt(PermissionFlags.MANAGE_EMOJIS));
+                if (!allowed) {
+                    ack({ success: false, error: "Permission denied" });
+                    return;
+                }
+                const emojiId = payload?.emojiId;
+                if (typeof emojiId !== "string" || emojiId.length === 0 || emojiId.length > 64) {
+                    ack({ success: false, error: "Invalid emoji" });
+                    return;
+                }
+                const serverId = socket.data.serverId;
+                const emoji = await app.prisma.customEmoji.findUnique({ where: { id: emojiId } });
+                if (!emoji || emoji.serverId !== serverId || emoji.status !== "APPROVED") {
+                    ack({ success: false, error: "Emoji not found" });
+                    return;
+                }
+                // Row first, then release its file via the ledger (never a URL from the client).
+                await app.prisma.customEmoji.delete({ where: { id: emojiId } });
+                ack({ success: true });
+                io.to(`server:${serverId}`).emit("CUSTOM_EMOJI_REMOVED", { serverId, emojiId });
+                releaseStoredFile(app.prisma, emoji.imageUrl).catch((err) =>
+                    app.log.warn({ err, emojiId }, "Failed to release a removed emoji's file"),
+                );
+                app.log.info({ socketId: socket.id, emojiId, name: emoji.name }, "Custom emoji removed");
+            } catch (err) {
+                app.log.error({ err }, "Error in DELETE_CUSTOM_EMOJI");
+                ack({ success: false, error: "Failed to remove emoji" });
             }
         });
     });

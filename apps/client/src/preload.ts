@@ -751,6 +751,7 @@ const api = {
             if (payload.emoji) resolveEmojiMedia(payload.emoji);
             emit("custom-emoji-approved", payload);
         });
+        socket.on("CUSTOM_EMOJI_REMOVED", (payload) => emit("custom-emoji-removed", payload));
         socket.on("NUDGE_RECEIVED", (payload) => emit("nudge-received", payload));
         socket.on("USER_AVATAR_UPDATED", (payload) => emit("user-avatar-updated", payload));
         socket.on("SERVER_SETTINGS_UPDATED", (payload) => {
@@ -2182,6 +2183,16 @@ const api = {
                 return;
             }
             socket.emit("REVIEW_CUSTOM_EMOJI", { emojiId, decision }, resolve);
+        });
+    },
+
+    deleteCustomEmoji(emojiId: string): Promise<{ success: boolean; error?: string }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.emit("DELETE_CUSTOM_EMOJI", { emojiId }, resolve);
         });
     },
 

@@ -5543,50 +5543,6 @@
       text-overflow: ellipsis;
     }
 
-    .emoji-pending-thumb {
-      width: 32px;
-      height: 32px;
-      object-fit: contain;
-      border-radius: 4px;
-      background: repeating-conic-gradient(var(--color-neutral-900) 0% 25%, var(--color-surface) 0% 50%) 50% / 8px 8px;
-      flex-shrink: 0;
-    }
-
-    .emoji-pending-actions {
-      display: flex;
-      gap: 6px;
-      flex-shrink: 0;
-    }
-
-    .btn-emoji-approve,
-    .btn-emoji-reject {
-      font-size: 11px;
-      padding: 4px 10px;
-      border-radius: var(--radius-md);
-      cursor: pointer;
-      border: 1px solid var(--color-divider);
-      background: transparent;
-      transition: all 0.15s;
-    }
-
-    .btn-emoji-approve {
-      color: var(--color-success);
-    }
-
-    .btn-emoji-approve:hover {
-      border-color: var(--color-success);
-      background: color-mix(in srgb, var(--color-success) 12%, transparent);
-    }
-
-    .btn-emoji-reject {
-      color: var(--color-live);
-    }
-
-    .btn-emoji-reject:hover {
-      border-color: var(--color-live);
-      background: color-mix(in srgb, var(--color-live) 12%, transparent);
-    }
-
     .admin-empty {
       text-align: center;
       color: var(--color-neutral-500);
@@ -6613,6 +6569,74 @@
       border-radius: var(--radius-lg);
       font-size: 13px;
       color: var(--color-neutral-500);
+    }
+
+    .emoji-section-head {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .emoji-req-img {
+      width: 40px;
+      height: 40px;
+      flex: none;
+      object-fit: contain;
+      border-radius: var(--radius-md);
+      background: var(--color-neutral-900);
+    }
+
+    .emoji-code {
+      font: 500 14px ui-monospace, Menlo, monospace;
+    }
+
+    .emoji-library {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+      gap: 8px;
+    }
+
+    .emoji-library .bans-empty {
+      grid-column: 1 / -1;
+    }
+
+    .emoji-lib-card {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+      padding: 12px 8px 10px;
+      border-radius: var(--radius-md);
+      background: color-mix(in srgb, var(--color-bg) 35%, transparent);
+      box-shadow: var(--shadow-sm);
+    }
+
+    .emoji-lib-card img {
+      width: 36px;
+      height: 36px;
+      object-fit: contain;
+    }
+
+    .emoji-lib-card .emoji-code {
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 12px;
+      font-weight: 400;
+      color: var(--color-neutral-300);
+    }
+
+    .emoji-lib-remove {
+      height: 24px;
+      padding: 0 8px;
+      font-size: 12px;
+      color: var(--color-neutral-500);
+    }
+
+    .emoji-lib-remove.armed {
+      color: var(--color-danger-text);
     }
 
     /* M4: a count on a settings nav item. */
@@ -10034,10 +10058,15 @@
       <!-- Emojis Tab (pending custom emoji review queue) -->
       <div class="settings-panel" data-settings-panel="emojis">
         <h2 class="settings-page-title">Emoji</h2>
-        <p class="settings-page-sub">Custom emoji people submitted, waiting for review.</p>
-        <div id="emoji-pending-list" class="admin-user-list">
-          <div class="admin-empty">Loading pending emojis...</div>
-        </div>
+        <p class="settings-page-sub">Review custom emoji before members can use them.</p>
+        <section class="settings-section">
+          <div class="emoji-section-head"><div class="section-label" id="emoji-requests-label">Requests</div><button type="button" class="btn btn-ghost" id="btn-emoji-approve-all" style="display:none;">Approve all</button></div>
+          <div id="emoji-pending-list" class="members-list"></div>
+        </section>
+        <section class="settings-section">
+          <div class="section-label" id="emoji-library-label">On this server</div>
+          <div id="emoji-library" class="emoji-library"></div>
+        </section>
       </div>
 
       <div class="settings-panel" data-settings-panel="profile">

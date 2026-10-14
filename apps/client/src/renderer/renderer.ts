@@ -1046,6 +1046,7 @@ interface Reson8Api {
     getApprovedEmojis(): Promise<{ success: boolean; emojis?: CustomEmoji[]; error?: string }>;
     getPendingEmojis(): Promise<{ success: boolean; emojis?: CustomEmoji[]; error?: string }>;
     reviewCustomEmoji(emojiId: string, decision: "APPROVED" | "REJECTED"): Promise<{ success: boolean; error?: string }>;
+    deleteCustomEmoji(emojiId: string): Promise<{ success: boolean; error?: string }>;
     nudgeUser(targetUserId: string): Promise<{ success: boolean; error?: string }>;
     getServerSettings(): Promise<{
         success: boolean;
@@ -11772,6 +11773,7 @@ async function openSettingsPanel(): Promise<void> {
 
         if (canManageEmojis) {
             renderPendingEmojis(pendingEmojisRes.emojis ?? []);
+            renderEmojiLibrary();
         }
 
         // Server tab — UPDATE_SERVER_SETTINGS requires literal ADMIN, so
@@ -11797,56 +11799,168 @@ async function openSettingsPanel(): Promise<void> {
     }
 }
 
-function renderPendingEmojis(emojis: CustomEmoji[]): void {
-    emojiPendingList.innerHTML = "";
+let pendingEmojiQueue: CustomEmoji[] = [];
 
-    if (emojis.length === 0) {
-        emojiPendingList.innerHTML = '<div class="admin-empty">No emojis pending review.</div>';
-        return;
+/** "Requests · n" header, Approve all and the nav count follow the queue (PRD 20 M3). */
+function syncEmojiRequests(): void {
+    const n = pendingEmojiQueue.length;
+    (document.getElementById("emoji-requests-label") as HTMLElement).textContent = n > 0 ? `Requests · ${n}` : "Requests";
+    (document.getElementById("btn-emoji-approve-all") as HTMLElement).style.display = n > 1 ? "" : "none";
+    updateSettingsNavCount("emojis", n);
+    if (n === 0 && !emojiPendingList.querySelector(".bans-empty")) {
+        emojiPendingList.textContent = "";
+        const empty = document.createElement("div");
+        empty.className = "bans-empty";
+        empty.textContent = "All caught up — no emoji waiting for review.";
+        emojiPendingList.appendChild(empty);
     }
+}
+
+function renderPendingEmojis(emojis: CustomEmoji[]): void {
+    pendingEmojiQueue = [...emojis];
+    emojiPendingList.textContent = "";
 
     for (const emoji of emojis) {
         const row = document.createElement("div");
-        row.className = "admin-user-row";
-        row.innerHTML = `
-            <img class="emoji-pending-thumb" src="${escapeHtml(emoji.imageUrl)}" alt="${escapeHtml(emoji.name)}">
-            <div class="admin-user-info">
-                <div class="admin-user-nickname">:${escapeHtml(emoji.name)}:</div>
-                <div class="admin-user-id">by ${escapeHtml(emoji.uploadedByNickname ?? "Unknown")}</div>
-            </div>
-            <div class="emoji-pending-actions">
-                <button class="btn-emoji-approve">✓ Approve</button>
-                <button class="btn-emoji-reject">✕ Reject</button>
-            </div>
-        `;
+        row.className = "member-row";
 
-        row.querySelector(".btn-emoji-approve")?.addEventListener("click", async () => {
+        const img = document.createElement("img");
+        img.className = "emoji-req-img";
+        img.src = emoji.imageUrl;
+        img.alt = "";
+
+        const main = document.createElement("div");
+        main.className = "member-main";
+        const name = document.createElement("div");
+        name.className = "member-name";
+        const code = document.createElement("span");
+        code.className = "emoji-code";
+        code.textContent = `:${emoji.name}:`;
+        name.appendChild(code);
+        const sub = document.createElement("div");
+        sub.className = "member-sub";
+        const by = document.createElement("span");
+        by.textContent = `Requested by ${emoji.uploadedByNickname ?? "Unknown"}`;
+        sub.appendChild(by);
+        main.append(name, sub);
+
+        const reject = document.createElement("button");
+        reject.type = "button";
+        reject.className = "btn btn-ghost";
+        reject.textContent = "Reject";
+        const approve = document.createElement("button");
+        approve.type = "button";
+        approve.className = "btn btn-primary";
+        approve.innerHTML = '<i class="ph ph-check" aria-hidden="true"></i> Approve';
+
+        const finish = (): void => {
+            row.remove();
+            pendingEmojiQueue = pendingEmojiQueue.filter((e) => e.id !== emoji.id);
+            syncEmojiRequests();
+        };
+        approve.addEventListener("click", async () => {
+            approve.disabled = reject.disabled = true;
             const result = await api.reviewCustomEmoji(emoji.id, "APPROVED");
             if (result.success) {
-                log(`Approved emoji ":${emoji.name}:"`, "success");
-                row.remove();
-                if (emojiPendingList.children.length === 0) {
-                    emojiPendingList.innerHTML = '<div class="admin-empty">No emojis pending review.</div>';
-                }
+                log(`Approved emoji ":${escapeHtml(emoji.name)}:"`, "success");
+                finish();
             } else {
-                log(`Failed to approve emoji: ${result.error}`, "error");
+                approve.disabled = reject.disabled = false;
+                log(`Failed to approve emoji: ${escapeHtml(result.error ?? "unknown error")}`, "error");
             }
         });
-
-        row.querySelector(".btn-emoji-reject")?.addEventListener("click", async () => {
+        reject.addEventListener("click", async () => {
+            approve.disabled = reject.disabled = true;
             const result = await api.reviewCustomEmoji(emoji.id, "REJECTED");
             if (result.success) {
-                log(`Rejected emoji ":${emoji.name}:"`, "success");
-                row.remove();
-                if (emojiPendingList.children.length === 0) {
-                    emojiPendingList.innerHTML = '<div class="admin-empty">No emojis pending review.</div>';
-                }
+                log(`Rejected emoji ":${escapeHtml(emoji.name)}:"`, "success");
+                finish();
             } else {
-                log(`Failed to reject emoji: ${result.error}`, "error");
+                approve.disabled = reject.disabled = false;
+                log(`Failed to reject emoji: ${escapeHtml(result.error ?? "unknown error")}`, "error");
             }
         });
 
+        row.append(img, main, reject, approve);
         emojiPendingList.appendChild(row);
+    }
+    if (emojis.length === 0) {
+        pendingEmojiQueue = [];
+        emojiPendingList.textContent = "";
+    }
+    syncEmojiRequests();
+}
+
+document.getElementById("btn-emoji-approve-all")!.addEventListener("click", async (e) => {
+    const btn = e.currentTarget as HTMLButtonElement;
+    btn.disabled = true;
+    let approved = 0;
+    for (const emoji of [...pendingEmojiQueue]) {
+        const res = await api.reviewCustomEmoji(emoji.id, "APPROVED");
+        if (!res.success) {
+            showToast(`Approved ${approved}; stopped at :${escapeHtml(emoji.name)}: — ${escapeHtml(res.error ?? "refused")}`);
+            break;
+        }
+        approved++;
+    }
+    btn.disabled = false;
+    const res = await api.getPendingEmojis();
+    renderPendingEmojis(res.emojis ?? []);
+});
+
+/** "On this server": every approved emoji with Remove (PRD 20 M3). Two clicks: Remove → Confirm (4 s). */
+function renderEmojiLibrary(): void {
+    const grid = document.getElementById("emoji-library");
+    const label = document.getElementById("emoji-library-label");
+    if (!grid || !label) return;
+    label.textContent = `On this server · ${customEmojis.length}`;
+    grid.textContent = "";
+    if (customEmojis.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "bans-empty";
+        empty.textContent = "No custom emoji yet.";
+        grid.appendChild(empty);
+        return;
+    }
+    for (const emoji of [...customEmojis].sort((a, b) => a.name.localeCompare(b.name))) {
+        const card = document.createElement("div");
+        card.className = "emoji-lib-card";
+        const img = document.createElement("img");
+        img.src = emoji.imageUrl;
+        img.alt = "";
+        const code = document.createElement("span");
+        code.className = "emoji-code";
+        code.textContent = `:${emoji.name}:`;
+        code.title = `:${emoji.name}:`;
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "btn btn-ghost emoji-lib-remove";
+        remove.textContent = "Remove";
+        let armedUntil = 0;
+        remove.addEventListener("click", async () => {
+            if (Date.now() > armedUntil) {
+                armedUntil = Date.now() + 4000;
+                remove.textContent = "Confirm";
+                remove.classList.add("armed");
+                setTimeout(() => {
+                    if (Date.now() >= armedUntil) {
+                        remove.textContent = "Remove";
+                        remove.classList.remove("armed");
+                    }
+                }, 4000);
+                return;
+            }
+            remove.disabled = true;
+            const res = await api.deleteCustomEmoji(emoji.id);
+            if (!res.success) {
+                remove.disabled = false;
+                log(`Failed to remove :${escapeHtml(emoji.name)}:: ${escapeHtml(res.error ?? "unknown error")}`, "error");
+            }
+            // Success: the CUSTOM_EMOJI_REMOVED broadcast re-renders the grid.
+        });
+        card.append(img, code);
+        if (canManageEmojis) card.appendChild(remove);
+        grid.appendChild(card);
     }
 }
 
@@ -14883,6 +14997,15 @@ api.on("custom-emoji-approved", (data: { serverId: string; emoji: CustomEmoji })
     if (emojiPicker.classList.contains("visible")) {
         renderEmojiGrid(emojiSearch.value);
     }
+    renderEmojiLibrary(); // PRD 20 M3: the settings page, if open
+});
+
+api.on("custom-emoji-removed", (data: { serverId: string; emojiId: string }) => {
+    const before = customEmojis.length;
+    customEmojis = customEmojis.filter((e) => e.id !== data.emojiId);
+    if (customEmojis.length !== before) api.setCustomEmojis(customEmojis);
+    if (emojiPicker.classList.contains("visible")) renderEmojiGrid(emojiSearch.value);
+    renderEmojiLibrary(); // PRD 20 M3: the settings page, if open
 });
 
 // ── Nudge (PRD 4.14) ─────────────────────────────────────────────────────

@@ -1267,3 +1267,39 @@ Feature/Fix: Banned people list with who banned and the linked address (PRD 20 M
       bannedByNickname renders "Banned · …"; covered by reading, not driven).
 
   Next Step: M3 (Emoji approve-all and library).
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Emoji approve-all and the server library with remove (PRD 20 M3, plus the M4 emoji nav count)
+
+  Problem: The Emoji page only listed pending requests one by one with
+  Approve/Reject; an approved emoji could never be removed.
+
+  Solution: New event DELETE_CUSTOM_EMOJI (MANAGE_EMOJIS; row deleted, then the
+  file released through the ledger; classified "open" in EVENT_ACCESS) with the
+  CUSTOM_EMOJI_REMOVED broadcast on server:<id>, so pickers drop it live and a
+  message that used it shows :name: as text. Client: preload
+  deleteCustomEmoji() + the "custom-emoji-removed" event; the Emoji page has a
+  "Requests · n" section (member-row cards, Approve all shown for 2+, an empty
+  state) and an "On this server · n" grid with a two-click Remove (Remove ->
+  Confirm for 4 s). The queue and library update the Emoji nav count through
+  updateSettingsNavCount() (M4). Dead emoji-request CSS removed.
+
+  Key Files Modified:
+    packages/shared-types/src/socket-events.ts
+    apps/server/src/handlers/emoji.handler.ts, services/access.service.ts
+    apps/client/src/preload.ts, renderer/renderer.ts, renderer/index.html
+
+  Verification:
+    - shared-types tsc --build; server tsc --noEmit + npm run test (493, the
+      EVENT_ACCESS classification test included); client tsc --noEmit; lint 0.
+    - Real app against the 9800 dev server: three emoji submitted through the
+      client, "Requests · 3" + Emoji nav "3" + Approve all -> all approved, the
+      library shows "On this server · 3", empty state text, nav count hidden;
+      Remove -> "Confirm" -> removed, library 2, customEmojis 2; a second socket
+      (WatchBot) received CUSTOM_EMOJI_REMOVED; a member calling
+      DELETE_CUSTOM_EMOJI got "Permission denied". Test emoji deleted after.
+    - Not exercised: another client's open picker re-rendering (same handler as
+      custom-emoji-approved, which renders from customEmojis).
+
+  Next Step: M4 remaining pieces are in M1/M3; then W1.
