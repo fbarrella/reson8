@@ -7086,6 +7086,8 @@ btnCreateChannel.addEventListener("click", () => {
     newChannelNsfw.checked = false;
     newChannelNsfwRow.style.display = newChannelType.value === "TEXT" ? "flex" : "none";
     (document.getElementById("create-channel-sub") as HTMLElement).textContent = `in ${connectedServerName ?? "this server"}`;
+    setCreateChannelIconDraft(null);
+    paintCreateChannelIconRow();
     paintChannelTypeSegments();
     createChannelModal.classList.add("visible");
     newChannelName.focus();
@@ -7112,6 +7114,7 @@ document.querySelectorAll<HTMLButtonElement>(".create-channel-type .segmented-op
 newChannelType.addEventListener("change", () => {
     newChannelNsfwRow.style.display = newChannelType.value === "TEXT" ? "flex" : "none";
     if (newChannelType.value !== "TEXT") newChannelNsfw.checked = false;
+    paintCreateChannelIconRow();
 });
 
 btnModalCancel.addEventListener("click", () => {
@@ -7145,6 +7148,9 @@ btnModalCreate.addEventListener("click", async () => {
 
     const result = await api.createChannel(currentServerId, name, type, parentId, isNsfw);
     if (result.success) {
+        const draft = createChannelIconDraft;
+        if (draft && result.channelId && type === "TEXT") void applyNewChannelIcon(result.channelId, draft);
+        setCreateChannelIconDraft(null);
         log(`Channel "${name}" created`, "success");
         SoundAlert.play("channel_created.mp3");
         createChannelModal.classList.remove("visible");
@@ -15696,7 +15702,69 @@ btnEmojiAnimatedUploadConfirm.addEventListener("click", async () => {
 // this exact pattern) — plus a "choose a default emoji instead" step that
 // reuses the full built-in 552-entry emoji set (not a curated subset).
 
+/** Where the channel-icon chooser sends its result (PRD 20 S3). */
+let channelIconDraftMode = false;
+type ChannelIconDraft = { emoji: string } | { blob: Blob; url: string } | null;
+let createChannelIconDraft: ChannelIconDraft = null;
+const newChannelIconBtn = document.getElementById("new-channel-icon-btn") as HTMLButtonElement;
+const newChannelIconHint = document.getElementById("new-channel-icon-hint") as HTMLElement;
+
+function setCreateChannelIconDraft(draft: ChannelIconDraft): void {
+    if (createChannelIconDraft && "url" in createChannelIconDraft) URL.revokeObjectURL(createChannelIconDraft.url);
+    createChannelIconDraft = draft;
+    newChannelIconBtn.textContent = "";
+    if (!draft) {
+        newChannelIconBtn.innerHTML = '<i class="ph ph-hash" aria-hidden="true"></i>';
+    } else if ("emoji" in draft) {
+        newChannelIconBtn.textContent = draft.emoji;
+    } else {
+        const img = document.createElement("img");
+        img.src = draft.url;
+        img.alt = "";
+        newChannelIconBtn.appendChild(img);
+    }
+}
+
+function paintCreateChannelIconRow(): void {
+    const text = newChannelType.value === "TEXT";
+    newChannelIconBtn.style.display = text ? "" : "none";
+    newChannelIconHint.style.display = text ? "" : "none";
+    if (!text) setCreateChannelIconDraft(null);
+}
+
+newChannelIconBtn.addEventListener("click", () => {
+    channelIconDraftMode = true;
+    pendingChannelIconId = null;
+    channelIconStepSelect.style.display = "block";
+    channelIconStepEmoji.style.display = "none";
+    channelIconStepCrop.style.display = "none";
+    channelIconModal.classList.add("visible");
+});
+
+/** Applies the icon chosen in Create channel to the new channel (PRD 20 S3). */
+async function applyNewChannelIcon(channelId: string, draft: NonNullable<ChannelIconDraft>): Promise<void> {
+    if ("emoji" in draft) {
+        const res = await api.updateChannel(channelId, { iconEmoji: draft.emoji });
+        if (!res.success) log(`Channel created, but its icon couldn't be set: ${escapeHtml(res.error ?? "unknown error")}`, "error");
+        return;
+    }
+    try {
+        const upload = await api.uploadChannelIcon(await draft.blob.arrayBuffer(), "channel-icon.png", "image/png");
+        let applied = false;
+        try {
+            const res = await api.updateChannel(channelId, { iconUploadId: upload.uploadId, iconUrl: upload.url, iconPublicId: upload.publicId ?? null });
+            applied = res.success;
+            if (!res.success) log(`Channel created, but its icon couldn't be set: ${escapeHtml(res.error ?? "unknown error")}`, "error");
+        } finally {
+            if (!applied) discardUpload(upload.uploadId);
+        }
+    } catch (err: any) {
+        log(`Channel created, but the icon upload failed: ${escapeHtml(err?.message ?? String(err))}`, "error");
+    }
+}
+
 function showChannelIconModal(channelId: string): void {
+    channelIconDraftMode = false;
     pendingChannelIconId = channelId;
     channelIconStepSelect.style.display = "block";
     channelIconStepEmoji.style.display = "none";
@@ -15706,6 +15774,7 @@ function showChannelIconModal(channelId: string): void {
 
 function closeChannelIconModal(): void {
     channelIconModal.classList.remove("visible");
+    channelIconDraftMode = false;
     pendingChannelIconId = null;
     channelCropper.clear();
 }
@@ -15741,6 +15810,11 @@ function renderChannelIconEmojiGrid(): void {
 }
 
 async function selectChannelIconEmoji(emoji: string): Promise<void> {
+    if (channelIconDraftMode) {
+        setCreateChannelIconDraft({ emoji });
+        closeChannelIconModal();
+        return;
+    }
     if (!pendingChannelIconId) return;
     const channelId = pendingChannelIconId;
     closeChannelIconModal();
@@ -15774,6 +15848,11 @@ channelIconModal.addEventListener("click", (e) => {
 });
 
 btnChannelIconReset.addEventListener("click", async () => {
+    if (channelIconDraftMode) {
+        setCreateChannelIconDraft(null);
+        closeChannelIconModal();
+        return;
+    }
     if (!pendingChannelIconId) return;
     const channelId = pendingChannelIconId;
     closeChannelIconModal();
@@ -15805,6 +15884,13 @@ channelIconFileInput.addEventListener("change", () => {
 });
 
 btnChannelIconUploadConfirm.addEventListener("click", async () => {
+    if (channelIconDraftMode) {
+        if (!channelCropper.isReady()) return;
+        const blob = await channelCropper.toBlob(128, "image/png");
+        if (blob) setCreateChannelIconDraft({ blob, url: URL.createObjectURL(blob) });
+        closeChannelIconModal();
+        return;
+    }
     if (!pendingChannelIconId) return;
     if (!channelCropper.isReady()) return;
     const channelId = pendingChannelIconId;

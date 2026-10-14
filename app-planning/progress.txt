@@ -1423,3 +1423,41 @@ Feature/Fix: Linux portal waiting card and source row in Name your stream (PRD 2
       default name).
 
   Next Step: S3 (icon in Create channel).
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Choose a channel icon while creating a channel (PRD 20 S3)
+
+  Problem: A text channel's icon could only be set afterwards from the channel
+  menu; the design (frame 1g) puts an icon button next to the name field in
+  Create channel.
+
+  Solution: A 38 px dashed icon button + hint for TEXT channels (hidden for
+  voice, which also clears the draft). The existing #channel-icon-modal runs in
+  a draft mode (channelIconDraftMode): an emoji, a cropped image or Reset go
+  into createChannelIconDraft instead of being applied; the channel menu's "Set
+  icon…" turns draft mode off, so it still applies immediately. After
+  CREATE_CHANNEL succeeds, applyNewChannelIcon() applies an emoji with
+  updateChannel(), or uploads the image THEN applies it (a failed create
+  uploads nothing; a failed apply discards the upload).
+
+  Differences: the generic ".modal-content input" margin would have pushed the
+  hint 12 px down, so the name input inside .new-channel-name-row resets it.
+  Note (pre-existing): on its first open the dialog's hidden select defaults to
+  Voice, so the icon button is hidden until Text is picked.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts, index.html
+
+  Verification:
+    - Client tsc --noEmit; lint exit 0.
+    - Real app (admin on the 9800 server): button visible for Text, hidden for
+      Voice; the icon chooser opens on top of Create channel
+      (elementFromPoint); an emoji shows in the button and the new channel's
+      tree row shows it; an image -> crop -> 24 px preview -> create -> the
+      tree row shows the uploaded image; cancelling Create after choosing an
+      image left stored_files unchanged (21 -> 21); Text -> Voice -> Text
+      cleared the draft; "Set icon…" on an existing channel applied at once
+      with draft mode off. Test channels deleted afterwards.
+
+  Next Step: G2 (Play sound alerts).

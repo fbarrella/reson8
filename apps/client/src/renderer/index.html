@@ -9052,6 +9052,50 @@
       overflow: hidden;
       text-overflow: ellipsis;
     }
+    .new-channel-name-row {
+      display: flex;
+      gap: 8px;
+    }
+
+    /* The generic ".modal-content input" margin would push the hint 12 px down. */
+    .modal-content .new-channel-name-row input {
+      min-width: 0;
+      margin-bottom: 0;
+    }
+
+    .new-channel-icon-btn {
+      width: 38px;
+      height: 38px;
+      flex: none;
+      display: grid;
+      place-items: center;
+      padding: 0;
+      border: 1px dashed var(--color-neutral-700);
+      border-radius: var(--radius-md);
+      background: transparent;
+      color: var(--color-neutral-400);
+      font-size: 17px;
+      cursor: pointer;
+      overflow: hidden;
+    }
+
+    .new-channel-icon-btn:hover {
+      border-color: var(--color-accent);
+      color: var(--color-accent-300);
+    }
+
+    .new-channel-icon-btn img {
+      width: 24px;
+      height: 24px;
+      object-fit: cover;
+      border-radius: var(--radius-sm);
+    }
+
+    .new-channel-icon-hint {
+      margin-top: 5px;
+      font-size: 11.5px;
+      color: var(--color-neutral-500);
+    }
   </style>
 </head>
 
@@ -9386,7 +9430,11 @@
         <button type="button" class="segmented-option" role="radio" data-channel-type="VOICE"><i class="ph ph-speaker-high" aria-hidden="true"></i> Voice</button>
       </div>
       <label for="new-channel-name">Channel name</label>
-      <input type="text" id="new-channel-name" placeholder="e.g. Music Room">
+      <div class="new-channel-name-row">
+        <button type="button" class="new-channel-icon-btn" id="new-channel-icon-btn" title="Channel icon — pick an emoji or upload an image" aria-label="Channel icon"><i class="ph ph-hash" aria-hidden="true"></i></button>
+        <input type="text" class="input" id="new-channel-name" placeholder="e.g. Music Room">
+      </div>
+      <div class="new-channel-icon-hint" id="new-channel-icon-hint">Click the icon to choose an emoji or upload a custom image.</div>
       <label for="new-channel-parent">Parent channel <span class="optional">(optional)</span></label>
       <select id="new-channel-parent">
         <option value="">— None (root) —</option>
