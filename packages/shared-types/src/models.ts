@@ -409,6 +409,19 @@ export interface IOnlineUser {
 }
 
 /** Banned user record for the moderation panel. */
+/** One hit of SEARCH_MESSAGES (PRD 20 Q1). `snippet` marks the match with `<<` and `>>` (never HTML). */
+export interface ISearchResult {
+    id: string;
+    /** Set for a channel message; absent for a DM hit. */
+    channelId?: string;
+    /** For a DM hit: the other person of the conversation. */
+    dmPartnerId?: string;
+    authorId: string;
+    authorNickname: string;
+    createdAt: string;
+    snippet: string;
+}
+
 export interface IBannedUser {
     userId: string;
     nickname: string;

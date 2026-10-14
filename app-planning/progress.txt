@@ -1665,3 +1665,55 @@ Feature/Fix: Get beta updates switch for stable builds (PRD 20 G1, D3 = a)
       downgrade.
 
   Next Step: Q1 (message search).
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Message search (PRD 20 Q1, D2 = a)
+
+  Problem: Neither channels nor DMs could be searched.
+
+  Solution: Server: SEARCH_MESSAGES ("member"), migration
+  20261019140000_add_message_search_indexes (GIN on to_tsvector('simple',
+  content) for messages and direct_messages), search.service.ts (pure: query
+  2-100 chars after whitespace collapse, ids/cursor validation, 1 search per
+  second per socket) and search.handler.ts: $queryRaw with the query ONLY as a
+  bound parameter (plainto_tsquery), ts_headline with << >> markers, 25 per page
+  (+1 row to know hasMore), newest first, cursor on createdAt. No ids = the
+  server's TEXT channels; channelId = that channel; dmPartnerId = the caller's
+  conversation with that person (never anyone else's). Client: a Search field
+  at the right of the tab bar (Ctrl/Cmd+F focuses it; Enter searches, input
+  searches after 450 ms, Escape/× closes), a 370 px results column beside the
+  chat (the composer stays under the chat only) with "{n} results · Newest
+  first", scope "All channels | #current / this DM", results grouped by channel
+  (author avatar, date, two-line snippet with <mark> built from text — never
+  innerHTML), Load more, and click-to-jump (opens the tab if needed, waits for
+  its first page, then jumpToMessage()).
+
+  Not built (not in the PRD's plan): the design's Has image / Has link / From /
+  Any date filter chips.
+
+  Key Files Modified:
+    packages/shared-types/src/models.ts (ISearchResult), socket-events.ts
+    apps/server/prisma/migrations/20261019140000_add_message_search_indexes (NEW)
+    apps/server/src/services/search.service.ts (NEW), handlers/search.handler.ts (NEW),
+      __tests__/search.service.test.ts (NEW), services/access.service.ts, index.ts
+    apps/client/src/preload.ts, renderer/renderer.ts, renderer/index.html
+
+  Verification:
+    - shared-types tsc --build; server tsc --noEmit + npm run test (38 files,
+      501 tests); client tsc --noEmit; lint exit 0; migration deployed.
+    - Real app against the 9800 server with 33 seeded messages: "dragon" ->
+      "25+ results", all highlighted, case-insensitive ("DRAGON" matched), the
+      SQL-looking message was just text; Load more -> "32 results"; scope
+      "#Chat"; "zzzqqqq" -> nothing; 1 character -> "Type at least 2
+      characters"; clicking a result from the Server Log switched to the
+      channel and landed on the message. DM scope between two bots: both
+      participants found the DM, a third user got 0 results (also none through
+      the all-channels search); a second search within a second is refused
+      ("Searching too fast") and the client retries once.
+    - Fixed on the way: the composer is a sibling of the tab content, so the
+      results column needed a #chat-column wrapper; the column's children must
+      not shrink.
+    - Not exercised: Cmd+F on macOS; the design's filter chips (not built).
+
+  Next Step: H2 (TypeScript moduleResolution).

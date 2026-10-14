@@ -21,6 +21,7 @@ import type {
     ITransportOptions,
     IConsumerInfo,
     ICustomEmoji,
+    ISearchResult,
     IReactionSummary,
     IAvatarSelection,
     IUserProfile,
@@ -616,6 +617,16 @@ export interface ClientToServerEvents {
     REVIEW_CUSTOM_EMOJI: (
         payload: { emojiId: string; decision: "APPROVED" | "REJECTED" },
         ack: (response: { success: boolean; error?: string }) => void,
+    ) => void;
+
+    /**
+     * Full-text search (PRD 20 Q1). No ids = every text channel of the server; `channelId` = that channel;
+     * `dmPartnerId` = the conversation with that person. Query 2-100 characters; newest first, 25 per page,
+     * `before` is the `createdAt` of the last result already shown.
+     */
+    SEARCH_MESSAGES: (
+        payload: { query: string; channelId?: string; dmPartnerId?: string; before?: string },
+        ack: (response: { success: boolean; results?: ISearchResult[]; hasMore?: boolean; error?: string }) => void,
     ) => void;
 
     /** "I'm typing" in a text channel or a DM (PRD 20 W2). Fire-and-forget; the server throttles. */

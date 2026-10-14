@@ -101,6 +101,7 @@ export const EVENT_ACCESS: Record<keyof ClientToServerEvents, "open" | "member">
     // Text channels
     USER_JOIN_CHANNEL: "member",
     TYPING: "member", // PRD 20 W2
+    SEARCH_MESSAGES: "member", // PRD 20 Q1
     SEND_MESSAGE: "member",
     FETCH_MESSAGES: "member",
     MARK_CHANNEL_READ: "member",

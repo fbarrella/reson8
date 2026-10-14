@@ -107,6 +107,17 @@ interface ServerSummary {
     iconUrl?: string | null;
 }
 
+/** One hit of SEARCH_MESSAGES (PRD 20 Q1); `snippet` marks the match with << and >>. */
+interface SearchResult {
+    id: string;
+    channelId?: string;
+    dmPartnerId?: string;
+    authorId: string;
+    authorNickname: string;
+    createdAt: string;
+    snippet: string;
+}
+
 interface DirectMessage {
     id: string;
     senderId: string;
@@ -1054,6 +1065,12 @@ interface Reson8Api {
     reviewCustomEmoji(emojiId: string, decision: "APPROVED" | "REJECTED"): Promise<{ success: boolean; error?: string }>;
     deleteCustomEmoji(emojiId: string): Promise<{ success: boolean; error?: string }>;
     sendTyping(target: { channelId?: string; dmPartnerId?: string }): void;
+    searchMessages(payload: { query: string; channelId?: string; dmPartnerId?: string; before?: string }): Promise<{
+        success: boolean;
+        results?: SearchResult[];
+        hasMore?: boolean;
+        error?: string;
+    }>;
     nudgeUser(targetUserId: string): Promise<{ success: boolean; error?: string }>;
     getServerSettings(): Promise<{
         success: boolean;
@@ -7587,6 +7604,7 @@ api.on("disconnected", (data?: { reason?: string }) => {
     connectedNickname = "";
     typingByTab.clear(); // PRD 20 W2
     renderTypingIndicator();
+    closeSearchPanel(); // PRD 20 Q1
     updateSettingsNavCount("roles", 0, false); // PRD 20 M4
     updateSettingsNavCount("emojis", 0);
     myPermissions = null; // PRD 19 A8: unknown again
@@ -8782,6 +8800,7 @@ document.querySelectorAll<HTMLButtonElement>("#members-filters .seg-opt").forEac
 function switchTab(tabId: string): void {
     activeTabId = tabId;
     renderTypingIndicator(); // PRD 20 W2
+    if (searchPanel.classList.contains("open")) paintSearchScope(); // PRD 20 Q1: "here" follows the tab
     scheduleDmSidebarRender(); // PRD 19 C7: the open conversation is excluded from the rail total
 
     // Close emoji picker on tab switch
@@ -15237,6 +15256,247 @@ api.on("custom-emoji-removed", (data: { serverId: string; emojiId: string }) => 
     if (customEmojis.length !== before) api.setCustomEmojis(customEmojis);
     if (emojiPicker.classList.contains("visible")) renderEmojiGrid(emojiSearch.value);
     renderEmojiLibrary(); // PRD 20 M3: the settings page, if open
+});
+
+// ── Message search (PRD 20 Q1) ───────────────────────────────────────────────
+
+const tabSearchInput = document.getElementById("tab-search-input") as HTMLInputElement;
+const tabSearchClear = document.getElementById("tab-search-clear") as HTMLButtonElement;
+const searchPanel = document.getElementById("search-panel") as HTMLDivElement;
+const searchCountEl = document.getElementById("search-count") as HTMLElement;
+const searchResultsEl = document.getElementById("search-results") as HTMLDivElement;
+const searchMoreBtn = document.getElementById("search-more") as HTMLButtonElement;
+const searchScopeEl = document.getElementById("search-scope") as HTMLElement;
+
+let searchScope: "all" | "here" = "all";
+let searchRunId = 0;
+let searchDebounce: ReturnType<typeof setTimeout> | null = null;
+let searchResults: SearchResult[] = [];
+let searchHasMore = false;
+let searchLastQuery = "";
+
+/** What "here" means for the active tab: a channel, a DM, or nothing (log / voice room). */
+function searchHereTarget(): { channelId?: string; dmPartnerId?: string; label: string } | null {
+    const tab = chatTabs.get(activeTabId);
+    if (!tab) return null;
+    if (activeTabId.startsWith("dm:")) return { dmPartnerId: activeTabId.slice(3), label: tab.channelName };
+    return { channelId: activeTabId, label: `#${tab.channelName}` };
+}
+
+function paintSearchScope(): void {
+    const here = searchHereTarget();
+    const btnAll = searchScopeEl.querySelector('[data-scope="all"]') as HTMLButtonElement;
+    const btnHere = searchScopeEl.querySelector('[data-scope="here"]') as HTMLButtonElement;
+    btnHere.style.display = here ? "" : "none";
+    btnHere.textContent = here?.label ?? "";
+    if (!here) searchScope = "all";
+    btnAll.classList.toggle("active", searchScope === "all");
+    btnHere.classList.toggle("active", searchScope === "here");
+}
+
+function openSearchPanel(): void {
+    searchPanel.classList.add("open");
+    paintSearchScope();
+}
+
+function closeSearchPanel(): void {
+    searchRunId++;
+    searchPanel.classList.remove("open");
+    tabSearchInput.value = "";
+    tabSearchClear.style.display = "none";
+    searchResults = [];
+    searchResultsEl.textContent = "";
+    searchMoreBtn.style.display = "none";
+}
+
+/** Text with the server's << >> markers turned into <mark> elements — never innerHTML of server text. */
+function appendSnippet(into: HTMLElement, snippet: string): void {
+    const parts = snippet.split(/<<([\s\S]*?)>>/);
+    parts.forEach((part, i) => {
+        if (!part) return;
+        if (i % 2 === 1) {
+            const mark = document.createElement("mark");
+            mark.textContent = part;
+            into.appendChild(mark);
+        } else {
+            into.appendChild(document.createTextNode(part));
+        }
+    });
+}
+
+function renderSearchResults(note?: string): void {
+    searchResultsEl.textContent = "";
+    searchMoreBtn.style.display = searchHasMore ? "" : "none";
+    if (note) {
+        searchCountEl.textContent = "";
+        const el = document.createElement("div");
+        el.className = "search-note";
+        el.textContent = note;
+        searchResultsEl.appendChild(el);
+        return;
+    }
+    const n = searchResults.length;
+    searchCountEl.textContent = `${n}${searchHasMore ? "+" : ""} result${n === 1 && !searchHasMore ? "" : "s"}`;
+    if (n === 0) {
+        const el = document.createElement("div");
+        el.className = "search-note";
+        el.textContent = `Nothing found for “${searchLastQuery}”.`;
+        searchResultsEl.appendChild(el);
+        return;
+    }
+    // Grouped by channel (a DM hit is its own group), in order of each group's newest hit.
+    const groups = new Map<string, SearchResult[]>();
+    for (const res of searchResults) {
+        const key = res.channelId ?? `dm:${res.dmPartnerId}`;
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key)!.push(res);
+    }
+    for (const [key, list] of groups) {
+        const head = document.createElement("div");
+        head.className = "search-group";
+        const icon = document.createElement("i");
+        icon.className = `ph ${key.startsWith("dm:") ? "ph-chat-circle" : "ph-hash"}`;
+        icon.setAttribute("aria-hidden", "true");
+        const name = document.createElement("span");
+        name.textContent = key.startsWith("dm:") ? "Direct messages" : (findChannelNodeById(currentTree, key)?.name ?? "Unknown channel");
+        head.append(icon, name);
+        searchResultsEl.appendChild(head);
+        for (const res of list) {
+            const card = document.createElement("button");
+            card.type = "button";
+            card.className = "search-result";
+            card.appendChild(createAvatarElement(res.authorId, res.authorNickname, 28));
+            const body = document.createElement("div");
+            body.className = "search-result-body";
+            const top = document.createElement("div");
+            top.className = "search-result-top";
+            const nick = document.createElement("span");
+            nick.className = "search-result-nick";
+            nick.textContent = res.authorNickname;
+            const when = document.createElement("span");
+            when.className = "search-result-date";
+            const d = new Date(res.createdAt);
+            when.textContent = Number.isNaN(d.getTime())
+                ? ""
+                : d.toLocaleDateString("en-US", { month: "short", day: "numeric" }) +
+                  " " +
+                  d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
+            top.append(nick, when);
+            const snip = document.createElement("div");
+            snip.className = "search-result-snippet";
+            appendSnippet(snip, res.snippet);
+            body.append(top, snip);
+            card.appendChild(body);
+            card.addEventListener("click", () => void openSearchResult(res));
+            searchResultsEl.appendChild(card);
+        }
+    }
+}
+
+async function runSearch(append = false, retried = false): Promise<void> {
+    const query = tabSearchInput.value.trim();
+    if (query.length < 2) {
+        searchRunId++;
+        searchResults = [];
+        searchHasMore = false;
+        renderSearchResults(query.length === 0 ? undefined : "Type at least 2 characters to search.");
+        if (query.length === 0) searchCountEl.textContent = "";
+        return;
+    }
+    if (!requireServerAccess()) return; // PRD 18.18
+    openSearchPanel();
+    const run = ++searchRunId;
+    searchLastQuery = query;
+    searchCountEl.textContent = "Searching…"; // the previous results stay until the new ones arrive
+    const here = searchScope === "here" ? searchHereTarget() : null;
+    const before = append && searchResults.length > 0 ? searchResults[searchResults.length - 1].createdAt : undefined;
+    const res = await api.searchMessages({
+        query,
+        ...(here?.channelId ? { channelId: here.channelId } : {}),
+        ...(here?.dmPartnerId ? { dmPartnerId: here.dmPartnerId } : {}),
+        ...(before ? { before } : {}),
+    });
+    if (run !== searchRunId) return; // a newer search took over
+    if (!res.success) {
+        if (!retried && /too fast/i.test(res.error ?? "")) {
+            setTimeout(() => void runSearch(append, true), 1100);
+            return;
+        }
+        searchResults = append ? searchResults : [];
+        searchHasMore = false;
+        renderSearchResults(res.error ?? "Search failed.");
+        return;
+    }
+    searchResults = append ? [...searchResults, ...(res.results ?? [])] : (res.results ?? []);
+    searchHasMore = res.hasMore === true;
+    renderSearchResults();
+}
+
+async function openSearchResult(res: SearchResult): Promise<void> {
+    let tabId: string;
+    if (res.channelId) {
+        tabId = res.channelId;
+        if (!chatTabs.has(tabId)) {
+            const name = findChannelNodeById(currentTree, tabId)?.name ?? "channel";
+            openChatTab(tabId, name, { mode: "preview", focus: true });
+        }
+    } else if (res.dmPartnerId) {
+        tabId = `dm:${res.dmPartnerId}`;
+        if (!chatTabs.has(tabId)) {
+            const nick = searchResults.find((r) => r.authorId === res.dmPartnerId)?.authorNickname ?? "Direct message";
+            openDmTab(res.dmPartnerId, nick, { mode: "preview", focus: true });
+        }
+    } else {
+        return;
+    }
+    switchTab(tabId);
+    // A freshly opened tab is still loading its latest page: wait for it, or the jump window is overwritten.
+    const started = Date.now();
+    while (!chatTabs.get(tabId)?.initialLoadDone && Date.now() - started < 3000) {
+        await new Promise((r) => setTimeout(r, 80));
+    }
+    await jumpToMessage(tabId, res.id);
+}
+
+tabSearchInput.addEventListener("input", () => {
+    tabSearchClear.style.display = tabSearchInput.value ? "" : "none";
+    if (searchDebounce) clearTimeout(searchDebounce);
+    if (!tabSearchInput.value.trim()) {
+        searchRunId++;
+        searchPanel.classList.remove("open");
+        return;
+    }
+    searchDebounce = setTimeout(() => void runSearch(), 450);
+});
+tabSearchInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+        e.preventDefault();
+        if (searchDebounce) clearTimeout(searchDebounce);
+        void runSearch();
+    } else if (e.key === "Escape") {
+        closeSearchPanel();
+        tabSearchInput.blur();
+    }
+});
+tabSearchClear.addEventListener("click", () => {
+    closeSearchPanel();
+    tabSearchInput.focus();
+});
+searchMoreBtn.addEventListener("click", () => void runSearch(true));
+searchScopeEl.querySelectorAll<HTMLButtonElement>("button").forEach((b) =>
+    b.addEventListener("click", () => {
+        searchScope = b.dataset.scope === "here" ? "here" : "all";
+        paintSearchScope();
+        if (tabSearchInput.value.trim().length >= 2) void runSearch();
+    }),
+);
+document.addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "f") {
+        if (!isConnected) return;
+        e.preventDefault();
+        tabSearchInput.focus();
+        tabSearchInput.select();
+    }
 });
 
 // ── Nudge (PRD 4.14) ─────────────────────────────────────────────────────

@@ -2206,6 +2206,35 @@ const api = {
         });
     },
 
+    /** Message search (PRD 20 Q1). */
+    searchMessages(payload: {
+        query: string;
+        channelId?: string;
+        dmPartnerId?: string;
+        before?: string;
+    }): Promise<{
+        success: boolean;
+        results?: {
+            id: string;
+            channelId?: string;
+            dmPartnerId?: string;
+            authorId: string;
+            authorNickname: string;
+            createdAt: string;
+            snippet: string;
+        }[];
+        hasMore?: boolean;
+        error?: string;
+    }> {
+        return new Promise((resolve) => {
+            if (!socket?.connected) {
+                resolve({ success: false, error: "Not connected" });
+                return;
+            }
+            socket.emit("SEARCH_MESSAGES", payload, resolve);
+        });
+    },
+
     /** "I'm typing" (PRD 20 W2): fire-and-forget; the server throttles and relays. */
     sendTyping(target: { channelId?: string; dmPartnerId?: string }): void {
         if (socket?.connected) socket.emit("TYPING", target);
