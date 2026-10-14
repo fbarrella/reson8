@@ -1110,3 +1110,26 @@ Feature/Fix: A press on a menu's own anchor closes it instead of reopening it (f
       open, closed, open, closed on four successive clicks.
 
   Next Step: group 2.
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Server-pill popover centred under the pill (follow-up to PRD 20 U3)
+
+  Problem: The server switcher opened with its left edge on the pill's left
+  edge, so it looked misaligned, more so now that the pill is wider (address +
+  nickname) and its width changes between connected and disconnected.
+
+  Solution: openMenu() takes opts.align ("start" default | "center"); with
+  "center", x is the anchor's horizontal centre and the menu is centred on it
+  (still clamped to the window). openServerSwitcher() passes the pill's centre.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts — openMenu align option,
+      openServerSwitcher
+
+  Verification:
+    - apps/client npx tsc --noEmit; npm run lint (0 errors).
+    - Real app: menu centre == pill centre (512 / 512) both while not
+      connected (no nickname in the pill) and connected with a long nickname.
+
+  Next Step: group 2.

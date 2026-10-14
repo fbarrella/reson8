@@ -3769,7 +3769,7 @@ function openServerSwitcher(): void {
         icon: "ph-plus",
         onClick: () => (document.getElementById("rail-add") as HTMLButtonElement).click(),
     });
-    openMenu(items, rect.left, rect.bottom + 6, { anchor: pill });
+    openMenu(items, rect.left + rect.width / 2, rect.bottom + 6, { anchor: pill, align: "center" });
 }
 
 // ── Server header and its menu (PRD 19 C3) ───────────────────────────────────
@@ -4947,7 +4947,7 @@ function openMenu(
     items: MenuItem[],
     x: number,
     y: number,
-    opts: { anchor?: HTMLElement; returnFocusTo?: HTMLElement; placement?: "below" | "above" } = {},
+    opts: { anchor?: HTMLElement; returnFocusTo?: HTMLElement; placement?: "below" | "above"; align?: "start" | "center" } = {},
 ): void {
     closeMenu();
     if (items.length === 0) return;
@@ -5069,10 +5069,11 @@ function openMenu(
     menu.style.visibility = "hidden";
     document.body.appendChild(menu);
     const rect = menu.getBoundingClientRect();
-    let left = x;
+    // align "center": x is the anchor's horizontal centre and the menu is centred on it.
+    let left = opts.align === "center" ? x - rect.width / 2 : x;
     // "above": y is the anchor's top edge; the menu's bottom sits 6 px above it.
     let top = opts.placement === "above" ? y - rect.height - 6 : y;
-    if (left + rect.width > window.innerWidth - MENU_EDGE_MARGIN) left = x - rect.width;
+    if (opts.align !== "center" && left + rect.width > window.innerWidth - MENU_EDGE_MARGIN) left = x - rect.width;
     if (top + rect.height > window.innerHeight - MENU_EDGE_MARGIN) top = y - rect.height;
     left = Math.max(MENU_EDGE_MARGIN, Math.min(left, window.innerWidth - rect.width - MENU_EDGE_MARGIN));
     top = Math.max(MENU_EDGE_MARGIN, Math.min(top, window.innerHeight - rect.height - MENU_EDGE_MARGIN));
