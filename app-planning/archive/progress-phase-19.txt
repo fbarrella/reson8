@@ -1,0 +1,2627 @@
+================================================================================
+  PHASE 19 — unabridged progress log (archived at 3.0.0-beta.2, 14/10/2026)
+  The condensed summary lives in app-planning/progress.txt. Entries are in the
+  order they were built: R0, A1-A10 (+ P11/P12), B1-B12, F1-F4, C1-C12, R7,
+  R1-R6 and the owner-review follow-up.
+================================================================================
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Beta release pipeline — prereleases, update channel, version comparison (PRD 19 R0)
+
+  Problem: Phase 19 ships as 3.0.0-beta.N prereleases from the ui-overhaul-beta
+  branch, but the bump procedure only accepted X.Y.Z and had no publishing
+  steps, the renderer's compareVersions() split on "." (so "3.0.0-beta.1"
+  produced NaN parts and the version-mismatch modal could name the wrong side
+  as outdated), and nothing guaranteed that stable 2.7.x users would never be
+  offered a beta.
+
+  Step 0 findings (read from the installed packages, not memory):
+    - electron-updater 6.8.9: a version with a prerelease part sets
+      allowPrerelease = true (AppUpdater.js:218); autoInstallOnAppQuit
+      defaults to true (:114); the `channel` setter also sets
+      allowDowngrade = true (:44). GitHubProvider: with allowPrerelease it
+      scans releases.atom (stable or alpha/beta tags), reads `<channel>.yml`
+      (beta.yml for a beta tag) and falls back to latest.yml on a 404;
+      without it, it asks /releases/latest, which never resolves to a
+      pre-release.
+    - electron-builder 25 (app-builder-lib PublishManager.js:385–404,
+      updateInfoBuilder.js:37) does NOT apply the version-derived channel to
+      the GitHub provider: a beta build would write latest*.yml. This
+      contradicted the PRD's assumption; the user chose (13/10/2026) to build
+      prereleases on an explicit `beta` channel.
+
+  Solution:
+    - New pure module apps/client/src/app-version.ts: parseVersion /
+      compareVersions (semver §11 precedence, null when unparseable) /
+      isPrerelease / prereleaseChannel, covered by `npm run test:version`.
+    - main.ts states autoUpdater.allowPrerelease = isPrerelease(version)
+      (equal to electron-updater's own default; `channel` is never set).
+    - The renderer's local compareVersions() is gone: checkVersionMismatch()
+      uses api.version.compare() from the preload; an unparseable version
+      gets a neutral message with no Releases button.
+    - apps/client/scripts/update-channel.mjs adds `-c.publish.channel=beta`
+      for any prerelease version. Every packaging path uses it: build:* now
+      runs scripts/electron-build.mjs, test-build.mjs and the root
+      release-all.mjs append it. Verified with a real local Windows NSIS
+      build (version 2.7.0 + the override, scratch output dir): it wrote
+      beta.yml and no latest.yml, and baked `channel: beta` into the packaged
+      app-update.yml — read by GitHubProvider.channel only, so allowDowngrade
+      stays off. Consequences: beta tags serve beta.yml; the final stable
+      3.0.0 tag later serves beta apps through the latest.yml fallback; a
+      stable app that ever lands on a beta release whose pre-release box was
+      forgotten finds no latest.yml and errors instead of installing it.
+    - .claude/commands/bump-version.md rewritten for X.Y.Z-beta.N: branch
+      guard (only 3.0.0-beta.N, N = previous + 1, on ui-overhaul-beta), the
+      shields.io `--` escaping for the README badge, the beta notes format
+      (warning box, changes since the previous beta, link to earlier betas),
+      and an owner-run publishing checklist (upload only beta*.yml, mark
+      pre-release, verify /releases/latest still points at stable).
+    - eslint.config.mjs ignores app-planning/design_handoff_reson8_ui_overhaul/**
+      (the design study's bundled JS produced 90 lint errors; it is reference
+      material, never shipped).
+
+  Key Files Modified:
+    apps/client/src/app-version.ts (NEW)
+    apps/client/scripts/app-version-smoke.mjs (NEW)
+    apps/client/scripts/update-channel.mjs (NEW)
+    apps/client/scripts/electron-build.mjs (NEW)
+    apps/client/scripts/test-build.mjs
+    apps/client/package.json (build:* scripts, test:version)
+    apps/client/src/main.ts
+    apps/client/src/preload.ts
+    apps/client/src/renderer/renderer.ts
+    scripts/release-all.mjs
+    eslint.config.mjs
+    .claude/commands/bump-version.md
+    AGENTS.md, apps/client/AGENTS.md
+
+  Verification:
+    - npm run test:version: all ordering/equality/null/prerelease checks pass
+      (2.7.0 < 3.0.0-beta.1 < … < 3.0.0-beta.10 < 3.0.0, numeric vs
+      alphanumeric identifiers, v-prefix, malformed inputs).
+    - npx tsc --noEmit (apps/client): clean. npm run lint: 0 errors
+      (72 pre-existing warnings).
+    - update-channel.mjs: 2.7.0 → [], 3.0.0-beta.1 → [-c.publish.channel=beta],
+      malformed → error; release-all --dry-run passes.
+    - Real Windows build with the override (see above): beta.yml only.
+    - Real built client driven over CDP (no server needed; Windows, own
+      --user-data-dir): checkVersionMismatch("3.0.0-beta.1") → "server is
+      newer" + Releases button (the old code got this wrong); "2.6.0" →
+      "server needs updating"; "v2.7.0" → no modal; "nonsense" → neutral
+      text. Screenshot inspected.
+    - Not run: the GitHub publishing checklist (owner, at beta.1).
+
+  Environment notes (this Windows machine): node_modules was installed with
+  `npm ci --ignore-scripts`; shared-types needed `tsc --build --force`
+  because the tracked tsconfig.tsbuildinfo claimed an up-to-date build while
+  dist had no .d.ts; Electron's install.js only extracted `locales`, so the
+  cached zip was extracted with 7za; electron-builder's winCodeSign cache
+  needs symlink rights (pre-extracted without its darwin/ folder); Electron
+  must be launched with ELECTRON_RUN_AS_NODE unset (VS Code sets it). No
+  Docker/WSL/Postgres/Redis here, so server-backed checks (P1 onwards) need
+  a database setup first.
+
+  Next Step: PRD 19 A1 — member-visible server summary.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Member-visible server summary — GET_SERVER_SUMMARY (PRD 19 A1)
+
+  Problem: Nothing gave an ordinary member (or a restricted user) the server's
+  admins, member total, online count or feature switches — About and the
+  Nocturne header (C3/C4) need them. SERVER_SETTINGS_UPDATED also carried none
+  of the join gates, so a feature list could not update live.
+
+  Solution:
+    Shared types:
+      - IServerSummary (models.ts): name, memberCount, onlineCount, admins[],
+        features{nudge, screenShare, requireApproval, requireInvite,
+        requireSignedIdentity}, optional iconUrl (A2 fills it).
+      - ClientToServerEvents.GET_SERVER_SUMMARY(ack); SERVER_SETTINGS_UPDATED
+        gains optional requireApproval/requireInvite/requireSignedIdentity.
+    Server:
+      - services/server-summary.ts: pure buildServerSummary(). Members =
+        user_servers rows whose aggregated permissions pass hasServerAccess()
+        and who are not banned; admins = members with the ADMIN bit, sorted by
+        lower-cased nickname (userId as tie-break); online = online ids ∩
+        counted members.
+      - permissions.service.ts: new exported pure aggregatePermissions(roles,
+        serverId) (only that server's roles); getUserPermissions() now uses it.
+      - nudge.handler.ts: GET_SERVER_SUMMARY next to GET_SERVER_SETTINGS — one
+        query for members+roles, one for bans, the Redis online set, the server
+        row; features are the values IN EFFECT (env overrides included) via the
+        config getters. Any error acks "Failed to load the server summary".
+        Never includes addresses, fingerprints, public keys, unprotected counts
+        or the allowed-host lists.
+      - access.service.ts: EVENT_ACCESS.GET_SERVER_SUMMARY = "open" (restricted
+        users may open About, like the tree and presence).
+      - UPDATE_SERVER_SETTINGS's broadcast adds the three join gates, read from
+        the same getters after the update.
+    Client:
+      - preload.getServerSummary(): socket.timeout(5000); error/timeout → null
+        (a v2.7.0 server never answers); iconUrl goes through resolveMediaUrl().
+      - renderer: serverSummary state; refreshServerSummary() with a 2 s
+        trailing debounce, triggered on connected, user-joined, user-left and
+        server-settings-updated; a response that arrives after a disconnect or
+        server change is dropped; clearServerSummary() on disconnect; ONE
+        getOnlineCountForDisplay() (summary.onlineCount, else the online
+        entries of the last GET_ONLINE_USERS read, cached by updateOnlineDot()).
+        No UI yet (C3/C4), no debug logging.
+    Deviation: the PRD also lists "A8's permissions change" as a refresh
+    trigger; A8 does not exist yet, so that trigger is added with A8.
+
+  Key Files Modified:
+    packages/shared-types/src/models.ts
+    packages/shared-types/src/socket-events.ts
+    apps/server/src/services/server-summary.ts (NEW)
+    apps/server/src/services/permissions.service.ts
+    apps/server/src/services/access.service.ts
+    apps/server/src/handlers/nudge.handler.ts
+    apps/server/src/__tests__/server-summary.test.ts (NEW)
+    apps/server/src/__tests__/access.service.test.ts
+    apps/client/src/preload.ts
+    apps/client/src/renderer/renderer.ts
+    apps/server/AGENTS.md
+
+  Verification:
+    - npx tsc --noEmit: apps/server and apps/client clean;
+      packages/shared-types built with `npx tsc --build`.
+    - npm run lint (root): exit 0, 0 errors, 73 warnings (was 72): the one
+      new warning is getOnlineCountForDisplay() being unused until C3/C4.
+    - apps/server `npm run test`: 343 tests pass, incl. the new
+      server-summary tests (banned excluded; restricted excluded from total and
+      online; online and offline admin; unknown online id ignored; case-
+      insensitive admin sort; aggregatePermissions ignores other servers'
+      roles) and the EVENT_ACCESS table test (the compiler forced the new
+      entry). 2 suites (auth-hosts.service, prune-orphan-uploads) fail to LOAD
+      here, before and independent of this change: this Windows checkout
+      (core.autocrlf=true) turns scripts/*.mjs into CRLF and their `#!` line
+      then fails to parse ("Invalid or unexpected token"). Not touched.
+    - Real server (port 9801, scratch Redis db 5, ADMIN_INSTANCE_ID set), real
+      socket.io clients, script in the session scratchpad:
+        * a socket that never signed in → { success:false, error:"Not signed in" }
+          (packet gate);
+        * a plain member → success, memberCount 3 / onlineCount 3, one admin;
+        * after the admin removed the Member role from a third user, THAT
+          restricted socket still got success, and the counts dropped to
+          2 / 2 (the restricted user is neither counted nor online);
+        * the summary JSON contains no publicKey/fingerprint/address/host-list
+          keys;
+        * toggling requireApproval as admin: SERVER_SETTINGS_UPDATED carried
+          requireApproval:true and the next summary showed it; toggled back.
+      Relation to GET_ONLINE_USERS: that list omits the caller and INCLUDES
+      restricted users, the summary includes the caller and excludes restricted
+      users. (3 raw online, 1 restricted: list showed Alice + Carol; summary 2.)
+    - Real built client over CDP against that server: connected →
+      serverSummary filled after the 2 s debounce (4 members, 1 online),
+      getOnlineCountForDisplay() = 1, api.getServerSummary() returns the same;
+      after Disconnect serverSummary = null and the count 0.
+    - NOT run: the old-server (v2.7.0) fallback against a real v2.7.0 server —
+      no such build here; it is the 5 s ack timeout → null → last
+      GET_ONLINE_USERS count path, read from the code only. A v2.7.0 CLIENT
+      never emits the event and ignores the extra broadcast fields (additive,
+      optional). No UI change, so no screenshot.
+
+  Environment setup (this machine, needed once for server-backed checks):
+    - Rancher Desktop's Windows docker pipe did not answer ("timed out
+      dialing Hyper-V socket"), but dockerd runs in its WSL distro. Postgres
+      and Redis were started with `wsl -d rancher-desktop -- docker run` using
+      the images and credentials of docker-compose.dev.yml (containers
+      reson8-postgres 16-alpine and reson8-redis 7-alpine, ports 5432/6379
+      reachable from Windows as localhost). Inside WSL the docker CLI's
+      credential helper fails, so pulls ran with a clean environment:
+      `env -i PATH=/usr/bin:/bin HOME=/tmp/h DOCKER_CONFIG=/tmp/dcfg docker …`.
+    - apps/server/.env copied from .env.example (git-ignored);
+      `npm run db:generate`; `npx prisma migrate deploy` (not migrate dev);
+      `npm rebuild mediasoup` downloaded the prebuilt mediasoup-worker.exe;
+      `npm run dev` boots ("mediasoup Workers initialized", listening).
+    - A fresh database needs `npx tsx prisma/seed.ts` (roles/channels) AFTER
+      the server created its Server row, or every join fails on the
+      user_roles FK.
+    - Test servers: PORT=9801 REDIS_URL=redis://localhost:6379/5
+      SERVER_PRIVATE_PASSWORD= ADMIN_INSTANCE_ID=<uuid>; stop by the PID on
+      the port (netstat), never by pattern.
+
+  Noticed, not changed (out of scope):
+    - USER_JOIN_SERVER sets socket.data.userId/serverId before the role
+      upsert; when the upsert threw (unseeded database) the ack was
+      { success:false } yet the packet gate treated the socket as signed in
+      and let it call GET_SERVER_SUMMARY. Only reachable when a join fails on
+      a database error, and the event is "open" anyway, but a failed join
+      should probably clear those fields — worth a look in a later item.
+
+  Next Step: PRD 19 A2 — server icon.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Server icon — upload route with byte validation, claim/replace/remove (PRD 19 A2)
+
+  Problem: A server had no icon. The only upload validation anywhere was the
+  MIME type the client DECLARES, and the stored extension came from the
+  client's file name, so the new route could not just reuse the old ones.
+
+  Solution:
+    Database: Server.iconUrl / Server.iconPublicId (mirroring Channel) and
+    StoredFileKind.SERVER_ICON; migration 20261018120000_add_server_icon
+    (generated with `prisma migrate diff`, nothing in it uses the new enum
+    value in the same transaction).
+    Server:
+      - services/image-sniff.ts (NEW, pure, no dependency): sniffImage() reads
+        PNG / GIF / WebP (VP8, VP8L, VP8X) / JPEG (bounded 64-segment SOF walk)
+        headers and the pixel size, null for anything truncated, unknown, zero-
+        sized or SVG; validateServerIcon() requires sniffed type == declared
+        MIME and each side 256–4096 and builds the stored name
+        `server-icon.<sniffed ext>`; isServerIconFileName().
+      - routes/upload.route.ts: handleUpload()'s 7th parameter is now an
+        UploadOptions object (allowedMimeTypes, requireToken, authorize,
+        validate); the existing routes pass nothing new (the animated-emoji
+        route's Set moved into the object). POST /api/upload/server-icon: 1 MB,
+        token required (401), ADMIN on app.serverId (403, checked before the
+        body is read), validation failure → 400 with the PRD's message.
+      - index.ts: @fastify/static applies its own Cache-Control AFTER
+        setHeaders, so a plain setHeaders override has no effect (found by
+        testing). cacheControl is switched off and setHeaders sets
+        `public, max-age=31536000, immutable` for <uuid>-server-icon.<ext> and
+        `public, max-age=0` (the former default) for everything else.
+      - UPDATE_SERVER_SETTINGS gains iconUploadId (string = set/replace,
+        null = remove, omitted = unchanged; parsed by the pure
+        server-icon.ts parseIconChange — a URL or a non-string is refused).
+        claimUploads(kind SERVER_ICON) and servers.update run in ONE
+        transaction; the previous file is released AFTER the commit
+        (iconToRelease()). UploadClaimError is answered with its message.
+      - GET_SERVER_SETTINGS (everyone), SERVER_SETTINGS_UPDATED and
+        IServerSummary.iconUrl carry the icon (null = none).
+      - countFileReferences() counts servers.iconUrl, so a shared file is never
+        deleted from under the icon.
+    Client:
+      - preload: resolveMediaUrl() on iconUrl at the three entry points
+        (getServerSettings, the server-settings-updated forwarder, the
+        summary), uploadServerIcon() on uploadTo(), updateServerSettings
+        accepts iconUploadId; renderer API types mirrored. No UI (C5).
+    Not done here, by design: sniffing the OTHER upload routes (A10), the
+    client re-encode/cache of the icon (C1/C5), the discardUpload-on-cancel
+    call (needs the icon UI in C5).
+
+  Key Files Modified:
+    apps/server/prisma/schema.prisma
+    apps/server/prisma/migrations/20261018120000_add_server_icon/migration.sql (NEW)
+    apps/server/src/services/image-sniff.ts (NEW)
+    apps/server/src/services/server-icon.ts (NEW)
+    apps/server/src/services/stored-file.service.ts
+    apps/server/src/routes/upload.route.ts
+    apps/server/src/index.ts
+    apps/server/src/handlers/nudge.handler.ts
+    apps/server/src/__tests__/image-sniff.test.ts (NEW)
+    apps/server/src/__tests__/server-icon.test.ts (NEW)
+    packages/shared-types/src/socket-events.ts
+    apps/client/src/preload.ts
+    apps/client/src/renderer/renderer.ts
+    apps/server/AGENTS.md
+
+  Verification:
+    - Migration: `migrate diff` SQL read; applied from scratch with
+      `migrate deploy` on a throwaway database (columns + enum value present,
+      a second `migrate diff` against the schema empty); applied to the dev DB
+      with `migrate deploy`; throwaway databases dropped.
+    - npx tsc --noEmit: shared-types (build), apps/server, apps/client clean.
+      npm run lint: exit 0, 73 warnings (unchanged from A1).
+    - apps/server tests: 371 pass (22 sniffer cases incl. every format at
+      512 and 100 px, truncation, noise, SVG/HTML, APP1-before-SOF0, the
+      64-segment bound, mismatch refusal; parseIconChange/iconToRelease).
+      The same 2 suites that cannot load on this CRLF checkout (see the A1
+      entry) still fail to load; unrelated.
+    - Real server + real HTTP uploads (scratch Redis db 5):
+        member token → 403; no token → 401; real PNG declared image/jpeg →
+        400 with the message; 200×200 → 400; HTML declared image/png → 400;
+        SVG → 400; 1.5 MB → 413;
+        admin upload of a real 512×512 PNG named "My Evil Name.php.png" →
+        200, stored as /uploads/<uuid>-server-icon.png;
+        logged-out GET → 200, image/png, `Cache-Control: public,
+        max-age=31536000, immutable`, no cookie; a normal attachment keeps
+        `public, max-age=0`;
+        member UPDATE_SERVER_SETTINGS → "Permission denied"; iconUploadId 12
+        → "Invalid icon"; a URL as the id → refused; admin sets the icon →
+        SERVER_SETTINGS_UPDATED carries iconUrl, GET_SERVER_SETTINGS (as a
+        member) and GET_SERVER_SUMMARY return it; claiming the same id twice
+        and claiming an attachment's id (wrong kind) are refused;
+        replacing → the old file answers 404 and the new one 200; sending
+        null → the broadcast carries iconUrl:null, settings return null, and
+        the file is gone. The ledger holds no SERVER_ICON row afterwards
+        (the one left over was from an aborted first run).
+    - NOT run: Cloudinary mode (no credentials; the public_id path is the
+      ledger's own and unchanged), a JPEG/WebP/GIF real upload over HTTP
+      (covered by the sniffer unit tests with hand-built headers).
+    - Quirk noted: Node's fetch (undici) reuses a connection after the
+      server's early 413 reply and then hangs/ECONNRESETs; harmless for real
+      clients (Chromium) but keep a 413 case last in any Node test script.
+
+  Environment: WSL containers reson8-postgres / reson8-redis still running;
+  test server on 9801 stopped (by PID).
+
+  Next Step: PRD 19 A3 — complete the per-channel voice session timer.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Two test suites that could not load — *.mjs kept LF (chore)
+
+  Problem: auth-hosts.service.test.ts and prune-orphan-uploads.test.ts failed
+  with "SyntaxError: Invalid or unexpected token" on this Windows checkout.
+  The index holds LF; core.autocrlf=true wrote CRLF to the working tree, so
+  the scripts they import started with "#!/usr/bin/env node\r", which the
+  module transform cannot parse. Not a product bug, but it hid 38 tests.
+
+  Solution: a repo-level .gitattributes with `*.mjs text eol=lf`, so every
+  checkout (any autocrlf setting) gets LF for the scripts; the working-tree
+  .mjs files were re-checked-out. Git config untouched.
+
+  Verification: apps/server `npm run test`: 26 files / 409 tests pass (was
+  24 files / 371, two suites unloadable). git status shows no .mjs changes.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Voice session timer completed — tree carries the start, kick and
+access-change keep it (PRD 19 A3)
+
+  Problem: the per-room voice timer (Phase 8) had three gaps: (a) the
+  join-time tree carried no start time, so a client connecting mid-session
+  showed no timer until the next PRESENCE_UPDATE; (b) KICK_USER and the
+  PRD 18.18 access-change broadcast sent PRESENCE_UPDATE WITHOUT
+  sessionStartedAt (clients then DELETED the timer of a still-occupied room)
+  and never cleared the map when the room emptied; (c) a restart re-seeds.
+
+  Solution:
+    Shared types: IChannelTreeNode.sessionStartedAt? (ISO, voice rooms,
+    occupied only; the same value PRESENCE_UPDATE carries — the field name is
+    kept, the handoff's `occupiedSince` would have duplicated it).
+    Server:
+      - services/voice-session.service.ts now OWNS voiceSessionStartedAt (one
+        Map; connection.handler.ts re-exports it, voice.handler.ts' import is
+        unchanged). New presencePayload(app, presence, channelId): reads the
+        occupant set, deletes the start when empty, returns
+        { channelId, occupants, sessionStartedAt? } (the key is absent for an
+        empty room). New annotateSessionStarts(tree, requireOccupants).
+      - Used ONLY in the two broken paths (broadcastChannelOccupants() and
+        KICK_USER); the six emitters that already sent the right value are
+        untouched. The map is never cleared in a raw disconnect path.
+      - hydrateOccupants' tree (join) is annotated with requireOccupants=true;
+        channel.handler.ts' broadcastTreeUpdate() is annotated from the map
+        alone (it carries no occupants).
+      - Gap (c) stays by decision D5: in memory, doc-commented on the map.
+    Client: seedSessionTimersFromTree() on every channel-tree event (before
+    the render): a voice node's own value wins; a voice node with neither a
+    start nor occupants has no session (delete); a node with occupants but no
+    value (an older server) is left to presence updates.
+    One deviation from the PRD wording: it says to delete timers for "nodes
+    with no occupants", but broadcast trees ALWAYS have empty occupants (see
+    below), so the delete is applied only when the node ALSO has no start.
+
+  Key Files Modified:
+    packages/shared-types/src/models.ts
+    apps/server/src/services/voice-session.service.ts
+    apps/server/src/handlers/connection.handler.ts
+    apps/server/src/handlers/moderation.handler.ts
+    apps/server/src/handlers/channel.handler.ts
+    apps/server/src/__tests__/voice-session.test.ts (NEW)
+    apps/client/src/renderer/renderer.ts
+    app-planning/Reson8_Phase19_PRD.md (P12 added)
+
+  Verification:
+    - tsc --noEmit server/client clean (shared-types built); lint exit 0, 73
+      warnings (unchanged). Server tests: 27 files / 417 pass (8 new: shared
+      map identity, empty room clears + omits the key, occupied keeps it, kick
+      leaving someone keeps / last one out clears, annotate recursion, TEXT
+      never annotated, requireOccupants ignores a stale entry).
+    - Real server, socket.io clients (admin, A, B, a late C):
+        * C connects 1+ s after the room started: its join-time tree node has
+          the same sessionStartedAt as the presence updates; an empty room has
+          none;
+        * renaming a text channel: the broadcast tree's voice node still
+          carries it;
+        * kick B (A remains): PRESENCE_UPDATE to A and C carries the same
+          sessionStartedAt (v2.7.0 dropped it);
+        * removing Member from A, the last occupant (access loss): PRESENCE_
+          UPDATE has no sessionStartedAt, a fresh join tree has none for the
+          room, and A rejoining starts a later one;
+        * transport dropped without a clean disconnect (2.5 s) and a same-id
+          reconnect: the start is unchanged (grace period).
+    - Real built client over CDP: connecting mid-session shows "00:38" next to
+      the occupied room at once; after a rename broadcast the timer remains.
+      Screenshots inspected.
+    - NOT run: a v2.7.0 client against this server (it ignores the tree
+      field, additive); the 10 s grace boundary itself (only a 2.5 s blip).
+
+  Noticed, not changed (PRD P12): every CHANNEL_TREE_UPDATE built by
+  broadcastTreeUpdate() has occupants:[] and the client replaces its tree with
+  it, so after a rename/create/move all voice rooms look empty (occupant rows
+  and the count pill vanish; seen in the screenshots) until the next presence
+  update. Pre-existing; logged as a TO-DO in the PRD, not fixed here.
+
+  Next Step: PRD 19 A4 — cap of 5 concurrent screen shares per room.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Cap of 5 concurrent screen shares per room (PRD 19 A4)
+
+  Problem: PRODUCE created screen-video producers with no check at all; the
+  server-wide toggle was only enforced at WATCH_SCREEN_SHARE, so a room could
+  carry any number of shares.
+
+  Solution:
+    Shared types: MAX_SCREEN_SHARES_PER_ROOM = 5 (models.ts); the PRODUCE and
+    SET_SCREEN_SHARE_STATE acks gain optional errorCode "SCREEN_SHARE_LIMIT".
+    Server:
+      - services/channel-lock.ts (NEW): withChannelLock(key, fn), a per-key
+        promise chain; a rejection does not break the chain; the entry is
+        removed once the chain drained (channelLockCount() for tests).
+      - services/screen-share-limit.ts (NEW): the code, the user message and
+        the pure screenShareSlotAvailable(otherLiveShares, max).
+      - MediasoupService.countScreenVideoProducers(channelId, exceptKey):
+        live (not closed) screen-video producers, excluding one session.
+      - voice.handler PRODUCE: only for appData.mediaType "screen-video" the
+        count, sendTransport.produce() and the slot assignment run inside
+        withChannelLock(channelId); at the cap the ack is { success:false,
+        error, errorCode:"SCREEN_SHARE_LIMIT" } and nothing is produced.
+        Mic and screen-audio take no lock.
+      - SET_SCREEN_SHARE_STATE: when turning ON for a user with no live screen
+        producer of their own while the room is full, the flag is coerced to
+        false and the ack carries the code (older clients ignore the ack).
+    Client:
+      - voice.service: the produce error carries errorCode; a failed or refused
+        screen-video produce now STOPS the already-granted capture tracks
+        (before, a failed produce left the OS sharing indicator on).
+      - preload: startScreenShareVideo / ...ViaSystemPicker return errorCode.
+      - renderer: both start paths show the static toast "All 5 stream slots
+        are in use. You can share when someone stops." and do not call
+        setScreenShareState(true) (the video is produced BEFORE audio capture
+        starts, so no audio capture exists to stop); the modal path closes the
+        modal. The Share button is labelled "Share screen · 5/5" (title +
+        .share-full dimming) when you are not sharing and the room's occupants
+        include 5 sharers; clicking it toasts without opening the picker.
+        Updated from updateOccupants() and the channel-tree event.
+
+  Key Files Modified:
+    packages/shared-types/src/models.ts, socket-events.ts
+    apps/server/src/services/channel-lock.ts (NEW)
+    apps/server/src/services/screen-share-limit.ts (NEW)
+    apps/server/src/services/mediasoup.service.ts
+    apps/server/src/handlers/voice.handler.ts
+    apps/server/src/__tests__/channel-lock.test.ts (NEW)
+    apps/client/src/services/voice.service.ts
+    apps/client/src/preload.ts
+    apps/client/src/renderer/renderer.ts, index.html
+    apps/server/AGENTS.md
+
+  Verification:
+    - tsc --noEmit server/client clean; lint exit 0 (73 warnings, same);
+      server tests 28 files / 426 pass (9 new: ordering, concurrency across
+      keys, rejection does not block, drained map, a check-then-act race
+      leaves exactly one winner, the slot decision, the message).
+    - Real server, real mediasoup, 7 socket clients each with a send transport
+      and handcrafted VP9 L1T3 RTP parameters (no media):
+        shares 1–5 OK; #6 → REFUSED SCREEN_SHARE_LIMIT with the exact text;
+        SET_SCREEN_SHARE_STATE(true) without a producer → refused with the
+        code, as a live sharer → success; a mic (audio) PRODUCE in the full
+        room → OK; after one sharer's CLOSE_PRODUCER #6 shares; after another
+        sharer's socket disconnects (transport closes) #7 shares; with one
+        slot free, two simultaneous requests → exactly one OK.
+    - Real built client over CDP: with 4 sharers in the room the button reads
+      "Share Screen"; with 5 it reads "Share screen · 5/5", is dimmed and a
+      click shows the toast with no picker; when I am the sharer it reads
+      "Stop Sharing". Screenshot inspected (toast).
+    - NOT run: the capture-stop on a refused real share (needs a granted
+      desktop capture; the cleanup is a try/catch around sendTransport.produce
+      that calls stopScreenVideoProducing()), the OS "sharing" indicator, and
+      six app instances by hand — user to verify on a real desktop with six
+      clients, or at least two.
+
+  Next Step: PRD 19 A5 — unread counts for channels.
+  Reminder: P11 and P12 (PRD "Pre-Existing Issues") still need a decision.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Unread counts for channels (PRD 19 A5)
+
+  Problem: the join-time tree only told a client THAT a text channel had
+  unread messages (hasUnread), not how many; the new tab badges need a number.
+
+  Solution:
+    Shared types: IChannelTreeNode.unreadCount? (capped at 100; join-time tree
+    only, like hasUnread; deletions are not subtracted live).
+    Server: services/unread.service.ts (NEW): countUnreadByChannel() is ONE raw
+    query (tagged template, parameters bound) with a LATERAL subquery bounded
+    by LIMIT 100 per channel; applyUnreadCounts() (pure) sets the field on
+    nodes with a count > 0. annotateUnreadChannels() keeps its hasUnread logic
+    byte-for-byte and counts only the channels that came out unread.
+    Client: nothing (B1 uses it).
+
+  Key Files Modified:
+    packages/shared-types/src/models.ts
+    apps/server/src/services/unread.service.ts (NEW)
+    apps/server/src/handlers/connection.handler.ts
+    apps/server/src/__tests__/unread.service.test.ts (NEW)
+
+  Verification:
+    - tsc server/client clean; lint exit 0 (73 warnings, unchanged); server
+      tests 29 files pass (5 new: tree application, cap, no query for no
+      channels, clamping, parameters never reach the SQL text).
+    - SQL on a throwaway database (all migrations applied, then dropped):
+        5 messages with the cursor after 2 → 3; 150 unread → 100; never-read
+        channel with 7 messages → 7; cursor after the last message → 0; only
+        my own messages → 0; an unknown channel id → 0; 1 ms for 5 channels.
+    - Real server: a writer sent 4 messages; the reader's join tree had
+      { hasUnread: true, unreadCount: 4 }; after MARK_CHANNEL_READ the next join
+      tree had hasUnread false and no unreadCount; the author's own tree has
+      neither.
+
+  Next Step: PRD 19 A6 — category delete with children.
+  Reminder: P11 / P12 still need a decision.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Category delete with children, server-side voice teardown (PRD 19 A6)
+
+  Problem: DELETE_CHANNEL always re-parented a deleted channel's children
+  through the foreign key (ON DELETE SET NULL), leaving them with stale
+  positions that interleave with the top level, offered no way to delete a
+  subtree, and never tore a deleted VOICE room down on the server: occupants'
+  mediasoup sessions and presence were left to each client's channel-deleted
+  handler (and a client that missed it stayed in presence forever).
+
+  Solution:
+    Shared types: DELETE_CHANNEL payload gains children?: "keep" | "delete";
+    the ack gains deletedChannelIds?: string[].
+    Server:
+      - services/channel-delete.ts (NEW, pure): planChannelDelete(channels,
+        targetId, mode) returns { deleteIds, reparent, voiceIds } for legacy
+        (target only, FK re-parents as before), keep (target only; direct
+        children to the top level at maxTopLevelPosition(excluding the target)
+        + 1 + i in their current order) and delete (target + descendants,
+        breadth-first, visited set); parseDeleteMode().
+      - channel.handler.ts DELETE_CHANNEL rewritten in the PRD order: validate
+        the option ("Invalid option"), load the channel (it must also belong to
+        the caller's server: a tightening), plan, collect the orphaned files of
+        EVERY deleted id, ONE $transaction (re-parent each moved child, then
+        deleteMany), then voice teardown, ack, background file release, one
+        CHANNEL_TREE_UPDATE and one CHANNEL_DELETED per id.
+      - Voice teardown (every mode, only after the commit): for each deleted
+        VOICE id, primary sockets (not superseded) go through
+        removeSocketFromChannel() (quiet, PRODUCER_CLOSED to the room, no
+        USER_KICKED); viewer sockets get cleanupUserSession() + disconnect;
+        leftover presence members (grace period) are removed; the session
+        start is deleted.
+      - registerChannelHandlers() now takes the MediasoupService (index.ts).
+    Legacy mode keeps today observable behaviour: same ack shape plus the new
+    optional field, one tree broadcast and one CHANNEL_DELETED, same order.
+    Client: nothing (C6 builds the dialog, B7 the voice text).
+
+  Key Files Modified:
+    packages/shared-types/src/socket-events.ts
+    apps/server/src/services/channel-delete.ts (NEW)
+    apps/server/src/handlers/channel.handler.ts
+    apps/server/src/index.ts
+    apps/server/src/__tests__/channel-delete.test.ts (NEW)
+
+  Verification:
+    - tsc server clean; lint exit 0; server tests 30 files pass (11 new:
+      legacy, keep with a nested target, keep orders by position, empty top
+      level, delete breadth-first on a nested subtree, voiceIds, childless
+      target in every mode, cycle terminates, option parsing).
+    - Real server, an admin and an occupant sitting in a voice room under a
+      category that also holds a text channel and a sub-category with a text
+      channel:
+        legacy: only the category goes; children land on TOP with their OLD
+        positions 0/1/2 (the stale-position behaviour of v2.7.0, kept); one
+        tree broadcast, one CHANNEL_DELETED; the voice room survives with its
+        occupant.
+        keep: children land on TOP at 2/3/4 in their old order, the nested
+        text channel stays under its sub-category; the voice room survives.
+        delete: all five ids in deletedChannelIds, one tree broadcast and five
+        CHANNEL_DELETED; the occupant received CHANNEL_DELETED for its room,
+        no USER_KICKED, and a fresh tree lists no such room.
+        A standalone occupied voice room deleted: presence:channel:<id> is
+        gone from Redis.
+        Refusals: children:"everything" → "Invalid option"; unknown id →
+        "Channel not found"; a plain member → "Permission denied".
+    - NOT run: a v2.7.0 CLIENT (the payload without `children` is exactly the
+      legacy branch above), file release of a deleted subtree on Cloudinary,
+      the client UI (C6).
+
+  Next Step: PRD 19 A7 — DM directory.
+  Reminder: P11 / P12 still need a decision.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: DM directory, GET_DM_DIRECTORY (PRD 19 A7)
+
+  Problem: GET_ONLINE_USERS lists only people who are online plus existing DM
+  partners, so a member who is offline and was never messaged cannot be found,
+  and there is no last-message or unread data per conversation for the new DM
+  sidebar (C7).
+
+  Solution:
+    Shared types: IDmDirectoryEntry { userId, nickname, avatarUrl, isOnline,
+    lastMessage?{ text(raw, <=300), hasAttachments, at, fromMe }, unreadCount }
+    and the GET_DM_DIRECTORY ack.
+    Server:
+      - services/server-summary.ts gains loadServerMembers(): the ONE loader of
+        "members + this server's aggregated permissions + banned ids"; A1's
+        GET_SERVER_SUMMARY now uses it too (refactor, same behaviour).
+      - services/dm-directory.ts (NEW): buildDmDirectory() (pure: members with
+        access, not banned, not the caller; unsorted), truncatePreview()
+        (300 UTF-16 units, never splits a surrogate pair) and
+        loadLastDmByPartner() (the DISTINCT ON query as a tagged template over
+        direct_messages, only pairs that include the caller).
+      - dm.handler.ts GET_DM_DIRECTORY: members + online ids + last-by-partner
+        + the existing unread groupBy + one attachment groupBy over the last
+        message ids; errors ack "Failed to load the DM directory".
+      - EVENT_ACCESS.GET_DM_DIRECTORY = "member".
+    Client: preload.getDmDirectory() (5 s timeout, null on error/timeout = an
+    older server); the renderer API type and a DmDirectoryEntry mirror. No UI
+    (C7 builds it and the GET_ONLINE_USERS fallback).
+
+  Key Files Modified:
+    packages/shared-types/src/models.ts, socket-events.ts
+    apps/server/src/services/dm-directory.ts (NEW)
+    apps/server/src/services/server-summary.ts
+    apps/server/src/services/access.service.ts
+    apps/server/src/handlers/dm.handler.ts, nudge.handler.ts
+    apps/server/src/__tests__/dm-directory.test.ts (NEW)
+    apps/client/src/preload.ts, renderer/renderer.ts
+
+  Verification:
+    - tsc server/client clean; lint exit 0; server tests 31 files pass (10 new:
+      caller/banned/restricted excluded, no-DM member, fromMe both ways,
+      attachments + ISO time, online + unread default 0, 300-char cut,
+      surrogate-safe cut, the SQL binds the caller as a parameter).
+    - Real server (admin, me, Bob, banned Eve, restricted Rex, an offline
+      never-messaged member): the directory lists Bob, the offline member and
+      the admin, and NOT me, Eve or Rex; the offline member has isOnline false
+      and no lastMessage; Bob wrote twice -> last "second from bob", fromMe
+      false, unread 2; after my reply -> last "my reply", fromMe true; Bob's
+      own view of the same chat has fromMe false and unread 1; the admin's
+      directory carries no lastMessage for chats it is not part of; Rex is
+      refused by the packet gate; a 1000-char message arrives cut to 300.
+      The DISTINCT ON query therefore ran against real rows in both
+      directions (the dev database, not a mock).
+    - NOT run: hasAttachments=true on a real upload (the lookup is one
+      attachment.groupBy by dmId, covered by the pure test only).
+
+  Next Step: PRD 19 A8 — the client learns its own permissions.
+  Reminder: P11 / P12 still need a decision.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: The client learns its own permissions (PRD 19 A8)
+
+  Problem: the client only learned three permissions, by probing admin calls
+  (GET_ROLES / GET_BANNED_USERS / GET_PENDING_EMOJIS); there was no signal for
+  MANAGE_CHANNELS, CREATE_CHANNEL, KICK_USER or ADMIN, which B6, B8 and C3 need.
+
+  Solution:
+    Shared types: the USER_JOIN_SERVER ack gains permissions?: string (the
+    aggregate as a decimal string; bigint is not JSON); new server->client
+    event PERMISSIONS_CHANGED { permissions }.
+    Server:
+      - connection.handler.ts: the join computes the aggregate once
+        (joinPermissions), derives hasAccess from it as before and puts
+        permissions in the ack.
+      - access-change.ts: sendPermissionsChanged(io, userId, serverId, perms)
+        (pure over a socket map: primary sockets of that user on that server
+        only, viewers skipped) and emitPermissionsChanged(io, app, ...)
+        (recomputes). applyAccessChange() now calls it for every role change,
+        whether or not ACCESS changed (e.g. gaining KICK_USER). ASSIGN_ROLE is
+        the only role-changing event, so every path is covered.
+    Client:
+      - preload forwards permissions on the connected event and the new
+        permissions-changed event.
+      - renderer: PERM (mirror of PermissionFlags, bigint literals; target
+        ES2022), myPermissions: bigint | null (null = unknown), setMyPermissions(),
+        hasPerm(flag): boolean | null. Reset to null on disconnect; a
+        permissions-changed event also refreshes the server summary (the A1
+        deviation noted there). NO gate changes: isAdminUser/canBanUsers/
+        canManageEmojis probes stay as they are.
+
+  Key Files Modified:
+    packages/shared-types/src/socket-events.ts
+    apps/server/src/services/access-change.ts
+    apps/server/src/handlers/connection.handler.ts
+    apps/server/src/__tests__/permissions-changed.test.ts (NEW)
+    apps/client/src/preload.ts, renderer/renderer.ts
+
+  Verification:
+    - tsc server/client clean; lint exit 0; server tests pass (4 new with a
+      fake io: decimal string, viewers/other users/other servers skipped,
+      "0", not connected).
+    - Real server: admin join ack 511, member 7; ASSIGN_ROLE role-admin ->
+      the target got PERMISSIONS_CHANGED "511"; removing admin and Member ->
+      "7" then "0" (and the existing ACCESS_CHANGED path still ran); the admin's
+      own socket got none.
+    - Real client over CDP: before connecting myPermissions null and every
+      hasPerm null; as a Member 7 -> kick/manage/admin all false; after
+      Disconnect null again.
+    - hasPerm() is intentionally unused so far (lint warning, like
+      getOnlineCountForDisplay): B6/B8/C3 consume it.
+
+  Next Step: PRD 19 A9 — screen-share server hardening.
+  Reminder: P11 / P12 still need a decision.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Screen-share switch enforced at PRODUCE and CONSUME (PRD 19 A9, security)
+
+  Problem: servers.screenShareEnabled was checked only by SET_SCREEN_SHARE_STATE
+  (the presence flag) and WATCH_SCREEN_SHARE. PRODUCE created screen-video and
+  screen-audio producers with the switch off, and CONSUME accepted ANY producer
+  in the router, so a socket in the room could receive a screen producer
+  directly and skip WATCH_SCREEN_SHARE's checks. Only a modified client could.
+
+  Solution:
+    Shared types: PRODUCE ack errorCode also allows "SCREEN_SHARE_DISABLED";
+    CONSUME ack gains errorCode "SCREEN_SHARE_DISABLED" | "NOT_WATCHING".
+    Server:
+      - config/screen-share.config.ts (NEW): in-memory mirror of the switch
+        (same pattern as approval.config); loaded at boot in index.ts, updated
+        by UPDATE_SERVER_SETTINGS. WATCH_SCREEN_SHARE and SET_SCREEN_SHARE_STATE
+        KEEP their own DB reads (non-regression rule); the new checks read the
+        mirror. The two cannot disagree for longer than the update itself.
+      - MediasoupService.findProducer(channelId, producerId) -> { ownerKey,
+        mediaType: mic | screen-video | screen-audio } | null.
+      - services/screen-consume.ts (NEW, pure): screenConsumeDecision(): unknown
+        producer -> allowed (canConsume decides, as before); mic -> always
+        allowed; screen + switch off -> SCREEN_SHARE_DISABLED; screen + not a
+        viewer socket watching that very sharer -> NOT_WATCHING.
+      - voice.handler PRODUCE: screen-audio/video refused with
+        SCREEN_SHARE_DISABLED when off; for screen-video the switch is
+        re-checked INSIDE A4's channel lock, before the cap. CONSUME: the
+        decision runs before router.canConsume.
+    Compatibility: the v2.7.0 Viewer window (and C10's stage) consume through a
+    viewer socket after WATCH_SCREEN_SHARE, which sets watchingUserId, so they
+    pass unchanged. Out of scope (as the PRD says): switching sharing off while
+    someone is already sharing does not stop that share; it just can no longer
+    be received.
+
+  Key Files Modified:
+    packages/shared-types/src/socket-events.ts
+    apps/server/src/config/screen-share.config.ts (NEW)
+    apps/server/src/services/screen-consume.ts (NEW)
+    apps/server/src/services/mediasoup.service.ts
+    apps/server/src/handlers/voice.handler.ts, nudge.handler.ts
+    apps/server/src/index.ts
+    apps/server/src/__tests__/screen-consume.test.ts (NEW)
+
+  Verification:
+    - tsc server/client clean; lint exit 0; server tests pass (10 new: every
+      row of the decision table, findProducer with fake sessions, the config).
+    - Real server + mediasoup (sharer, watcher, a real viewer socket with a
+      ticket, WATCH_SCREEN_SHARE, a recv transport):
+        sharing ON: produce mic and screen OK; a PRIMARY socket consuming the
+        screen producer -> NOT_WATCHING; the same socket consuming the MIC ->
+        OK; the viewer socket watching that sharer consumes the share OK; a
+        viewer watching ANOTHER sharer consuming it -> NOT_WATCHING.
+        sharing OFF: screen-video PRODUCE and screen-audio PRODUCE ->
+        SCREEN_SHARE_DISABLED; mic PRODUCE OK; the watching viewer's CONSUME ->
+        SCREEN_SHARE_DISABLED; a primary's mic CONSUME OK.
+    - NOT run: the Electron Viewer window itself (the socket protocol it uses
+      is exactly the sequence above).
+
+  Next Step: PRD 19 A10 — validate every upload by its real bytes.
+  Reminder: P11 / P12 still need a decision.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Every upload is validated by its real bytes (PRD 19 A10, security)
+
+  Problem: all four upload routes trusted the MULTIPART MIME type the client
+  declared and stored the file under the CLIENT's file name and extension, so
+  a request could store x.html (or an SVG) as an "image" under the public
+  /uploads/ path, where the static route serves it as text/html from the
+  server's own origin.
+
+  Solution:
+    Server (services/image-sniff.ts, A2's sniffer):
+      - validateImageBytes(buffer, declaredMime, originalName): the bytes must
+        sniff as PNG/JPEG/GIF/WebP AND match the declared type; the stored name
+        is storedImageName(): client base name (dots kept, path separators
+        replaced, empty/extension-only -> "image") + the SNIFFED extension
+        (jpeg -> .jpg). No dimension rules (only the server icon has them).
+      - upload.route.ts: handleUpload()'s validate hook now defaults to
+        validateImageBytes, so /api/upload, /emoji, /emoji-animated (still
+        GIF-only through its MIME set) and /channel-icon are all validated; the
+        server icon keeps its stricter hook. Same size limits, MIME sets,
+        ledger and response. Refusal: 400 "That file isn't a valid PNG, JPEG,
+        GIF or WebP image." Cloudinary uploads gain only the validation (its
+        public_id base comes from the sniffed name).
+      - The error text reaches the user: uploadTo() throws Error(errBody.error);
+        the composer card shows att.error and logs it; emoji/icon flows log it.
+    Client: nothing.
+    Stored files are untouched: files already on disk keep their names; the
+    risk for OLD files is left to `npm run uploads:prune` and the owner.
+
+  Key Files Modified:
+    apps/server/src/services/image-sniff.ts
+    apps/server/src/routes/upload.route.ts
+    apps/server/src/__tests__/upload-validate.test.ts (NEW)
+
+  Verification:
+    - tsc server clean; lint exit 0; server tests pass (12 new: each format
+      with its matching type, PNG declared GIF, HTML and SVG refused, other
+      declared types refused, no dimension rule, x.html -> x.png,
+      photo.final.JPG -> photo.final.jpg, empty/".png" -> image.<ext>, no path
+      separators, jpeg -> .jpg).
+    - Real server, real files of every type to attachment, emoji and
+      channel-icon routes: PNG/JPEG/GIF/WebP all 200 and served back with the
+      matching image Content-Type under the sniffed extension (pic.jpeg ->
+      pic.jpg); PNG bytes named x.html -> stored x.png; PNG declared GIF,
+      HTML declared PNG and SVG declared PNG -> 400 with the message; the
+      animated-emoji route accepts a real GIF, refuses PNG bytes declared GIF
+      and a PNG declared image/png (its MIME set).
+    - NOT run (user to check on the real app): pasting from at least one
+      browser and one screenshot tool, as the PRD asks. User-visible change to
+      know about: a file whose bytes do not match the type the OS/browser
+      derived from its NAME (e.g. a PNG renamed photo.jpg, dropped into the
+      composer) is now refused instead of stored. If that proves common, the
+      fix belongs on the CLIENT (sniff and correct the declared type before
+      uploading), not in a looser server check; I have not done that.
+
+  Next Step: P1 is complete. P2 starts with B1 (unread counts in the current UI).
+  Reminder: P11 / P12 still need a decision.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: P1.5 — a failed join no longer leaves the socket signed in (P11) and
+channel-tree broadcasts keep their occupants (P12)
+
+  Problem:
+    P11: USER_JOIN_SERVER wrote socket.data.userId/serverId BEFORE its last
+    fallible steps (user upsert, role grants, membership). When one threw, the
+    ack said { success: false } but the packet gate (which only looks at
+    userId + serverId) treated the socket as signed in.
+    P12: broadcastTreeUpdate() sent a tree built from the database alone
+    (occupants: []) and clients replace their tree with it, so after any channel
+    create/rename/move/delete every voice room looked empty until the next
+    presence update.
+
+  Solution:
+    P11: services/join-state.ts (NEW): snapshotJoinState()/restoreJoinState()
+    over the five join-owned fields (userId, serverId, nickname,
+    currentChannelId, hasAccess). The handler snapshots at entry and restores on
+    the invite-unusable path, the identity-create-race path and the catch. A
+    socket that was already signed in keeps its previous state if a re-join
+    fails; one that never was is default-deny again.
+    P12: hydrateOccupants() moved out of connection.handler.ts into
+    voice-session.service.ts (shared, with the start-time bootstrap for occupied
+    voice rooms); the join-time tree and broadcastTreeUpdate() both use it.
+
+  Key Files Modified:
+    apps/server/src/services/join-state.ts (NEW)
+    apps/server/src/services/voice-session.service.ts
+    apps/server/src/handlers/connection.handler.ts, channel.handler.ts
+    apps/server/src/__tests__/join-state.test.ts (NEW), voice-session.test.ts
+    app-planning/Reson8_Phase19_PRD.md (P11 and P12 marked fixed)
+
+  Verification:
+    - tsc clean; server tests pass (3 + 2 new; the join-state test also
+      asserts requiresSignIn for a normal event).
+    - P11 on a real server: with the Member role id temporarily renamed in the
+      database (the join's role upsert then violates the FK), a new identity's
+      join -> { success:false, "Failed to join server" }; on the SAME socket
+      GET_SERVER_SUMMARY and GET_ONLINE_USERS -> "Not signed in" (before: the
+      summary answered). The role id was restored afterwards.
+    - P12 on a real server: an occupant sat in Lobby; an admin renamed a text
+      channel; the broadcast tree's Lobby carried the occupant and the session
+      start (before: occupants []).
+
+  Next Step: P2 — B1 (unread counts in the current UI).
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Unread counts in the current UI (PRD 19 B1)
+
+  Problem: the client only knew WHETHER a channel/DM was unread (two Sets), so
+  the tree and tabs could only paint a dot.
+
+  Solution (renderer + index.html only):
+    - unreadChannelIds/unreadDmPartners (Sets) became unreadChannelCounts/
+      unreadDmCounts (Maps) with channelUnread/hasChannelUnread/dmUnread/
+      hasDmUnread, bumpCount() and formatUnreadCount() ("99+" from 100, "•"
+      for -1 = unread but unknown).
+    - Seeding: renderTree() seeds from node.unreadCount, or -1 from node.
+      hasUnread (an older server), only when there is no entry yet, so a
+      re-render never resets a live-incremented count. DMs seed from
+      GET_UNREAD_DM_PARTNERS' unreadCount, or from the page's unread messages
+      when the server number has not arrived.
+    - Live: every message in a non-active channel bumps the count; your own
+      messages are excluded (msg.userId !== api.getInstanceId()); a DM from the
+      partner adds 1 before markDmTabRead (still the only DM read path).
+    - Clearing: markChannelRead() deletes the entry and also clears the cached
+      node's unreadCount (a re-render cannot re-seed it); markDmTabRead()
+      deletes the DM entry.
+    - Display: one pill element. Tree: .unread-count after .ch-name (replaces
+      .unread-dot, also on the targeted update paths so collapsed categories
+      survive); tabs: .tab-unread-dot renamed .tab-unread-count and filled with
+      the same text; aria-label "{name} ({n} unread)" (unknown: "{name}
+      (unread)"). Muted channels keep counting but paint nothing.
+    - Deleted messages do not decrement (documented in the code comment).
+    - The online-users modal shows no unread today, so nothing was added there.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/renderer/index.html
+
+  Verification:
+    - tsc client clean; lint exit 0.
+    - Real built client over CDP against the real server (admin creates a
+      channel, a bot sends 3 messages): joined -> tree pill "3"; one more
+      message -> "4"; my own message -> unchanged; opening the channel ->
+      pill gone; disconnect + reconnect -> still gone. No old .unread-dot /
+      .tab-unread-dot elements remain. Screenshot inspected (red pills).
+    - NOT shown here: the DM tab pill while backgrounded: with the current
+      DM-tab behaviour the tab is opened AND focused (and so read at once);
+      B4 makes incoming DM tabs background tabs, and its verification covers
+      the DM count on a tab. The old-server "•" path is covered by the -1
+      branch (no v2.7.0 server build available here).
+
+  Next Step: PRD 19 B2 — muted channels fully silent.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Muted channels are fully silent (PRD 19 B2)
+
+  Problem: a muted channel already hid its dot (tree and tab) and played no
+  sound, but it had no bell-slash, its tab was not faded, and the viewed
+  channel's fade rule was missing.
+
+  Solution (renderer + index.html):
+    - Tree: the existing .muted fade now applies only while the row is not
+      .viewing (full opacity while you are in it); a .ch-muted-icon bell-slash
+      (inline SVG constant BELL_SLASH_ICON_SVG, F2 swaps in Phosphor) sits after
+      the name, built by renderChannel() and toggled by applyChannelMuteState().
+    - Tab: setTabMuted() toggles .muted (opacity .55 unless active) and a
+      .tab-muted-icon next to the label; called from refreshTabUnread(), which
+      already runs on tab creation and on every mute change, so a tab opened
+      later for a muted channel comes up muted. A muted tab never shows a badge.
+    - All targeted DOM updates (no renderTree(), collapsed categories survive).
+    - Unmuting shows the stored count again (B1 keeps counting while muted).
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts, index.html
+
+  Verification:
+    - tsc client clean; lint exit 0.
+    - Real client over CDP: a channel with 2 unread -> pill "2"; muted -> no
+      pill, bell-slash present, name opacity 0.45; unmuted -> pill "2" again;
+      muted while viewing -> .muted .viewing, name opacity 1, its tab is
+      "tab preview muted active" with the bell and an empty badge. Screenshot
+      taken (b2-muted.png).
+    - NOT checked visually: the faded tab while another tab is active (the
+      state classes and the CSS rule are in place; the headless run closed that
+      tab before sampling it).
+
+  Next Step: PRD 19 B3 — one "mark channel read" rule.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: One "mark channel read" rule for tree and tab (PRD 19 B3)
+
+  Problem: switchTab() called markChannelRead() unconditionally (so a tab still
+  loading, or a window nobody was looking at, counted as "read"), and a message
+  arriving on the ACTIVE channel while the window was unfocused was never
+  counted. (The handoff assumed opening from a tab did not clear; it did.)
+
+  Solution (renderer only; decision D1 = the DM focus rule of PRD 18.13):
+    - markChannelTabRead(tab): marks the channel read only when its tab is the
+      active one, document.hasFocus() is true and its page has rendered
+      (initialLoadDone). markDmTabRead() is untouched and still the only DM
+      read path.
+    - Called from every view path: switchTab() (tree click and tab click both
+      end there), scrollToMostRecent(), the end of loadChatHistory() (a tab that
+      was loading when opened is read once it has been seen), the window focus
+      handler, and the message handler.
+    - Message handler: a message from someone else counts when its channel is
+      not active OR the window is not focused; markChannelTabRead() then clears
+      it immediately when you really are looking at it. No sound changes.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts
+
+  Verification:
+    - tsc client clean; lint exit 0.
+    - Real client over CDP (focus emulation on, a bot sending): two channels
+      with 2 unread each -> opening one from the TREE clears its pill;
+      a message in a background channel -> pill 1; opening it from its TAB
+      clears it; with document.hasFocus() forced to false a message on the
+      ACTIVE channel -> pill 1; focus restored + focus event -> cleared.
+    - Note: the unfocused state was simulated by overriding document.hasFocus
+      (the headless window really has OS focus), then restored.
+
+  Next Step: PRD 19 B4 — DM tabs follow the preview/kept rules.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: DM tabs follow the preview/kept rules (PRD 19 B4)
+
+  Problem: openDmTab() always made a permanent tab AND switched to it, so an
+  incoming DM (or connect-time unread partners) stole the view, DM tabs had no
+  preview/kept modes and were never remembered.
+
+  Solution (renderer only):
+    - Shared helpers: replaceablePreview(mode), insertTabElement(),
+      placeTab(tab, replaced, mode, focus) (mode styling, unread state, the
+      replaced preview closed through closeTab(..., "replaced") so observers and
+      reply drafts are disposed, previewTabId / persist, optional focus) and
+      wireTabKeepGesture(); openChatTab() and openDmTab() both use them.
+    - openDmTab(userId, nickname, { mode?, focus?, unreadCountHint? }),
+      defaults preview + focus (a click on a person). Incoming DM without a tab
+      and connect/access-restore auto-open pass { mode:"kept", focus:false }
+      (decision Q5). An already-open tab is kept when asked and focused only
+      when asked. No access: nothing opens (silent when unfocused).
+    - Double-click keeps a tab (channel and DM); right-click menu (Keep Tab Open
+      / Close) now also on DM tabs; setTabKept(tabId, ...) works for both kinds.
+    - Persistence: persistKeptTabs() stores channel ids and dm:<id>s in the
+      same store/shape. restoreKeptTabs() opens channel entries only and moves
+      dm: entries to pendingKeptDmIds (kept in the store meanwhile);
+      restoreKeptDmTabs() opens those whose person is in the directory (A7) or,
+      on an older server, GET_ONLINE_USERS, as kept + unfocused; people not
+      listed stay in the store. Also called when access returns. A user closing
+      a kept DM forgets it (pending set + store).
+    - Found while testing: the first channel tree arrives before the connected
+      event, so the guard in restoreKeptDmTabs identifies the server by
+      keptTabsServerId, not currentServerId (the first version silently skipped
+      the restore on reconnect).
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts
+
+  Verification:
+    - tsc client clean; lint exit 0.
+    - Real client over CDP: open DM A -> one preview tab; open DM B -> it
+      replaces A in the same slot; double-click B -> [kept]; open + keep
+      channel C -> both stay and the store holds both ids; a DM from D while C
+      is active -> a kept background tab "Dee" with count (2) and C stays
+      active; disconnect + reconnect -> C, D and B restored (B after the DM
+      directory arrives); access removed -> all tabs close; access restored ->
+      they return.
+    - NOT checked: the DM sound on a background-opened tab (unchanged code:
+      wasTabActive is still captured before openDmTab); the preview DM italic
+      style is renderTabMode's existing .preview class.
+
+  Next Step: PRD 19 B5.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Tab menu additions (PRD 19 B5)
+
+  Problem: the tab right-click menu (channel tabs only) had two items.
+
+  Solution (renderer + index.html): showChannelTabContextMenu became
+  showTabContextMenu and is attached to DM tabs too (B4 wired it). Items:
+  Keep open / Stop keeping open, Close tab, Close other tabs, Close tabs to the
+  right (SPEC 3.5 casing; the preview tooltip and the tree menu's keep label
+  use the same wording). "Close other tabs" closes every tab except this one
+  and the Server Log; "to the right" closes the tabs after this one in bar
+  order, Server Log excluded; each goes through closeTab(id, "user"), so a kept
+  tab is also un-kept and forgotten. An item that would do nothing is
+  disabled, not hidden (.channel-ctx-menu-item:disabled). The Server Log tab
+  has no menu.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts, index.html
+
+  Verification:
+    - tsc client clean; lint exit 0.
+    - Real client over CDP, 6 tabs (5 kept channels/DM + log): right-click the
+      3rd -> four items, all enabled; "Close tabs to the right" -> log, 1st,
+      2nd, 3rd remain and the kept-tabs store lost the closed ids; "Close other
+      tabs" leaves the log and that tab with a one-id store; on the only tab
+      "Close other tabs" and "Close tabs to the right" are [disabled].
+    - NOT re-checked: persistence across a full app restart is the same store
+      logic B4 verified (reconnect restore).
+
+  Next Step: PRD 19 B6 — menu permissions.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Channel menu gated by permissions, grouped (PRD 19 B6)
+
+  Problem: the channel right-click menu showed Rename/Move/Delete (and Icon,
+  NSFW) to everyone; the server refused non-holders and the client played the
+  "insufficient perms" sound.
+
+  Solution (renderer + index.html): attachChannelContextMenu() builds its items
+  on every open from hasPerm(PERM.MANAGE_CHANNELS) (A8):
+    - false -> no "Manage channel" group at all; true or null (an older server
+      sends no permissions) -> the group, as today.
+    - Text channel: Keep open, Mute; then, when allowed, a divider, the
+      "Manage channel" label (a non-interactive div.ctx-menu-label set with
+      textContent), Rename…, Set icon…, Move to category…, Mark/Unmark NSFW, a
+      divider and Delete channel… (red, last). Voice channel / category rows:
+      only the manage group (Rename…, Move to category…, divider, Delete
+      channel…); a member there gets NO menu at all (nothing is appended).
+    - Because the menu is rebuilt per open, PERMISSIONS_CHANGED needs no
+      re-render.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts, index.html
+
+  Verification:
+    - tsc client clean; lint exit 0 (hasPerm is now used).
+    - Real client over CDP: as a member, Chat -> ["Keep open","Mute Channel"],
+      Lobby (voice) -> no menu; an admin bot assigned role-admin to the client
+      -> myPermissions 511 live (no reconnect) and Chat -> Keep open, Mute,
+      ---, Manage channel, Rename…, Set icon…, Move to category…, Mark as NSFW,
+      ---, Delete channel…; Lobby -> Manage channel, Rename…, Move to
+      category…, ---, Delete channel…; role removed -> Lobby menu gone again.
+    - NOT run: a v2.7.0 server (hasPerm null -> the items show; same code path
+      as `!== false`).
+
+  Next Step: PRD 19 B7 — deleting a voice channel says who is affected.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Deleting a voice channel says who is affected (PRD 19 B7)
+
+  Problem: the delete dialog was the same for every channel, though deleting an
+  occupied voice room disconnects the people in it.
+
+  Solution (renderer + index.html): the dialog gained #delete-channel-affected
+  (and a #delete-channel-tail span for the generic "This cannot be undone.").
+  refreshDeleteModalAffected() reads the node from currentTree when the modal
+  opens: for a VOICE channel with n > 0 occupants it sets, via textContent,
+  "The {n} people in it will be disconnected. The channel is removed for
+  everyone on the server. This can't be undone." ("The 1 person…" for one) and
+  clears the generic tail; any other channel keeps today's text. The presence
+  handler calls it when an update for the channel being deleted arrives while
+  the modal is open. The exit for the deleting user is the existing
+  channel-deleted handler (leaves voice, hides the panel); nothing else until
+  C9 adds the voice room tab.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts, index.html
+
+  Verification:
+    - tsc client clean; lint exit 0.
+    - Real client over CDP (admin role granted live): a room with one person ->
+      "The 1 person in it…"; a second person joins while the dialog is open ->
+      "The 2 people in it…" without reopening; a text channel -> the original
+      sentence only; confirming deletes the room (gone from the tree). The
+      server side of the occupants leaving voice is A6's verified teardown.
+    - NOT checked: the deleting user being inside the room themself (the
+      existing handler path, unchanged).
+
+  Next Step: PRD 19 B8 — occupant menu.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Occupant menu — one model, targeted updates, KICK_USER gate, self menu (PRD 19 B8)
+
+  Problem: the occupant menu saved the volume on every `input` event, a local
+  mute ran a full renderTree() (collapsed categories reset), Kick was gated on
+  MANAGE_ROLES while the server requires KICK_USER, the result only went to the
+  log, and yourself had no menu.
+
+  Solution (renderer + index.html):
+    - buildOccupantMenuModel(occ, channelNode) returns plain data
+      (kind "self" | "other": volume {0-200 step 5, ticks 0/100/200},
+      localMuted, canKick); renderOccupantMenu(model, x, y) draws it with
+      today's .occupant-ctx-menu styles (F3 replaces the renderer; C9 reuses the
+      model). Labels are set with textContent.
+    - Volume: `input` -> api.setLocalUserVolume + the live "{n}%" readout only;
+      `change` -> setSavedLocalVolume + refreshOccupantMarks().
+    - "Mute locally / Unmute locally" + the hint "Only for you": api call +
+      saved state + refreshOccupantMarks(); NOT renderTree().
+    - "Moderate" label + "Kick from channel" (red, last): shown when
+      hasPerm(KICK_USER) is true, or, on an older server (null), isAdminUser.
+      Success -> toast "{nick} was kicked from {channel}" (both escaped);
+      failure keeps the log line and the insufficient-perms sound.
+    - Yourself: one item, "Voice settings…" (openVoiceSettings(): opens the
+      Settings panel and selects the Voice & Shortcuts tab).
+    - refreshOccupantMarks(userId) updates every .tree-occupant[data-user-id]
+      in place (the locally-muted icon is now wrapped in .occ-local-muted so it
+      can be found); B9 adds the volume mark to it.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts, index.html
+
+  Verification:
+    - tsc client clean; lint exit 0.
+    - Real client over CDP: a member's menu on an occupant -> Volume (100%,
+      ticks 0%/100%/200%), divider, Mute locally, "Only for you", no Moderate;
+      slider `input` to 135 -> readout 135%, nothing saved; `change` -> 135
+      saved; Mute locally -> tree mark appears, unmute -> gone (no re-render);
+      a role with KICK_USER (71, no MANAGE_ROLES; inserted into the throwaway
+      dev database for the test and left there) assigned live -> permissions 71,
+      isAdminUser false, menu gains Moderate + Kick; clicking Kick -> toast
+      "Sitter was kicked from Lobby" and the bot received USER_KICKED; the self
+      model -> "Voice settings…" only, and it opens Settings on the voice tab.
+    - Test-script traps recorded: `const` in repeated Runtime.evaluate calls
+      silently fails (use an IIFE) and clicking outside closes the menu.
+
+  Next Step: PRD 19 B9 — tree marks for local volume and mute.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Tree marks for local volume and mute (PRD 19 B9)
+
+  Problem: a locally changed volume was invisible in the tree, and the
+  locally-muted icon used the accent colour that now means something else.
+
+  Solution (renderer + index.html): renderOccupants() adds
+  <span class="occ-local-volume">{n}%</span> (monospace, muted colour) after the
+  name when the saved volume is not 100 and the person is not locally muted;
+  OCC_LOCALLY_MUTED_ICON is restyled to var(--text-muted).
+  refreshOccupantMarks(userId) (B8) now maintains BOTH marks in place on every
+  .tree-occupant[data-user-id], so the menu's change/mute updates them without
+  renderTree().
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts, index.html
+
+  Verification:
+    - tsc client clean; lint exit 0.
+    - Real client over CDP: default -> no marks; volume 60 via the menu ->
+      "60%"; mute locally -> the muted icon and no volume mark; unmute -> "60%"
+      again; back to 100 -> no mark. Full render and targeted update agree
+      (both paths exercised: connect render, then menu updates). Screenshot
+      taken (b9-marks.png).
+
+  Next Step: PRD 19 B10 — voice row count tooltip and icon.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Voice row count pill — icon and tooltip (PRD 19 B10)
+
+  Problem: the voice row's occupant count was a bare number.
+
+  Solution (renderer + index.html): the .ch-count pill gets a person icon
+  (inline SVG until F2's ph-user) before the number and a tooltip "{n} people
+  connected" ("1 person connected" for one). Confirmed, unchanged: the timer
+  format (formatDuration: mm:ss, h:mm:ss from one hour), the timer being
+  absent for an empty room (A3's tree seeding deletes it), and the single
+  global 1 s interval.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts, index.html
+
+  Verification:
+    - tsc client clean; lint exit 0.
+    - Real client over CDP: a room occupied before connecting shows count 1,
+      title "1 person connected", icon, and a running timer at once (A3); a
+      second person -> "2 people connected"; formatDuration(59s/61s/3661s) =
+      00:59 / 01:01 / 1:01:01; the room emptied -> no pill, no timer.
+
+  Next Step: PRD 19 B11 — What's New only before connecting.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: What's New only before connecting (PRD 19 B11)
+
+  Problem: checkForWhatsNew() awaits a GitHub fetch; a user who connected
+  before it returned got the modal over a live session.
+
+  Solution (renderer): right after fetchReleaseNotes resolves,
+  `if (isConnected || connectInProgress) return;` WITHOUT marking the version
+  as seen, so the notes show at the next launch. Unchanged: isExistingInstall,
+  "only Got it marks the version as seen", "a backdrop click doesn't".
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts
+
+  Verification:
+    - tsc client clean; lint exit 0.
+    - Real client over CDP (last-seen forced to 0.0.1): while connected,
+      checkForWhatsNew('2.7.0') resolved its fetch and did NOT show the modal,
+      and reson8-last-seen-version stayed 0.0.1; after disconnecting the same
+      call showed the modal (so the guard, not a failed fetch, was what held it
+      back). The GitHub fetch itself was not delayed with CDP Fetch (it runs in
+      the main process), the guard was exercised by timing instead.
+
+  Next Step: PRD 19 B12 — update state machine, logic part.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Update state machine, logic part (PRD 19 B12)
+
+  Problem: the update modal had a 4-state flag; on update-downloaded the
+  renderer restarted the app after 1.2 s without asking; main sent only
+  { version } / { percent }; the About row, the modal and nothing else knew the
+  state.
+
+  Solution:
+    main.ts (additive payloads): update-available { version, releaseDate?,
+    sizeBytes? } (the first of info.files); download-progress also
+    { transferred, total }. The Windows signature-verifier override and
+    showUpdateError's manual-download hint text are unchanged. autoInstallOnAppQuit
+    is NOT set (electron-updater's default is true, confirmed in AppUpdater.js).
+    Renderer: ONE source of truth, `updateState` with phases idle / checking /
+    up-to-date / available / downloading / ready / error (+ current, next,
+    releaseDate, sizeBytes, percent, transferred, total, checkedAt, error) and
+    setUpdateState(patch) which notifies listeners. Three subscribers: the modal
+    (renderUpdateModal: per-phase title/message/buttons/progress with MB), the
+    About row (status text with "Checked hh:mm", the check button disabled while
+    checking/downloading) and a .has-update dot on the gear (#btn-server-settings)
+    in available/ready. Manual check: checking -> up-to-date / error (with
+    checkedAt) or the update-available event.
+    "Ready waits for you": the setTimeout(quitAndInstall) is gone. The ready
+    modal offers "Restart now" (api.quitAndInstall) and "On next launch" (closes,
+    phase stays ready; the install happens on quit). "Not Now" on available keeps
+    the phase (gear dot + About row remember it).
+    "Release notes" in the available state fetches the pending version's notes
+    into the What's New modal in pending mode (pendingWhatsNewVersion = null,
+    so Got it writes nothing to reson8-last-seen-version).
+    The event handlers are named functions (onUpdateAvailable, ...) so the state
+    machine can be exercised without the main process.
+
+  Key Files Modified:
+    apps/client/src/main.ts
+    apps/client/src/renderer/renderer.ts, index.html
+
+  Verification:
+    - tsc client clean; lint exit 0.
+    - Real client over CDP, driving the handlers: available -> modal with
+      "(90.0 MB)", buttons Release notes / Not Now / Update Now, About "Version
+      3.0.0-beta.2 is available. Checked …", gear dot on; Not Now -> modal
+      closed, gear dot and About remain; downloading -> progress 42% and
+      "38.1 MB of 90.0 MB", check button disabled; downloaded -> "Update Ready"
+      with Restart now / On next launch and NOTHING restarted after 2.5 s;
+      On next launch -> closed, phase ready, About "ready — restart to install";
+      error -> "Update Failed" + the manual-download text; Release notes with a
+      real version -> What's New modal opened, and Got it left
+      reson8-last-seen-version untouched; up-to-date -> "You're up to date.
+      Checked …". Screenshots taken (b12-available / b12-ready).
+    - Found and fixed while testing: the error branch left the previous
+      phase's title on the modal.
+    - NOT run: a real download and install (user, with the first beta);
+      the main-process payloads are type-checked only (no real update feed).
+
+  Next Step: end of P2. Before 3.0.0-beta.1 (PRD): the user confirms the P1/P2
+  items, the full suites pass (done below), a smoke run against a v2.7.0 and a
+  3.0.0-beta.1 server, then /bump-version 3.0.0-beta.1.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Nocturne tokens, legacy names aliased (PRD 19 F1)
+
+  Problem: the app used a hand-picked blue palette defined by ~16 variables;
+  the new design system needs its tokens, and every screen must shift palette
+  in one step without a per-screen rewrite.
+
+  Solution (index.html only):
+    - :root gains the Nocturne tokens verbatim from the design system:
+      --color-bg/surface/text/accent/divider, the accent and neutral 100-900
+      ramps, --space-1..8 (2.8px steps), --radius-sm/md/lg, --shadow-sm/md/lg;
+      plus the status colours from the README (--color-success, -danger-text,
+      -danger-border, -live, -warning-text, -warning-bg).
+    - Every old variable is now an alias per the README mapping (--bg-primary ->
+      --color-bg, --bg-secondary -> --color-surface, --bg-tertiary ->
+      --color-accent-900, --bg-input -> 60% mix, --text-* -> text/neutral-400/
+      neutral-500, --accent* -> accent/accent-400/accent-800, --border ->
+      divider, --success/--danger/--warning -> the status colours,
+      --radius -> --radius-md, --voice-icon/--text-icon -> neutral-400).
+      The pinned bar's --pin-* family is retinted from the warning amber
+      (oklch 0.82 0.1 80) with color-mix, replacing the old #ffd54f family.
+    - app-planning/phase19-hardcoded-colours.md: the inventory R6 works from
+      (index.html 144 lines / 152 occurrences / 79 distinct values;
+      renderer.ts 2; viewer.html 13), nothing changed yet.
+    - Pitfall found: a CSS comment containing "nocturne-*/styles.css" ends
+      the comment at "*/" and silently swallowed the next declaration
+      (--color-bg came out empty and the whole palette fell back to
+      transparent). Fixed; do not write "*/" inside comments.
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html
+    app-planning/phase19-hardcoded-colours.md (NEW)
+
+  Verification:
+    - tsc client clean; lint exit 0; the packaged-style CSS parses.
+    - Real built client: oklch() and color-mix() render in Electron 34 (a
+      swatch resolves to oklch(0.78 0.14 150) and oklch(0.82 0.1 80 / 0.08));
+      computed --color-bg #161826, --bg-primary #161826, --danger
+      oklch(0.65 0.2 22).
+    - Screenshots (disconnected, connected, chat, Settings) reviewed: the
+      whole app moved to the blurple/indigo palette in one step; chat, tree,
+      unread pills, modals and buttons remain legible. Palette only, per the
+      item; shapes and spacing change in later items.
+
+  Next Step: PRD 19 F2 — vendored Inter and Phosphor.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Vendored Inter and Phosphor icons (PRD 19 F2)
+
+  Problem: Inter came from the Google Fonts CDN (a request leaves the app on
+  every launch, and the CSP allowed two external hosts); there was no icon font
+  and B2/B9/B10 used temporary inline SVGs.
+
+  Solution:
+    - Inter 4.1 (official release, rsms/inter): InterVariable.woff2 and
+      InterVariable-Italic.woff2 + LICENSE.txt (OFL) + inter.css with relative
+      @font-face URLs under apps/client/assets/fonts/inter/; version and the
+      SHA-256 of each file are in the CSS header.
+    - Phosphor 2.1.2 (npm pack @phosphor-icons/web@2.1.2, NOT a dependency):
+      regular and fill weights under assets/icons/phosphor/, woff2 + woff only
+      (the ttf/svg entries were trimmed from the @font-face rules), MIT LICENSE,
+      README.md with the version, hashes and usage. The CSS references its fonts
+      by relative path; `.ph` only sets the icon font on the icon element, so
+      the emoji font stays first for text.
+    - index.html: both fonts.googleapis.com links removed; style-src and
+      font-src lost https://fonts.googleapis.com / https://fonts.gstatic.com
+      ('self' only); the three vendored stylesheets are linked after the emoji
+      CSS. --font stays 'Reson8 Emoji', 'Inter', ….
+    - Swapped to Phosphor: the muted-channel bell-slash (ph-bell-slash, B2),
+      the locally-muted occupant mark (ph-microphone-slash, B9), the voice
+      count pill's person (ph-user, B10) and the DM tab's icon (ph-at, was ✉️).
+      The server-broadcast mute/deafen SVGs and the kept-tab bookmark were not
+      in scope and stay.
+    - viewer.html: has no CSP and its own variables, and no icons yet — it is
+      linked to the vendored fonts when C10 adds its buttons.
+
+  Key Files Modified:
+    apps/client/assets/fonts/inter/* (NEW)
+    apps/client/assets/icons/phosphor/* (NEW)
+    apps/client/src/renderer/index.html
+    apps/client/src/renderer/renderer.ts
+
+  Verification:
+    - tsc client clean; lint exit 0.
+    - Real client (dev): document.fonts.check true for Inter, Phosphor and the
+      emoji family; body font-family "Reson8 Emoji", Inter, …; a .ph element
+      computes font-family Phosphor with a glyph; performance entries show no
+      non-file resource (nothing fetched from the network). Screenshot: the
+      DM tab shows "@", the muted Chat row the bell-slash, the Lobby pill the
+      person icon.
+    - PACKAGED build: `electron-builder --win --dir` (unsigned, output in the
+      scratchpad): the assets are inside app.asar (inter and both phosphor
+      folders); launching the packaged Reson8.exe with a debug port, Inter,
+      Phosphor and Phosphor-Fill all load (document.fonts: loaded). This is
+      the Windows analogue of the PRD's AppImage check; Linux/macOS packages
+      were not built here.
+
+  Next Step: PRD 19 F3 — one menu builder.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: One menu builder for every context menu (PRD 19 F3)
+
+  Problem: three hand-built context menus (channel, tab, occupant) with their
+  own DOM, dismissal and CSS, none keyboard-accessible or edge-clamped.
+
+  Solution (renderer + index.html):
+    - New section "Menu builder (PRD 19 F3)": MenuItem (label/icon/onClick/hint/
+      danger/disabled | heading | divider | slider), openMenu(items, x, y,
+      { anchor, returnFocusTo }) and closeMenu(). One menu at a time. Closes on
+      an outside pointerdown (capture), Escape, window blur, a scroll anywhere
+      (one capture listener: #channel-tree, .chat-messages, the window) and
+      resize. Positioned after measuring: flips left/up when there is no room,
+      then clamps to the window with an 8 px margin. The anchor row gets
+      .menu-open (the accent ring) while open; focus returns to returnFocusTo
+      or the anchor. Keyboard: Up/Down (wrapping), Home, End move between
+      enabled items and the slider; Enter/Space activate; Left/Right adjust a
+      slider natively. role=menu / menuitem / presentation; every label, hint
+      and heading via textContent.
+    - Look (README): --color-surface, --shadow-lg, 5 px padding, 32 px items
+      with a 15 px Phosphor icon, accent-900/accent-200 hover, 10.5 px uppercase
+      headings, 1 px divider, danger items red and last.
+    - Migrated: attachChannelContextMenu (B6 grouping and the MANAGE_CHANNELS
+      gate preserved), renderOccupantMenu (B8's model maps straight onto items:
+      slider with onInput/onChange, Mute locally with the "Only for you" hint,
+      Moderate heading + danger Kick, self menu), showTabContextMenu (B5). Labels
+      moved to Phosphor icons; a local mute now closes the menu (items close on
+      click) instead of toggling its label in place.
+    - Deleted: the .occupant-ctx-menu / .channel-ctx-menu-item / .ctx-* CSS and
+      the old DOM code (grep shows no reference left).
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts, index.html
+    apps/client/AGENTS.md
+
+  Verification:
+    - tsc client clean; lint exit 0.
+    - Real client over CDP: member channel menu = Keep open, Mute channel; the
+      anchor ring appears and Escape removes menu and ring; opened at (2,2),
+      (1005,725), the right edge and the bottom edge the menu rect stays inside
+      the 1008x729 window with >= 8 px margin on every side (flipped left/up);
+      keyboard only: Down/Down/Down wraps, Up, End, Home, Enter on the first
+      item -> menu closed and the tab kept; scroll of the tree, window blur,
+      resize and an outside pointerdown each close it; admin channel and voice
+      menus match B6; the occupant slider saves nothing on input (readout 145%)
+      and persists 145 on release, with the tree mark updated; the tab menu
+      shows the disabled items. Screenshots reviewed (channel, occupant).
+    - NOT checked: returnFocusTo with a real focusable opener (the tree rows
+      are not focusable; no caller passes it yet).
+
+  Next Step: PRD 19 F4 — base component styles.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Base component styles (PRD 19 F4)
+
+  Problem: the new surfaces and restyled screens need shared buttons, inputs,
+  badges and dialogs written to the design system's visual rules.
+
+  Solution (index.html + two renderer touch-ups):
+    - Buttons: .btn-primary (outlined: 1 px accent border, transparent fill,
+      accent-900/800 hover/pressed), .btn-secondary, .btn-ghost, .btn-icon
+      (square; the identity-log .btn-reset-key.btn-icon keeps its more specific
+      rule), .btn-danger (secondary with red text and border); every button and
+      .btn gets :focus-visible { outline: 2px solid var(--color-accent);
+      outline-offset: 2px }. The existing .btn/.btn-cancel/.btn-create/
+      .btn-disconnect are untouched (R1-R5 migrate the rest).
+    - Small components: .tag, .input (bg-input, divider border, accent focus),
+      .count-pill (16 px, accent-800 fill, accent-200 text, 10.5 px / 600),
+      .section-label (11 px, 600, 0.08em, uppercase, neutral-500).
+    - Dialogs: .dialog (surface, shadow-lg, radius-lg) with .dialog-title
+      (19 px / 500), .dialog-subtitle (13 px neutral-400) and right-aligned
+      .modal-actions; .toast moved onto the surface/shadow-md/radius tokens.
+    - Applied: the B1 pills (tree and tab) now carry .count-pill (the old red
+      pill CSS is gone); the Rename and Delete channel dialogs use .dialog,
+      .input, .btn-secondary / .btn-primary / .btn-danger, keeping every id.
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html, renderer.ts
+
+  Verification:
+    - tsc client clean; lint exit 0.
+    - Real client: the unread pill computes background rgb(66,58,106)
+      (accent-800), text rgb(231,229,254) (accent-200), 16 px; the Rename and
+      Delete dialogs compared with frames 6c and 14c: title, label, field,
+      secondary Cancel + outlined primary / red-bordered destructive confirm
+      match (the category "keep or delete" radio cards belong to C6); a
+      keyboard Tab onto a button gives solid 2 px rgb(145,132,217), the accent;
+      the toast uses the new surface. Screenshots reviewed.
+    - Note: a script focus() right after a pointer interaction does not show
+      the ring (focus-visible heuristics); keyboard focus does.
+
+  Next Step: P3 complete. P4 starts with C1 (saved servers, welcome screen and
+  the server rail).
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Saved servers, welcome screen and the server rail (PRD 19 C1)
+
+  Problem: one remembered server in four plaintext localStorage keys (password
+  included), a toolbar connect form, no list, no rail.
+
+  Solution:
+    Main process:
+      - saved-passwords-store.ts (NEW, Electron-free): <userData>/server-
+        passwords.json = { id: base64(encrypted pw) }, atomic write, 0600; set/
+        has/get/delete with validation (UUID-shaped id, password <= 256 chars);
+        nothing is stored unless the cipher is RELIABLE.
+      - saved-passwords.ts (NEW): the safeStorage adapter with the identity
+        key's rule (not Linux basic_text). IPC saved-password-set/delete/has/
+        available/get-for-connect, every one refused unless event.sender is the
+        main window's webContents; the plaintext is returned ONLY by
+        get-for-connect, which is not on reson8Api.
+    Preload: connect(..., savedServerId?) — when no password was typed the join
+    asks main for the stored one at join time (every reconnect) and keeps no
+    copy; a typed password wins. api.savedPassword.{available,set,delete,has}.
+    Renderer + index.html:
+      - Store reson8-saved-servers (max 50, newest first, validated on read);
+        the address is stored as typed. A remembered entry is written on
+        `connected` (a failed connect creates nothing); the same address +
+        nickname updates the entry; Edit keeps the entry and updates its
+        address/nickname on connect.
+      - Migration: the four v2.7.0 keys become one entry, the password moves to
+        the main-process store (a toast when it cannot be stored securely), and
+        the plaintext keys are removed unconditionally.
+      - Shell: #toolbar is gone. #titlebar (logo, "Reson8", the pill — C2 wires
+        it) / #shell: #rail (64 px: Servers, DMs [disabled: "Direct messages —
+        connect to a server first"], divider, saved tiles 40x40 with the active
+        ring, Add a server, the settings gear at the bottom keeping
+        #btn-server-settings, #pending-badge-gear and the B12 update dot),
+        #welcome-screen and #main. body.is-connected / .is-approving decide
+        welcome vs main (the approval screen keeps working); the connect inputs
+        and #invite-code keep their ids; log() mirrors progress/errors into the
+        welcome status line; #btn-disconnect stays as a hidden control.
+      - Welcome: the connect form (a .dialog) and the saved list (icon
+        thumbnail or initials, name, address in monospace, nickname + relative
+        time, Connect / Edit / Remove; clicking a row connects).
+      - Switching: a rail tile while connected runs the full disconnect path
+        and connects on `disconnected`.
+      - Name/icon refresh on connected and on server-settings-updated; a changed
+        iconUrl is fetched through fetch-image-bytes, drawn into 80x80 and
+        stored as a PNG data URL (<= 32 KB, else none; failure keeps the old
+        one; null clears both).
+      - serverAvatarElement(name, url, size): the ONE avatar helper (C5 reuses).
+      - The sidebar is 280 px (SPEC 1.1).
+    test:saved-passwords (NEW): 19 checks (validation, 0600, plaintext never on
+    disk, unreliable cipher, decrypt failure, corrupt file, foreign keys).
+
+  Key Files Modified:
+    apps/client/src/saved-passwords-store.ts, saved-passwords.ts (NEW)
+    apps/client/scripts/saved-passwords-smoke.mjs (NEW), package.json
+    apps/client/src/main.ts, preload.ts
+    apps/client/src/renderer/renderer.ts, index.html
+    apps/client/AGENTS.md
+
+  Verification:
+    - tsc client clean; lint exit 0; test:saved-passwords passes.
+    - Real client, throwaway profile, two real servers (:9800 open, :9801 with
+      SERVER_PRIVATE_PASSWORD): a fresh profile shows the welcome screen with no
+      saved servers and the DM button disabled; v2.7.0 keys seeded -> one entry
+      (pw stored in the main process), the four keys gone, form pre-filled;
+      connect to :9801 with a typed password + Remember -> an entry with
+      hasPassword; neither localStorage nor the DOM contains the password
+      string; disconnect, then Connect from the list with the field empty ->
+      connected (the preload used the stored one); the same entry with
+      hasPassword forced off -> "Invalid server password" (so the previous run
+      really used the stored password); an admin set a server icon -> the
+      entry got iconUrl and an 80x80 PNG thumbnail and the rail tile shows it
+      with the active ring; connecting without Remember adds no entry; a failed
+      connect (:1) adds none; switching from :9800 to :9801 via the saved entry
+      disconnects, reconnects and moves the ring. Screenshots reviewed.
+    - NOT run: a Linux basic_text keyring (the "asks for it" path is the
+      stored:false branch covered by the unit test), the TLS trust/changed
+      modals and the approval + invite flows from the new screen (their code
+      paths are unchanged; approval uses #main which is kept visible),
+      packaged-offline icon display (the thumbnail is a data URL in
+      localStorage).
+
+  Next Step: PRD 19 C2 — title-bar pill, switcher and status bar.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Title-bar server pill, switcher and status bar (PRD 19 C2)
+
+  Problem: the connection state and the server's name lived in a toolbar that
+  C1 removed, and there was no quick way to switch or disconnect.
+
+  Solution (renderer + index.html):
+    - The pill in #titlebar reads "Not connected" or the server's name with a
+      green dot; renderServerPill() runs from updateWindowTitle() (so it
+      follows every change of the server name), connected and disconnected
+      (guarded: updateWindowTitle can run before the saved-servers state
+      exists at script start-up).
+    - Click -> openServerSwitcher() built with F3's openMenu: a "Servers"
+      heading, one row per saved server (avatar, name, address as a monospace
+      second line, a tick on the active one), a divider, "Disconnect" (danger,
+      when connected) and "Add a server…". MenuItem gained optional avatar,
+      sublabel and checked (the menu builder stays the one implementation).
+    - Status bar: 28 px on --color-bg with a divider. It keeps the connection
+      dot, "Connected as {nickname}", the EXISTING 3-second latency poll (no
+      new ping loop) and the existing lock / "Not encrypted" indicator; new
+      "Client {version}" on the right from api.getAppVersion(); the ID and Copy
+      button are unchanged.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts, index.html
+
+  Verification:
+    - tsc client clean; lint exit 0.
+    - Real client: disconnected -> pill "Not connected", grey dot, bar 28 px
+      with "Disconnected", "Client 3.0.0-beta.1", the ID and Copy; connected ->
+      the server's name and a green dot, "Connected as Pill Check", "1ms",
+      "Not encrypted"; the switcher lists the three saved entries with a tick on
+      the active one, Disconnect and Add a server…; clicking Disconnect returns
+      to the welcome screen with the pill back to "Not connected". Screenshot
+      reviewed.
+    - The text dumps in the check script showed mangled letters because of a
+      regex-escaping slip in the script, not in the app (the screenshot is
+      correct).
+
+  Next Step: PRD 19 C3 — server header and dropdown.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Server header and dropdown (PRD 19 C3)
+
+  Problem: the sidebar header was a small-caps "Channels" strip with three
+  icon buttons (online users, settings, create channel).
+
+  Solution (renderer + index.html):
+    - #tree-header is now: the 38 px server avatar (icon, else initials on
+      accent-900, through serverAvatarElement), the name, "{host} · {N} online"
+      (N from getOnlineCountForDisplay(), the one shared count) and a caret
+      button. renderServerHeader() runs on connected/disconnected, name changes
+      (updateWindowTitle), each summary refresh and the old-server fallback
+      count.
+    - Caret menu (F3's openMenu): Copy server address (the address as typed,
+      toast "Server address copied"), Online users (TEMPORARY: it opens the old
+      modal until C7's DM sidebar replaces it), a divider, Create channel
+      (only when hasPerm(CREATE_CHANNEL) !== false — V25: CREATE_CHANNEL, not
+      MANAGE_CHANNELS), Server settings (when the user has ADMIN, MANAGE_ROLES,
+      BAN_USER or MANAGE_EMOJIS — decision D3; on an older server it shows as
+      today; it opens Settings on the first server page they may use). About
+      {server} joins the list with C4.
+    - The pending-approvals badge element (#pending-badge-gear, id kept so
+      refreshPendingApprovals() is untouched) moved onto the caret; the menu
+      item carries the count; the caret's tooltip says who is waiting.
+    - #btn-online-users and #btn-create-channel stay in the DOM, hidden,
+      because their handlers drive the old online list and the create dialog.
+    - The rail's gear is the client Settings entry (its update dot is B12's).
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts, index.html
+
+  Verification:
+    - tsc client clean; lint exit 0.
+    - Real client (a throwaway "Mod" role with BAN_USER+Member, id role-ban,
+      inserted into the dev database for the test and left there): header
+      "Reson8 Server" / "127.0.0.1:9800 · 2 online" / initials "RS"; member menu
+      = Copy server address, Online users only; with BAN_USER (perms 135, live)
+      Server settings appears (with the pending count) and the badge sits on
+      the caret; admin menu adds Create channel; a third user joined and the
+      header count went 2 -> 3, equal to the summary's onlineCount, after the
+      2 s debounce; Copy server address toasts "Server address copied".
+      Screenshot taken (c3-header.png).
+
+  Next Step: PRD 19 C4 — About {server}.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: About {server} (PRD 19 C4)
+
+  Problem: no place showed a member what the server is, who runs it and which
+  features are on.
+
+  Solution:
+    - preload.measureLatency(samples = 3): PING_LATENCY sent in sequence, 3 s
+      timeout each, returns the median round trip or null (the status bar keeps
+      its own periodic poll).
+    - A 560 px read-only dialog (#about-server-modal, the shared .dialog look),
+      opened from the header menu's first item "About {server}" (restricted
+      users can open it too — GET_SERVER_SUMMARY is "open"):
+        header: avatar/initials (serverAvatarElement), name, the address in
+        monospace with a copy button (toast "Server address copied"), ×;
+        three cards: Connection ("Encrypted"/"Not encrypted" from the scheme
+        resolveConnectionTarget chose), Latency (median ms, 4 bars:
+        <40 Excellent, <90 Good, <160 Slow, else 1; ↻ spins while it measures),
+        People ("{online} online of {total}" with a thin green bar, online
+        through getOnlineCountForDisplay() so it equals the header);
+        Admins as chips (avatar, name, online dot, "(you)"); a chip opens the
+        profile card (openUserProfile);
+        Features: Nudge, Screen sharing, Approval to join, Invite code required,
+        Signed identity required, each On/Off, "{n} of 5 on".
+    - It fetches a fresh summary every time it opens and re-renders when the
+      summary is refreshed (the 2 s-debounced refresh also runs on
+      server-settings-updated), so the feature list updates live.
+    - Older server (summary null): People and Admins are hidden, "Some details
+      need a newer server." shows, Nudge/Screen sharing come from
+      GET_SERVER_SETTINGS and the three join gates read "Unknown".
+    - All text via textContent.
+
+  Key Files Modified:
+    apps/client/src/preload.ts
+    apps/client/src/renderer/renderer.ts, index.html
+
+  Verification:
+    - tsc client clean; lint exit 0.
+    - Real client: the menu lists About / Copy server address / Online users;
+      the dialog showed name, 127.0.0.1:9800, "Not encrypted", "0 ms
+      Excellent" with 4 bars, "2 online of 98" (header said "2 online" too),
+      the two admins, "2 of 5 on" with the five rows; an admin turning
+      Approval on moved it to "3 of 5 on" without reopening; ↻ spun and
+      re-measured ("1 ms"); with the summary removed the old-server rendering
+      hid People/Admins, showed the note and "Unknown" for the three gates; an
+      admin chip closed the dialog and opened that person's profile card.
+      Screenshot reviewed.
+
+  Next Step: PRD 19 C5 — server icon UI.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Server icon UI (PRD 19 C5)
+
+  Problem: an admin had no way to give the server an icon from the client,
+  and the channel-icon dialog owned the only crop code.
+
+  Solution:
+    - renderer.ts: a shared IconCropper class (cover scale, drag-to-pan,
+      zoom 1-3, clamp so no gap shows; loadFile/clear/isReady/toCanvas/
+      toBlob). The channel-icon dialog now uses it (its private crop state
+      and handlers are gone; same 128 px PNG output).
+    - A "Server icon" dialog (#server-icon-modal): drop or choose a file;
+      the client checks type (png/jpeg/gif/webp), <= 1 MB and >= 256x256
+      (createImageBitmap) before cropping; live previews at 40 and 24 px;
+      the public-link notice and the resolved URL (or "Shown after you
+      save"); "Save icon" stays disabled until a file is cropped.
+    - Save: 512x512 PNG (retry as WebP q0.9 when over 1 MB) ->
+      uploadServerIcon -> updateServerSettings({ iconUploadId }); the
+      upload is discarded when the second step fails.
+    - Settings -> Server gets an "Server icon" row (56 px preview,
+      Upload/Change, Remove with a click-again confirm -> iconUploadId:
+      null). The row, header, pill, rail and saved-entry thumbnail follow the
+      SERVER_SETTINGS_UPDATED broadcast immediately.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts, index.html
+
+  Verification:
+    - tsc client clean; lint exit 0.
+    - Real client as a server admin: row showed Upload/Change correctly;
+      a 100x100 image and a text file were refused with the right messages;
+      a 600x400 gradient image opened the crop step with both previews;
+      Save closed the dialog, the header avatar became the new /uploads URL,
+      the row switched to Change + Remove; Remove (two clicks) returned the
+      header to initials and the row to Upload. Screenshot reviewed.
+    - Not driven: the channel-icon dialog end to end after the refactor
+      (the cropper object exists; same code path as the server dialog).
+
+  Next Step: PRD 19 C6 — category menu and rename/delete dialogs.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Category menu, rename and delete dialogs (PRD 19 C6)
+
+  Problem: a category (a channel with children) shared the channel menu and
+  the plain delete confirmation, so there was no way to choose what happens to
+  its channels, and a rebuilt tree re-expanded every collapsed category.
+
+  Solution:
+    - A dedicated category menu (attachCategoryContextMenu): "Manage
+      category", Rename category…, divider, Delete category…; hidden when
+      hasPerm(MANAGE_CHANNELS) is false (null = older server: shown, the
+      server refuses, as B6 does).
+    - Rename dialog (400 px, 32 chars): inline errors for empty and for a
+      duplicate among categories (case-insensitive); Enter saves, Esc
+      cancels; the button is disabled with an error or an unchanged name.
+      The server has no name length limit beyond non-empty, so 32 stands.
+    - Delete dialog (460 px): "Delete {name}?", live counts of text and voice
+      descendants from currentTree, two radio cards (Keep — accent ring,
+      default; Delete the channels too — red ring), the amber line with the
+      number of people in its voice channels (recomputed on every presence
+      event), "nothing else changes" for an empty category, the confirm label
+      "Delete category" / "Delete category and {n} channels". Sends
+      DELETE_CHANNEL { children } (preload.deleteChannel gained the param).
+    - Old-server guard: serverSummary === null (after one fresh fetch) hides
+      the "delete the channels too" card and shows the note; the request then
+      carries no children mode.
+    - Collapsed state: a session-long Set (collapsedCategoryIds) applied in
+      renderCategory — the tree used to re-expand every category on each
+      rebuild.
+
+  Key Files Modified:
+    apps/client/src/preload.ts
+    apps/client/src/renderer/renderer.ts, index.html
+
+  Verification:
+    - tsc client clean; lint exit 0.
+    - Real client as a channel manager: menu = Manage category / Rename
+      category… / Delete category…; collapsing then renaming kept the
+      category collapsed; empty, duplicate (General, gaming) and unchanged
+      names gave the right error/disabled state, a new name enabled Rename
+      and Enter saved it; the delete dialog showed "1 text channel and 1
+      voice channel", the amber "1 person is in…" line with a guest in voice
+      (gone when the guest left), the "…and 2 channels" label on the delete
+      card, and Keep moved both children to the top level; with the summary
+      missing the delete card was hidden and the note shown. Screenshot
+      reviewed; the radio/card layout was corrected after it.
+    - Not driven: "Delete the channels too" against the server end to end
+      (A6's server tests cover that branch).
+
+  Next Step: PRD 19 C7 — DM sidebar.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: DM sidebar (PRD 19 C7)
+
+  Problem: direct messages were reachable only through a modal list of online
+  users, with no previews, no grouping of offline members and no total.
+
+  Solution:
+    - The rail's DM button swaps #left-pane between the channel tree and a new
+      #dm-list (a class on the pane — the tree's DOM and collapsed state are
+      never rebuilt; the main area is untouched). The Servers button swaps back.
+    - Header "Direct messages" with "On {server name}" and a server glyph with
+      an explanatory tooltip; no compose button.
+    - Data: api.getDmDirectory() on connect and after user-joined/left
+      (2 s debounce); dm-received updates the row's last message and
+      user-joined/left flip its online dot at once; an older server falls back
+      to the online-users list with a "Message previews need a newer server."
+      note.
+    - sortDmDirectory(entries) (pure): Online / Offline groups, each with the
+      SPEC notes; people you've messaged first (newest first), then the rest
+      alphabetically.
+    - Rows: avatar, nickname, "You: …"/text preview (markdownToPlainText,
+      80 chars, "Image" for attachment-only) or the italic "No messages yet —
+      start a conversation"; a count pill from unreadDmCounts; the nudge button
+      (canNudge/buildNudgeButton, shown over the row's edge on hover or while
+      cooling down). Click -> openDmTab(…, { mode: "preview", focus: true }).
+    - Rail badge = sum of unreadDmCounts excluding the conversation you are
+      reading now (active tab + window focus); the DM button is disabled when
+      not connected or without server access (the access text as its title).
+    - Removed: #online-users-modal, its button and dot, renderOnlineUsers/
+      createUserRow, the header menu's "Online users" item and the CSS only
+      they used (the profile card keeps .btn-dm/.btn-nudge). updateOnlineDot
+      became refreshOnlineCount (the header's fallback count).
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts, index.html
+
+  Verification:
+    - tsc client clean; lint exit 0.
+    - Real client with two bot members: the DM button was enabled on connect;
+      a DM from Alice put "1" on the rail badge before the sidebar was open;
+      the sidebar showed Online — 2 / Offline — 103 with both notes, Alice
+      first with "hello there from alice" and a "1" pill, never-messaged people
+      with the italic text; the tree was hidden then intact (same category
+      count) after returning; a live DM from Bob moved him to the top with his
+      preview; clicking Alice opened her conversation and cleared her pill
+      (rail total fell to Bob's 1); my reply showed "You: my reply"; Bob
+      leaving moved him to Offline; disconnect disabled the DM button with its
+      "connect first" title; applyAccessState(false) disabled it with the
+      access text and returned it to the tree, and restoring access re-enabled
+      it. Screenshot reviewed (nudge button compacted after it).
+    - Not driven: the old-server fallback against a real v2.7.0 server (the
+      path is the same getOnlineUsers call restoreKeptDmTabs already uses).
+
+  Next Step: PRD 19 C8 — tab bar overflow.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Tab bar overflow (PRD 19 C8)
+
+  Problem: the tab bar scrolled sideways (hidden scrollbar), so tabs past the
+  edge were invisible and unreachable without hunting for them.
+
+  Solution:
+    - layoutTabBar() collapses what doesn't fit into an "{n} more ▾" button
+      right after the last visible tab. It runs from a ResizeObserver on
+      #tab-bar (and window resize / tab events via a one-frame scheduler).
+    - Real widths: offsetWidth cached per element in a WeakMap, invalidated by
+      paintTabUnread, setTabMuted and renderTabMode (which the rename path
+      also goes through); nothing is cached while the bar is not displayed
+      (the welcome screen) — that read 0 on the first try and broke the fit.
+    - Fitting reserves the active tab first and fills the rest in order; an
+      active tab beyond the ones that fit takes the slot after the last one
+      that fits via CSS `order`. Hidden tabs are display:none (.tab-hidden),
+      never detached, and the DOM order — hence reson8-kept-tabs — is never
+      touched. Only display and order change, never a width: no loop.
+    - The button carries a 7 px accent dot when a hidden tab has unread
+      messages (muted ones never get the has-unread class, so they don't).
+    - The dropdown (260 px, "Open tabs that don't fit"): icon, label
+      (textContent), the bookmark for a kept tab, the count pill and ✕
+      (not on the Server Log); a row opens the tab, ✕ closes it and the list
+      follows; outside click / Esc / selecting closes it. insertTabElement now
+      inserts before the button so it stays last.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts, index.html
+
+  Verification:
+    - tsc client clean; lint exit 0.
+    - Real client with 14 extra kept tabs: 11 hidden, "11 more" with the dot;
+      activating the last (hidden) tab made it visible next to the others
+      (order after the last fitted), DOM order unchanged; the dropdown listed
+      the hidden tabs with counts, bookmarks and ✕, a ✕ shrank it to "10 more",
+      a row opened its tab; 30 pane resizes caused 29 layout passes (one each,
+      no feedback loop); closing every tab hid the button. Screenshot compared
+      with frame 13b.
+    - Not driven: a window resize by dragging the OS frame (the observer is on
+      the bar, which the pane-width change exercises).
+
+  Next Step: PRD 19 C9 — voice room tab: people.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Voice room tab — people (PRD 19 C9)
+
+  Problem: the people in your voice room were only visible as small rows in
+  the tree; there was no room view.
+
+  Solution:
+    - One `voiceTab` object (id `voice-room`), deliberately not a ChatTab: no
+      scroll keeper, no sentinels, never preview/kept, never replaced. It
+      opens from a new "Expand voice room" button in the voice dock and by
+      clicking the voice row you are in; joining a channel opens it too
+      (join-then-open). Its ✕ closes only the tab; leaving voice, a kick or a
+      deleted channel closes it (updateVoiceUI), going to the first text tab
+      or the Server Log.
+    - Header: room name, "{n} / {cap}" (maxUsers; "{n}" when unlimited — the
+      tree node now carries maxUsers) and a Mosaic | Featured toggle saved in
+      reson8-voice-layout. While anyone shares, Featured is forced, Mosaic is
+      disabled with the SPEC tooltip and the saved choice is not overwritten.
+    - Mosaic: everyone, 4:3 tiles sized by fitVoiceTiles() (pure; picks the
+      column count that maximises the tile, capped at 420 px) inside a
+      ResizeObserver on the stage, no scrolling; small tiles get .tile-sm
+      (smaller name, no volume readout). Featured: five tiles then
+      "…and {n} more" (everyone when it would hide just one); the block opens
+      a popover with avatar, name, marks, right-click = the shared menu.
+    - Tiles are keyed by user id: presence adds/removes tiles and updates
+      marks in place, an avatar is rebuilt only when its size bucket changes,
+      and active-speakers / the local halo go through speakingEls() which
+      toggles a class on tree rows and tiles alike. Right-click opens B8's
+      menu (buildOccupantMenuModel -> renderOccupantMenu); local volume/mute
+      changes refresh the tile marks (refreshOccupantMarks).
+    - The composer is hidden on the voice tab like on the Server Log.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts, index.html
+
+  Verification:
+    - tsc client clean; lint exit 0.
+    - Real client in the Lobby with 15 bots: the tab opened and focused on
+      join, header "Lobby 16", Mosaic showed all 16 tiles inside the stage
+      with no scrolling (149 px tiles, .tile-sm), Featured showed 5 tiles and
+      "…and 11 more" with 11 rows in the popover and saved
+      reson8-voice-layout=featured; the speaking class landed on the same tile
+      element; the tile menu offered Volume and Mute locally; a bot leaving
+      removed one tile; ✕ closed the tab with voice still connected, a click
+      on the Lobby row reopened it, and Leave voice removed it and returned to
+      the Server Log. Screenshot reviewed.
+    - Not driven: the menu's Kick item on a tile (the model is B8's, tested
+      there), a real mediasoup speaking indicator (bots send no audio), and
+      the forced-Featured state while someone shares (C10/C11 own the stage).
+
+  Next Step: PRD 19 C10 — in-app stream stage with an optional pop-out.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: In-app stream stage with an optional pop-out (PRD 19 C10)
+
+  Problem: watching a screen share always opened a separate Viewer window,
+  and the Viewer had no always-on-top, no way back to the main window and no
+  boost above 100 %.
+
+  Solution:
+    - src/screen-watch.ts: the Viewer's receive pipeline extracted into one
+      module (viewer socket with role "viewer", the same TLS pin, ticket auth,
+      WATCH_SCREEN_SHARE, device/recv transport, consume + resume, reconnect
+      re-establish, PRODUCER_CLOSED -> onEnded). Sound goes through a Web
+      Audio gain 0–200 % fed by a muted, DOM-attached <audio>; close() sends
+      STOP_WATCHING_SCREEN_SHARE and removes every media element.
+    - preload-viewer.ts rewritten on top of it (same status flow); the
+      Viewer window gained volume 0–200 with a readout, an Always on top
+      toggle (default on, remembered in reson8-viewer-on-top) and a "Return to
+      Reson8" button; its title is "{sharer} · {stream} — {room}".
+    - preload.ts: api.stage.{watch,stop,isWatching,setVolume,setMuted,
+      qualityHeight} (a viewer ticket requested in the preload, the pin the
+      main socket used, the video placed into a container the renderer names
+      by id), focusViewerWindow/closeViewerWindow, openScreenShareViewer takes
+      the room name and returns { windowId }, "viewer-closed" is forwarded.
+    - main.ts: viewerWindows map (only ids it recorded are accepted),
+      open-screen-share-viewer is main-window-only and returns windowId,
+      "viewer-closed" is sent when a Viewer closes, viewer-focus/viewer-close
+      (main window only) and viewer-set-always-on-top/viewer-return (the
+      Viewer itself), the room name travels as a plain argument.
+    - Renderer: one state machine idle -> starting -> stage <-> popping ->
+      popped -> returning -> stage; transitions wait for the previous side to
+      close (no two consumers). The LIVE badge (confirm prompt kept) opens the
+      stage in the voice tab: LIVE badge, quality ("1080p" once known),
+      "{sharer} · {title}", volume, Pop out, Fullscreen; the people become a
+      strip of two tiles plus the "…and n more" block. Popped: the stage says
+      "{sharer}'s stream is in its own window" with Bring it back and Show
+      window; closing the Viewer by any route returns the stream. Teardown on
+      access loss, leaving/switching rooms, the sharer stopping, closing the
+      tab and disconnecting. While anyone shares, Featured is forced and
+      Mosaic is disabled with the SPEC tooltip.
+    - Sharer side: a viewer leaving then joining within 3 s plays neither
+      sound (the leave sound is held for 3 s).
+
+  Key Files Modified:
+    apps/client/src/screen-watch.ts (new)
+    apps/client/src/preload-viewer.ts, preload.ts, main.ts
+    apps/client/src/renderer/renderer.ts, index.html, viewer.html, viewer.ts
+
+  Verification:
+    - tsc client clean; lint exit 0.
+    - Two real Electron clients on the local server: the sharer shared a
+      screen; the watcher saw the LIVE badge, Featured forced with Mosaic
+      disabled and its tooltip, the confirm modal, the stage reaching "stage"
+      with the sharer · title, a two-tile strip, then Pop out -> a Viewer
+      window titled "Sharer · Test stream — Lobby" (volume max 200, always on
+      top on) with the stage showing the popped placeholder state; Bring it
+      back and the Viewer's Return both returned the stream; the sharer
+      stopping returned the room to idle and re-enabled Mosaic.
+    - NOT verified here: video frames. In this environment the received track
+      stayed muted at 0x0 with the transport "connected" — and the previous
+      Viewer code, restored temporarily for comparison, showed exactly the
+      same, so it is the screen capture/ICE of this machine, not the
+      refactor. The user's live test must confirm picture and sound on both
+      the stage and the Viewer. Also not driven: fullscreen on Windows/Wayland,
+      the sharer-side sound debounce, and the "no two consumers" check against
+      the server log.
+
+  Next Step: PRD 19 C11 — multiple streams: Focus and Grid (Step 0 asks the
+  owner about live previews).
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Multiple streams — Focus and Grid (PRD 19 C11)
+
+  Problem: the stage (C10) showed one stream; with several people sharing there
+  was no way to see who else was live or to see more than one at a time.
+
+  Solution (the default build, no server change):
+    - api.stage in the preload became multi-handle: one watch per sharer id
+      (watch/stop(id?)/isWatching(id?)/setVolume/setMuted/qualityHeight(id));
+      "stage-ended" carries targetUserId.
+    - Header: "{n} / 5 sharing" and a Focus | Grid toggle (from two streams),
+      remembered in reson8-stream-layout. The people toggle stays forced to
+      Featured while anyone shares.
+    - Focus: the main stream is the C10 stage; the other sharers are static
+      LIVE cards in a 212 px "Also live · {n}" column (avatar, name, the stream
+      name when known from an earlier watch else "Screen share", a LIVE dot) —
+      no video, no extra consumers. Clicking one stops the current watch and
+      then starts the new one (C10's sequencing).
+    - Grid: every stream in a 16:9 cell sized by fitVoiceTiles(ratio 16/9),
+      each with its own watch and muted (one stream's sound at a time);
+      double-click or ⤢ focuses one; a per-cell Pop out opens that stream's
+      Viewer (the cell shows "in its own window" with Bring it back / Show
+      window, and closing the Viewer by any route puts the stream back).
+      Cells are keyed by sharer: a share that starts adds a cell + watch, one
+      that stops removes them; the last one ending leaves the grid.
+    - People: with a stream on stage the strip's height is clamp(96px, 20vh,
+      150px) and its tiles become 44 px chips when they would be under 90 px.
+
+  NOT built — owner decision D2: Step 0 asks for CPU % / inbound kbit/s with
+  3 and 5 sharers (all full vs. non-focused paused) BEFORE deciding on live
+  previews (the new viewer-socket event SET_CONSUMER_LAYERS). That needs real
+  multi-sharer video, which this machine does not deliver (see C10's entry), so
+  no measurement exists and the cards stay static. The owner needs to run the
+  measurement (or waive it) and say yes/no.
+
+  Key Files Modified:
+    apps/client/src/preload.ts
+    apps/client/src/renderer/renderer.ts, index.html
+
+  Verification:
+    - tsc client clean; lint exit 0.
+    - Three real Electron clients (two sharers, one watcher): the header read
+      "1 / 5 sharing" then "2 / 5 sharing" with the toggle appearing; Focus on
+      A showed B as a static card "Also live · 1"; clicking it swapped the main
+      stream to B (stop, then start) and A became the card; Grid showed two
+      318x178 cells each with a watch, Pop out on one opened a Viewer and the
+      cell showed the popped state, Bring it back closed it and restored the
+      cell; double-click returned to Focus on that stream; a sharer stopping
+      removed its card, the last stopping returned the room to idle.
+      Screenshot reviewed.
+    - Not driven: the 44 px chip layout (needs a short window), more than two
+      sharers, and picture/sound in cells (no frames flow here).
+
+  Next Step: PRD 19 C12 — update corner card, in-call note, What's New.
+
+--- Entry: 13/10/2026 ---
+
+Feature/Fix: Update corner card, About row table, What's new variants (PRD 19 C12)
+
+  Problem: an update interrupted with a blocking modal, the About row was one
+  line of text, and What's new had a single, older layout.
+
+  Solution:
+    - #update-modal is retired (a grep found no other user). A 360 px card sits
+      bottom-right above the status bar with an accent edge and glow, driven by
+      the B12 updateState: available (What's new / Later / Update), downloading
+      (progress with %, "You can keep chatting. We'll ask before restarting.",
+      Hide), ready (On next launch / Restart now), and the error text inside it.
+      × and Later and Hide only hide it; the phase, the gear dot and the About
+      row keep showing the state.
+    - In a call the card adds the amber "Restarting drops you from {room} for a
+      few seconds." (room name through textContent in a <strong>), kept in step
+      with the voice state through updateVoiceUI.
+    - About › Updates is the SPEC 8.1 row: idle / checking (spinner) / up to
+      date ("{v} is the latest version · checked just now") / available (New
+      tag, "Released {date} · {size} · you have {v}", Release notes + Update
+      now) / downloading (4 px bar, "{pct}% of {size} · you can keep using
+      Reson8") / ready (Restart to update) / error. The button id
+      btn-check-updates now acts per phase.
+    - What's new is a 600 px dialog (max 760 px) with a radial accent wash, the
+      logo, a kicker, the title, the date (GitHub's published_at, an additive
+      field on fetch-release-notes) and "View on GitHub"; the body keeps its
+      headings and turns "#123" into monospace accent chips; three variants —
+      launch ("Updated · you're on the new version", Got it, marks the version
+      seen), About ("Release notes", Close) and pending ("Available update",
+      Close). A backdrop click never marks it seen. Settings › About gained a
+      "What's new in this version" button.
+
+  Key Files Modified:
+    apps/client/src/main.ts, preload.ts
+    apps/client/src/renderer/renderer.ts, index.html
+
+  Verification:
+    - tsc client clean; lint exit 0.
+    - Real client with the update events driven through the real handlers:
+      available -> the card with What's new / Later / Update and the About row
+      with the New tag; Later hid the card while the phase and gear dot stayed;
+      downloading showed 42 % in the card (Hide only) and the row with its bar;
+      ready in the Lobby showed "Restarting drops you from Lobby…" (gone after
+      leaving); the error text inside the card; the three What's new variants
+      with the right kicker/button, chips for #142 and #7, width 600, and the
+      seen marker changing only on Got it. Screenshots reviewed (the stream
+      toggle leaking into the header was fixed after them).
+    - Not driven: a real electron-updater download/restart (unpackaged dev
+      builds can't), and the card with the Windows taskbar.
+
+  Next Step: end of P4 — the owner's checklist for 3.0.0-beta.2 (confirm every
+  item, full suites, smoke against v2.7.0 and a beta server, then
+  /bump-version 3.0.0-beta.2), and the decision on live stream previews (D2).
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Integrated title bar (PRD 19 R7)
+
+  Problem: the window kept the OS title bar, with Reson8's own #titlebar strip
+  underneath it — two bars, where the design has one with the window controls
+  in it.
+
+  Solution:
+    - src/window-chrome.ts (Electron-free): the "Use the system title bar"
+      preference (<userData>/window-chrome.json, atomic write, read by main
+      BEFORE any window exists) and frameOptions(platform, system): Windows/
+      Linux titleBarStyle "hidden" + titleBarOverlay (#161826 / #cfd3e5, 37 px
+      so the bar's bottom border runs under the buttons), macOS hidden with the
+      traffic lights centred in the 38 px bar; {} = the OS frame.
+      npm run test:window-chrome (14 checks).
+    - main.ts: both the main window and the Viewer use frameOptions(); the mode
+      for the run is read once at startup; "window-chrome-state" {maximized,
+      fullscreen} is sent on maximize/unmaximize/enter/leave-full-screen; IPC
+      window-chrome-get (any of our windows), window-chrome-set-system-titlebar
+      and app-relaunch (main window only; relaunch goes through app.quit so the
+      socket disconnects cleanly).
+    - Renderer: body.integrated-titlebar / platform-* / window-maximized /
+      window-fullscreen; #titlebar is the drag region with
+      env(titlebar-area-*) padding so nothing sits under the OS buttons (80 px
+      left on macOS); its buttons and every floating element that can cover it
+      (menus, tab-overflow and voice "more" lists, the reaction card, the emoji
+      picker — the modals, lightbox, toasts and update card already were) are
+      no-drag; fullscreen hides the bar.
+    - A red "● Sharing" chip in the bar while you share (clicking it stops
+      sharing) replaces the OS-title 🔴 cue, which the window no longer shows;
+      document.title keeps it for the taskbar.
+    - Settings › Application › "Use the system title bar" with a "Restart
+      Reson8 to apply" note and Restart now (the note also shows when a saved
+      choice differs from the running mode).
+    - The Viewer has the same integrated bar: the logo and "{sharer} · {stream}
+      — {room}", hidden in fullscreen and when the OS frame is used.
+
+  Key Files Modified:
+    apps/client/src/window-chrome.ts (new), scripts/window-chrome-smoke.mjs (new), package.json
+    apps/client/src/main.ts, preload.ts, preload-viewer.ts
+    apps/client/src/renderer/renderer.ts, index.html, viewer.html, viewer.ts
+
+  Verification:
+    - tsc client clean; lint exit 0; test:window-chrome passes.
+    - Windows 11, real window, real OS mouse input: one bar with the native
+      minimize/maximize/close inside it (Window Controls Overlay visible,
+      888 px free of 1024); dragging the bar moved the window and back;
+      clicking the server pill opened its menu without moving the window;
+      double-clicking the bar maximized (restore icon shown,
+      body.window-maximized) and double-clicking again restored; the native
+      minimize button minimized and the window restored; the saved position
+      survived three restarts; the Sharing chip showed (no-drag) and the
+      fullscreen state hid the bar; the Viewer opened with its own integrated
+      bar "Bar Check — Lobby" and native controls; switching to the system title
+      bar and Restart now relaunched with the OS frame, and back again.
+    - Pre-existing, unchanged by this item: with minimize-to-tray on, the
+      minimize button leaves the window minimized AND hidden (will-minimize
+      did not fire here) — identical with the OS frame, so not a regression;
+      restoring via a second launch (showMainWindow) works.
+    - Not checked here: macOS and Linux (X11/Wayland), snap layouts on hover.
+
+  Next Step: PRD 19 R1 — connect states.
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Connect states restyle (PRD 19 R1)
+
+  Problem: the welcome screen was a plain form card; a failed connect was a red
+  line under it (behind endless reconnect attempts), and a private server only
+  said "Invalid server password".
+
+  Solution:
+    - Welcome screen per frames 2a/2b: the logo, "Welcome to Reson8" (or
+      "Welcome back" with saved servers) and its lead line; Server address,
+      Username + Password side by side ("· if required"), "Remember this server
+      on this device" (now ticked by default, as in the frames), a full-width
+      Connect →. A vertical divider, then the saved servers (name, address,
+      "as {nickname}" / "Last connected …", Connect, and a ⋯ / right-click
+      menu with Edit details and Remove) or the dashed "No saved servers yet"
+      card, and "Host your own" with the real command (docker compose up -d
+      --build — the frame's single-image command doesn't exist for this
+      project), a copy button and a link to the README's Docker section.
+    - Connect card (3a): while connecting, the form is replaced by the steps
+      the client really runs — Resolving address (the TLS probe), Encrypted /
+      Not encrypted, Signing in as {nickname} (the join), Syncing channels — and
+      Cancel. A failure keeps the card: "Couldn't reach {address}" or
+      "Couldn't sign in to {address}", the reason, two hints when the server
+      wasn't reachable, Try again and Edit details. The title-bar pill reads
+      "Connecting…", "Connection failed" (red dot) or "Waiting for password".
+      One deliberate change: a FIRST connect that can't reach the server stops
+      instead of retrying forever behind the card (an established session's
+      reconnects are untouched).
+    - Password required (3b): a join refused for its password opens a dialog
+      (the address, "join as {nickname}", Remember password for this server);
+      Join server reconnects with it (a wrong typed one says so). Remembering
+      the password remembers the server, as C1 stores passwords per saved
+      entry.
+    - Invite codes still open the form with the code field; approval and
+      identity-locked close the card.
+    - The TLS trust / changed-certificate dialogs and the approval card moved
+      onto the shared dialog look (Phosphor icons, primary/secondary buttons);
+      ids and texts unchanged.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts, index.html
+
+  Verification:
+    - tsc client clean; lint exit 0.
+    - Real client, 1440x900: 2a (fresh profile: "Welcome to Reson8", Remember
+      ticked, empty card); a connect to 127.0.0.1:9 showed the card, then
+      "Couldn't reach 127.0.0.1:9 — Couldn't reach the server (ECONNREFUSED)"
+      with the hints, Try again / Edit details and a red "Connection failed"
+      pill; Edit details brought the form back with the address focused; the
+      password dialog (driven directly — the local server has no password)
+      with "Waiting for password" in the pill and the lock on the signing-in
+      step; a real connect to 127.0.0.1:9800 succeeded, saved the server, and
+      after disconnecting the screen read "Welcome back" with the saved row.
+      Screenshots compared with 2a, 2b, 3a, 3b.
+    - Not driven: the TLS trust and changed-certificate flows (no TLS server
+      here), the approval wait (the admin bot's identity is bound to the
+      owner's key) and a real password-protected server.
+
+  Next Step: PRD 19 R2 — chat.
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Chat restyle (PRD 19 R2)
+
+  Problem: the chat still had the pre-Nocturne look — small type, a flat
+  composer row, a bar-style pinned strip and the old NSFW prompt.
+
+  Solution (visual only; no behaviour changed):
+    - One "Chat restyle" block appended last in index.html's stylesheet, so it
+      overrides the older chat rules without editing them (R6 removes what is
+      now dead):
+      the left and right panes as rounded cards on the window background;
+      tabs at 13 px; messages at 14.5 px with rounded hover rows, the time at
+      11.5 px, date dividers in small uppercase; the hover toolbar as a
+      rounded floating box with 32 px buttons; reply snippets with an accent
+      name; image and link-preview cards on tokens.
+    - Names keep their person's colour (nickColor(): a stable hue per user id,
+      oklch 0.78/0.12) instead of every name in accent.
+    - Toolbar icons are Phosphor (smiley, arrow-bend-up-left, pencil, push-pin,
+      trash) — the same buttons, classes and handlers.
+    - Pinned bar: a tinted card with a filled pin, "PINNED · {author}" and the
+      one-line text, and a caret (the author comes from the existing
+      PinnedMessage.authorNickname).
+    - Composer: one rounded box — attach and emoji icons, a divider, the
+      text, and an outlined "Send ➤"; the placeholder names the conversation
+      ("Message #chat" / "Message @name").
+    - The NSFW prompt (3c): "Age-restricted channel" with an NSFW badge, the
+      channel in bold, the "Don't warn me again" switch in its own card, Cancel
+      / Open channel (ids unchanged).
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts, index.html
+
+  Verification:
+    - tsc client clean; lint exit 0; npm run test:markdown passes (rendering
+      unchanged).
+    - Real client at 1440x900 with a bot's messages, a reply and a GitHub link
+      preview: before/after screenshots compared with frame 1a (grouped
+      messages, the reply snippet, the hover toolbar, the preview card, the
+      composer with "Message #Chat"); the pinned bar and the NSFW prompt
+      compared with 1a and 3c.
+    - Not driven: the lightbox (only inherits the tokens) and a blurred NSFW
+      preview card.
+
+  Next Step: PRD 19 R3 — client settings.
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Client Settings restyle — left navigation (PRD 19 R3)
+
+  Problem: Settings was one wide box with a row of emoji tabs mixing this
+  device's options with the server's, and pages that were long lists of
+  separately boxed rows.
+
+  Solution:
+    - #admin-modal became a fixed-size (1080 x 740, PRD 14.9 kept) left-nav
+      dialog with two modes: "client" (the gear) — You: Profile & identity;
+      Voice & sound: Voice, Sound, Shortcuts; Client: Privacy & safety,
+      Window, About — and "server" (the header menu's Server settings), whose
+      pages R4 rebuilds. The other mode's buttons are hidden by CSS
+      (data-mode); setSettingsMode() / openClientSettings(page) /
+      openServerSettings() pick the mode and a page of it; a server mode with
+      no page this person may use shows a short "you don't manage anything
+      here" page instead of a blank.
+    - Every existing control was MOVED (same element, id and handler; a
+      script check confirmed no id was lost or duplicated) into the frames'
+      pages: Profile (the avatar card + the identity key block from About),
+      Voice (input device, mic volume, level, Hear yourself; then input mode,
+      noise gate, noise cancelling), Sound (output device, voice chat volume;
+      sound alerts, alert volume, nudge volume), Shortcuts, Privacy & safety
+      (NSFW, link previews with the blur sub-switches, avatars, trusted
+      certificates), Window (tray, the R7 title-bar switch), About (version,
+      updates row, What's new). Each page has a title and a one-line lead,
+      and sections are labelled cards with divided rows.
+    - The close × replaces the footer Close button (same id). "Edit profile"
+      and the occupant menu's "Voice settings…" open their pages in client
+      mode; the NSFW prompt now points at Settings › Privacy & safety.
+    - Not built from the frames (they would be new features, not a restyle):
+      "Get beta updates", an output-device save flow different from today's,
+      and the renamed "Play sound alerts" (today's switch is "Mute sound
+      alerts"; its wording and meaning stay).
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts, index.html
+
+  Verification:
+    - tsc client clean; lint exit 0.
+    - Real client: all seven client pages opened at the same 740 px height;
+      screenshots of Voice, Sound, Shortcuts, Profile, Privacy and About
+      compared with 4a–4h; a dialog opened from Settings (the identity export)
+      is the topmost element at its own position (elementFromPoint); the
+      header menu path opened server mode with the empty page for a member
+      without rights, and the gear went back to client mode.
+    - Not driven here: server mode with an admin (R4 covers it).
+
+  Next Step: PRD 19 R4 — server settings pages.
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Server settings pages (PRD 19 R4)
+
+  Problem: the server's options lived in three crowded Settings tabs —
+  "User Management" held the member list, approvals, invites, address bans
+  and the identity log; "Server" mixed features with sign-in security.
+
+  Solution:
+    - Server mode of the Settings dialog (R3) now has the server's own header
+      (its icon/initials, name, "Server settings", "Admins only · applies to
+      everyone") and seven pages in four groups: Server — General; People —
+      Members, Joining & invites, Bans; Security — Sign-in security, Identity
+      log; Content — Emoji.
+    - Today's content was MOVED, not rebuilt (same ids and handlers; a script
+      check confirmed no id was lost): General = Features (nudge, screen
+      sharing), Identity (C5's server icon row), Messages (max length);
+      Members = the member list; Joining & invites = the approval and invite
+      switches, the waiting list and the invites; Bans = address bans (with a
+      note that banned people are marked in Members, where they are
+      unbanned); Sign-in security = require signed identity and connection
+      names; Identity log = the log, which a member row's menu still opens
+      filtered to that person, and "Back to users" returns to Members.
+    - Each page keeps today's gate: General and Sign-in security for
+      isAdminUser, Members for isAdminUser/canBanUsers, Joining for either
+      (its two switches only for isAdminUser, as UPDATE_SERVER_SETTINGS
+      needs), Bans for canBanUsers, Emoji for canManageEmojis, Identity log
+      for ADMIN (learned from my roles in the member list, as before). The
+      pending-approvals badge moved to Joining & invites.
+    - Not built from the frames: the member search/filters and the new member
+      row design (5a), "Approve all" and the emoji library grid (5e) — new
+      behaviour, not a restyle.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts, index.html
+
+  Verification:
+    - tsc client clean; lint exit 0.
+    - Real client as a server admin (a temporary ADMIN role, removed after):
+      the header menu's Server settings opened server mode with the server's
+      avatar and name and all seven pages; screenshots of every page compared
+      with 5a–5f; the join switches visible for the admin; the identity log
+      listed 47 entries, opened filtered from a member and Back returned to
+      Members; toggling Nudge on General changed the server's setting (read
+      back through GET_SERVER_SETTINGS) and was restored. A member without
+      rights still gets R3's empty server page.
+
+  Next Step: PRD 19 R5 — dialogs.
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Dialogs restyle (PRD 19 R5)
+
+  Problem: most dialogs were still the pre-Nocturne small grey boxes with
+  emoji titles and the old button colours, next to the new F4 dialogs.
+
+  Solution (visual only):
+    - One "Dialogs" block appended last gives every remaining .modal-content
+      dialog the F4 look (surface, divider border, large radius, shadow, 19 px
+      title, 13 px lead, 12.5 px labels, inputs on the background colour) and
+      maps the old button classes onto the F4 buttons (btn-cancel → secondary,
+      btn-create / btn-connect → primary, btn-disconnect → danger) — so the
+      move-channel, channel-icon, emoji-upload, invite, ban and version
+      dialogs match without each being rewritten.
+    - Create channel (1g/1h): "Create channel / in {server}", a Text | Voice
+      segmented control that drives the existing (now hidden) select — its
+      change handler is unchanged —, "Channel name", "Parent channel
+      (optional)", the Age-restricted NSFW card (text only), "Create channel".
+    - Share picker (1k): "Share your screen / Everyone in {room} will be able
+      to watch.", source cards on tokens with an accent ring when selected,
+      the audio row as a card, "Stream name · optional", "Start sharing";
+      the stream-name dialog (1m) in the same words.
+    - Sentence-case titles and Phosphor icons instead of emoji on the move,
+      channel-icon and watch-share dialogs.
+    - Not built: message search (1i — decision D10), the frame's Screens |
+      Windows tabs (the picker keeps its two labelled groups) and the
+      channel-icon picker inside Create channel (1g) — new behaviour.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts, index.html
+
+  Verification:
+    - tsc client clean; lint exit 0.
+    - Real client: Create channel opened with "in Reson8 Server", the Voice
+      segment active (the select's value), clicking Text set the select to
+      TEXT and showed the NSFW card through the existing handler; in the
+      Lobby the share picker showed "Everyone in Lobby will be able to watch."
+      with real screen thumbnails; the move, channel-icon, stream-name and
+      version-mismatch dialogs screenshotted and compared with 1g/1h, 1k, 1m,
+      6c–6g.
+
+  Next Step: PRD 19 R6 — hard-coded colours and alias removal.
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Hard-coded colours and alias removal (PRD 19 R6)
+
+  Problem: after the Nocturne tokens landed (F1), the renderer still carried
+  ~150 colour literals (many of them the old light-blue accent and
+  pre-Nocturne reds/ambers) and every rule used the legacy alias names.
+
+  Solution:
+    - Every var(--bg-primary/-secondary/-tertiary/-input), --text-primary/
+      -secondary/-muted, --accent/-hover/-dim, --border, --success, --danger,
+      --warning, --radius, --voice-icon, --text-icon in index.html and
+      renderer.ts (inline styles and SVG strings) now names the token it
+      stood for; the alias block is deleted. --font and the --pin-* family
+      (not in the alias list) stay.
+    - Colour literals outside the token block are gone: rgba() becomes
+      color-mix(in srgb, var(token) N%, transparent) and hex values map to a
+      token — the old light-blue and indigo accents to --color-accent, the old
+      reds to --color-live, ambers to --color-warning(-text), greens to
+      --color-success, the stray darks to --color-bg / --color-surface mixes.
+      New tokens, documented in :root: --color-warning, --color-field (the
+      input background the --bg-input alias held), --color-black and
+      --color-white (overlays, shadows, text on solid colour).
+    - viewer.html: its own pre-Nocturne palette replaced by the Nocturne
+      subset it uses.
+    - Two SVG strings in renderer.ts now set stroke/fill through style="" so
+      var()/color-mix() are parsed as CSS.
+    - app-planning/phase19-hardcoded-colours.md (the F1 inventory) deleted.
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html, renderer.ts, viewer.html
+    app-planning/phase19-hardcoded-colours.md (deleted)
+
+  Verification:
+    - tsc client clean; lint exit 0; a script check: no alias use left in any
+      of the three files and no colour literal outside index.html's :root.
+    - Screenshot pass (welcome, chat with a reply and a preview card, the
+      voice room, the DM sidebar, Settings) — the same look as before; the
+      only intended shifts are places that still used the old light-blue
+      accent, now the Nocturne accent.
+    - The full TEST_STATES pass is part of the beta.3 gate (owner).
+
+  Next Step: end of P5 — the beta.3 gate (TEST_STATES checked or marked for
+  the owner), then /bump-version 3.0.0-beta.3, the AGENTS.md/README update
+  and condensing progress.txt into a Phase 19 block.
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Welcome screen and title bar fixes (PRD 19 R1/R7 follow-up, owner review)
+
+  Problem (from the owner's screenshot at a ~1080 px wide window):
+    - the saved-server row's ⋯ button rendered as an unstyled default button,
+      and the rows were so cramped that names and addresses were cut to
+      "Fare…" / "farew…";
+    - "Host your own" carried a repository command the owner didn't want;
+    - with the integrated title bar, the server pill was centred between the
+      brand and the window controls instead of on the window.
+
+  Solution:
+    - .saved-row-more is a proper 32 px icon button (transparent, hover/open
+      state on tokens).
+    - The saved list is a size container: below 560 px the "as {nickname} ·
+      Last connected …" line moves under the name instead of squeezing it,
+      and below a 1180 px window the welcome columns tighten (32 px gap,
+      340 px form) so the list gets the room.
+    - "Host your own" keeps only the explanation and "Read the hosting
+      guide", now pointing at https://github.com/fbarrella/reson8#-quick-start
+      (the command block, its copy button and its handler are gone).
+    - The server pill is absolutely centred on the title bar (window width),
+      capped so it never reaches the brand or the controls; the Sharing chip
+      sits at the right.
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html, renderer.ts
+
+  Verification:
+    - tsc client clean; lint exit 0.
+    - Real client at 1080x940 and 1440x900 with two saved servers: the pill's
+      centre equals half the window width at both sizes (540 / 720); names
+      and addresses are shown in full; the ⋯ button's normal and open states
+      screenshotted; the hosting text and link render without the command.
+
+  Next Step: the beta.3 gate (owner).

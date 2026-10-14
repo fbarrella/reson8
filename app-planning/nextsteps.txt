@@ -3,6 +3,7 @@
 **Created:** 10/10/2026 (v2.7.0)
 **Source:** what Phase 18's own verification could not cover, and findings made along the way. The nine open risks carried out of Phase 17 (transport encryption, the key's trust-on-first-use window, challenge relay, local key theft, ban evasion, NSFW previews, preview fetching limits, DM unread/truncation, the broken lint script) were all addressed in Phase 18; their rationale lives in `app-planning/archive/Reson8_Phase18_PRD.md` and the progress summary.
 **Purpose:** input for the next phase's planning, and a checklist for the manual test pass of 2.7.0.
+**Note (14/10/2026):** what Phase 19 (the 3.0 beta UI) left open is tracked in `app-planning/Reson8_Phase20_PRD.md`, not here.
 
 ---
 
