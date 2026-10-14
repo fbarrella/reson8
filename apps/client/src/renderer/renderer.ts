@@ -6880,8 +6880,28 @@ btnCreateChannel.addEventListener("click", () => {
     newChannelName.value = "";
     newChannelNsfw.checked = false;
     newChannelNsfwRow.style.display = newChannelType.value === "TEXT" ? "flex" : "none";
+    (document.getElementById("create-channel-sub") as HTMLElement).textContent = `in ${connectedServerName ?? "this server"}`;
+    paintChannelTypeSegments();
     createChannelModal.classList.add("visible");
     newChannelName.focus();
+});
+
+/** The Text | Voice segments mirror the (hidden) select, which stays the source of truth (PRD 19 R5). */
+function paintChannelTypeSegments(): void {
+    document.querySelectorAll<HTMLButtonElement>(".create-channel-type .segmented-option").forEach((b) => {
+        const on = b.dataset.channelType === newChannelType.value;
+        b.classList.toggle("active", on);
+        b.setAttribute("aria-checked", String(on));
+    });
+}
+
+document.querySelectorAll<HTMLButtonElement>(".create-channel-type .segmented-option").forEach((b) => {
+    b.addEventListener("click", () => {
+        if (newChannelType.value === b.dataset.channelType) return;
+        newChannelType.value = b.dataset.channelType ?? "TEXT";
+        newChannelType.dispatchEvent(new Event("change"));
+        paintChannelTypeSegments();
+    });
 });
 
 newChannelType.addEventListener("change", () => {
@@ -14210,6 +14230,10 @@ function selectShareSource(source: DesktopSource, cardEl: HTMLElement): void {
 
 async function openScreenShareModal(): Promise<void> {
     selectedShareSource = null;
+    const roomName = currentChannelId ? findChannelNodeById(currentTree, currentChannelId)?.name : null;
+    (document.getElementById("screen-share-sub") as HTMLElement).textContent = roomName
+        ? `Everyone in ${roomName} will be able to watch.`
+        : "Everyone in your voice room will be able to watch."; // PRD 19 R5
     btnScreenShareStart.disabled = true;
     sourceShareAudioCheckbox.disabled = true;
     sourceShareAudioCheckbox.checked = false;

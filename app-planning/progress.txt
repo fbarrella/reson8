@@ -3229,3 +3229,47 @@ Feature/Fix: Server settings pages (PRD 19 R4)
       rights still gets R3's empty server page.
 
   Next Step: PRD 19 R5 — dialogs.
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Dialogs restyle (PRD 19 R5)
+
+  Problem: most dialogs were still the pre-Nocturne small grey boxes with
+  emoji titles and the old button colours, next to the new F4 dialogs.
+
+  Solution (visual only):
+    - One "Dialogs" block appended last gives every remaining .modal-content
+      dialog the F4 look (surface, divider border, large radius, shadow, 19 px
+      title, 13 px lead, 12.5 px labels, inputs on the background colour) and
+      maps the old button classes onto the F4 buttons (btn-cancel → secondary,
+      btn-create / btn-connect → primary, btn-disconnect → danger) — so the
+      move-channel, channel-icon, emoji-upload, invite, ban and version
+      dialogs match without each being rewritten.
+    - Create channel (1g/1h): "Create channel / in {server}", a Text | Voice
+      segmented control that drives the existing (now hidden) select — its
+      change handler is unchanged —, "Channel name", "Parent channel
+      (optional)", the Age-restricted NSFW card (text only), "Create channel".
+    - Share picker (1k): "Share your screen / Everyone in {room} will be able
+      to watch.", source cards on tokens with an accent ring when selected,
+      the audio row as a card, "Stream name · optional", "Start sharing";
+      the stream-name dialog (1m) in the same words.
+    - Sentence-case titles and Phosphor icons instead of emoji on the move,
+      channel-icon and watch-share dialogs.
+    - Not built: message search (1i — decision D10), the frame's Screens |
+      Windows tabs (the picker keeps its two labelled groups) and the
+      channel-icon picker inside Create channel (1g) — new behaviour.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts, index.html
+
+  Verification:
+    - tsc client clean; lint exit 0.
+    - Real client: Create channel opened with "in Reson8 Server", the Voice
+      segment active (the select's value), clicking Text set the select to
+      TEXT and showed the NSFW card through the existing handler; in the
+      Lobby the share picker showed "Everyone in Lobby will be able to watch."
+      with real screen thumbnails; the move, channel-icon, stream-name and
+      version-mismatch dialogs screenshotted and compared with 1g/1h, 1k, 1m,
+      6c–6g.
+
+  Next Step: PRD 19 R6 — hard-coded colours and alias removal.

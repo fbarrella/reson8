@@ -8285,6 +8285,171 @@
       flex: 1;
       max-width: 240px;
     }
+    /* ══ Dialogs (PRD 19 R5, frames 1g/1h, 1j, 1k–1m, 6c–6g) ══════════════
+       Every dialog still built on the pre-Nocturne .modal-content gets the
+       F4 dialog look here, so the old ones (move channel, channel icon, emoji
+       upload, invites, ban, version mismatch, share picker…) match the new
+       ones without each being rewritten. The old button classes map onto the
+       F4 buttons: btn-cancel → secondary, btn-create / btn-connect → primary,
+       btn-disconnect → danger. */
+    .modal-content {
+      min-width: 380px;
+      max-width: calc(100vw - 32px);
+      padding: 24px;
+      border: 1px solid var(--color-divider);
+      border-radius: var(--radius-lg);
+      background: var(--color-surface);
+      box-shadow: var(--shadow-lg);
+      color: var(--color-text);
+    }
+
+    .modal-content h3 {
+      margin: 0 0 6px;
+      font-size: 19px;
+      font-weight: 500;
+      letter-spacing: -0.01em;
+      color: var(--color-text);
+    }
+
+    .modal-content h3 + p.dialog-subtitle,
+    .modal-content .dialog-subtitle {
+      margin: 0 0 16px;
+      font-size: 13px;
+      color: var(--color-neutral-400);
+    }
+
+    .modal-content p {
+      font-size: 13.5px;
+      color: var(--color-neutral-300);
+    }
+
+    .modal-content label {
+      margin: 12px 0 6px;
+      font-size: 12.5px;
+      font-weight: 500;
+      color: var(--color-neutral-300);
+    }
+
+    .modal-content label .optional {
+      font-weight: 400;
+      color: var(--color-neutral-500);
+    }
+
+    .modal-content input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+    .modal-content select,
+    .modal-content textarea {
+      padding: 9px 12px;
+      border: 1px solid var(--color-divider);
+      border-radius: var(--radius-md);
+      background: var(--color-bg);
+      color: var(--color-text);
+      font-size: 13.5px;
+    }
+
+    .modal-content input:focus,
+    .modal-content select:focus,
+    .modal-content textarea:focus {
+      border-color: var(--color-accent-700);
+    }
+
+    .modal-content .modal-actions {
+      margin-top: 18px;
+      gap: 8px;
+    }
+
+    .btn.btn-cancel {
+      background: var(--color-neutral-900);
+      border: 1px solid var(--color-divider);
+      color: var(--color-text);
+    }
+
+    .btn.btn-cancel:hover:not(:disabled) {
+      background: var(--color-neutral-800);
+    }
+
+    .btn.btn-create,
+    .btn.btn-connect {
+      background: transparent;
+      border: 1px solid var(--color-accent);
+      color: var(--color-accent-200);
+    }
+
+    .btn.btn-create:hover:not(:disabled),
+    .btn.btn-connect:hover:not(:disabled) {
+      background: var(--color-accent-900);
+    }
+
+    .btn.btn-disconnect {
+      background: transparent;
+      border: 1px solid var(--color-danger-border);
+      color: var(--color-danger-text);
+    }
+
+    .btn.btn-disconnect:hover:not(:disabled) {
+      background: color-mix(in srgb, var(--color-danger, #e5484d) 14%, transparent);
+    }
+
+    .modal-content .btn .ph {
+      vertical-align: -2px;
+    }
+
+    /* Create channel */
+    .create-channel-dialog {
+      width: 440px;
+    }
+
+    .create-channel-type {
+      display: flex;
+      width: 100%;
+    }
+
+    .create-channel-type .segmented-option {
+      flex: 1;
+      justify-content: center;
+    }
+
+    #new-channel-nsfw-row {
+      margin-top: 14px;
+    }
+
+    #new-channel-nsfw-row .nsfw-badge {
+      margin-left: 6px;
+      vertical-align: 1px;
+    }
+
+    /* Share picker */
+    #screen-share-modal .modal-content.wide {
+      width: min(760px, calc(100vw - 32px));
+    }
+
+    .source-share-card {
+      border: 1px solid var(--color-divider);
+      border-radius: var(--radius-lg);
+      background: var(--color-bg);
+    }
+
+    .source-share-card:hover {
+      border-color: var(--color-accent-700);
+    }
+
+    .source-share-card.selected {
+      border-color: var(--color-accent);
+      box-shadow: 0 0 0 1px var(--color-accent);
+    }
+
+    #screen-share-modal .toggle-row {
+      margin-top: 12px;
+      padding: 12px 14px;
+      border: 1px solid var(--color-divider);
+      border-radius: var(--radius-md);
+      background: var(--color-bg);
+    }
+
+    #screen-share-modal #source-share-audio-checkbox {
+      width: 18px;
+      height: 18px;
+      accent-color: var(--color-accent);
+    }
   </style>
 </head>
 
@@ -8623,25 +8788,31 @@
   </div>
 
   <!-- ── Create Channel Modal ──────────────────────────────────────────── -->
-  <div id="create-channel-modal">
-    <div class="modal-content">
-      <h3>Create Channel</h3>
-      <label for="new-channel-name">Channel Name</label>
-      <input type="text" id="new-channel-name" placeholder="e.g. Music Room">
-      <label for="new-channel-type">Type</label>
-      <select id="new-channel-type">
-        <option value="VOICE">🔊 Voice</option>
-        <option value="TEXT">💬 Text</option>
+  <div id="create-channel-modal" role="dialog" aria-modal="true" aria-labelledby="create-channel-title">
+    <div class="modal-content create-channel-dialog">
+      <h3 id="create-channel-title">Create channel</h3>
+      <p class="dialog-subtitle" id="create-channel-sub"></p>
+      <label>Type</label>
+      <!-- The select stays the source of truth (its handlers are unchanged); the segmented control drives it (PRD 19 R5). -->
+      <select id="new-channel-type" hidden>
+        <option value="VOICE">Voice</option>
+        <option value="TEXT">Text</option>
       </select>
-      <label for="new-channel-parent">Parent Channel (optional)</label>
+      <div class="segmented create-channel-type" role="radiogroup" aria-label="Type">
+        <button type="button" class="segmented-option" role="radio" data-channel-type="TEXT"><i class="ph ph-hash" aria-hidden="true"></i> Text</button>
+        <button type="button" class="segmented-option" role="radio" data-channel-type="VOICE"><i class="ph ph-speaker-high" aria-hidden="true"></i> Voice</button>
+      </div>
+      <label for="new-channel-name">Channel name</label>
+      <input type="text" id="new-channel-name" placeholder="e.g. Music Room">
+      <label for="new-channel-parent">Parent channel <span class="optional">(optional)</span></label>
       <select id="new-channel-parent">
         <option value="">— None (root) —</option>
       </select>
-      <div class="toggle-row" id="new-channel-nsfw-row" style="display:none; margin-top:4px;">
+      <div class="toggle-row nsfw-switch-card" id="new-channel-nsfw-row" style="display:none;">
         <div class="toggle-row-info">
           <div class="toggle-row-text">
-            <span class="toggle-row-title">🔞 NSFW</span>
-            <span class="toggle-row-desc">Prompts users before opening this channel</span>
+            <span class="toggle-row-title">Age-restricted <span class="nsfw-badge">NSFW</span></span>
+            <span class="toggle-row-desc">Members confirm before opening this channel.</span>
           </div>
         </div>
         <label class="toggle-switch">
@@ -8650,8 +8821,8 @@
         </label>
       </div>
       <div class="modal-actions">
-        <button class="btn btn-cancel" id="btn-modal-cancel">Cancel</button>
-        <button class="btn btn-create" id="btn-modal-create">Create</button>
+        <button class="btn btn-secondary" id="btn-modal-cancel">Cancel</button>
+        <button class="btn btn-primary" id="btn-modal-create">Create channel</button>
       </div>
     </div>
   </div>
@@ -8729,8 +8900,8 @@
   <!-- ── Move Channel Modal (PRD 14.5) ───────────────────────────────────── -->
   <div id="move-channel-modal">
     <div class="modal-content">
-      <h3>Move Channel</h3>
-      <label for="move-channel-select">New Parent</label>
+      <h3>Move channel</h3>
+      <label for="move-channel-select">New parent</label>
       <select id="move-channel-select"></select>
       <div class="modal-actions">
         <button class="btn btn-cancel" id="btn-move-cancel">Cancel</button>
@@ -8955,7 +9126,8 @@
   <!-- ── Screen Share Selection Modal (PRD 12.10) ─────────────────────────── -->
   <div id="screen-share-modal">
     <div class="modal-content wide">
-      <h3>🖥️ Share Screen</h3>
+      <h3>Share your screen</h3>
+      <p class="dialog-subtitle" id="screen-share-sub">Everyone in your voice room will be able to watch.</p>
       <div class="source-share-groups" id="source-share-groups">
         <div class="source-share-empty" id="source-share-status">Loading sources…</div>
       </div>
@@ -8966,11 +9138,11 @@
         </div>
         <input type="checkbox" id="source-share-audio-checkbox" disabled>
       </div>
-      <label for="source-share-name-input">Custom Stream Name (optional)</label>
+      <label for="source-share-name-input">Stream name <span class="optional">· optional</span></label>
       <input type="text" id="source-share-name-input" placeholder="Leave blank to use the source's own name" maxlength="64">
       <div class="modal-actions">
-        <button class="btn btn-cancel" id="btn-screen-share-cancel">Cancel</button>
-        <button class="btn btn-connect" id="btn-screen-share-start" disabled>Start Sharing</button>
+        <button class="btn btn-secondary" id="btn-screen-share-cancel">Cancel</button>
+        <button class="btn btn-primary" id="btn-screen-share-start" disabled><i class="ph ph-screencast" aria-hidden="true"></i> Start sharing</button>
       </div>
     </div>
   </div>
@@ -8980,12 +9152,13 @@
        the OS's own) ──────────────────────────────────────────────────── -->
   <div id="stream-name-modal">
     <div class="modal-content">
-      <h3>Name Your Stream</h3>
-      <label for="stream-name-input">Custom Stream Name (optional)</label>
+      <h3>Name your stream</h3>
+      <p class="dialog-subtitle">Everyone in your voice room will be able to watch.</p>
+      <label for="stream-name-input">Stream name <span class="optional">· optional</span></label>
       <input type="text" id="stream-name-input" placeholder="Leave blank to use the default" maxlength="64">
       <div class="modal-actions">
-        <button class="btn btn-cancel" id="btn-stream-name-skip">Skip</button>
-        <button class="btn btn-connect" id="btn-stream-name-confirm">Start Sharing</button>
+        <button class="btn btn-secondary" id="btn-stream-name-skip">Skip</button>
+        <button class="btn btn-primary" id="btn-stream-name-confirm"><i class="ph ph-screencast" aria-hidden="true"></i> Start sharing</button>
       </div>
     </div>
   </div>
@@ -8993,7 +9166,7 @@
   <!-- ── Watch Screen Share Confirmation Modal (PRD 12.13) ────────────────── -->
   <div id="watch-share-confirm-modal">
     <div class="modal-content">
-      <h3>🖥️ Watch Screen Share</h3>
+      <h3>Watch screen share</h3>
       <p>Do you want to watch <strong id="watch-share-confirm-nickname"></strong>'s stream? It plays in the voice room tab; you can pop it out into its own window from there.</p>
       <div class="modal-actions">
         <button class="btn btn-cancel" id="btn-watch-share-cancel">Cancel</button>
@@ -9123,17 +9296,17 @@
   <!-- ── Channel Icon Modal (PRD 14.7, text channels only) ───────────── -->
   <div id="channel-icon-modal">
     <div class="modal-content">
-      <h3>Channel Icon</h3>
+      <h3>Channel icon</h3>
 
       <div id="channel-icon-step-select">
         <input type="file" id="channel-icon-file-input" accept="image/png,image/jpeg,image/gif,image/webp" style="display:none;">
         <div class="modal-actions" style="justify-content:center; gap:10px; margin-bottom:8px;">
-          <button class="btn btn-create" id="btn-channel-icon-choose-emoji">😀 Choose Emoji</button>
-          <button class="btn btn-create" id="btn-channel-icon-choose-image">🖼️ Upload Image</button>
+          <button class="btn btn-create" id="btn-channel-icon-choose-emoji"><i class="ph ph-smiley" aria-hidden="true"></i> Choose emoji</button>
+          <button class="btn btn-create" id="btn-channel-icon-choose-image"><i class="ph ph-image" aria-hidden="true"></i> Upload image</button>
         </div>
         <p class="emoji-upload-hint">Images: max 512KB, PNG/JPEG/GIF/WebP — cropped to a square next.</p>
         <div class="modal-actions">
-          <button class="btn btn-disconnect" id="btn-channel-icon-reset">Reset to Default</button>
+          <button class="btn btn-disconnect" id="btn-channel-icon-reset">Reset to default</button>
           <button class="btn btn-cancel" id="btn-channel-icon-cancel-select">Cancel</button>
         </div>
       </div>
