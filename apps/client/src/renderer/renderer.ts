@@ -1363,6 +1363,7 @@ let serverMaxMessageLength = 4000;
 let connectFlow: ConnectFlow | null = null;
 /** The currently-connected server's display name, once fetched via getServerSettings() — null until then / after disconnect. */
 let connectedServerName: string | null = null;
+let connectedNickname = "";
 
 // ── Own permissions (PRD 19 A8) ──────────────────────────────────────────
 /**
@@ -3723,9 +3724,21 @@ function renderServerPill(): void {
     if (!text || !dot) return;
     const saved = activeSavedServerId ? savedServerById(activeSavedServerId) : undefined;
     const flow = isConnected ? null : connectPillText(); // PRD 19 R1: what a connect is doing
-    text.textContent = isConnected
-        ? connectedServerName || saved?.name || (currentConnection ? displayAddress(currentConnection.host, currentConnection.port) : "Connected")
-        : flow?.text ?? "Not connected";
+    if (isConnected) {
+        text.textContent = currentConnection
+            ? displayAddress(currentConnection.host, currentConnection.port)
+            : connectedServerName || saved?.name || "Connected";
+    } else {
+        text.textContent = flow?.text ?? "Not connected";
+    }
+    const user = document.getElementById("server-pill-user");
+    const nick = document.getElementById("server-pill-nick");
+    if (user && nick) {
+        user.hidden = !isConnected;
+        nick.textContent = isConnected ? connectedNickname : "";
+    }
+    const pill = document.getElementById("server-pill");
+    if (pill) pill.title = isConnected ? `${connectedServerName ?? ""} — ${text.textContent} as ${connectedNickname}`.replace(/^ — /, "") : "";
     dot.classList.toggle("connected", isConnected);
     dot.classList.toggle("failed", !!flow?.failed);
 }
@@ -7334,12 +7347,13 @@ api.on("connected", (data: { serverId: string; instanceId: string; secure?: bool
     serverPasswordInput.disabled = true;
     document.body.classList.add("is-connected");
     document.body.classList.remove("is-approving");
+    connectedNickname = nicknameInput.value.trim() || "User";
     onSavedServerConnected(); // PRD 19 C1
     showWelcomeForm(); // PRD 19 R1: the connect card's job is done
     renderServerPill(); // PRD 19 C2
     renderServerHeader(); // PRD 19 C3
     statusDot.classList.add("connected");
-    statusText.textContent = `Connected as ${nicknameInput.value.trim() || "User"}`;
+    statusText.textContent = `Connected as ${connectedNickname}`;
     statusText.classList.add("connected");
     statusInstance.textContent = `ID: ${data.instanceId}`;
     renderConnectionSecurity(); // PRD 18.3: lock icon / "not encrypted" warning
@@ -7435,6 +7449,7 @@ api.on("disconnected", (data?: { reason?: string }) => {
     previousOccupantIds = new Set();
     previousSharingIds = new Set();
     connectedServerName = null;
+    connectedNickname = "";
     myPermissions = null; // PRD 19 A8: unknown again
     clearServerSummary(); // PRD 19 A1
     updateWindowTitle();

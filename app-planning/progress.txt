@@ -1016,3 +1016,39 @@ Feature/Fix: Voice room header pills and call bar (PRD 20 U2)
     - Not exercised: the keyboard mute shortcut (same toggleMuteAndNotify).
 
   Next Step: U3 (title-bar pill).
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Title-bar pill shows address and nickname (PRD 20 U3)
+
+  Problem: The title-bar pill showed only the server's name; the design (frame
+  1a) shows "● {address} · 👤 {nickname} ▾".
+
+  Solution: #server-pill gained a #server-pill-user part (separator, ph-user,
+  #server-pill-nick). renderServerPill() writes the address
+  (displayAddress(currentConnection)) when connected, falling back to the
+  server name, and fills/hides the nickname part; the connect-flow texts when
+  not connected are unchanged. New state connectedNickname is set in the
+  `connected` handler before the first render (the status bar's "Connected
+  as" uses it too) and cleared on `disconnected`. CSS: max-width
+  min(460px, 100vw - 420px); the address shrinks first, the nickname only
+  truncates beyond 140 px.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts — connectedNickname, renderServerPill,
+      connected/disconnected handlers
+    apps/client/src/renderer/index.html — #server-pill markup and CSS
+
+  Verification:
+    - apps/client npx tsc --noEmit; npm run lint (0 errors).
+    - Real app over CDP against the 9800 dev server: pill "127.0.0.1:9800 ·
+      DockTester" centred on the window (centre 512 = window centre), tooltip
+      "Reson8 Server — 127.0.0.1:9800 as DockTester"; a 60-character nickname
+      ellipsised at 140 px; a 66-character host truncated while the nickname
+      stayed whole (pill capped at 460 px); disconnect -> "Not connected", no
+      nickname, empty tooltip; the server switcher still opens under the
+      pill; no console errors.
+    - Not exercised: a real 1024 px-wide window below the 460 px cap (the
+      test window was 1024 px; the cap is min(460px, 100vw - 420px) = 460).
+
+  Next Step: Group 1 done — report; then M4 helper, M1–M4, W1, S1–S3, G2.

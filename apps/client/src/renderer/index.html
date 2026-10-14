@@ -165,7 +165,7 @@
       display: inline-flex;
       align-items: center;
       gap: 8px;
-      max-width: min(320px, calc(100vw - 420px));
+      max-width: min(460px, calc(100vw - 420px));
       padding: 4px 12px;
       border: 1px solid var(--color-divider);
       border-radius: 999px;
@@ -181,6 +181,39 @@
     }
 
     .server-pill #server-pill-text {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    #server-pill-text {
+      min-width: 0;
+      flex-shrink: 1;
+    }
+
+    .server-pill-user {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      flex-shrink: 0;
+      color: var(--color-neutral-300);
+    }
+
+    .server-pill-user[hidden] {
+      display: none;
+    }
+
+    .server-pill-sep {
+      color: var(--color-neutral-600);
+    }
+
+    .server-pill-user i,
+    .server-pill-caret {
+      color: var(--color-neutral-500);
+    }
+
+    #server-pill-nick {
+      max-width: 140px;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
@@ -8742,7 +8775,8 @@
     <button type="button" id="server-pill" class="server-pill" aria-haspopup="menu">
       <span class="server-pill-dot" id="server-pill-dot"></span>
       <span id="server-pill-text">Not connected</span>
-      <i class="ph ph-caret-down" aria-hidden="true"></i>
+      <span class="server-pill-user" id="server-pill-user" hidden><span class="server-pill-sep" aria-hidden="true">·</span><i class="ph ph-user" aria-hidden="true"></i><span id="server-pill-nick"></span></span>
+      <i class="ph ph-caret-down server-pill-caret" aria-hidden="true"></i>
     </button>
     <!-- While you share, the OS title's 🔴 is not visible in the window any more (PRD 19 R7). -->
     <button type="button" id="titlebar-sharing" class="titlebar-sharing" title="You are sharing your screen — click to stop" style="display:none;"><span class="titlebar-sharing-dot" aria-hidden="true"></span>Sharing</button>
