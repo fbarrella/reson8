@@ -142,6 +142,16 @@ contextBridge.exposeInMainWorld("reson8ViewerApi", {
         return ipcRenderer.invoke("viewer-set-always-on-top", !!flag);
     },
 
+    /** How this window's frame is drawn (PRD 19 R7): the integrated bar, or the OS frame. */
+    getWindowChrome(): Promise<{ integrated: boolean; platform: string; maximized: boolean; fullscreen: boolean }> {
+        return ipcRenderer.invoke("window-chrome-get");
+    },
+
+    /** Maximized/fullscreen changes of this window (the bar hides in fullscreen). */
+    onWindowChromeState(cb: (state: { maximized: boolean; fullscreen: boolean }) => void): void {
+        ipcRenderer.on("window-chrome-state", (_event, state) => cb(state));
+    },
+
     /** Closes this window and brings the main window forward; the stream returns to the stage. */
     returnToMain(): void {
         void ipcRenderer.invoke("viewer-return");

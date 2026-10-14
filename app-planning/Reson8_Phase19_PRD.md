@@ -2641,12 +2641,12 @@ The main window and the Viewer use the OS frame (`main.ts` sets no `frame`, `tit
 - Linux Wayland with client-side decorations is the least predictable platform; the switch exists for it.
 
 ### Done When
-- [ ] One bar on Windows with the native controls, snap layouts, double-click maximize and the system menu working.
-- [ ] Minimize-to-tray, close-to-tray, restore from tray, re-launch and saved size/position/maximized unchanged.
-- [ ] No floating element over the bar drags the window.
-- [ ] Fullscreen hides the bar; the "● Sharing" chip appears while sharing.
-- [ ] The Viewer has the same integrated bar.
-- [ ] "Use the system title bar" restores the OS frame after a restart, for both windows.
+- [x] One bar on Windows with the native controls, snap layouts, double-click maximize and the system menu working.
+- [x] Minimize-to-tray, close-to-tray, restore from tray, re-launch and saved size/position/maximized unchanged.
+- [x] No floating element over the bar drags the window.
+- [x] Fullscreen hides the bar; the "● Sharing" chip appears while sharing.
+- [x] The Viewer has the same integrated bar.
+- [x] "Use the system title bar" restores the OS frame after a restart, for both windows.
 - [ ] macOS and Linux (X11 and Wayland) checked by the owner.
 
 ## R1 — Connect States

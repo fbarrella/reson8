@@ -25,6 +25,8 @@
         toggleFullscreen(): Promise<boolean>;
         setAlwaysOnTop(flag: boolean): Promise<boolean>;
         returnToMain(): void;
+        getWindowChrome(): Promise<{ integrated: boolean; platform: string; maximized: boolean; fullscreen: boolean }>;
+        onWindowChromeState(cb: (state: { maximized: boolean; fullscreen: boolean }) => void): void;
     }
 
     const api = (window as any).reson8ViewerApi as Reson8ViewerApi;
@@ -50,7 +52,17 @@
         if (streamName) title += ` · ${streamName}`;
         if (api.info.roomName) title += ` — ${api.info.roomName}`;
         document.title = title;
+        const bar = document.getElementById("viewer-title");
+        if (bar) bar.textContent = title; // the integrated bar shows the same string (PRD 19 R7)
     }
+
+    // The integrated title bar (PRD 19 R7): the frame mode is decided by the main process.
+    void api.getWindowChrome().then((chrome) => {
+        document.body.classList.toggle("integrated-titlebar", chrome.integrated);
+        document.body.classList.add(`platform-${chrome.platform}`);
+        document.body.classList.toggle("window-fullscreen", chrome.fullscreen);
+    });
+    api.onWindowChromeState((state) => document.body.classList.toggle("window-fullscreen", state.fullscreen));
 
     setWindowTitle();
     nicknameLabel.textContent = api.info.nickname;

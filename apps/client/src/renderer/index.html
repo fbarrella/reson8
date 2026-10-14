@@ -193,6 +193,73 @@
       background: var(--color-success);
     }
 
+    /* ── Integrated title bar (PRD 19 R7) ─────────────────────────────── */
+    /* The OS draws its minimize/maximize/close INSIDE this bar (Windows/Linux:
+       titleBarOverlay at the right, reported through env(titlebar-area-*);
+       macOS: the traffic lights at the left). The bar drags the window; anything
+       clickable in it, and anything that can float over it, must be no-drag or
+       its clicks become window drags. */
+    body.integrated-titlebar #titlebar {
+      -webkit-app-region: drag;
+      user-select: none;
+      padding-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + 12px);
+    }
+
+    body.integrated-titlebar.platform-darwin #titlebar {
+      padding-left: 80px;
+    }
+
+    #titlebar button,
+    #titlebar a,
+    #titlebar input,
+    .menu,
+    .tab-overflow-menu,
+    .voice-more-menu,
+    .reaction-card,
+    #emoji-picker {
+      -webkit-app-region: no-drag;
+    }
+
+    /* Fullscreen (F11, or a stream's own fullscreen window): no bar at all. */
+    body.window-fullscreen #titlebar {
+      display: none;
+    }
+
+    .titlebar-sharing {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 10px;
+      border: 1px solid var(--color-danger-border);
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--color-danger, #e5484d) 14%, transparent);
+      color: var(--color-danger-text);
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+
+    .system-titlebar-restart {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin: -4px 0 12px;
+      padding: 8px 12px;
+      border: 1px solid var(--color-accent-700);
+      border-radius: var(--radius-md);
+      font-size: 12.5px;
+      color: var(--color-neutral-300);
+    }
+
+    .titlebar-sharing-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--color-danger, #e5484d);
+    }
+
     /* ── Shell: rail | (welcome | main) ────────────────────────────────── */
     #shell {
       display: flex;
@@ -7240,6 +7307,8 @@
       <span id="server-pill-text">Not connected</span>
       <i class="ph ph-caret-down" aria-hidden="true"></i>
     </button>
+    <!-- While you share, the OS title's 🔴 is not visible in the window any more (PRD 19 R7). -->
+    <button type="button" id="titlebar-sharing" class="titlebar-sharing" title="You are sharing your screen — click to stop" style="display:none;"><span class="titlebar-sharing-dot" aria-hidden="true"></span>Sharing</button>
   </header>
 
   <!-- ── Unencrypted-connection warning (PRD 18.3) ───────────────────── -->
@@ -8597,6 +8666,24 @@
             <input type="checkbox" id="chk-link-previews">
             <span class="toggle-slider"></span>
           </label>
+        </div>
+
+        <div class="toggle-row">
+          <div class="toggle-row-info">
+            <div class="toggle-row-icon"><i class="ph ph-app-window" aria-hidden="true"></i></div>
+            <div class="toggle-row-text">
+              <span class="toggle-row-title">Use the system title bar</span>
+              <span class="toggle-row-desc">Use your operating system's window frame instead of Reson8's own bar. Takes effect after a restart.</span>
+            </div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="chk-system-titlebar">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+        <div class="system-titlebar-restart" id="system-titlebar-restart" style="display:none;">
+          <span>Restart Reson8 to apply.</span>
+          <button type="button" class="btn btn-secondary" id="btn-system-titlebar-restart">Restart now</button>
         </div>
 
         <!-- Trusted certificates (PRD 18.3) -->

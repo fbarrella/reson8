@@ -39,6 +39,50 @@
       height: 100vh;
     }
 
+    /* The integrated title bar (PRD 19 R7): logo + "{sharer} · {stream} — {room}". */
+    #viewer-titlebar {
+      display: none;
+      align-items: center;
+      gap: 8px;
+      height: 38px;
+      padding: 0 12px;
+      background: #161826;
+      border-bottom: 1px solid var(--border);
+      color: var(--text-primary);
+      font-size: 13px;
+      flex-shrink: 0;
+      -webkit-app-region: drag;
+      user-select: none;
+      padding-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + 12px);
+    }
+
+    body.integrated-titlebar #viewer-titlebar {
+      display: flex;
+    }
+
+    body.integrated-titlebar.platform-darwin #viewer-titlebar {
+      padding-left: 80px;
+    }
+
+    body.window-fullscreen #viewer-titlebar {
+      display: none !important;
+    }
+
+    #viewer-titlebar img {
+      width: 18px;
+      height: 18px;
+    }
+
+    #viewer-title {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    #controls-bar {
+      -webkit-app-region: no-drag;
+    }
+
     #video-container {
       flex: 1;
       position: relative;
@@ -200,6 +244,7 @@
 
 <body>
   <div id="viewer-root">
+    <header id="viewer-titlebar"><img src="logo.png" alt=""><span id="viewer-title"></span></header>
     <div id="video-container">
       <div id="status-overlay">
         <div id="status-title">Connecting…</div>

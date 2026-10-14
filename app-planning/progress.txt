@@ -2958,3 +2958,67 @@ Feature/Fix: Update corner card, About row table, What's new variants (PRD 19 C1
   Next Step: end of P4 — the owner's checklist for 3.0.0-beta.2 (confirm every
   item, full suites, smoke against v2.7.0 and a beta server, then
   /bump-version 3.0.0-beta.2), and the decision on live stream previews (D2).
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Integrated title bar (PRD 19 R7)
+
+  Problem: the window kept the OS title bar, with Reson8's own #titlebar strip
+  underneath it — two bars, where the design has one with the window controls
+  in it.
+
+  Solution:
+    - src/window-chrome.ts (Electron-free): the "Use the system title bar"
+      preference (<userData>/window-chrome.json, atomic write, read by main
+      BEFORE any window exists) and frameOptions(platform, system): Windows/
+      Linux titleBarStyle "hidden" + titleBarOverlay (#161826 / #cfd3e5, 37 px
+      so the bar's bottom border runs under the buttons), macOS hidden with the
+      traffic lights centred in the 38 px bar; {} = the OS frame.
+      npm run test:window-chrome (14 checks).
+    - main.ts: both the main window and the Viewer use frameOptions(); the mode
+      for the run is read once at startup; "window-chrome-state" {maximized,
+      fullscreen} is sent on maximize/unmaximize/enter/leave-full-screen; IPC
+      window-chrome-get (any of our windows), window-chrome-set-system-titlebar
+      and app-relaunch (main window only; relaunch goes through app.quit so the
+      socket disconnects cleanly).
+    - Renderer: body.integrated-titlebar / platform-* / window-maximized /
+      window-fullscreen; #titlebar is the drag region with
+      env(titlebar-area-*) padding so nothing sits under the OS buttons (80 px
+      left on macOS); its buttons and every floating element that can cover it
+      (menus, tab-overflow and voice "more" lists, the reaction card, the emoji
+      picker — the modals, lightbox, toasts and update card already were) are
+      no-drag; fullscreen hides the bar.
+    - A red "● Sharing" chip in the bar while you share (clicking it stops
+      sharing) replaces the OS-title 🔴 cue, which the window no longer shows;
+      document.title keeps it for the taskbar.
+    - Settings › Application › "Use the system title bar" with a "Restart
+      Reson8 to apply" note and Restart now (the note also shows when a saved
+      choice differs from the running mode).
+    - The Viewer has the same integrated bar: the logo and "{sharer} · {stream}
+      — {room}", hidden in fullscreen and when the OS frame is used.
+
+  Key Files Modified:
+    apps/client/src/window-chrome.ts (new), scripts/window-chrome-smoke.mjs (new), package.json
+    apps/client/src/main.ts, preload.ts, preload-viewer.ts
+    apps/client/src/renderer/renderer.ts, index.html, viewer.html, viewer.ts
+
+  Verification:
+    - tsc client clean; lint exit 0; test:window-chrome passes.
+    - Windows 11, real window, real OS mouse input: one bar with the native
+      minimize/maximize/close inside it (Window Controls Overlay visible,
+      888 px free of 1024); dragging the bar moved the window and back;
+      clicking the server pill opened its menu without moving the window;
+      double-clicking the bar maximized (restore icon shown,
+      body.window-maximized) and double-clicking again restored; the native
+      minimize button minimized and the window restored; the saved position
+      survived three restarts; the Sharing chip showed (no-drag) and the
+      fullscreen state hid the bar; the Viewer opened with its own integrated
+      bar "Bar Check — Lobby" and native controls; switching to the system title
+      bar and Restart now relaunched with the OS frame, and back again.
+    - Pre-existing, unchanged by this item: with minimize-to-tray on, the
+      minimize button leaves the window minimized AND hidden (will-minimize
+      did not fire here) — identical with the OS frame, so not a regression;
+      restoring via a second launch (showMainWindow) works.
+    - Not checked here: macOS and Linux (X11/Wayland), snap layouts on hover.
+
+  Next Step: PRD 19 R1 — connect states.

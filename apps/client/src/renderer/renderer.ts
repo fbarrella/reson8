@@ -1129,6 +1129,12 @@ interface Reson8Api {
         roomName?: string,
     ): Promise<{ success: boolean; windowId?: number; error?: string }>;
     focusViewerWindow(windowId: number): Promise<boolean>;
+    /** The integrated title bar (PRD 19 R7). */
+    windowChrome: {
+        get(): Promise<{ integrated: boolean; systemTitleBarSaved: boolean; platform: string; maximized: boolean; fullscreen: boolean }>;
+        setSystemTitleBar(flag: boolean): Promise<{ saved: boolean; restartNeeded: boolean }>;
+        relaunch(): Promise<boolean>;
+    };
     closeViewerWindow(windowId: number): Promise<boolean>;
     /** The in-app stream stage (PRD 19 C10): one viewer socket in the preload, video placed into a container by id. */
     stage: {
@@ -6309,6 +6315,8 @@ function updateShareScreenButton(): void {
     // bigger stop button (`btnStopShareAlert`, wired below) and a
     // title-bar marker are the redundant, harder-to-miss cues instead.
     screenShareAlertBanner.classList.toggle("visible", isSharingScreen);
+    const sharingChip = document.getElementById("titlebar-sharing"); // PRD 19 R7: the title-bar cue
+    if (sharingChip) sharingChip.style.display = isSharingScreen ? "" : "none";
     updateWindowTitle();
     if (api.platform === "darwin") {
         btnShareScreen.title = "Screen sharing isn't available on macOS yet";
@@ -6475,6 +6483,7 @@ btnShareScreen.addEventListener("click", async () => {
 });
 
 btnStopShareAlert.addEventListener("click", stopSharingScreen);
+document.getElementById("titlebar-sharing")?.addEventListener("click", stopSharingScreen); // PRD 19 R7
 
 /**
  * Linux/Wayland-only path: uses `getDisplayMedia()` (via
@@ -15077,6 +15086,40 @@ chkLpAdultBlur.addEventListener("change", () => {
     writeBoolPref(LP_ADULT_BLUR_KEY, chkLpAdultBlur.checked);
     applyLinkPreviewBlurPreferences();
 });
+
+// ── Integrated title bar (PRD 19 R7) ─────────────────────────────────────────
+// The main process decides the frame before the window exists; the page only
+// learns which mode is in force (body classes drive the drag region, the space
+// for the OS controls and hiding the bar in fullscreen) and offers the switch.
+
+const chkSystemTitleBar = document.getElementById("chk-system-titlebar") as HTMLInputElement;
+const systemTitleBarRestart = document.getElementById("system-titlebar-restart") as HTMLDivElement;
+
+function applyWindowChromeState(state: { maximized: boolean; fullscreen: boolean }): void {
+    document.body.classList.toggle("window-maximized", state.maximized);
+    document.body.classList.toggle("window-fullscreen", state.fullscreen);
+}
+
+void api.windowChrome.get().then((chrome) => {
+    document.body.classList.toggle("integrated-titlebar", chrome.integrated);
+    document.body.classList.add(`platform-${chrome.platform}`);
+    applyWindowChromeState(chrome);
+    chkSystemTitleBar.checked = chrome.systemTitleBarSaved;
+    // Saved but not yet in force (changed, then not restarted): keep saying so.
+    systemTitleBarRestart.style.display = chrome.systemTitleBarSaved === chrome.integrated ? "" : "none";
+});
+api.on("window-chrome-state", applyWindowChromeState);
+
+chkSystemTitleBar.addEventListener("change", async () => {
+    const res = await api.windowChrome.setSystemTitleBar(chkSystemTitleBar.checked);
+    if (!res.saved) {
+        chkSystemTitleBar.checked = !chkSystemTitleBar.checked;
+        showToast("Couldn't save the title-bar choice.");
+        return;
+    }
+    systemTitleBarRestart.style.display = res.restartNeeded ? "" : "none";
+});
+document.getElementById("btn-system-titlebar-restart")?.addEventListener("click", () => void api.windowChrome.relaunch());
 
 const chkLinkPreviews = document.getElementById("chk-link-previews") as HTMLInputElement;
 chkLinkPreviews.checked = isLinkPreviewsEnabled();

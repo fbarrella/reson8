@@ -1912,6 +1912,29 @@ const api = {
         });
     },
 
+    // ── Integrated title bar (PRD 19 R7) ─────────────────────────────────
+
+    windowChrome: {
+        /** How this window's frame is drawn this run, and the saved choice for the next one. */
+        get(): Promise<{
+            integrated: boolean;
+            systemTitleBarSaved: boolean;
+            platform: string;
+            maximized: boolean;
+            fullscreen: boolean;
+        }> {
+            return ipcRenderer.invoke("window-chrome-get");
+        },
+        /** Saves "Use the system title bar"; it applies after a restart. */
+        setSystemTitleBar(flag: boolean): Promise<{ saved: boolean; restartNeeded: boolean }> {
+            return ipcRenderer.invoke("window-chrome-set-system-titlebar", !!flag);
+        },
+        /** Restarts Reson8 through the normal quit path (the socket disconnects cleanly). */
+        relaunch(): Promise<boolean> {
+            return ipcRenderer.invoke("app-relaunch");
+        },
+    },
+
     /** Brings a Viewer window this client opened to the front (PRD 19 C10). */
     focusViewerWindow(windowId: number): Promise<boolean> {
         return ipcRenderer.invoke("viewer-focus", windowId);
@@ -2360,6 +2383,9 @@ ipcRenderer.on(
 
 // ── Auto-Updater IPC from main process (PRD 10.1) ──────────────────────────
 ipcRenderer.on("viewer-closed", (_event, data: { windowId: number }) => emit("viewer-closed", data)); // PRD 19 C10
+ipcRenderer.on("window-chrome-state", (_event, data: { maximized: boolean; fullscreen: boolean }) =>
+    emit("window-chrome-state", data),
+); // PRD 19 R7
 ipcRenderer.on("update-available", (_event, data: { version: string }) => emit("update-available", data));
 ipcRenderer.on("download-progress", (_event, data: { percent: number }) => emit("download-progress", data));
 ipcRenderer.on("update-downloaded", () => emit("update-downloaded", null));

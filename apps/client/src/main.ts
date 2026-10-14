@@ -16,6 +16,7 @@ import { startCapture, resolvePidForWindowSourceId, listAudioProducingApps, plat
 import type { CaptureHandle } from "@reson8/native-audio";
 import MarkdownIt from "markdown-it";
 import { loadWindowState, trackWindowState } from "./window-state.js";
+import { frameOptions, readWindowChromePrefs, writeWindowChromePrefs } from "./window-chrome.js";
 import { displayDomain, toFixerUrl } from "./link-fixers.js";
 import {
     createNewIdentityAfterLock,
@@ -456,6 +457,22 @@ async function fetchLinkPreview(url: string): Promise<LinkPreviewData | null> {
 }
 
 let mainWindow: BrowserWindow | null = null;
+/**
+ * The title-bar mode in force for THIS run (PRD 19 R7): read once at startup;
+ * a change in Settings is saved and applies after a restart.
+ */
+let systemTitleBarActive = false;
+
+/** Tells a window's page whether it is maximized / fullscreen (it hides its bar in fullscreen). */
+function wireWindowChromeEvents(win: BrowserWindow): void {
+    const send = (): void => {
+        if (win.isDestroyed()) return;
+        win.webContents.send("window-chrome-state", { maximized: win.isMaximized(), fullscreen: win.isFullScreen() });
+    };
+    for (const ev of ["maximize", "unmaximize", "enter-full-screen", "leave-full-screen"] as const) {
+        win.on(ev as any, send);
+    }
+}
 /** webContents id of a Viewer window → its viewer ticket (PRD 17.12). */
 const viewerTickets = new Map<number, string>();
 /** BrowserWindow id of an open Viewer window → the share it shows (PRD 19 C10). */
@@ -691,6 +708,8 @@ function createWindow(): void {
         minHeight: 600,
         title: "Reson8",
         icon: path.join(__dirname, "..", "assets", "icon.png"),
+        // The integrated title bar (PRD 19 R7): the OS controls drawn inside #titlebar.
+        ...frameOptions(process.platform, systemTitleBarActive),
         webPreferences: {
             preload: path.join(__dirname, "preload.js"),
             contextIsolation: true,
@@ -701,6 +720,7 @@ function createWindow(): void {
 
     if (savedWindowState.isMaximized) mainWindow.maximize();
     trackWindowState(mainWindow);
+    wireWindowChromeEvents(mainWindow);
 
     mainWindow.loadFile(path.join(__dirname, "renderer", "index.html"));
 
@@ -991,6 +1011,9 @@ app.whenReady().then(() => {
     if (process.env.NODE_ENV !== "development") {
         Menu.setApplicationMenu(null);
     }
+
+    // The title-bar mode for this run, before any window exists (PRD 19 R7).
+    systemTitleBarActive = readWindowChromePrefs(app.getPath("userData")).systemTitleBar;
 
     // Expose instance ID to renderer/preload
     // Must run before getInstanceId(), which creates the ID file as a side effect.
@@ -1515,6 +1538,8 @@ app.whenReady().then(() => {
                 minWidth: 480,
                 minHeight: 320,
                 title: `${str(args.nickname, 100)}${roomName ? ` — ${roomName}` : ""}`,
+                // The same integrated bar as the main window (PRD 19 R7).
+                ...frameOptions(process.platform, systemTitleBarActive),
                 webPreferences: {
                     preload: path.join(__dirname, "preload-viewer.js"),
                     contextIsolation: true,
@@ -1547,6 +1572,7 @@ app.whenReady().then(() => {
             }
             const windowId = viewerWindow.id;
             viewerWindows.set(windowId, { targetUserId: args.targetUserId, channelId: args.channelId });
+            wireWindowChromeEvents(viewerWindow);
             viewerWindow.on("closed", () => {
                 viewerTickets.delete(contentsId);
                 viewerServers.delete(contentsId);
@@ -1558,6 +1584,38 @@ app.whenReady().then(() => {
             return { success: true, windowId };
         },
     );
+
+    // ── Integrated title bar (PRD 19 R7) ─────────────────────────────────
+    // Any of our windows may ask how its frame is drawn; only the main window
+    // may change the saved choice or restart the app.
+    ipcMain.handle("window-chrome-get", (event) => {
+        const win = BrowserWindow.fromWebContents(event.sender);
+        const pref = readWindowChromePrefs(app.getPath("userData")).systemTitleBar;
+        return {
+            integrated: !systemTitleBarActive,
+            systemTitleBarSaved: pref,
+            platform: process.platform,
+            maximized: !!win?.isMaximized(),
+            fullscreen: !!win?.isFullScreen(),
+        };
+    });
+    ipcMain.handle("window-chrome-set-system-titlebar", (event, flag: unknown) => {
+        if (!fromMainWindow(event) || typeof flag !== "boolean") return { saved: false, restartNeeded: false };
+        try {
+            writeWindowChromePrefs(app.getPath("userData"), { systemTitleBar: flag });
+        } catch (err) {
+            console.error("[window-chrome] couldn't save the title-bar choice:", err);
+            return { saved: false, restartNeeded: false };
+        }
+        return { saved: true, restartNeeded: flag !== systemTitleBarActive };
+    });
+    ipcMain.handle("app-relaunch", (event) => {
+        if (!fromMainWindow(event)) return false;
+        // app.quit() (not exit) so the graceful-disconnect handler runs.
+        app.relaunch();
+        app.quit();
+        return true;
+    });
 
     // The main window's controls over a Viewer it opened (PRD 19 C10). Both only
     // accept ids this process recorded — never an arbitrary window.

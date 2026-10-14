@@ -31,6 +31,7 @@
         "test:identity-backup": "tsc --build && node scripts/identity-backup-smoke.mjs",
         "test:version": "tsc --build && node scripts/app-version-smoke.mjs",
         "test:saved-passwords": "tsc --build && node scripts/saved-passwords-smoke.mjs",
+        "test:window-chrome": "tsc --build && node scripts/window-chrome-smoke.mjs",
         "typecheck": "tsc --noEmit"
     },
     "build": {
