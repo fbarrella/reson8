@@ -7979,6 +7979,42 @@
       color: var(--color-text);
     }
 
+    .settings-nav-server {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    #admin-modal[data-mode="client"] #settings-nav-avatar,
+    #admin-modal[data-mode="client"] .settings-nav-note {
+      display: none;
+    }
+
+    .settings-nav-note {
+      display: flex;
+      gap: 6px;
+      margin-top: 12px;
+      font-size: 12px;
+      color: var(--color-neutral-400);
+    }
+
+    #admin-modal[data-mode="server"] .settings-nav-title {
+      font-size: 16px;
+    }
+
+    #admin-modal[data-mode="server"] .settings-nav-sub {
+      margin-top: 0;
+    }
+
+    /* The old "Identity log" button bar: the nav item replaced it (PRD 19 R4). */
+    #identity-log-bar {
+      display: none !important;
+    }
+
+    .bans-note {
+      margin: 0 0 16px;
+    }
+
     .settings-nav-sub {
       margin-top: 6px;
       font-size: 12.5px;
@@ -9171,8 +9207,14 @@
     <div class="modal-content wide settings-shell">
       <nav class="settings-nav" aria-label="Settings pages">
         <div class="settings-nav-head">
-          <div class="settings-nav-title" id="settings-nav-title">Settings</div>
-          <div class="settings-nav-sub" id="settings-nav-sub">Saved on this device. Server options live in the server menu.</div>
+          <div class="settings-nav-server">
+            <span id="settings-nav-avatar"></span>
+            <div class="settings-nav-head-text">
+              <div class="settings-nav-title" id="settings-nav-title">Settings</div>
+              <div class="settings-nav-sub" id="settings-nav-sub">Saved on this device. Server options live in the server menu.</div>
+            </div>
+          </div>
+          <div class="settings-nav-note" id="settings-nav-note"><i class="ph ph-shield-check" aria-hidden="true"></i>Admins only · applies to everyone</div>
         </div>
         <div class="settings-nav-group" data-nav-mode="client">
           <div class="section-label">You</div>
@@ -9193,7 +9235,20 @@
         <div class="settings-nav-group" data-nav-mode="server">
           <div class="section-label">Server</div>
           <button class="settings-tab-btn" data-settings-tab="server" id="settings-tab-server"><i class="ph ph-sliders-horizontal" aria-hidden="true"></i>General</button>
-          <button class="settings-tab-btn" data-settings-tab="roles" id="settings-tab-roles"><i class="ph ph-users" aria-hidden="true"></i>Members<span class="pending-badge" id="pending-badge-tab" style="display:none;"></span></button>
+        </div>
+        <div class="settings-nav-group" data-nav-mode="server">
+          <div class="section-label">People</div>
+          <button class="settings-tab-btn" data-settings-tab="roles" id="settings-tab-roles"><i class="ph ph-users-three" aria-hidden="true"></i>Members</button>
+          <button class="settings-tab-btn" data-settings-tab="joining" id="settings-tab-joining"><i class="ph ph-door-open" aria-hidden="true"></i>Joining &amp; invites<span class="pending-badge" id="pending-badge-tab" style="display:none;"></span></button>
+          <button class="settings-tab-btn" data-settings-tab="bans" id="settings-tab-bans"><i class="ph ph-prohibit" aria-hidden="true"></i>Bans</button>
+        </div>
+        <div class="settings-nav-group" data-nav-mode="server">
+          <div class="section-label">Security</div>
+          <button class="settings-tab-btn" data-settings-tab="signin" id="settings-tab-signin"><i class="ph ph-lock-key" aria-hidden="true"></i>Sign-in security</button>
+          <button class="settings-tab-btn" data-settings-tab="identitylog" id="settings-tab-identitylog" style="display:none;"><i class="ph ph-fingerprint" aria-hidden="true"></i>Identity log</button>
+        </div>
+        <div class="settings-nav-group" data-nav-mode="server">
+          <div class="section-label">Content</div>
           <button class="settings-tab-btn" data-settings-tab="emojis" id="settings-tab-emojis"><i class="ph ph-smiley" aria-hidden="true"></i>Emoji</button>
         </div>
       </nav>
@@ -9208,65 +9263,16 @@
       </div>
 
       <!-- Roles Tab -->
-      <div class="settings-panel" data-settings-panel="roles">
-        <h2 class="settings-page-title">Members</h2>
-        <p class="settings-page-sub">Roles, approvals, invites and bans for the people on this server.</p>
-        <!-- Identity log (PRD 18.4) — ADMIN only; the server checks it too. -->
-        <div class="identity-log-bar" id="identity-log-bar" style="display:none;">
-          <span>Who bound a key, who reset one, and which sign-ins were refused.</span>
-          <button type="button" class="btn btn-cancel" id="btn-identity-log">Identity log</button>
-        </div>
-        <div id="identity-log-panel" style="display:none;">
-          <div class="identity-log-head">
-            <button type="button" class="btn btn-cancel" id="btn-identity-log-back">← Back to users</button>
-            <span class="identity-log-filter" id="identity-log-filter"></span>
-            <button type="button" class="btn btn-cancel" id="btn-identity-log-clear-filter" style="display:none;">Show everyone</button>
-          </div>
-          <div id="identity-log-list" class="admin-user-list"></div>
-          <button type="button" class="btn btn-cancel" id="btn-identity-log-more" style="display:none; width:100%; margin-top:6px;">Load older</button>
-        </div>
-        <!-- People waiting to be let in (PRD 18.8) -->
-        <div id="pending-approvals-section" style="display:none;">
-          <div class="banned-addresses-title" style="margin-top:0;">Waiting for approval</div>
-          <div id="pending-approvals-list"></div>
-        </div>
-        <!-- Invite codes (PRD 18.9) -->
-        <div id="invites-section" style="display:none;">
-          <div style="display:flex; align-items:center; justify-content:space-between;">
-            <div class="banned-addresses-title" style="margin:6px 0;">Invites</div>
-            <button class="btn btn-create" id="btn-create-invite" style="padding:4px 10px; font-size:11px;">Create invite</button>
-          </div>
-          <div id="invites-list"></div>
-        </div>
-        <div id="admin-user-list" class="admin-user-list">
-          <div class="admin-empty">Loading users...</div>
-        </div>
-        <!-- Banned addresses (PRD 18.7) — BAN_USER holders; masked unless ADMIN -->
-        <div id="banned-addresses-section" style="display:none;">
-          <div class="banned-addresses-title">Banned addresses</div>
-          <div id="banned-addresses-list"></div>
-        </div>
-      </div>
-
-      <!-- Server Tab (admin-only server-wide settings) -->
       <div class="settings-panel" data-settings-panel="server">
         <h2 class="settings-page-title">General</h2>
-        <p class="settings-page-sub">How this server looks and what it allows, for everyone on it.</p>
-        <div class="server-icon-row" id="server-icon-row">
-          <span id="server-icon-row-preview"></span>
-          <div class="server-icon-row-text">
-            <div class="server-icon-row-title">Server icon</div>
-            <div class="server-icon-row-note">Shown in the rail, the header and saved server lists. Anyone with the link can open it.</div>
-          </div>
-          <div class="server-icon-row-actions">
-            <button type="button" class="btn btn-secondary" id="btn-server-icon-upload">Upload</button>
-            <button type="button" class="btn btn-ghost" id="btn-server-icon-remove" style="display:none;">Remove</button>
-          </div>
-        </div>
+        <p class="settings-page-sub">Features and limits for everyone on this server.</p>
+        <section class="settings-section">
+          <div class="section-label">Features</div>
+          <div class="settings-card">
         <div class="toggle-row">
           <div class="toggle-row-info">
             <div class="toggle-row-text">
-              <span class="toggle-row-title">👋 Nudge</span>
+              <span class="toggle-row-title">Nudge</span>
               <span class="toggle-row-desc">Lets members nudge each other for attention (30s cooldown per pair, not configurable)</span>
             </div>
           </div>
@@ -9278,7 +9284,7 @@
         <div class="toggle-row">
           <div class="toggle-row-info">
             <div class="toggle-row-text">
-              <span class="toggle-row-title">🖥️ Screen Sharing</span>
+              <span class="toggle-row-title">Screen sharing</span>
               <span class="toggle-row-desc">Lets members share their screen in voice channels</span>
             </div>
           </div>
@@ -9287,10 +9293,29 @@
             <span class="toggle-slider"></span>
           </label>
         </div>
+          </div>
+        </section>
+        <section class="settings-section">
+          <div class="section-label">Identity</div>
+        <div class="server-icon-row" id="server-icon-row">
+          <span id="server-icon-row-preview"></span>
+          <div class="server-icon-row-text">
+            <div class="server-icon-row-title">Server icon</div>
+            <div class="server-icon-row-note">Shown in the rail, the header and saved server lists. Anyone with the link can open it.</div>
+          </div>
+          <div class="server-icon-row-actions">
+            <button type="button" class="btn btn-secondary" id="btn-server-icon-upload">Upload</button>
+            <button type="button" class="btn btn-ghost" id="btn-server-icon-remove" style="display:none;">Remove</button>
+          </div>
+        </div>
+        </section>
+        <section class="settings-section">
+          <div class="section-label">Messages</div>
+          <div class="settings-card">
         <div class="toggle-row">
           <div class="toggle-row-info">
             <div class="toggle-row-text">
-              <span class="toggle-row-title">💬 Max Message Length</span>
+              <span class="toggle-row-title">Max message length</span>
               <span class="toggle-row-desc">Maximum characters allowed per chat message (channel messages and DMs) — protects server resources against oversized messages</span>
             </div>
           </div>
@@ -9299,11 +9324,87 @@
             <button class="btn btn-connect" id="btn-save-max-message-length">Save</button>
           </div>
         </div>
-        <!-- Require signed identity (PRD 18.4) -->
+          </div>
+        </section>
+      </div>
+
+      <div class="settings-panel" data-settings-panel="roles">
+        <h2 class="settings-page-title">Members</h2>
+        <p class="settings-page-sub">Everyone who has an identity on this server.</p>
+        <div class="identity-log-bar" id="identity-log-bar" style="display:none;">
+          <span>Who bound a key, who reset one, and which sign-ins were refused.</span>
+          <button type="button" class="btn btn-cancel" id="btn-identity-log">Identity log</button>
+        </div>
+        <div id="admin-user-list" class="admin-user-list">
+          <div class="admin-empty">Loading users...</div>
+        </div>
+      </div>
+
+      <div class="settings-panel" data-settings-panel="joining">
+        <h2 class="settings-page-title">Joining &amp; invites</h2>
+        <p class="settings-page-sub">Who can get in for the first time, and how.</p>
+        <section class="settings-section" id="joining-switches">
+          <div class="section-label">Who can join</div>
+          <div class="settings-card">
         <div class="toggle-row">
           <div class="toggle-row-info">
             <div class="toggle-row-text">
-              <span class="toggle-row-title">🔒 Require signed identity</span>
+              <span class="toggle-row-title">Approve new people</span>
+              <span class="toggle-row-desc">People who have joined before aren't affected. New people wait until a moderator approves them below.</span>
+            </div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="chk-require-approval">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+        <div class="toggle-row">
+          <div class="toggle-row-info">
+            <div class="toggle-row-text">
+              <span class="toggle-row-title">Require an invite code</span>
+              <span class="toggle-row-desc">People who have joined before aren't affected. New people need one of the codes below. Works together with "Approve new people".</span>
+            </div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="chk-require-invite">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+          </div>
+        </section>
+        <div id="pending-approvals-section" style="display:none;">
+          <div class="banned-addresses-title" style="margin-top:0;">Waiting for approval</div>
+          <div id="pending-approvals-list"></div>
+        </div>
+        <div id="invites-section" style="display:none;">
+          <div style="display:flex; align-items:center; justify-content:space-between;">
+            <div class="banned-addresses-title" style="margin:6px 0;">Invites</div>
+            <button class="btn btn-create" id="btn-create-invite" style="padding:4px 10px; font-size:11px;">Create invite</button>
+          </div>
+          <div id="invites-list"></div>
+        </div>
+      </div>
+
+      <div class="settings-panel" data-settings-panel="bans">
+        <h2 class="settings-page-title">Bans</h2>
+        <p class="settings-page-sub">People and addresses that can't join this server.</p>
+        <p class="settings-note bans-note">Banned people are marked <strong>BANNED</strong> in Members, where you can unban them.</p>
+        <div id="banned-addresses-section" style="display:none;">
+          <div class="banned-addresses-title">Banned addresses</div>
+          <div id="banned-addresses-list"></div>
+        </div>
+      </div>
+
+      <div class="settings-panel" data-settings-panel="signin">
+        <h2 class="settings-page-title">Sign-in security</h2>
+        <p class="settings-page-sub">How the server checks that people are who they say they are.</p>
+        <section class="settings-section">
+          <div class="section-label">Identity</div>
+          <div class="settings-card">
+        <div class="toggle-row">
+          <div class="toggle-row-info">
+            <div class="toggle-row-text">
+              <span class="toggle-row-title">Require signed identity</span>
               <span class="toggle-row-desc">Refuse clients older than 2.6.0, which can't prove who they are. People who already connected with 2.6.0 or newer are protected either way.</span>
               <span class="toggle-row-note" id="require-signed-note" style="display:none;"></span>
             </div>
@@ -9313,35 +9414,10 @@
             <span class="toggle-slider"></span>
           </label>
         </div>
-        <!-- Approve new users (PRD 18.8) -->
-        <div class="toggle-row">
-          <div class="toggle-row-info">
-            <div class="toggle-row-text">
-              <span class="toggle-row-title">🚪 Approve new users</span>
-              <span class="toggle-row-desc">People who have joined before aren't affected. New people wait until a moderator approves them in User Management.</span>
-            </div>
           </div>
-          <label class="toggle-switch">
-            <input type="checkbox" id="chk-require-approval">
-            <span class="toggle-slider"></span>
-          </label>
-        </div>
-        <!-- Require an invite code (PRD 18.9) -->
-        <div class="toggle-row">
-          <div class="toggle-row-info">
-            <div class="toggle-row-text">
-              <span class="toggle-row-title">🎟️ Require an invite code for new users</span>
-              <span class="toggle-row-desc">People who have joined before aren't affected. New people need a code from User Management → Invites. Works together with "Approve new users".</span>
-            </div>
-          </div>
-          <label class="toggle-switch">
-            <input type="checkbox" id="chk-require-invite">
-            <span class="toggle-slider"></span>
-          </label>
-        </div>
-        <!-- Connection names / relay protection (PRD 18.5) -->
+        </section>
         <div class="relay-hosts" id="relay-hosts-section" style="display:none;">
-          <div class="relay-hosts-title">🛡️ Connection names (relay protection)</div>
+          <div class="relay-hosts-title">Connection names · relay protection</div>
           <p class="relay-hosts-desc">Only accept sign-ins made for these addresses. This protects your users if they ever connect to a malicious server that tries to pass this server's sign-in challenge on. List <strong>every</strong> address people use to reach this server.</p>
           <div class="relay-hosts-status" id="relay-hosts-status"></div>
           <div id="relay-hosts-list"></div>
@@ -9354,6 +9430,20 @@
           <div class="relay-hosts-actions">
             <button type="button" class="btn btn-connect" id="btn-relay-hosts-save">Save</button>
           </div>
+        </div>
+      </div>
+
+      <div class="settings-panel" data-settings-panel="identitylog">
+        <h2 class="settings-page-title">Identity log</h2>
+        <p class="settings-page-sub">Who bound a key, whose key was reset, and which sign-ins were refused.</p>
+        <div id="identity-log-panel" style="display:none;">
+          <div class="identity-log-head">
+            <button type="button" class="btn btn-cancel" id="btn-identity-log-back">← Back to users</button>
+            <span class="identity-log-filter" id="identity-log-filter"></span>
+            <button type="button" class="btn btn-cancel" id="btn-identity-log-clear-filter" style="display:none;">Show everyone</button>
+          </div>
+          <div id="identity-log-list" class="admin-user-list"></div>
+          <button type="button" class="btn btn-cancel" id="btn-identity-log-more" style="display:none; width:100%; margin-top:6px;">Load older</button>
         </div>
       </div>
 

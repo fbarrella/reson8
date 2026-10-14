@@ -3180,3 +3180,52 @@ Feature/Fix: Client Settings restyle — left navigation (PRD 19 R3)
     - Not driven here: server mode with an admin (R4 covers it).
 
   Next Step: PRD 19 R4 — server settings pages.
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Server settings pages (PRD 19 R4)
+
+  Problem: the server's options lived in three crowded Settings tabs —
+  "User Management" held the member list, approvals, invites, address bans
+  and the identity log; "Server" mixed features with sign-in security.
+
+  Solution:
+    - Server mode of the Settings dialog (R3) now has the server's own header
+      (its icon/initials, name, "Server settings", "Admins only · applies to
+      everyone") and seven pages in four groups: Server — General; People —
+      Members, Joining & invites, Bans; Security — Sign-in security, Identity
+      log; Content — Emoji.
+    - Today's content was MOVED, not rebuilt (same ids and handlers; a script
+      check confirmed no id was lost): General = Features (nudge, screen
+      sharing), Identity (C5's server icon row), Messages (max length);
+      Members = the member list; Joining & invites = the approval and invite
+      switches, the waiting list and the invites; Bans = address bans (with a
+      note that banned people are marked in Members, where they are
+      unbanned); Sign-in security = require signed identity and connection
+      names; Identity log = the log, which a member row's menu still opens
+      filtered to that person, and "Back to users" returns to Members.
+    - Each page keeps today's gate: General and Sign-in security for
+      isAdminUser, Members for isAdminUser/canBanUsers, Joining for either
+      (its two switches only for isAdminUser, as UPDATE_SERVER_SETTINGS
+      needs), Bans for canBanUsers, Emoji for canManageEmojis, Identity log
+      for ADMIN (learned from my roles in the member list, as before). The
+      pending-approvals badge moved to Joining & invites.
+    - Not built from the frames: the member search/filters and the new member
+      row design (5a), "Approve all" and the emoji library grid (5e) — new
+      behaviour, not a restyle.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts, index.html
+
+  Verification:
+    - tsc client clean; lint exit 0.
+    - Real client as a server admin (a temporary ADMIN role, removed after):
+      the header menu's Server settings opened server mode with the server's
+      avatar and name and all seven pages; screenshots of every page compared
+      with 5a–5f; the join switches visible for the admin; the identity log
+      listed 47 entries, opened filtered from a member and Back returned to
+      Members; toggling Nudge on General changed the server's setting (read
+      back through GET_SERVER_SETTINGS) and was restored. A member without
+      rights still gets R3's empty server page.
+
+  Next Step: PRD 19 R5 — dialogs.

@@ -3809,11 +3809,13 @@ function canSeeServerSettings(): boolean {
  */
 function setSettingsMode(mode: "client" | "server"): void {
     adminModal.dataset.mode = mode;
-    (document.getElementById("settings-nav-title") as HTMLElement).textContent = mode === "server" ? "Server settings" : "Settings";
+    const serverName = connectedServerName ?? "This server";
+    (document.getElementById("settings-nav-title") as HTMLElement).textContent = mode === "server" ? serverName : "Settings";
     (document.getElementById("settings-nav-sub") as HTMLElement).textContent =
-        mode === "server"
-            ? connectedServerName ?? "This server"
-            : "Saved on this device. Server options live in the server menu.";
+        mode === "server" ? "Server settings" : "Saved on this device. Server options live in the server menu.";
+    (document.getElementById("settings-nav-avatar") as HTMLElement).replaceChildren(
+        ...(mode === "server" ? [serverAvatarElement(serverName, currentServerIcon(), 36)] : []),
+    );
     const active = document.querySelector<HTMLElement>(".settings-tab-btn.active");
     const inMode = (b: Element | null): boolean => b?.closest(".settings-nav-group")?.getAttribute("data-nav-mode") === mode;
     if (!inMode(active)) {
@@ -3842,7 +3844,7 @@ function openClientSettings(page?: string): void {
 function openServerSettings(): void {
     setSettingsMode("server");
     void openSettingsPanel();
-    for (const id of ["settings-tab-server", "settings-tab-roles", "settings-tab-emojis"]) {
+    for (const id of ["settings-tab-server", "settings-tab-roles", "settings-tab-joining", "settings-tab-bans", "settings-tab-emojis"]) {
         const btn = document.getElementById(id) as HTMLButtonElement | null;
         if (btn && btn.style.display !== "none") {
             btn.click();
@@ -8178,8 +8180,11 @@ function renderAdminUsers(users: any[]): void {
         }
     });
 
-    // The identity log is ADMIN-only on the server too (PRD 18.4).
+    // The identity log is ADMIN-only on the server too (PRD 18.4); its nav item follows (PRD 19 R4).
+    identityLogAllowed = iAmAdmin;
     identityLogBar.style.display = iAmAdmin ? "flex" : "none";
+    const logTab = document.getElementById("settings-tab-identitylog");
+    if (logTab) logTab.style.display = iAmAdmin ? "" : "none";
 
     for (const user of users) {
         const row = document.createElement("div");
@@ -11324,6 +11329,8 @@ async function refreshOnlineCount(): Promise<void> {
 let isAdminUser = false;
 let canManageEmojis = false;
 let canBanUsers = false;
+/** The identity log is ADMIN-only (PRD 18.4); learned from my own roles in the member list. */
+let identityLogAllowed = false;
 
 // Settings tab switching
 const settingsTabBtns = document.querySelectorAll(".settings-tab-btn");
@@ -11351,6 +11358,18 @@ function applySettingsTabVisibility(): void {
     settingsTabRoles.style.display = isConnected && (isAdminUser || canBanUsers) ? "" : "none";
     settingsTabEmojis.style.display = isConnected && canManageEmojis ? "" : "none";
     settingsTabServer.style.display = isConnected && isAdminUser ? "" : "none";
+    // PRD 19 R4: the pages split out of User Management and the Server tab keep their old gates.
+    const showTab = (id: string, on: boolean): void => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = on ? "" : "none";
+    };
+    showTab("settings-tab-joining", isConnected && (isAdminUser || canBanUsers));
+    showTab("settings-tab-bans", isConnected && canBanUsers);
+    showTab("settings-tab-signin", isConnected && isAdminUser);
+    showTab("settings-tab-identitylog", isConnected && identityLogAllowed);
+    // The two join switches need literal ADMIN (UPDATE_SERVER_SETTINGS); BAN_USER holders only see the queue and invites.
+    const joiningSwitches = document.getElementById("joining-switches");
+    if (joiningSwitches) joiningSwitches.style.display = isConnected && isAdminUser ? "" : "none";
 
     const activeTabBtn = document.querySelector(".settings-tab-btn.active") as HTMLButtonElement | null;
     if (activeTabBtn && activeTabBtn.style.display === "none") {
@@ -12196,23 +12215,33 @@ function showIdentityLog(user: { id: string; nickname: string } | null = null): 
     identityLogUser = user;
     identityLogFilter.textContent = user ? `Showing only ${user.nickname}` : "All users";
     btnIdentityLogClearFilter.style.display = user ? "" : "none";
-    adminUserList.style.display = "none";
-    identityLogBar.style.display = "none";
     identityLogPanel.style.display = "";
+    // Its own page since PRD 19 R4 (a member row's menu lands here filtered to that person).
+    const tab = document.getElementById("settings-tab-identitylog") as HTMLButtonElement | null;
+    if (tab && !tab.classList.contains("active")) {
+        tab.style.display = "";
+        settingsTabBtns.forEach((b) => b.classList.remove("active"));
+        settingsPanels.forEach((p) => p.classList.remove("active"));
+        tab.classList.add("active");
+        document.querySelector('.settings-panel[data-settings-panel="identitylog"]')?.classList.add("active");
+    }
     void loadIdentityLog(true);
 }
 
 function hideIdentityLog(): void {
-    identityLogPanel.style.display = "none";
+    // The page is always the log; "hiding" resets its filter (PRD 19 R4).
+    identityLogPanel.style.display = "";
     adminUserList.style.display = "";
     identityLogUser = null;
 }
 
 btnIdentityLog.addEventListener("click", () => showIdentityLog(null));
+document.getElementById("settings-tab-identitylog")?.addEventListener("click", () => {
+    if (identityLogUser === null) void loadIdentityLog(true);
+});
 btnIdentityLogBack.addEventListener("click", () => {
     hideIdentityLog();
-    // Put the bar back (renderAdminUsers hid it when the log opened).
-    identityLogBar.style.display = "flex";
+    (document.getElementById("settings-tab-roles") as HTMLButtonElement | null)?.click(); // back to Members
 });
 btnIdentityLogClearFilter.addEventListener("click", () => showIdentityLog(null));
 btnIdentityLogMore.addEventListener("click", () => void loadIdentityLog(false));
