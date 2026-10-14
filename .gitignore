@@ -39,3 +39,6 @@ npm-debug.log*
 
 # Personal, machine-local AI agent instructions
 CLAUDE.local.md
+
+# TypeScript incremental build cache
+*.tsbuildinfo
