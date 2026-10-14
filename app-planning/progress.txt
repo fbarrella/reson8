@@ -1750,3 +1750,35 @@ Feature/Fix: Client tsconfig on Node16 module resolution (PRD 20 H2)
       test-build:win (dist is byte-identical, so the package would be too).
 
   Next Step: PRD 20 is implemented except L1 (D1 = b) and the owner's V1-V3.
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Window border and rounded corners on Linux
+
+  Problem: On Linux (Arch + KDE Plasma) the app rendered completely square
+  with no border, unlike Windows. The 1 px border and the rounded corners on
+  Windows are NOT the app's: Windows 11 draws them for a frameless window. The
+  page itself (html/body) never had a border or radius, and Linux compositors
+  draw nothing for a frameless window.
+
+  Solution: On Linux with the integrated title bar the window is created
+  transparent (main.ts: transparent + backgroundColor #00000000), and the
+  page draws it: body.platform-linux.integrated-titlebar gets a 1 px border
+  (white at 22 %) and a 10 px radius, removed while maximized/fullscreen. html
+  gets a 1 %-opaque colour on purpose: with a fully transparent root, the
+  body's background propagates to the whole canvas and the corners would stay
+  square. "Use the system title bar" is unaffected (no transparency, OS frame).
+
+  Key Files Modified:
+    apps/client/src/main.ts, apps/client/src/renderer/index.html
+
+  Verification:
+    - tsc --noEmit; lint exit 0.
+    - Not testable on Linux from this Windows machine. Simulated: a temporary
+      test hook made the Windows build create the same transparent window and
+      the class was added by hand — the border and radius rendered correctly
+      (hook removed). The owner confirms on Arch/KDE.
+    - Known limits: the OS window buttons' hover box is square at the top-right
+      corner; a snapped/tiled (not maximized) window keeps the border and radius.
+      If a Linux setup without a compositor shows black corners, "Use the system
+      title bar" is the way back.

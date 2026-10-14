@@ -267,6 +267,20 @@
       --controls-left: 0px;
     }
 
+    /* Linux draws no window border or rounded corners (Windows 11 does it for a frameless window), so the
+       page does: a 1 px border and a radius on the body of the TRANSPARENT window (main.ts), none while
+       maximized or fullscreen. html gets a barely-there colour on purpose: with a fully transparent root the
+       body's background would be propagated to the whole canvas and the corners would stay square. */
+    html:has(body.platform-linux.integrated-titlebar) {
+      background: rgba(0, 0, 0, 0.01);
+    }
+
+    body.platform-linux.integrated-titlebar:not(.window-maximized):not(.window-fullscreen) {
+      box-sizing: border-box;
+      border: 1px solid color-mix(in srgb, var(--color-white) 22%, transparent);
+      border-radius: 10px;
+    }
+
     body.integrated-titlebar #titlebar {
       -webkit-app-region: drag;
       user-select: none;

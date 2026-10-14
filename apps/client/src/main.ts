@@ -713,6 +713,10 @@ function createWindow(): void {
         icon: path.join(__dirname, "..", "assets", "icon.png"),
         // The integrated title bar (PRD 19 R7): the OS controls drawn inside #titlebar.
         ...frameOptions(process.platform, systemTitleBarActive),
+        // Windows 11 draws a 1 px border and rounded corners round a frameless window; Linux draws
+        // nothing, so the page paints both itself (index.html, body.platform-linux). That needs a
+        // transparent window: the corners outside the rounded body must show the desktop.
+        ...(process.platform === "linux" && !systemTitleBarActive ? { transparent: true, backgroundColor: "#00000000" } : {}),
         webPreferences: {
             preload: path.join(__dirname, "preload.js"),
             contextIsolation: true,
