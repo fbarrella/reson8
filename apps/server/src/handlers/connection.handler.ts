@@ -285,6 +285,9 @@ export function registerConnectionHandlers(
         }
 
         await presence.leaveServer(userId, serverId);
+        // "Last seen" for the Members page (PRD 20 M1): only the owning socket's final
+        // teardown gets here, after the grace period. Fire-and-forget.
+        void app.prisma.user.update({ where: { id: userId }, data: { lastSeenAt: new Date() } }).catch(() => {});
         // The session is over: its Viewer windows' tickets go with it (PRD 17.12).
         await revokeViewerTickets(app.redis, userId).catch(() => {});
 

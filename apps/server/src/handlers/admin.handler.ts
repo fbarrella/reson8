@@ -20,6 +20,8 @@ import type {
 import { requirePermission, requireAnyPermission } from "../middleware/permissions.middleware.js";
 import { PermissionFlags } from "@reson8/shared-types";
 import { revokeViewerTickets } from "../services/viewer-ticket.service.js";
+import { getUserPermissions, isAdmin } from "../services/permissions.service.js";
+import { decideRoleChange } from "../services/role-guard.js";
 import { keyFingerprint } from "../services/identity.service.js";
 import { syncModeratorRoom } from "./approval.handler.js";
 import { adminUsersWhere, mapAdminUser } from "../services/admin-users.js";
@@ -233,6 +235,38 @@ export function registerAdminHandlers(
 
             try {
                 const { userId, roleId, action } = payload;
+
+                // Safety rules (PRD 20 M1): the role must belong to THIS server, and an
+                // admin change needs an admin; nobody removes their own admin/Member
+                // role; the server keeps at least one admin.
+                const serverId = socket.data.serverId;
+                const role = await app.prisma.role.findFirst({ where: { id: roleId, serverId } });
+                if (!role) {
+                    ack({ success: false, error: "Role not found" });
+                    return;
+                }
+                const adminBit = BigInt(PermissionFlags.ADMIN);
+                const roleGrantsAdmin = (role.permissions & adminBit) !== 0n;
+                const actorPerms = await getUserPermissions(app.prisma, socket.data.userId, serverId);
+                const adminHolders = await app.prisma.userRole.findMany({
+                    where: { role: { serverId } },
+                    include: { role: { select: { id: true, permissions: true } } },
+                });
+                const holders = adminHolders.filter((ur) => (ur.role.permissions & adminBit) !== 0n);
+                const decision = decideRoleChange({
+                    actorId: socket.data.userId,
+                    actorIsAdmin: isAdmin(actorPerms),
+                    targetId: userId,
+                    action,
+                    roleGrantsAdmin,
+                    isMemberRole: roleId === "role-default",
+                    adminHolderCount: new Set(holders.map((h) => h.userId)).size,
+                    targetHasOtherAdminRole: holders.some((h) => h.userId === userId && h.role.id !== roleId),
+                });
+                if (!decision.ok) {
+                    ack({ success: false, error: decision.error });
+                    return;
+                }
 
                 if (action === "add") {
                     await app.prisma.userRole.upsert({

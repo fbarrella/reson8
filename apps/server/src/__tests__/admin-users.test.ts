@@ -39,6 +39,12 @@ describe("mapAdminUser", () => {
         expect(mapAdminUser(base, new Set(["other"])).isBanned).toBe(false);
     });
 
+    it("serializes lastSeenAt, null when never recorded", () => {
+        const at = new Date("2026-03-03T10:00:00Z");
+        expect(mapAdminUser({ ...base, lastSeenAt: at }, new Set()).lastSeenAt).toBe("2026-03-03T10:00:00.000Z");
+        expect(mapAdminUser(base, new Set()).lastSeenAt).toBeNull();
+    });
+
     it("reports only WHETHER a key is bound, never the key", () => {
         const m = mapAdminUser({ ...base, publicKey: "SECRETKEYMATERIAL" }, new Set());
         expect(m.hasIdentityKey).toBe(true);

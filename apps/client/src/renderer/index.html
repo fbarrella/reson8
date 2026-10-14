@@ -999,8 +999,7 @@
       color: var(--color-text);
     }
 
-    /* A square icon-only button (the identity-log button keeps its own,
-       more specific .btn-reset-key.btn-icon rule). */
+    /* A square icon-only button. */
     .btn-icon {
       display: inline-flex;
       align-items: center;
@@ -5520,21 +5519,6 @@
       text-overflow: ellipsis;
     }
 
-    /* A member without CONNECT/ADMIN: connected but restricted (PRD 18.18). */
-    .user-no-access-badge {
-      display: inline-block;
-      background: color-mix(in srgb, var(--color-warning) 18%, transparent);
-      color: var(--color-warning);
-      border: 1px solid var(--color-warning);
-      font-size: 9px;
-      font-weight: 700;
-      letter-spacing: 0.3px;
-      padding: 0 5px;
-      border-radius: 4px;
-      margin-left: 6px;
-      vertical-align: middle;
-    }
-
     /* A member who holds no roles (PRD 18.17) — muted, unlike BANNED. */
     .user-no-roles-badge {
       display: inline-block;
@@ -5550,19 +5534,6 @@
       vertical-align: middle;
     }
 
-    .user-banned-badge {
-      display: inline-block;
-      background: var(--color-live);
-      color: var(--color-white);
-      font-size: 9px;
-      font-weight: 700;
-      letter-spacing: 0.3px;
-      padding: 1px 5px;
-      border-radius: 4px;
-      margin-left: 6px;
-      vertical-align: middle;
-    }
-
     .admin-user-id {
       font-size: 9px;
       font-family: 'Reson8 Emoji', monospace;
@@ -5570,42 +5541,6 @@
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
-    }
-
-    .admin-role-badges {
-      display: flex;
-      gap: 4px;
-      flex-wrap: wrap;
-    }
-
-    .role-badge {
-      /* Sized to match .btn-ban/.btn-unban beside it (PRD 13.17 follow-up)
-         — weight (border/font-weight) stays the plain default, since role
-         toggles don't carry the same severity as banning someone. Labels
-         wrap (no white-space: nowrap) rather than overflow if a role name
-         doesn't fit at this larger size. */
-      font-size: 11px;
-      padding: 2px 6px;
-      border-radius: 8px;
-      border: 1px solid var(--color-divider);
-      cursor: pointer;
-      transition: all 0.15s;
-      user-select: none;
-      color: var(--color-neutral-500);
-      background: transparent;
-      text-align: center;
-      max-width: 100%;
-      overflow-wrap: break-word;
-    }
-
-    .role-badge.active {
-      background: var(--color-accent);
-      color: var(--color-bg);
-      border-color: var(--color-accent);
-    }
-
-    .role-badge:hover {
-      border-color: var(--color-accent);
     }
 
     .emoji-pending-thumb {
@@ -6432,41 +6367,238 @@
       color: var(--color-neutral-500);
     }
 
-    .user-key-badge {
-      font-size: 11px;
-      margin-left: 4px;
-      cursor: help;
+    /* ── Identity log (PRD 18.4) ───────────────────────────────────────── */
+    .members-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 10px;
     }
 
-    .btn-reset-key {
-      flex-shrink: 0;
-      padding: 4px 10px;
-      border: 1px solid var(--color-divider);
-      border-radius: var(--radius-md);
-      background: var(--color-field);
+    .members-search {
+      position: relative;
+      flex: 1;
+    }
+
+    .members-search i {
+      position: absolute;
+      left: 11px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: var(--color-neutral-500);
+    }
+
+    /* #admin-modal: the generic .modal-content input rules are more specific than a class. */
+    #admin-modal .members-search .input {
+      padding-left: 32px;
+      margin-bottom: 0;
+    }
+
+    .members-list {
+      display: flex;
+      flex-direction: column;
+      border-radius: var(--radius-lg);
+      background: color-mix(in srgb, var(--color-bg) 35%, transparent);
+      box-shadow: var(--shadow-sm);
+    }
+
+    .member-row {
+      position: relative;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 9px 12px 9px 14px;
+    }
+
+    .member-row + .member-row {
+      background: linear-gradient(to right, transparent, var(--color-divider) 48px, var(--color-divider) calc(100% - 48px), transparent) no-repeat top / 100% 1px;
+    }
+
+    .member-avatar {
+      position: relative;
+      flex: none;
+    }
+
+    .member-dot {
+      position: absolute;
+      right: -1px;
+      bottom: -1px;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--color-neutral-700);
+      box-shadow: 0 0 0 2px var(--color-surface);
+    }
+
+    .member-dot.online {
+      background: var(--color-success);
+    }
+
+    .member-main {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .member-name {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--color-neutral-100);
+    }
+
+    .member-row.no-access .member-name {
       color: var(--color-neutral-400);
-      font-size: 11px;
+    }
+
+    .member-you {
+      font-size: 12px;
+      font-weight: 400;
+      color: var(--color-neutral-500);
+    }
+
+    .member-lock {
+      font-size: 12px;
+      color: var(--color-neutral-400);
+    }
+
+    .member-tag {
+      padding: 1px 6px;
+      border-radius: var(--radius-sm);
+      font-size: 10.5px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+    }
+
+    .member-tag.no-access {
+      color: var(--color-warning);
+      box-shadow: inset 0 0 0 1px var(--color-warning-line);
+    }
+
+    .member-tag.banned {
+      color: var(--color-danger-text);
+      box-shadow: inset 0 0 0 1px var(--color-danger-line);
+    }
+
+    .member-sub {
+      font: 11.5px ui-monospace, Menlo, monospace;
+      color: var(--color-neutral-500);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .member-sub span {
+      font-family: var(--font);
+      font-size: 12px;
+    }
+
+    .member-pills {
+      display: flex;
+      gap: 6px;
+    }
+
+    .member-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      height: 24px;
+      padding: 0 9px;
+      border: none;
+      border-radius: 12px;
+      background: transparent;
+      color: var(--color-neutral-600);
+      box-shadow: inset 0 0 0 1px var(--color-neutral-800);
+      font: 500 12px var(--font);
       cursor: pointer;
     }
 
-    .btn-reset-key.btn-icon {
-      padding: 4px 6px;
-      display: inline-flex;
-      align-items: center;
+    .member-pill i {
+      font-size: 13px;
     }
 
-    .btn-reset-key:hover {
-      border-color: var(--color-warning);
-      color: var(--color-text);
+    .member-pill.on {
+      background: color-mix(in srgb, var(--color-text) 7%, transparent);
+      color: var(--color-neutral-200);
+      box-shadow: inset 0 0 0 1px var(--color-neutral-600);
     }
 
-    .btn-reset-key.armed {
-      border-color: var(--color-live);
-      background: color-mix(in srgb, var(--color-live) 15%, transparent);
-      color: var(--color-text);
+    .member-pill.admin.on {
+      background: var(--color-accent-900);
+      color: var(--color-accent-200);
+      box-shadow: inset 0 0 0 1px var(--color-accent-600);
     }
 
-    /* ── Identity log (PRD 18.4) ───────────────────────────────────────── */
+    .member-pill:hover:not(:disabled) {
+      filter: brightness(1.15);
+    }
+
+    .member-pill:disabled {
+      cursor: not-allowed;
+      opacity: 0.55;
+    }
+
+    .member-pill.readonly {
+      cursor: default;
+      opacity: 1;
+    }
+
+    .member-pill.readonly:hover {
+      filter: none;
+    }
+
+    .member-menu-btn {
+      width: 30px;
+      height: 30px;
+      color: var(--color-neutral-400);
+    }
+
+    .members-legend {
+      display: flex;
+      gap: 16px;
+      margin-top: 10px;
+      font-size: 12px;
+      color: var(--color-neutral-500);
+    }
+
+    .members-legend i {
+      margin-right: 5px;
+    }
+
+    .members-help {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-top: 10px;
+      padding: 12px 14px;
+      border-radius: var(--radius-lg);
+      background: color-mix(in srgb, var(--color-text) 3%, transparent);
+      font-size: 12.5px;
+      line-height: 1.5;
+      color: var(--color-neutral-400);
+    }
+
+    .members-help div {
+      display: flex;
+      gap: 8px;
+    }
+
+    .members-help i {
+      margin-top: 3px;
+      color: var(--color-neutral-300);
+    }
+
+    .members-help b {
+      font-weight: 500;
+      color: var(--color-neutral-200);
+    }
+
+    /* M4: a count on a settings nav item. */
+    .settings-tab-btn .count-pill {
+      margin-left: auto;
+    }
+
     .identity-log-bar {
       display: flex;
       align-items: center;
@@ -6882,41 +7014,6 @@
     .btn-dm:hover {
       background: var(--color-accent-400);
       border-color: var(--color-accent-400);
-    }
-
-    /* Pill-shaped to match the role-badge pills beside it in the User
-       Management tab (PRD 13.17) rather than standing out as a full,
-       solid-filled button. */
-    .btn-ban {
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
-      font-size: 11px;
-      font-weight: 700;
-      padding: 2px 6px;
-      border-radius: 8px;
-      border: 2px solid var(--color-live);
-      cursor: pointer;
-      transition: all 0.15s;
-      user-select: none;
-      color: var(--color-live);
-      background: transparent;
-      flex-shrink: 0;
-    }
-
-    .btn-ban:not(:disabled):hover {
-      background: var(--color-live);
-      color: var(--color-white);
-    }
-
-    /* Your own row (PRD 15.4): shown but inert, so the rows stay visually
-       consistent instead of the button vanishing. */
-    .btn-ban:disabled {
-      color: var(--color-neutral-500);
-      border-color: var(--color-divider);
-      background: transparent;
-      cursor: not-allowed;
-      opacity: 0.6;
     }
 
     .btn-nudge {
@@ -9801,12 +9898,25 @@
       <div class="settings-panel" data-settings-panel="roles">
         <h2 class="settings-page-title">Members</h2>
         <p class="settings-page-sub">Everyone who has an identity on this server.</p>
-        <div class="identity-log-bar" id="identity-log-bar" style="display:none;">
-          <span>Who bound a key, who reset one, and which sign-ins were refused.</span>
-          <button type="button" class="btn btn-cancel" id="btn-identity-log">Identity log</button>
+        <div class="members-toolbar">
+          <div class="members-search">
+            <i class="ph ph-magnifying-glass" aria-hidden="true"></i>
+            <input type="text" class="input" id="members-search" placeholder="Search by name or ID" autocomplete="off" spellcheck="false" aria-label="Search members">
+          </div>
+          <div class="seg" id="members-filters" role="radiogroup" aria-label="Filter members">
+            <button type="button" class="seg-opt active" data-filter="all" role="radio" aria-checked="true">All<span class="seg-count"></span></button>
+            <button type="button" class="seg-opt" data-filter="admins" role="radio" aria-checked="false">Admins<span class="seg-count"></span></button>
+            <button type="button" class="seg-opt" data-filter="nokey" role="radio" aria-checked="false">No key<span class="seg-count"></span></button>
+            <button type="button" class="seg-opt" data-filter="noaccess" role="radio" aria-checked="false">No access<span class="seg-count"></span></button>
+          </div>
         </div>
-        <div id="admin-user-list" class="admin-user-list">
+        <div id="admin-user-list" class="members-list">
           <div class="admin-empty">Loading users...</div>
+        </div>
+        <div class="members-legend"><span><i class="ph-fill ph-lock-simple" aria-hidden="true"></i>Key bound — signs in with a verified identity</span><span>Same name twice? The ID tells accounts apart.</span></div>
+        <div class="members-help">
+          <div><i class="ph ph-user" aria-hidden="true"></i><span><b>Member</b> — can open text channels, send DMs, join voice and interact. Click to remove it: the person can still connect, but sees the server read-only.</span></div>
+          <div><i class="ph ph-shield-star" aria-hidden="true"></i><span><b>Admin</b> — opens these settings and does sensitive operations: bans, key resets, emoji approval. Admins can remove other admins.</span></div>
         </div>
       </div>
 

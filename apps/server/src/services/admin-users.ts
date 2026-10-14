@@ -13,6 +13,8 @@ export interface AdminUserRow {
     nickname: string;
     createdAt: Date;
     publicKey: string | null;
+    /** PRD 20 M1: when the last session ended (null = never recorded). */
+    lastSeenAt?: Date | null;
     roles: {
         role: {
             id: string;
@@ -44,6 +46,7 @@ export function mapAdminUser(u: AdminUserRow, bannedIds: ReadonlySet<string>) {
         isBanned: bannedIds.has(u.id),
         // Whether a key is bound (PRD 17.12) — never the key itself.
         hasIdentityKey: u.publicKey !== null,
+        lastSeenAt: u.lastSeenAt ? u.lastSeenAt.toISOString() : null,
         roles: u.roles.map((ur) => ({
             id: ur.role.id,
             serverId: ur.role.serverId,

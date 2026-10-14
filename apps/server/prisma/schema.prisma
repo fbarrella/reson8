@@ -116,6 +116,8 @@ model User {
   /// user who is offline. Personal data: only shown (masked or full) to moderators.
   lastAddress      String?
   lastAddressAt    DateTime?
+  /// When the user's last session on this server ended (PRD 20 M1). Day precision is what the UI shows.
+  lastSeenAt       DateTime?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

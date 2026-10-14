@@ -368,7 +368,7 @@ export interface ClientToServerEvents {
         ack: (response: {
             success: boolean;
             /** `hasIdentityKey` (PRD 17.12): whether a key is bound — never the key itself. */
-            users?: Array<IUser & { roles: IRole[]; isBanned: boolean; hasIdentityKey?: boolean }>;
+            users?: Array<IUser & { roles: IRole[]; isBanned: boolean; hasIdentityKey?: boolean; lastSeenAt?: string | null }>;
             error?: string;
         }) => void,
     ) => void;

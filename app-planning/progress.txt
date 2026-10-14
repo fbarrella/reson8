@@ -1156,3 +1156,74 @@ Feature/Fix: Server-pill popover is at least as wide as the pill (follow-up to P
       equal (512) in all three.
 
   Next Step: group 2.
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Members search, filters, role pills and role guard (PRD 20 M1, with the M4 nav-count helper)
+
+  Problem: The Members page listed every role as a clickable badge with
+  Ban/Reset buttons per row and had no search or filtering; ASSIGN_ROLE let a
+  MANAGE_ROLES holder grant admin, remove their own admin/Member role or the
+  last admin, and accepted a role id from another server.
+
+  Solution:
+    Client: new Members markup (search, All/Admins/No key/No access segmented
+    filter, one card of rows, legend and Member/Admin help). renderAdminUsers()
+    now builds .member-row via buildMemberRow(): 32 px avatar with an online
+    dot, name with (you) / lock / NO ACCESS / BANNED, "{short id} · Online ·
+    room | Online | Last seen … | Offline", Member and Admin pills (role ids
+    role-default / role-admin; read-only for non-MANAGE_ROLES; disabled with a
+    tooltip on your own row and on the last admin) and a ⋮ menu (Reset key…
+    with a second confirm menu, View identity log, Other roles, Ban…/Unban).
+    Search/filter are client-side; online state comes from one
+    api.getOnlineUsers() per refresh and the page refreshes live on
+    user-joined/user-left. The identity-log bar and its button are gone. Old
+    row CSS (.role-badge, .btn-ban, .btn-reset-key, .user-*-badge) removed;
+    .btn-unban stays (banned addresses use it). The M4 helper
+    updateSettingsNavCount() and its disconnect reset are included here
+    (M1 uses it); M3 will call it for emoji.
+    Server: services/role-guard.ts decideRoleChange() (+ role-guard.test.ts, 9
+    cases) wired into ASSIGN_ROLE, which now also requires the role to belong
+    to the caller's server. users.lastSeenAt (migration
+    20261019120000_add_user_last_seen) is written fire-and-forget in
+    finalizeDisconnect() and returned by GET_ALL_USERS (shared-types
+    lastSeenAt?: string | null; admin-users.ts + test).
+
+  Differences / findings:
+    - #admin-modal .members-search .input is used for the search field's
+      padding: the generic ".modal-content input:not(...)" rules out-specify a
+      single class (the icon overlapped the text).
+    - Pre-existing, NOT changed: settingsTabRoles.disabled is only computed at
+      connect time, so a user who is granted a role mid-session has to
+      reconnect before the Members nav item enables. Say if you want it fixed
+      in openSettingsPanel()'s live re-check.
+    - A user without MANAGE_ROLES doesn't get the roles list, so for a
+      BAN_USER-only moderator the Member/Admin pills are not drawn (the PRD's
+      "a pill whose role isn't in allServerRoles is not drawn").
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts, index.html
+    apps/server/src/services/role-guard.ts (NEW), __tests__/role-guard.test.ts (NEW)
+    apps/server/src/handlers/admin.handler.ts, connection.handler.ts
+    apps/server/src/services/admin-users.ts, __tests__/admin-users.test.ts
+    apps/server/prisma/schema.prisma, migrations/20261019120000_add_user_last_seen (NEW)
+    packages/shared-types/src/socket-events.ts
+
+  Verification:
+    - shared-types tsc --build; server tsc --noEmit + npm run test (36 files,
+      493 tests, role-guard included); client tsc --noEmit; npm run lint exit 0.
+    - Real app against the 9800 dev server with Socket.io bots (234 users in
+      the dev DB): search by name / id fragment / nonsense ("No members match");
+      filter counts; Member pill removal -> NO ACCESS tag and the No access
+      count 1, restored; own Member/Admin pills disabled with tooltips and
+      api.assignRole(self, role-admin|role-default, remove) refused by the
+      server; a MANAGE_ROLES-only bot is refused granting admin ("Only an admin
+      can change who is an admin") but may change Member; ⋮ -> Reset key… ->
+      confirm clears the lock; Ban… dialog -> BANNED tag -> Unban; "Online ·
+      Lobby" for a bot in voice; "Last seen just now" after a bot disconnects.
+    - Not exercised: the removed-Member user regaining channels without
+      reconnecting (PRD 18.18 path, unchanged server code).
+    - Test data: temporary TmpMROnly role and q-members.mjs script are removed
+      at the end of group 2; never committed.
+
+  Next Step: M2 (Bans list).

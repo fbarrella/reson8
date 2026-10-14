@@ -7473,6 +7473,8 @@ api.on("disconnected", (data?: { reason?: string }) => {
     previousSharingIds = new Set();
     connectedServerName = null;
     connectedNickname = "";
+    updateSettingsNavCount("roles", 0, false); // PRD 20 M4
+    updateSettingsNavCount("emojis", 0);
     myPermissions = null; // PRD 19 A8: unknown again
     clearServerSummary(); // PRD 19 A1
     updateWindowTitle();
@@ -7761,6 +7763,7 @@ api.on("user-joined", (data: { userId: string; nickname: string }) => {
     onDmPresenceChange(data.userId, true); // PRD 19 C7
     refreshServerSummary(); // PRD 19 A1
     if (data.userId === profileUserId && profileIsOnline !== null) setProfilePresence(true); // PRD 17.3
+    if (membersPanelActive()) void refreshMembersPanel(); // PRD 20 M1: live online dots
 });
 
 api.on("user-left", (data: { userId: string }) => {
@@ -7769,6 +7772,7 @@ api.on("user-left", (data: { userId: string }) => {
     onDmPresenceChange(data.userId, false); // PRD 19 C7
     refreshServerSummary(); // PRD 19 A1
     if (data.userId === profileUserId && profileIsOnline !== null) setProfilePresence(false); // PRD 17.3
+    if (membersPanelActive()) void refreshMembersPanel(); // PRD 20 M1: live online dots
 });
 
 // ── Active Speaker Indicator ──────────────────────────────────────────────
@@ -8325,211 +8329,338 @@ function injectLinkPreview(messageEl: HTMLElement, url: string, onLoaded?: () =>
 
 // ── Admin Panel (renderAdminUsers only — open/close handled by openSettingsPanel) ──
 
-function renderAdminUsers(users: any[]): void {
-    adminUserList.innerHTML = "";
+// ── Members page (PRD 20 M1) ─────────────────────────────────────────────────
 
-    if (users.length === 0) {
-        adminUserList.innerHTML = '<div class="admin-empty">No users found.</div>';
-        identityLogBar.style.display = "none";
+const ROLE_MEMBER_ID = "role-default"; // prisma/seed.ts
+const ROLE_ADMIN_ID = "role-admin"; // prisma/seed.ts
+const PERM_CONNECT = 1n << 0n;
+const PERM_ADMIN = 1n << 8n;
+
+type MembersFilter = "all" | "admins" | "nokey" | "noaccess";
+let membersCache: any[] = [];
+let membersOnline = new Set<string>();
+let membersFilter: MembersFilter = "all";
+const membersSearch = document.getElementById("members-search") as HTMLInputElement;
+
+/** The Members page is the visible settings page. */
+function membersPanelActive(): boolean {
+    return (
+        adminModal.classList.contains("visible") &&
+        !!document.querySelector('.settings-panel[data-settings-panel="roles"].active')
+    );
+}
+
+/** The OR of a user's role permissions on this server (strings from the server). */
+function memberPerms(user: any): bigint {
+    let p = 0n;
+    for (const r of user.roles ?? []) {
+        try {
+            p |= BigInt(r.permissions);
+        } catch {
+            /* malformed: ignore */
+        }
+    }
+    return p;
+}
+
+function memberIsAdmin(user: any): boolean {
+    return (memberPerms(user) & PERM_ADMIN) !== 0n;
+}
+
+function memberHasAccess(user: any): boolean {
+    const p = memberPerms(user);
+    return (p & PERM_CONNECT) !== 0n || (p & PERM_ADMIN) !== 0n;
+}
+
+function memberHasRole(user: any, roleId: string): boolean {
+    return (user.roles ?? []).some((r: any) => r.id === roleId);
+}
+
+/** The voice channel a user is in right now, from the live tree. */
+function memberVoiceRoom(userId: string): string | null {
+    let found: string | null = null;
+    const walk = (nodes: TreeNode[]): void => {
+        for (const n of nodes) {
+            if (found) return;
+            if (n.type === "VOICE" && n.occupants.some((o) => o.userId === userId)) found = n.name;
+            walk(n.children);
+        }
+    };
+    walk(currentTree);
+    return found;
+}
+
+function memberMatchesFilter(user: any, filter: MembersFilter): boolean {
+    if (filter === "admins") return memberIsAdmin(user);
+    if (filter === "nokey") return user.hasIdentityKey !== true;
+    if (filter === "noaccess") return !memberHasAccess(user);
+    return true;
+}
+
+/** Fetches the list and who is online, then draws (PRD 20 M1). */
+async function refreshMembersPanel(): Promise<void> {
+    if (!isConnected) return;
+    const [usersRes, onlineRes] = await Promise.all([api.getAllUsers(currentServerId), api.getOnlineUsers()]);
+    if (!usersRes.success) {
+        adminUserList.innerHTML = '<div class="admin-empty">You don\'t have permission to manage users.</div>';
         return;
     }
+    if (onlineRes.success && onlineRes.users) membersOnline = new Set(onlineRes.users.filter((u) => u.isOnline).map((u) => u.userId));
+    renderAdminUsers(usersRes.users ?? []);
+}
 
+function renderAdminUsers(users: any[]): void {
+    membersCache = users;
     const myId = api.getInstanceId();
-    // "Reset key" (PRD 17.12) is ADMIN-only on the server; derive it from my
-    // own roles in this same list rather than offer a button that can only
-    // fail for a MANAGE_ROLES-only holder.
-    const ADMIN_FLAG = 1n << 8n; // PermissionFlags.ADMIN
-    const iAmAdmin = (users.find((u) => u.id === myId)?.roles ?? []).some((r: any) => {
-        try {
-            return (BigInt(r.permissions) & ADMIN_FLAG) !== 0n;
-        } catch {
-            return false;
-        }
-    });
+    const iAmAdmin = memberIsAdmin(users.find((u) => u.id === myId) ?? {});
 
-    // The identity log is ADMIN-only on the server too (PRD 18.4); its nav item follows (PRD 19 R4).
+    // The identity log is ADMIN-only on the server too (PRD 18.4); its nav item follows.
     identityLogAllowed = iAmAdmin;
-    identityLogBar.style.display = iAmAdmin ? "flex" : "none";
     const logTab = document.getElementById("settings-tab-identitylog");
     if (logTab) logTab.style.display = iAmAdmin ? "" : "none";
 
-    for (const user of users) {
-        const row = document.createElement("div");
-        row.className = "admin-user-row";
+    // Filter counts always describe the whole list.
+    const counts: Record<MembersFilter, number> = {
+        all: users.length,
+        admins: users.filter((u) => memberIsAdmin(u)).length,
+        nokey: users.filter((u) => u.hasIdentityKey !== true).length,
+        noaccess: users.filter((u) => !memberHasAccess(u)).length,
+    };
+    document.querySelectorAll<HTMLButtonElement>("#members-filters .seg-opt").forEach((b) => {
+        const f = b.dataset.filter as MembersFilter;
+        (b.querySelector(".seg-count") as HTMLElement).textContent = String(counts[f]);
+        b.classList.toggle("active", f === membersFilter);
+        b.setAttribute("aria-checked", String(f === membersFilter));
+    });
+    updateSettingsNavCount("roles", users.length); // M4
 
-        const userRoleIds = new Set((user.roles ?? []).map((r: any) => r.id));
+    const q = membersSearch.value.trim().toLowerCase();
+    const rows = users.filter(
+        (u) => memberMatchesFilter(u, membersFilter) && (!q || String(u.nickname).toLowerCase().includes(q) || String(u.id).toLowerCase().includes(q)),
+    );
 
-        // User info
-        const infoEl = document.createElement("div");
-        infoEl.className = "admin-user-info";
-        const bannedBadge = user.isBanned ? ' <span class="user-banned-badge">BANNED</span>' : "";
-        // 🔒 = this identity has bound a key on this server (PRD 17.12).
-        const keyBadge = user.hasIdentityKey
-            ? ' <span class="user-key-badge" title="Identity key bound — only this user\'s device can connect as them" aria-label="Identity key bound">🔒</span>'
-            : "";
-        // Who can't use channels, DMs and voice (PRD 18.18): neither CONNECT nor ADMIN in
-        // any of their roles. That includes a member with no roles at all (PRD 18.17).
-        const CONNECT_BIT = 1n << 0n;
-        const ADMIN_BIT = 1n << 8n;
-        const userHasAccess = (user.roles ?? []).some((r: any) => {
-            try {
-                const p = BigInt(r.permissions);
-                return (p & CONNECT_BIT) !== 0n || (p & ADMIN_BIT) !== 0n;
-            } catch {
-                return false;
-            }
-        });
-        const noRolesBadge = !userHasAccess
-            ? userRoleIds.size === 0
-                ? ' <span class="user-no-access-badge" title="This user holds no roles, so they can\'t use channels, DMs or voice until given one">No access</span>'
-                : ' <span class="user-no-access-badge" title="Their roles don\'t include Member (or Server Admin): they can\'t use channels, DMs or voice">No access</span>'
-            : "";
-        infoEl.innerHTML = `
-            <div class="admin-user-nickname">${escapeHtml(user.nickname)}${keyBadge}${noRolesBadge}${bannedBadge}</div>
-            <div class="admin-user-id">${escapeHtml(user.id)}</div>
-        `;
-        row.appendChild(infoEl);
-
-        // Role toggles — only for those who can actually manage roles; a
-        // BAN_USER-only holder would just get PERMISSION_DENIED on click
-        // (PRD 13.17), so don't show them as if they were usable.
-        if (isAdminUser) {
-            const badgesEl = document.createElement("div");
-            badgesEl.className = "admin-role-badges";
-
-            for (const role of allServerRoles) {
-                const badge = document.createElement("span");
-                badge.className = `role-badge${userRoleIds.has(role.id) ? " active" : ""}`;
-                badge.textContent = role.name;
-                if (role.color) {
-                    badge.style.borderColor = role.color;
-                    if (userRoleIds.has(role.id)) {
-                        badge.style.background = role.color;
-                        badge.style.color = "var(--color-white)";
-                    }
-                }
-
-                badge.addEventListener("click", async () => {
-                    const hasRole = badge.classList.contains("active");
-                    const action = hasRole ? "remove" : "add";
-
-                    // Block admin from removing their own admin role
-                    if (action === "remove" && user.id === myId && role.name === "Server Admin") {
-                        log("You cannot remove your own admin role", "error");
-                        return;
-                    }
-
-                    const result = await api.assignRole(user.id, role.id, action);
-                    if (result.success) {
-                        // Refresh the panel
-                        openSettingsPanel();
-                    } else {
-                        log(`Failed to ${action} role: ${result.error}`, "error");
-                    }
-                });
-
-                badgesEl.appendChild(badge);
-            }
-
-            row.appendChild(badgesEl);
-        }
-
-        // Ban / Unban — only for those who hold BAN_USER (PRD 13.17). Works
-        // for offline users too, unlike the old Online Users modal button
-        // this replaces — GET_ALL_USERS lists every user with a role on
-        // this server regardless of online status. Your own row shows a
-        // disabled Ban button instead of hiding it (PRD 15.4) so the rows
-        // stay consistent; the server independently rejects self-ban.
-        if (canBanUsers && user.id === myId) {
-            const selfBanBtn = document.createElement("button");
-            selfBanBtn.className = "btn-ban";
-            selfBanBtn.disabled = true;
-            selfBanBtn.setAttribute("aria-disabled", "true");
-            selfBanBtn.title = "You can't ban yourself";
-            selfBanBtn.innerHTML = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="7" cy="7" r="4"/><circle cx="18" cy="17" r="5"/><line x1="14.5" y1="20.5" x2="21.5" y2="13.5"/></svg> Ban';
-            row.appendChild(selfBanBtn);
-        } else if (canBanUsers) {
-            const banBtn = document.createElement("button");
-            banBtn.className = user.isBanned ? "btn-unban" : "btn-ban";
-            // "Ban" gets a user-with-a-no-entry-circle icon so the
-            // destructive action reads at a glance; "Unban" stays
-            // text-only, matching the plain role-badge pills beside it.
-            banBtn.innerHTML = user.isBanned
-                ? "Unban"
-                : '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="7" cy="7" r="4"/><circle cx="18" cy="17" r="5"/><line x1="14.5" y1="20.5" x2="21.5" y2="13.5"/></svg> Ban';
-            banBtn.addEventListener("click", async () => {
-                // Banning asks first (PRD 18.7) so an address ban can be chosen;
-                // lifting a ban stays a single click.
-                if (!user.isBanned) {
-                    openBanDialog({ id: user.id, nickname: user.nickname });
-                    return;
-                }
-                const res = await api.unbanUser(user.id);
-                if (res.success) {
-                    log(`Unbanned ${escapeHtml(user.nickname)}`, "success");
-                    SoundAlert.play("user_unbanned_from_server.mp3");
-                    openSettingsPanel(); // refresh to reflect the new banned state
-                } else {
-                    log(`Failed to unban: ${res.error}`, "error");
-                    if (res.error && /permission|denied/i.test(res.error)) SoundAlert.play("insufficient_perms.mp3");
-                }
-            });
-            row.appendChild(banBtn);
-        }
-
-        // Reset identity key (PRD 17.12): ADMIN only, never on your own row.
-        // Two-step: the first click arms it, a second within 4 s confirms.
-        if (iAmAdmin && user.hasIdentityKey && user.id !== myId) {
-            const resetBtn = document.createElement("button");
-            resetBtn.className = "btn-reset-key";
-            resetBtn.textContent = "Reset key";
-            resetBtn.title = `The next device that connects as ${user.nickname} will be bound to this identity. Use it if they reinstalled, changed computer, or someone else claimed their identity. Disconnects them now.`;
-            let armedUntil = 0;
-            let disarmTimer: ReturnType<typeof setTimeout> | null = null;
-            resetBtn.addEventListener("click", async () => {
-                if (Date.now() > armedUntil) {
-                    armedUntil = Date.now() + 4000;
-                    resetBtn.textContent = "Confirm reset";
-                    resetBtn.classList.add("armed");
-                    if (disarmTimer) clearTimeout(disarmTimer);
-                    disarmTimer = setTimeout(() => {
-                        resetBtn.textContent = "Reset key";
-                        resetBtn.classList.remove("armed");
-                    }, 4000);
-                    return;
-                }
-                if (disarmTimer) clearTimeout(disarmTimer);
-                resetBtn.disabled = true;
-                const res = await api.resetIdentityKey(user.id);
-                if (res.success) {
-                    log(`Identity key of ${escapeHtml(user.nickname)} reset — their next connection binds a new key`, "success");
-                    openSettingsPanel(); // refresh the list
-                } else {
-                    resetBtn.disabled = false;
-                    resetBtn.textContent = "Reset key";
-                    resetBtn.classList.remove("armed");
-                    log(`Failed to reset identity key: ${escapeHtml(res.error ?? "unknown error")}`, "error");
-                }
-            });
-            row.appendChild(resetBtn);
-        }
-
-        // This user's slice of the identity log (PRD 18.4).
-        if (iAmAdmin) {
-            const logBtn = document.createElement("button");
-            logBtn.className = "btn-reset-key btn-icon";
-            // A compact icon: a text button here squeezed the nickname column (names truncated).
-            logBtn.innerHTML =
-                '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><circle cx="3.5" cy="6" r="1"/><circle cx="3.5" cy="12" r="1"/><circle cx="3.5" cy="18" r="1"/></svg>';
-            logBtn.setAttribute("aria-label", `Identity log of ${user.nickname}`);
-            logBtn.title = `Identity log of ${user.nickname}`;
-            logBtn.addEventListener("click", () => showIdentityLog({ id: user.id, nickname: user.nickname }));
-            row.appendChild(logBtn);
-        }
-
-        adminUserList.appendChild(row);
+    adminUserList.textContent = "";
+    if (rows.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "admin-empty";
+        empty.textContent = users.length === 0 ? "No users found." : q ? `No members match "${membersSearch.value.trim()}".` : "Nobody matches this filter.";
+        adminUserList.appendChild(empty);
+        return;
     }
+    const adminCount = counts.admins;
+    for (const user of rows) adminUserList.appendChild(buildMemberRow(user, { myId, iAmAdmin, adminCount }));
 }
+
+function buildMemberRow(user: any, ctx: { myId: string; iAmAdmin: boolean; adminCount: number }): HTMLElement {
+    const you = user.id === ctx.myId;
+    const access = memberHasAccess(user);
+    const row = document.createElement("div");
+    row.className = "member-row" + (access ? "" : " no-access");
+
+    // Avatar with the online dot
+    const avWrap = document.createElement("span");
+    avWrap.className = "member-avatar";
+    avWrap.appendChild(createAvatarElement(user.id, user.nickname, 32));
+    const online = membersOnline.has(user.id) || you;
+    const dot = document.createElement("span");
+    dot.className = "member-dot" + (online ? " online" : "");
+    avWrap.appendChild(dot);
+    row.appendChild(avWrap);
+
+    // Name line
+    const main = document.createElement("div");
+    main.className = "member-main";
+    const name = document.createElement("div");
+    name.className = "member-name";
+    name.append(document.createTextNode(user.nickname));
+    if (!access) name.append(memberTag("NO ACCESS", "no-access", "Their roles don't include Member (or Admin): they can't use channels, DMs or voice"));
+    if (user.isBanned) name.append(memberTag("BANNED", "banned", "Banned from this server"));
+    if (you) {
+        const y = document.createElement("span");
+        y.className = "member-you";
+        y.textContent = "(you)";
+        name.append(y);
+    }
+    if (user.hasIdentityKey) {
+        const lock = document.createElement("i");
+        lock.className = "ph-fill ph-lock-simple member-lock";
+        lock.title = "Signed identity — key bound";
+        name.append(lock);
+    }
+
+    // Second line: short id · status
+    const sub = document.createElement("div");
+    sub.className = "member-sub";
+    const room = memberVoiceRoom(user.id);
+    let status: string;
+    if (you) status = room ? `Online · ${room}` : "Online · this device";
+    else if (online) status = room ? `Online · ${room}` : "Online";
+    else if (user.lastSeenAt) status = `Last seen ${relativeTime(Date.parse(user.lastSeenAt))}`; // D5 (a)
+    else status = "Offline";
+    sub.textContent = String(user.id).slice(0, 13);
+    const st = document.createElement("span");
+    st.textContent = ` · ${status}`;
+    sub.appendChild(st);
+    sub.title = user.id;
+    main.append(name, sub);
+    row.appendChild(main);
+
+    // Member / Admin pills
+    const pills = document.createElement("div");
+    pills.className = "member-pills";
+    const lastAdmin = memberIsAdmin(user) && ctx.adminCount <= 1;
+    const memberPill = buildRolePill(user, ROLE_MEMBER_ID, "Member", false, you ? "You can't remove your own membership" : null);
+    const adminPill = buildRolePill(
+        user,
+        ROLE_ADMIN_ID,
+        "Admin",
+        true,
+        you ? "You can't remove your own admin role" : lastAdmin ? "The server needs at least one admin" : null,
+    );
+    if (memberPill) pills.appendChild(memberPill);
+    if (adminPill) pills.appendChild(adminPill);
+    row.appendChild(pills);
+
+    // ⋮ menu
+    const menuBtn = document.createElement("button");
+    menuBtn.type = "button";
+    menuBtn.className = "btn btn-icon btn-ghost member-menu-btn";
+    menuBtn.title = "Actions";
+    menuBtn.setAttribute("aria-label", `Actions for ${user.nickname}`);
+    menuBtn.setAttribute("aria-haspopup", "menu");
+    menuBtn.innerHTML = '<i class="ph ph-dots-three-vertical" aria-hidden="true"></i>';
+    menuBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const r = menuBtn.getBoundingClientRect();
+        openMemberMenu(user, ctx, r.right - 220, r.bottom + 4, menuBtn);
+    });
+    row.appendChild(menuBtn);
+    return row;
+}
+
+function memberTag(text: string, kind: string, title: string): HTMLElement {
+    const t = document.createElement("span");
+    t.className = `member-tag ${kind}`;
+    t.textContent = text;
+    t.title = title;
+    return t;
+}
+
+/** One Member/Admin pill; null when the server has no such role. `blockRemoveWhy` stops a removal (not a grant). */
+function buildRolePill(user: any, roleId: string, label: string, isAdminPill: boolean, blockRemoveWhy: string | null): HTMLButtonElement | null {
+    if (!allServerRoles.some((r) => r.id === roleId)) return null;
+    const on = memberHasRole(user, roleId);
+    const pill = document.createElement("button");
+    pill.type = "button";
+    pill.className = "member-pill" + (isAdminPill ? " admin" : "") + (on ? " on" : "");
+    const icon = isAdminPill ? (on ? "ph-shield-star" : "ph-shield") : on ? "ph-user" : "ph-user-minus";
+    pill.innerHTML = `<i class="ph ${icon}" aria-hidden="true"></i>`;
+    pill.append(document.createTextNode(label));
+    if (!isAdminUser) {
+        pill.classList.add("readonly");
+        pill.title = on ? `Has ${label}` : `No ${label} role`;
+        pill.tabIndex = -1;
+        return pill;
+    }
+    if (on && blockRemoveWhy) {
+        pill.disabled = true;
+        pill.title = blockRemoveWhy;
+        return pill;
+    }
+    pill.title = on ? `Click to remove ${label}` : `Click to grant ${label}`;
+    pill.addEventListener("click", async () => {
+        pill.disabled = true;
+        const res = await api.assignRole(user.id, roleId, on ? "remove" : "add");
+        if (!res.success) {
+            log(`Failed to ${on ? "remove" : "add"} ${label}: ${res.error}`, "error");
+            if (res.error && /permission|denied/i.test(res.error)) SoundAlert.play("insufficient_perms.mp3");
+        }
+        await refreshMembersPanel();
+    });
+    return pill;
+}
+
+function openMemberMenu(user: any, ctx: { myId: string; iAmAdmin: boolean }, x: number, y: number, anchor: HTMLElement): void {
+    const you = user.id === ctx.myId;
+    const items: MenuItem[] = [];
+    if (ctx.iAmAdmin && user.hasIdentityKey && !you) {
+        items.push({
+            label: "Reset key…",
+            icon: "ph-key",
+            onClick: () =>
+                // A second menu at the same spot is the confirmation (it disconnects them).
+                openMenu(
+                    [
+                        {
+                            label: `Reset ${user.nickname}'s key — disconnects them`,
+                            icon: "ph-key",
+                            danger: true,
+                            onClick: async () => {
+                                const res = await api.resetIdentityKey(user.id);
+                                if (res.success) log(`Identity key of ${escapeHtml(user.nickname)} reset — their next connection binds a new key`, "success");
+                                else log(`Failed to reset identity key: ${escapeHtml(res.error ?? "unknown error")}`, "error");
+                                await refreshMembersPanel();
+                            },
+                        },
+                    ],
+                    x,
+                    y,
+                    { anchor },
+                ),
+        });
+    }
+    if (ctx.iAmAdmin) {
+        items.push({ label: "View identity log", icon: "ph-fingerprint", onClick: () => showIdentityLog({ id: user.id, nickname: user.nickname }) });
+    }
+    const others = isAdminUser ? allServerRoles.filter((r) => r.id !== ROLE_MEMBER_ID && r.id !== ROLE_ADMIN_ID) : [];
+    if (others.length > 0) {
+        items.push({ divider: true }, { heading: "Other roles" });
+        for (const role of others) {
+            const has = memberHasRole(user, role.id);
+            items.push({
+                label: role.name,
+                checked: has,
+                onClick: async () => {
+                    const res = await api.assignRole(user.id, role.id, has ? "remove" : "add");
+                    if (!res.success) log(`Failed to change role: ${res.error}`, "error");
+                    await refreshMembersPanel();
+                },
+            });
+        }
+    }
+    if (canBanUsers && !you) {
+        items.push({ divider: true });
+        if (user.isBanned) {
+            items.push({
+                label: "Unban",
+                icon: "ph-arrow-counter-clockwise",
+                onClick: async () => {
+                    const res = await api.unbanUser(user.id);
+                    if (res.success) {
+                        log(`Unbanned ${escapeHtml(user.nickname)}`, "success");
+                        SoundAlert.play("user_unbanned_from_server.mp3");
+                    } else {
+                        log(`Failed to unban: ${res.error}`, "error");
+                        if (res.error && /permission|denied/i.test(res.error)) SoundAlert.play("insufficient_perms.mp3");
+                    }
+                    await refreshMembersPanel();
+                },
+            });
+        } else {
+            items.push({ label: "Ban…", icon: "ph-prohibit", danger: true, onClick: () => openBanDialog({ id: user.id, nickname: user.nickname }) });
+        }
+    }
+    if (items.length === 0) items.push({ label: "No actions available", disabled: true, onClick: () => {} });
+    openMenu(items, x, y, { anchor });
+}
+
+membersSearch.addEventListener("input", () => renderAdminUsers(membersCache));
+document.querySelectorAll<HTMLButtonElement>("#members-filters .seg-opt").forEach((b) => {
+    b.addEventListener("click", () => {
+        membersFilter = (b.dataset.filter as MembersFilter) ?? "all";
+        renderAdminUsers(membersCache);
+    });
+});
 
 // ── Tab Management ────────────────────────────────────────────────────────
 
@@ -11514,6 +11645,20 @@ settingsTabBtns.forEach((btn) => {
     });
 });
 
+/** A count pill on a settings nav item (PRD 20 M4); 0 hides it unless `showZero`. */
+function updateSettingsNavCount(tab: "roles" | "emojis", n: number, showZero = tab === "roles"): void {
+    const btn = document.querySelector(`.settings-tab-btn[data-settings-tab="${tab}"]`);
+    if (!btn) return;
+    let pill = btn.querySelector<HTMLElement>(".nav-count");
+    if (!pill) {
+        pill = document.createElement("span");
+        pill.className = "count-pill nav-count";
+        btn.appendChild(pill);
+    }
+    pill.textContent = n > 99 ? "99+" : String(n);
+    pill.style.display = n > 0 || showZero ? "" : "none";
+}
+
 /** Applies the already-known (cached) isAdminUser/canManageEmojis flags to
  * tab visibility, and falls back to the Voice tab if the active tab just got
  * hidden. Synchronous and idempotent — safe to call both before the modal is
@@ -11572,6 +11717,8 @@ async function openSettingsPanel(): Promise<void> {
     syncProfileSection(); // discard an unsaved avatar draft from a previous visit (PRD 17.1)
     void renderTrustedCertificates(); // PRD 18.3
     hideIdentityLog(); // always reopen on the user list (PRD 18.4)
+    membersSearch.value = "";
+    membersFilter = "all";
     void renderBannedAddresses(); // PRD 18.7 (no-op for anyone without BAN_USER)
     void refreshPendingApprovals(); // PRD 18.8
     void refreshInvites(); // PRD 18.9
@@ -11599,11 +11746,12 @@ async function openSettingsPanel(): Promise<void> {
         // so `isAdminUser`/`canBanUsers` reflect exactly those two
         // permissions even though GET_ALL_USERS itself now accepts either
         // one (PRD 13.17, since the tab serves both).
-        const [usersRes, rolesRes, bannedRes, pendingEmojisRes] = await Promise.all([
+        const [usersRes, rolesRes, bannedRes, pendingEmojisRes, onlineRes] = await Promise.all([
             api.getAllUsers(currentServerId),
             api.getRoles(currentServerId),
             api.getBannedUsers(),
             api.getPendingEmojis(),
+            api.getOnlineUsers(),
         ]);
 
         isAdminUser = rolesRes.success;
@@ -11613,6 +11761,9 @@ async function openSettingsPanel(): Promise<void> {
 
         if (usersRes.success) {
             allServerRoles = rolesRes.roles ?? [];
+            if (onlineRes.success && onlineRes.users) {
+                membersOnline = new Set(onlineRes.users.filter((u) => u.isOnline).map((u) => u.userId));
+            }
             renderAdminUsers(usersRes.users ?? []);
         } else {
             adminUserList.innerHTML = '<div class="admin-empty">You don\'t have permission to manage users.</div>';
@@ -12184,7 +12335,8 @@ document.getElementById("btn-ban-user-confirm")!.addEventListener("click", async
             showToast(escapeHtml(res.warning), 8000);
         }
         SoundAlert.play("user_banned_from_server.mp3");
-        openSettingsPanel(); // refresh to reflect the new banned state
+        if (membersPanelActive()) void refreshMembersPanel();
+        else void openSettingsPanel(); // refresh to reflect the new banned state
     } else {
         log(`Failed to ban: ${escapeHtml(res.error ?? "unknown error")}`, "error");
         if (res.error && /permission|denied/i.test(res.error)) SoundAlert.play("insufficient_perms.mp3");
@@ -12246,8 +12398,6 @@ async function renderBannedAddresses(): Promise<void> {
 }
 
 // ── Identity log + "Require signed identity" (PRD 18.4) ──────────────────
-const identityLogBar = document.getElementById("identity-log-bar") as HTMLDivElement;
-const btnIdentityLog = document.getElementById("btn-identity-log") as HTMLButtonElement;
 const identityLogPanel = document.getElementById("identity-log-panel") as HTMLDivElement;
 const identityLogList = document.getElementById("identity-log-list") as HTMLDivElement;
 const identityLogFilter = document.getElementById("identity-log-filter") as HTMLSpanElement;
@@ -12402,7 +12552,6 @@ function hideIdentityLog(): void {
     identityLogUser = null;
 }
 
-btnIdentityLog.addEventListener("click", () => showIdentityLog(null));
 document.getElementById("settings-tab-identitylog")?.addEventListener("click", () => {
     if (identityLogUser === null) void loadIdentityLog(true);
 });
