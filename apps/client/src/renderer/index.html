@@ -6546,6 +6546,10 @@
     }
 
     /* Same 8 px under the label as a plain .settings-section > .section-label. */
+    .beta-updates-card {
+      margin-top: 12px;
+    }
+
     #typing-indicator {
       height: 18px;
       padding: 4px 10px 0;
@@ -10848,6 +10852,22 @@
           <div class="update-row-actions">
             <button type="button" class="btn btn-ghost" id="btn-update-row-notes" style="display:none;">Release notes</button>
             <button type="button" class="btn btn-secondary" id="btn-check-updates">Check for updates</button>
+          </div>
+        </div>
+        <div class="settings-card beta-updates-card">
+          <div class="toggle-row">
+            <div class="toggle-row-info">
+              <div class="toggle-row-icon"><i class="ph ph-flask" aria-hidden="true"></i></div>
+              <div class="toggle-row-text">
+                <span class="toggle-row-title">Get beta updates <span class="tag">BETA</span></span>
+                <span class="toggle-row-desc">Get new features early. Beta builds can be less stable; switch back any time and the next stable release replaces it.</span>
+                <span class="toggle-row-note" id="beta-updates-note" style="display:none;">You're on a beta build. It moves to the next stable release automatically when one is out.</span>
+              </div>
+            </div>
+            <label class="toggle-switch">
+              <input type="checkbox" id="chk-beta-updates">
+              <span class="toggle-slider"></span>
+            </label>
           </div>
         </div>
         <button type="button" class="btn btn-ghost update-row-whatsnew" id="btn-about-whats-new">What's new in this version</button>

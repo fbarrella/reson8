@@ -34,7 +34,7 @@ try {
 
     const win = wc.frameOptions("win32", false);
     check("win32: hidden + overlay", win.titleBarStyle === "hidden" && win.titleBarOverlay?.height === wc.TITLEBAR_HEIGHT - 1);
-    check("win32: overlay colours", win.titleBarOverlay?.color === "#161826" && win.titleBarOverlay?.symbolColor === "#cfd3e5");
+    check("win32: overlay colours", win.titleBarOverlay?.color === "#00000000" && win.titleBarOverlay?.symbolColor === "#cfd3e5");
     const lin = wc.frameOptions("linux", false);
     check("linux: hidden + overlay", lin.titleBarStyle === "hidden" && !!lin.titleBarOverlay);
     const mac = wc.frameOptions("darwin", false);

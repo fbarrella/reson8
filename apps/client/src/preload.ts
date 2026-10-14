@@ -2061,6 +2061,15 @@ const api = {
         ipcRenderer.invoke("quit-and-install");
     },
 
+    updatePrefs: {
+        get(): Promise<{ betaUpdates: boolean; runningBeta: boolean }> {
+            return ipcRenderer.invoke("update-prefs-get");
+        },
+        setBeta(on: boolean): Promise<{ betaUpdates: boolean }> {
+            return ipcRenderer.invoke("update-prefs-set-beta", on);
+        },
+    },
+
     async getAppVersion(): Promise<string> {
         return ipcRenderer.invoke("get-app-version");
     },

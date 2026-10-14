@@ -12,6 +12,7 @@ import { readFileSync, statSync, writeFileSync } from "node:fs";
 import { getInstanceId, hasExistingInstanceId, replaceInstanceId } from "./instance-id.js";
 import { autoUpdater, NsisUpdater } from "electron-updater";
 import { isPrerelease } from "./app-version.js";
+import { readUpdatePrefs, writeUpdatePrefs } from "./update-prefs.js";
 import { startCapture, resolvePidForWindowSourceId, listAudioProducingApps, platformSupportsCapture } from "@reson8/native-audio";
 import type { CaptureHandle } from "@reson8/native-audio";
 import MarkdownIt from "markdown-it";
@@ -894,7 +895,12 @@ autoUpdater.autoDownload = false;
 // prereleases. electron-updater already derives this from the app version —
 // it is stated here so a future edit can't silently change it. NEVER set
 // autoUpdater.channel: its setter also turns on allowDowngrade.
-autoUpdater.allowPrerelease = isPrerelease(app.getVersion());
+const runningBeta = isPrerelease(app.getVersion());
+// PRD 20 G1: a stable build may opt in to betas (the newest release in the feed, and only if it is
+// newer). On a beta build the switch stays on: allowPrerelease=false there asks /releases/latest and
+// then looks for beta.yml in a stable release (a 404).
+autoUpdater.allowPrerelease = runningBeta || readUpdatePrefs(app.getPath("userData")).betaUpdates;
+autoUpdater.allowDowngrade = false;
 
 // Installers aren't Authenticode-signed (no code-signing certificate). On
 // Windows, NsisUpdater otherwise runs a PowerShell Authenticode check of
@@ -1368,6 +1374,17 @@ app.whenReady().then(() => {
     ipcMain.handle("is-window-focused", () => mainWindow?.isFocused() ?? false);
 
     // ── Auto-Updater IPC (PRD 10.1) ──────────────────────────────────────
+    // ── "Get beta updates" (PRD 20 G1) ───────────────────────────────────
+    ipcMain.handle("update-prefs-get", () => ({ betaUpdates: autoUpdater.allowPrerelease, runningBeta }));
+    ipcMain.handle("update-prefs-set-beta", (_event, on: unknown) => {
+        if (runningBeta) return { betaUpdates: true };
+        const v = on === true;
+        writeUpdatePrefs(app.getPath("userData"), { betaUpdates: v });
+        autoUpdater.allowPrerelease = v;
+        autoUpdater.allowDowngrade = false;
+        return { betaUpdates: v };
+    });
+
     ipcMain.handle("check-for-updates", async () => {
         return checkForUpdatesWithRetry();
     });

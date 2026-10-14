@@ -33,6 +33,7 @@
         "test:version": "tsc --build && node scripts/app-version-smoke.mjs",
         "test:saved-passwords": "tsc --build && node scripts/saved-passwords-smoke.mjs",
         "test:window-chrome": "tsc --build && node scripts/window-chrome-smoke.mjs",
+        "test:update-prefs": "tsc --build && node scripts/update-prefs-smoke.mjs",
         "typecheck": "tsc --noEmit"
     },
     "build": {

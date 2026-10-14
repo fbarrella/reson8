@@ -1628,3 +1628,40 @@ Feature/Fix: Typing indicator (PRD 20 W2, D4 = a with the "Show others when I'm 
       "member" event; covered by the EVENT_ACCESS classification test).
 
   Next Step: G1 (Get beta updates).
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Get beta updates switch for stable builds (PRD 20 G1, D3 = a)
+
+  Problem: A beta could only be installed by hand; a stable build never saw
+  prereleases.
+
+  Solution: src/update-prefs.ts (update-prefs.json in userData, atomic write,
+  default false) + scripts/update-prefs-smoke.mjs (npm run test:update-prefs).
+  main.ts: allowPrerelease = running a beta OR the stored preference, and
+  allowDowngrade stays false (autoUpdater.channel is never set — its setter
+  enables downgrades). IPC update-prefs-get / update-prefs-set-beta (on a beta
+  build the setter is a no-op that answers true). Settings → About has a "Get
+  beta updates" card with a BETA tag under the Updates row; changing it applies
+  live, persists and re-runs the update check; on a beta build the switch is
+  shown on and disabled with "You're on a beta build. It moves to the next
+  stable release automatically when one is out.". Root AGENTS.md "Beta
+  releases" bullet updated. Also fixed scripts/window-chrome-smoke.mjs, which
+  still expected the old opaque overlay colour.
+
+  Key Files Modified:
+    apps/client/src/update-prefs.ts (NEW), scripts/update-prefs-smoke.mjs (NEW),
+      package.json, src/main.ts, src/preload.ts, renderer/renderer.ts,
+      renderer/index.html, scripts/window-chrome-smoke.mjs, AGENTS.md
+
+  Verification:
+    - npm run test:update-prefs (6 checks) and test:window-chrome; client tsc
+      --noEmit; lint exit 0.
+    - Dev build (3.0.0-beta.3): About shows the switch ON, disabled, with the
+      beta note.
+    - Not exercised (needs a packaged stable build against the real GitHub
+      feed, the owner's test in the PRD): the switch on a stable build offering
+      the newest beta, off offering nothing newer than stable, never a
+      downgrade.
+
+  Next Step: Q1 (message search).

@@ -885,6 +885,10 @@ interface Reson8Api {
     downloadUpdate(): Promise<void>;
     quitAndInstall(): void;
     getAppVersion(): Promise<string>;
+    updatePrefs: {
+        get(): Promise<{ betaUpdates: boolean; runningBeta: boolean }>;
+        setBeta(on: boolean): Promise<{ betaUpdates: boolean }>;
+    };
     fetchReleaseNotes(version: string): Promise<{ name: string; bodyHtml: string; htmlUrl: string; publishedAt?: string } | null>;
     createChannel(
         serverId: string,
@@ -11893,6 +11897,7 @@ async function openSettingsPanel(): Promise<void> {
     syncProfileSection(); // discard an unsaved avatar draft from a previous visit (PRD 17.1)
     void renderTrustedCertificates(); // PRD 18.3
     hideIdentityLog(); // always reopen on the user list (PRD 18.4)
+    void syncBetaUpdatesSwitch(); // PRD 20 G1
     membersSearch.value = "";
     membersFilter = "all";
     void renderBannedAddresses(); // PRD 18.7 (no-op for anyone without BAN_USER)
@@ -17248,6 +17253,32 @@ versionMismatchModal.addEventListener("click", (e) => {
     if (e.target === versionMismatchModal) {
         versionMismatchModal.classList.remove("visible");
     }
+});
+
+// "Get beta updates" (PRD 20 G1): the switch lives in About, under the Updates row.
+const chkBetaUpdates = document.getElementById("chk-beta-updates") as HTMLInputElement;
+const betaUpdatesNote = document.getElementById("beta-updates-note") as HTMLElement;
+
+async function syncBetaUpdatesSwitch(): Promise<void> {
+    try {
+        const prefs = await api.updatePrefs.get();
+        chkBetaUpdates.checked = prefs.betaUpdates;
+        chkBetaUpdates.disabled = prefs.runningBeta;
+        betaUpdatesNote.style.display = prefs.runningBeta ? "" : "none";
+    } catch {
+        /* an older main process: leave the card as it is */
+    }
+}
+
+chkBetaUpdates.addEventListener("change", async () => {
+    chkBetaUpdates.disabled = true;
+    try {
+        const res = await api.updatePrefs.setBeta(chkBetaUpdates.checked);
+        chkBetaUpdates.checked = res.betaUpdates;
+    } finally {
+        await syncBetaUpdatesSwitch();
+    }
+    btnCheckUpdates.click(); // so the Updates row reflects the new feed
 });
 
 btnCheckUpdates.addEventListener("click", async () => {
