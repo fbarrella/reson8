@@ -736,3 +736,73 @@ Feature/Fix: <name>
   Verification:
     ...
   Next Step: ...
+
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Opt-in beta update channel (Settings → About)
+
+  Problem: The client could only see stable GitHub releases: electron-updater's
+  GitHub provider reads `/releases/latest` (which excludes pre-releases), and
+  nothing ever set a channel, so a beta build's metadata (`beta.yml`) was
+  invisible. There was no way for a user who wanted early builds to receive
+  them, and no UI to turn that on.
+
+  Solution: Added a strictly opt-in beta channel, driven by a "Register for beta
+  tests" switch in Settings → About. The choice lives in localStorage
+  (`reson8-beta-updates`) and its default is computed from whether the running
+  build is itself a pre-release (a beta installer wants betas; a stable
+  installer defaults off; the computed default is never stored, so upgrading a
+  beta build to a stable one falls back to stable). The value is mirrored to
+  main over a new `set-beta-updates` IPC (same shape as the tray preferences);
+  `userInitiated` marks a real toggle so turning the switch ON re-checks
+  immediately (packaged-only) while the startup sync does not. Before EVERY
+  metadata check, in `checkForUpdatesOnce()`, main re-applies
+  `autoUpdater.allowPrerelease` AND `autoUpdater.channel` from
+  `resolveUpdateChannel(betaUpdatesEnabled)` — explicitly in both directions,
+  because a pre-release build's baked-in `app-update.yml` says `channel: beta`
+  and leaving it alone with betas off would try to fetch a `beta*.yml` from a
+  stable tag and fail. `autoUpdater.allowDowngrade = false` is set AFTER
+  `channel` on purpose: electron-updater's `channel` setter forces
+  `allowDowngrade = true`, which would otherwise let a beta tester on a stable
+  version newer than the newest beta be offered a downgrade. The channel file
+  names are per-platform (`beta.yml` Windows, `beta-linux.yml`, `beta-mac.yml`)
+  and electron-builder already derives the channel from a version's pre-release
+  tag, so no build-config change was needed. The pure rules were extracted into
+  a new Electron-free module.
+
+  Client Changes:
+    - New pure module `update-channel.ts` (`isPrerelease`,
+      `effectiveBetaOptIn`, `resolveUpdateChannel`), smoke-tested and shared by
+      main.ts and preload.ts (exposed to the renderer as `reson8Api.updates`
+      because the renderer is a plain <script> that can't import modules).
+    - About panel gains a `.toggle-row` switch (`#chk-beta-updates`) plus a
+      one-time hint shown when a pre-release build defaults itself on. The
+      "Check for Updates" status now says "(beta channel)" when the switch is
+      on, and the update modal labels an offered pre-release as a Beta update.
+    - No server, shared-types or publish-config change: the update path never
+      crosses the wire.
+
+  localStorage Keys: `reson8-beta-updates`
+
+  Key Files Modified:
+    apps/client/src/update-channel.ts (NEW)
+    apps/client/scripts/update-channel-smoke.mjs (NEW)
+    apps/client/src/main.ts
+    apps/client/src/preload.ts
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/renderer/index.html
+    apps/client/package.json
+    AGENTS.md
+    apps/client/AGENTS.md
+
+  Verification:
+    npx tsc --noEmit in apps/client (clean); npm run test:update-channel (all
+    cases pass: isPrerelease, the stored-choice/default rules, and the
+    channel/allowPrerelease pair); npm run lint from the repo root (exit 0, no
+    new warnings).
+
+  Next Step: Publishing a beta means tagging `vX.Y.Z-beta.N`, marking the
+    GitHub release as pre-release, and uploading the installer(s) together with
+    the generated `beta.yml` / `beta-linux.yml` / `beta-mac.yml` — exactly as
+    `latest*.yml` for a stable release, or beta clients silently find nothing.

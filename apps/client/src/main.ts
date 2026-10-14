@@ -16,6 +16,7 @@ import type { CaptureHandle } from "@reson8/native-audio";
 import MarkdownIt from "markdown-it";
 import { loadWindowState, trackWindowState } from "./window-state.js";
 import { displayDomain, toFixerUrl } from "./link-fixers.js";
+import { resolveUpdateChannel } from "./update-channel.js";
 import {
     createNewIdentityAfterLock,
     exportIdentityPkcs8Der,
@@ -887,6 +888,30 @@ if (process.platform === "win32") {
 // would spam an error event).
 let isDownloadingUpdate = false;
 
+/**
+ * "Register for beta tests" (Settings → About), mirrored here by the renderer
+ * over the `set-beta-updates` IPC — main needs it because it also fires the
+ * silent startup check. Default `false`: beta updates are strictly opt-in.
+ */
+let betaUpdatesEnabled = false;
+
+/**
+ * Picks the update channel for the NEXT check from the current beta opt-in.
+ * Must be re-applied before every check (not once at boot), and the channel is
+ * set explicitly in BOTH directions (see `update-channel.ts`).
+ *
+ * `allowDowngrade = false` MUST follow the channel assignment: electron-updater's
+ * `channel` setter forces `allowDowngrade = true`, which would otherwise let a
+ * beta tester sitting on a stable version newer than the newest beta be offered
+ * a downgrade.
+ */
+function applyUpdateChannel(): void {
+    const { channel, allowPrerelease } = resolveUpdateChannel(betaUpdatesEnabled);
+    autoUpdater.allowPrerelease = allowPrerelease;
+    autoUpdater.channel = channel;
+    autoUpdater.allowDowngrade = false;
+}
+
 /** Active native-audio capture session for a screen share, if any (PRD 12.7). */
 let screenAudioCapture: CaptureHandle | null = null;
 
@@ -905,6 +930,8 @@ function checkForUpdatesOnce(): Promise<"available" | "not-available"> {
         autoUpdater.once("update-available", onAvailable);
         autoUpdater.once("update-not-available", onNotAvailable);
         autoUpdater.once("error", onError);
+        // Honour the current "Register for beta tests" choice on every check.
+        applyUpdateChannel();
         autoUpdater.checkForUpdates().catch(onError);
     });
 }
@@ -1294,6 +1321,22 @@ app.whenReady().then(() => {
     });
 
     ipcMain.handle("get-app-version", () => app.getVersion());
+
+    // "Register for beta tests" (Settings → About). The renderer mirrors its
+    // localStorage preference here on startup and on every toggle; main needs
+    // it because it also drives the silent startup check. `userInitiated` is
+    // true only for a real user toggle (not the startup sync) so turning the
+    // switch ON re-checks immediately, rather than waiting for the next launch —
+    // packaged-only, since a dev build has no app-update.yml and the check's
+    // retry loop would just spin for a minute.
+    ipcMain.on("set-beta-updates", (_event, payload: { enabled?: unknown; userInitiated?: unknown } | null) => {
+        const next = payload?.enabled === true;
+        const wasEnabled = betaUpdatesEnabled;
+        betaUpdatesEnabled = next;
+        if (payload?.userInitiated === true && next && !wasEnabled && app.isPackaged && mainWindow) {
+            void checkForUpdatesWithRetry();
+        }
+    });
 
     // Taskbar/dock attention flash for Nudge (PRD 4.14) — cleared automatically
     // by Electron once the window regains focus, so no explicit "un-flash" call
