@@ -76,6 +76,15 @@
       --color-warning-text: oklch(0.86 0.08 80);
       --color-warning-bg: color-mix(in oklch, oklch(0.82 0.1 80) 8%, transparent);
       --color-warning: oklch(0.82 0.1 80);
+      /* PRD 20 U0 — values from the mockup (Appendix A) that had no token yet. */
+      --color-voice: oklch(0.78 0.14 155);          /* "Voice connected" signal, speaking green */
+      --color-voice-text: oklch(0.8 0.13 155);       /* the "Voice connected" label */
+      --color-voice-tint: color-mix(in srgb, oklch(0.78 0.14 155) 7%, var(--color-surface)); /* dock card top */
+      --color-danger: oklch(0.7 0.15 22);            /* a muted mic/headset icon */
+      --color-danger-line: oklch(0.5 0.12 22);       /* its border */
+      --color-danger-fill: color-mix(in srgb, oklch(0.6 0.16 22) 16%, transparent); /* its fill */
+      --color-danger-hover: color-mix(in srgb, oklch(0.6 0.16 22) 14%, transparent); /* Leave hover */
+      --color-warning-line: oklch(0.5 0.09 80);      /* the NO ACCESS tag's ring */
       /* Input fields: the background, lifted (was the --bg-input alias). */
       --color-field: color-mix(in srgb, var(--color-bg) 60%, transparent);
       /* Pure black and white, for overlays, shadows and text on solid colour
@@ -1026,6 +1035,45 @@
       font-weight: 600;
       letter-spacing: 0.08em;
       text-transform: uppercase;
+      color: var(--color-neutral-500);
+    }
+
+    /* Segmented control (Nocturne .seg) — PRD 20 U0. A .seg-opt.active is the chosen one. */
+    .seg {
+      display: inline-flex;
+      overflow: hidden;
+      border: 1px solid var(--color-divider);
+      border-radius: var(--radius-md);
+    }
+
+    .seg-opt {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 7px 12px;
+      border: none;
+      background: transparent;
+      color: var(--color-neutral-300);
+      font: inherit;
+      font-size: 13px;
+      cursor: pointer;
+    }
+
+    .seg-opt + .seg-opt {
+      border-left: 1px solid var(--color-divider);
+    }
+
+    .seg-opt:hover:not(.active) {
+      background: color-mix(in srgb, var(--color-text) 7%, transparent);
+    }
+
+    .seg-opt.active {
+      color: var(--color-accent);
+      box-shadow: inset 0 0 0 1px var(--color-accent);
+    }
+
+    .seg-opt .seg-count {
+      font-size: 11.5px;
       color: var(--color-neutral-500);
     }
 

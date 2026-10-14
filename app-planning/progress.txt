@@ -896,3 +896,33 @@ Feature/Fix: TEST_STATES sweep — every study state in the real app, three fixe
 
   Next Step: the owner's hand checks in PRD 20 (V1–V3), then
     /bump-version 3.0.0-beta.3.
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Nocturne status tokens, menu "above" placement, segmented control (PRD 20 U0)
+
+  Problem: Items U1–S3 of PRD 20 need design values that had no token yet
+  (voice green, danger red variants, NO ACCESS ring), a way to open a context
+  menu above its anchor (the voice dock sits at the bottom of the sidebar) and
+  the mockup's segmented control.
+
+  Solution: Added eight tokens to the single :root block (--color-voice,
+  --color-voice-text, --color-voice-tint, --color-danger, --color-danger-line,
+  --color-danger-fill, --color-danger-hover, --color-warning-line). openMenu()
+  takes opts.placement ("below" default | "above"): with "above" y is the
+  anchor's top edge and the menu's bottom sits 6 px above it; the existing
+  flip/clamp lines still apply. Added the .seg / .seg-opt / .seg-count styles
+  after .section-label. --color-danger now also colours .server-pill-dot.failed
+  (it already referenced it with a fallback) — intended.
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html — tokens, .seg styles
+    apps/client/src/renderer/renderer.ts — openMenu placement option
+
+  Verification:
+    - apps/client npx tsc --noEmit; npm run lint (0 errors).
+    - Real app over CDP (no server needed): no console errors on load; a menu
+      opened with placement "above" from an anchor at top 400 had its bottom at
+      394; --color-voice resolves on :root.
+
+  Next Step: U1 (voice dock restyle).
