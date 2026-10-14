@@ -3280,10 +3280,6 @@ document.getElementById("btn-connect-cancel")?.addEventListener("click", () => {
     api.disconnect();
     showWelcomeForm();
 });
-document.getElementById("btn-copy-host-cmd")?.addEventListener("click", () => {
-    const cmd = (document.getElementById("welcome-host-cmd") as HTMLElement).textContent ?? "";
-    void api.copyText(cmd).then((ok) => showToast(ok ? "Command copied" : "Couldn't copy the command"));
-});
 
 // Password required (frame 3b): the join was refused for its password.
 const passwordModal = document.getElementById("password-modal") as HTMLDivElement;

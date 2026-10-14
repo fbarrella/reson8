@@ -3319,3 +3319,41 @@ Feature/Fix: Hard-coded colours and alias removal (PRD 19 R6)
   Next Step: end of P5 — the beta.3 gate (TEST_STATES checked or marked for
   the owner), then /bump-version 3.0.0-beta.3, the AGENTS.md/README update
   and condensing progress.txt into a Phase 19 block.
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Welcome screen and title bar fixes (PRD 19 R1/R7 follow-up, owner review)
+
+  Problem (from the owner's screenshot at a ~1080 px wide window):
+    - the saved-server row's ⋯ button rendered as an unstyled default button,
+      and the rows were so cramped that names and addresses were cut to
+      "Fare…" / "farew…";
+    - "Host your own" carried a repository command the owner didn't want;
+    - with the integrated title bar, the server pill was centred between the
+      brand and the window controls instead of on the window.
+
+  Solution:
+    - .saved-row-more is a proper 32 px icon button (transparent, hover/open
+      state on tokens).
+    - The saved list is a size container: below 560 px the "as {nickname} ·
+      Last connected …" line moves under the name instead of squeezing it,
+      and below a 1180 px window the welcome columns tighten (32 px gap,
+      340 px form) so the list gets the room.
+    - "Host your own" keeps only the explanation and "Read the hosting
+      guide", now pointing at https://github.com/fbarrella/reson8#-quick-start
+      (the command block, its copy button and its handler are gone).
+    - The server pill is absolutely centred on the title bar (window width),
+      capped so it never reaches the brand or the controls; the Sharing chip
+      sits at the right.
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html, renderer.ts
+
+  Verification:
+    - tsc client clean; lint exit 0.
+    - Real client at 1080x940 and 1440x900 with two saved servers: the pill's
+      centre equals half the window width at both sizes (540 / 720); names
+      and addresses are shown in full; the ⋯ button's normal and open states
+      screenshotted; the hosting text and link render without the command.
+
+  Next Step: the beta.3 gate (owner).

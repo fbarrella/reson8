@@ -142,12 +142,21 @@
       object-fit: contain;
     }
 
+    #titlebar {
+      position: relative;
+    }
+
+    /* Centred on the full window width (not between the brand and the window
+       controls), so the bar looks symmetric with the integrated controls. */
     .server-pill {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
       display: inline-flex;
       align-items: center;
       gap: 8px;
-      max-width: 320px;
-      margin: 0 auto;
+      max-width: min(320px, calc(100vw - 420px));
       padding: 4px 12px;
       border: 1px solid var(--color-divider);
       border-radius: 999px;
@@ -217,6 +226,7 @@
     }
 
     .titlebar-sharing {
+      margin-left: auto;
       display: inline-flex;
       align-items: center;
       gap: 6px;
@@ -594,6 +604,70 @@
 
     .saved-row-more {
       visibility: hidden;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 32px;
+      height: 32px;
+      padding: 0;
+      border: 1px solid transparent;
+      border-radius: var(--radius-md);
+      background: none;
+      color: var(--color-neutral-400);
+      font-size: 18px;
+      cursor: pointer;
+    }
+
+    .saved-row-more:hover,
+    .saved-row-more.menu-open {
+      background: var(--color-neutral-900);
+      border-color: var(--color-divider);
+      color: var(--color-text);
+    }
+
+    .welcome-saved {
+      container-type: inline-size;
+    }
+
+    .saved-row-main {
+      min-width: 120px;
+    }
+
+    /* A narrow column: the "as … / Last connected …" line moves under the name
+       instead of squeezing it (PRD 19 R1 follow-up). */
+    @container (max-width: 560px) {
+      .saved-row {
+        flex-wrap: wrap;
+        row-gap: 4px;
+      }
+
+      .saved-row-main {
+        flex: 1 1 0;
+      }
+
+      .saved-row-meta {
+        order: 3;
+        flex-basis: 100%;
+        display: flex;
+        gap: 6px;
+        padding-left: 52px;
+        text-align: left;
+        white-space: normal;
+      }
+
+      .saved-row-meta > div + div::before {
+        content: "· ";
+      }
+    }
+
+    @media (max-width: 1180px) {
+      .welcome-inner {
+        gap: 32px;
+      }
+
+      .welcome-left {
+        width: 340px;
+      }
     }
 
     .saved-row:hover .saved-row-more,
@@ -8539,9 +8613,8 @@
 
         <div class="welcome-host">
           <div class="section-label">Host your own</div>
-          <p>The Reson8 server runs with Docker Compose on a home machine, a VPS or anywhere containers run — free, no account needed. From a copy of the repository:</p>
-          <div class="welcome-cmd"><span class="welcome-cmd-prompt">$</span><code id="welcome-host-cmd">docker compose up -d --build</code><button type="button" class="welcome-cmd-copy" id="btn-copy-host-cmd" title="Copy" aria-label="Copy the command"><i class="ph ph-copy" aria-hidden="true"></i></button></div>
-          <a class="welcome-link" href="https://github.com/fbarrella/reson8#-full-stack-docker-alternative" target="_blank" rel="noopener noreferrer">Read the hosting guide <i class="ph ph-arrow-up-right" aria-hidden="true"></i></a>
+          <p>The Reson8 server runs with Docker Compose on a home machine, a VPS or anywhere containers run — free, no account needed.</p>
+          <a class="welcome-link" href="https://github.com/fbarrella/reson8#-quick-start" target="_blank" rel="noopener noreferrer">Read the hosting guide <i class="ph ph-arrow-up-right" aria-hidden="true"></i></a>
         </div>
       </div>
     </div>
