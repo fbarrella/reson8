@@ -5305,81 +5305,6 @@
     }
 
     /* ── Screen Share Selection Modal (PRD 12.10) ─────────────────────── */
-    .source-share-groups {
-      flex: 1;
-      overflow-y: auto;
-      margin: 10px 0;
-    }
-
-    .source-share-group-title {
-      font-size: 11px;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
-      color: var(--color-neutral-500);
-      margin: 12px 0 6px;
-    }
-
-    .source-share-group-title:first-child {
-      margin-top: 0;
-    }
-
-    .source-share-grid {
-      display: grid;
-      grid-template-columns: repeat(2, 1fr);
-      gap: 8px;
-    }
-
-    .source-share-card {
-      border: 1px solid var(--color-divider);
-      border-radius: var(--radius-md);
-      background: var(--color-field);
-      cursor: pointer;
-      overflow: hidden;
-      text-align: left;
-      padding: 0;
-      transition: border-color 0.15s;
-    }
-
-    .source-share-card:hover {
-      border-color: var(--color-accent-800);
-    }
-
-    .source-share-card.selected {
-      border-color: var(--color-accent);
-      box-shadow: 0 0 0 1px var(--color-accent);
-    }
-
-    .source-share-card-thumb {
-      width: 100%;
-      aspect-ratio: 16 / 9;
-      object-fit: cover;
-      display: block;
-      background: var(--color-accent-900);
-    }
-
-    .source-share-card-name {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      padding: 6px 8px;
-      font-size: 11px;
-      color: var(--color-neutral-400);
-    }
-
-    .source-share-card-name span {
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-
-    .source-share-card-icon {
-      width: 14px;
-      height: 14px;
-      border-radius: 2px;
-      flex-shrink: 0;
-    }
-
     .source-share-empty {
       padding: 20px;
       text-align: center;
@@ -8865,37 +8790,180 @@
     }
 
     /* Share picker */
-    #screen-share-modal .modal-content.wide {
-      width: min(760px, calc(100vw - 32px));
+    .share-picker {
+      width: min(740px, calc(100vw - 32px));
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .share-picker-head {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+    }
+
+    .share-picker-head > div {
+      flex: 1;
+    }
+
+    #source-share-tabs {
+      align-self: flex-start;
+    }
+
+    .source-share-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      max-height: min(46vh, max(150px, calc(100vh - 440px)));
+      overflow-y: auto;
+      padding: 2px;
+    }
+
+    .source-share-grid .source-share-empty {
+      grid-column: 1 / -1;
     }
 
     .source-share-card {
-      border: 1px solid var(--color-divider);
-      border-radius: var(--radius-lg);
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      padding: 0;
+      border: none;
+      border-radius: var(--radius-md);
+      overflow: hidden;
       background: var(--color-bg);
+      box-shadow: var(--shadow-sm);
+      color: inherit;
+      text-align: left;
+      cursor: pointer;
     }
 
     .source-share-card:hover {
-      border-color: var(--color-accent-700);
+      box-shadow: 0 0 0 1px var(--color-accent-600);
     }
 
     .source-share-card.selected {
-      border-color: var(--color-accent);
-      box-shadow: 0 0 0 1px var(--color-accent);
+      box-shadow: 0 0 0 2px var(--color-accent), 0 0 20px color-mix(in srgb, var(--color-accent) 25%, transparent);
     }
 
-    #screen-share-modal .toggle-row {
-      margin-top: 12px;
-      padding: 12px 14px;
-      border: 1px solid var(--color-divider);
+    .source-share-card-thumb {
+      width: 100%;
+      aspect-ratio: 16 / 10;
+      object-fit: cover;
+      background: var(--color-neutral-900);
+    }
+
+    .source-share-card-foot {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 10px;
+    }
+
+    .source-share-card-icon {
+      width: 16px;
+      height: 16px;
+    }
+
+    .source-share-card-ph {
+      font-size: 15px;
+      color: var(--color-neutral-400);
+    }
+
+    .source-share-card.selected .source-share-card-ph {
+      color: var(--color-accent);
+    }
+
+    .source-share-card-text {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .source-share-card-name {
+      font-size: 12.5px;
+      color: var(--color-neutral-100);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .source-share-card-sub {
+      font-size: 11px;
+      color: var(--color-neutral-500);
+    }
+
+    .source-share-check {
+      display: none;
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      width: 22px;
+      height: 22px;
+      place-items: center;
+      border-radius: 50%;
+      background: var(--color-accent-800);
+      color: var(--color-accent-100);
+      box-shadow: 0 0 0 1px var(--color-accent), 0 0 12px var(--color-accent);
+      font-size: 12px;
+    }
+
+    .source-share-card.selected .source-share-check {
+      display: grid;
+    }
+
+    /* .share-picker prefix: ".modal-content label" (display: block) would win otherwise. */
+    .share-picker .share-audio-card {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 0;
+      padding: 10px 12px;
       border-radius: var(--radius-md);
-      background: var(--color-bg);
+      box-shadow: var(--shadow-sm);
+      cursor: pointer;
     }
 
-    #screen-share-modal #source-share-audio-checkbox {
-      width: 18px;
-      height: 18px;
-      accent-color: var(--color-accent);
+    .share-audio-card:has(input:disabled) {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+
+    .share-audio-card > i {
+      font-size: 18px;
+      color: var(--color-neutral-400);
+    }
+
+    .share-audio-text {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .share-audio-title {
+      font-size: 13.5px;
+      font-weight: 500;
+    }
+
+    .share-audio-sub {
+      font-size: 12px;
+      color: var(--color-neutral-500);
+    }
+
+    .share-picker-foot {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    #source-share-preview {
+      flex: 1;
+      min-width: 0;
+      font-size: 12.5px;
+      color: var(--color-neutral-500);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
   </style>
 </head>
@@ -9554,22 +9622,25 @@
 
   <!-- ── Screen Share Selection Modal (PRD 12.10) ─────────────────────────── -->
   <div id="screen-share-modal">
-    <div class="modal-content wide">
-      <h3>Share your screen</h3>
-      <p class="dialog-subtitle" id="screen-share-sub">Everyone in your voice room will be able to watch.</p>
-      <div class="source-share-groups" id="source-share-groups">
-        <div class="source-share-empty" id="source-share-status">Loading sources…</div>
+    <div class="modal-content dialog share-picker">
+      <div class="share-picker-head">
+        <div><h3 class="dialog-title">Share your screen</h3><p class="dialog-subtitle" id="screen-share-sub">Everyone in your voice room will be able to watch.</p></div>
+        <button type="button" class="btn btn-ghost btn-icon" id="btn-screen-share-close" aria-label="Close"><i class="ph ph-x" aria-hidden="true"></i></button>
       </div>
-      <div class="toggle-row">
-        <div>
-          <span class="toggle-row-title">Share Audio</span>
-          <span class="toggle-row-desc" id="source-share-audio-desc">Select a source first</span>
-        </div>
-        <input type="checkbox" id="source-share-audio-checkbox" disabled>
+      <div class="seg" id="source-share-tabs" role="tablist">
+        <button type="button" class="seg-opt active" data-source-tab="screen" role="tab"><i class="ph ph-monitor" aria-hidden="true"></i>Screens<span class="seg-count"></span></button>
+        <button type="button" class="seg-opt" data-source-tab="window" role="tab"><i class="ph ph-app-window" aria-hidden="true"></i>Windows<span class="seg-count"></span></button>
       </div>
+      <div class="source-share-grid" id="source-share-groups"><div class="source-share-empty" id="source-share-status">Loading sources…</div></div>
+      <label class="share-audio-card" for="source-share-audio-checkbox">
+        <i class="ph ph-speaker-high" aria-hidden="true"></i>
+        <span class="share-audio-text"><span class="share-audio-title">Share audio</span><span class="share-audio-sub" id="source-share-audio-desc">Pick a window to share its sound</span></span>
+        <span class="toggle-switch"><input type="checkbox" id="source-share-audio-checkbox" disabled><span class="toggle-slider"></span></span>
+      </label>
       <label for="source-share-name-input">Stream name <span class="optional">· optional</span></label>
-      <input type="text" id="source-share-name-input" placeholder="Leave blank to use the source's own name" maxlength="64">
-      <div class="modal-actions">
+      <input type="text" class="input" id="source-share-name-input" placeholder="Leave blank to use the source's own name" maxlength="64">
+      <div class="share-picker-foot">
+        <span id="source-share-preview">Choose a screen or window</span>
         <button class="btn btn-secondary" id="btn-screen-share-cancel">Cancel</button>
         <button class="btn btn-primary" id="btn-screen-share-start" disabled><i class="ph ph-screencast" aria-hidden="true"></i> Start sharing</button>
       </div>

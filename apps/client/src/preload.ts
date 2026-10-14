@@ -1411,6 +1411,11 @@ const api = {
         });
     },
 
+    /** Process names ("Code.exe") for window sources, Windows only (PRD 20 S1). */
+    getWindowProcessNames(ids: string[]): Promise<Record<string, string>> {
+        return ipcRenderer.invoke("get-window-process-names", ids);
+    },
+
     /** Saved-server latency for the welcome list (PRD 20 W1); null = offline. */
     probeServerLatency(address: string): Promise<{ ms: number | null }> {
         return ipcRenderer.invoke("probe-server-latency", address);

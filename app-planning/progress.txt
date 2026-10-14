@@ -1342,3 +1342,50 @@ Feature/Fix: Latency or Offline on saved servers (PRD 20 W1)
       off); both follow from the 60 s cache and the timer states above.
 
   Next Step: S1 (share picker tabs).
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Share picker with Screens/Windows tabs and process names (PRD 20 S1)
+
+  Problem: The share picker listed two labelled groups of cards in a narrow
+  dialog with a plain checkbox for audio and no hint of what viewers will see;
+  the design (frame 1k) has Screens | Windows tabs, one 3-column grid, a share
+  audio card and an "Others will see" line.
+
+  Solution: New 740 px .share-picker markup (kept every id the code queries).
+  renderSourceGrid()/setShareTab() draw the grid for the chosen tab (selection
+  survives a tab switch), counts sit in the segmented control, the audio row
+  is a card with a switch and new copy, updateSharePreview() renders "Others
+  will see: {name}" and the name field's placeholder, and × closes the dialog.
+  Windows only: main's "get-window-process-names" resolves each window
+  source's pid and maps it through one `tasklist /FO CSV` call (3 s timeout,
+  ≤ 100 ids); the cards show "Code.exe" under the title once it arrives
+  (preload getWindowProcessNames()). Old .source-share-* group/title/duplicate
+  card CSS removed.
+
+  Differences / findings:
+    - ph-bold is not vendored: the check badge uses "ph ph-check".
+    - .modal-content label (display: block) beat the audio card's display:
+      flex, dropping the switch below the text; the card rule is prefixed with
+      .share-picker. The grid height is min(46vh, max(150px, 100vh - 440px)) so
+      the dialog fits a 768 px-high window (46vh alone cut the title off).
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts, index.html
+    apps/client/src/main.ts, preload.ts
+
+  Verification:
+    - Client tsc --noEmit; lint exit 0.
+    - Real app on Windows against the 9800 dev server, in a voice room: counts
+      "Screens 2 | Windows 7", process names Discord.exe / Code.exe /
+      mintty.exe / firefox.exe / Notepad.exe / explorer.exe; selecting a window
+      shows the ring + check, "Only sound from …" and "Others will see: My
+      stream" tracking the name field; switching tabs and back keeps the
+      selection; clicking the audio card toggles the switch exactly once;
+      Start sharing shared the window (Stop sharing label in the call bar,
+      stopped cleanly); × and Cancel both close the dialog. Screenshot
+      compared with 1k.png.
+    - Not exercised: Start sharing with audio on (needs a real audio session),
+      macOS and Linux (the Linux system-picker flow is S2).
+
+  Next Step: S2 (Linux system-picker flow).

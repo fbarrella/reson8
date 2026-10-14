@@ -42,6 +42,7 @@ import { TlsTrustStore } from "./tls-store.js";
 import { probeServer } from "./tls-probe.js";
 import { hostKey, isFingerprint, type CertInfo } from "./tls-trust.js";
 import { healthProbeUrl } from "./server-health.js";
+import { execFile } from "child_process";
 
 // ── Single-instance lock (PRD 13.18) ────────────────────────────────────
 // Requested as early as possible, before any other startup work. Opening
@@ -1508,6 +1509,33 @@ app.whenReady().then(() => {
         return typeof resolvePidForWindowSourceId === "function"
             ? resolvePidForWindowSourceId(sourceId)
             : undefined;
+    });
+
+    // PRD 20 S1: "dota2.exe" under a window card. One tasklist call for all of them.
+    ipcMain.handle("get-window-process-names", async (_event, ids: unknown): Promise<Record<string, string>> => {
+        if (process.platform !== "win32" || typeof resolvePidForWindowSourceId !== "function") return {};
+        if (!Array.isArray(ids) || ids.length > 100) return {};
+        const pidOf = new Map<string, number>();
+        for (const id of ids) {
+            if (typeof id !== "string" || id.length > 100) continue;
+            const pid = await resolvePidForWindowSourceId(id);
+            if (typeof pid === "number") pidOf.set(id, pid);
+        }
+        if (pidOf.size === 0) return {};
+        const csv = await new Promise<string>((resolve) =>
+            execFile("tasklist", ["/FO", "CSV", "/NH"], { timeout: 3000, windowsHide: true }, (err, out) => resolve(err ? "" : out)),
+        );
+        const nameOfPid = new Map<number, string>();
+        for (const line of csv.split(/\r?\n/)) {
+            const m = /^"([^"]+)","(\d+)"/.exec(line);
+            if (m) nameOfPid.set(Number(m[2]), m[1]);
+        }
+        const out: Record<string, string> = {};
+        for (const [id, pid] of pidOf) {
+            const name = nameOfPid.get(pid);
+            if (name) out[id] = name;
+        }
+        return out;
     });
 
     ipcMain.handle(

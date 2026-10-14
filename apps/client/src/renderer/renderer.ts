@@ -969,6 +969,7 @@ interface Reson8Api {
     unbanUser(userId: string): Promise<{ success: boolean; error?: string }>;
     getBannedUsers(): Promise<{ success: boolean; users?: { userId: string; nickname: string; bannedAt: string; bannedByNickname?: string | null; address?: string | null }[]; error?: string }>;
     probeServerLatency(address: string): Promise<{ ms: number | null }>;
+    getWindowProcessNames(ids: string[]): Promise<Record<string, string>>;
     uploadFile(fileBuffer: ArrayBuffer, fileName: string, mimeType: string): Promise<UploadResult>;
     downloadImage(url: string): void;
     setCustomEmojis(list: Array<{ name: string; imageUrl: string }>): void;
@@ -2080,6 +2081,9 @@ type DesktopSource = {
     sourceType: "screen" | "window";
 };
 let selectedShareSource: DesktopSource | null = null;
+let shareSources: DesktopSource[] = [];
+let shareTab: "screen" | "window" = "screen";
+let shareProcessNames: Record<string, string> = {};
 
 // ── Watch Screen Share Confirmation Modal (PRD 12.13) ───────────────────────
 const watchShareConfirmModal = document.getElementById("watch-share-confirm-modal") as HTMLDivElement;
@@ -14710,47 +14714,77 @@ btnWatchShareConfirm.addEventListener("click", async () => {
 
 // ── Screen Share Selection Modal (PRD 12.10) ────────────────────────────────
 
-function renderSourceShareGroup(title: string, sources: DesktopSource[]): HTMLElement {
-    const wrapper = document.createElement("div");
-
-    const heading = document.createElement("div");
-    heading.className = "source-share-group-title";
-    heading.textContent = title;
-    wrapper.appendChild(heading);
-
-    const grid = document.createElement("div");
-    grid.className = "source-share-grid";
-    for (const source of sources) {
+/** The picker's single grid for the chosen tab (PRD 20 S1). */
+function renderSourceGrid(): void {
+    sourceShareGroups.textContent = "";
+    const list = shareSources.filter((s) => s.sourceType === shareTab);
+    if (list.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "source-share-empty";
+        empty.textContent = shareTab === "screen" ? "No screens available." : "No windows available.";
+        sourceShareGroups.appendChild(empty);
+        return;
+    }
+    for (const source of list) {
         const card = document.createElement("button");
         card.type = "button";
-        card.className = "source-share-card";
-
+        card.className = "source-share-card" + (selectedShareSource?.id === source.id ? " selected" : "");
         const thumb = document.createElement("img");
         thumb.className = "source-share-card-thumb";
         thumb.src = source.thumbnail;
         thumb.alt = "";
-        card.appendChild(thumb);
-
-        const nameRow = document.createElement("div");
-        nameRow.className = "source-share-card-name";
+        const foot = document.createElement("div");
+        foot.className = "source-share-card-foot";
         if (source.appIcon) {
             const icon = document.createElement("img");
             icon.className = "source-share-card-icon";
             icon.src = source.appIcon;
             icon.alt = "";
-            nameRow.appendChild(icon);
+            foot.appendChild(icon);
+        } else {
+            const icon = document.createElement("i");
+            icon.className = `ph ${source.sourceType === "screen" ? "ph-monitor" : "ph-app-window"} source-share-card-ph`;
+            icon.setAttribute("aria-hidden", "true");
+            foot.appendChild(icon);
         }
-        const nameSpan = document.createElement("span");
-        nameSpan.textContent = source.name;
-        nameRow.appendChild(nameSpan);
-        card.appendChild(nameRow);
-
+        const text = document.createElement("div");
+        text.className = "source-share-card-text";
+        const name = document.createElement("div");
+        name.className = "source-share-card-name";
+        name.textContent = source.name;
+        const sub = document.createElement("div");
+        sub.className = "source-share-card-sub";
+        sub.textContent = shareProcessNames[source.id] ?? (source.sourceType === "screen" ? "Screen" : "Window");
+        text.append(name, sub);
+        foot.appendChild(text);
+        const check = document.createElement("span");
+        check.className = "source-share-check";
+        check.innerHTML = '<i class="ph ph-check" aria-hidden="true"></i>';
+        card.append(thumb, foot, check);
         card.addEventListener("click", () => selectShareSource(source, card));
-        grid.appendChild(card);
+        sourceShareGroups.appendChild(card);
     }
-    wrapper.appendChild(grid);
-    return wrapper;
 }
+
+function setShareTab(tab: "screen" | "window"): void {
+    shareTab = tab;
+    document.querySelectorAll<HTMLButtonElement>("#source-share-tabs .seg-opt").forEach((b) => b.classList.toggle("active", b.dataset.sourceTab === tab));
+    renderSourceGrid();
+}
+
+document.querySelectorAll<HTMLButtonElement>("#source-share-tabs .seg-opt").forEach((b) =>
+    b.addEventListener("click", () => setShareTab(b.dataset.sourceTab === "window" ? "window" : "screen")),
+);
+
+function updateSharePreview(): void {
+    const el = document.getElementById("source-share-preview")!;
+    const name = sourceShareNameInput.value.trim() || selectedShareSource?.name || "";
+    el.textContent = selectedShareSource ? `Others will see: ${name}` : "Choose a screen or window";
+    sourceShareNameInput.placeholder = selectedShareSource
+        ? `Leave blank to use “${selectedShareSource.name}”`
+        : "Leave blank to use the source's own name";
+}
+sourceShareNameInput.addEventListener("input", updateSharePreview);
 
 // Fetched once per modal open (PRD 12.11), not per selection — a
 // machine-wide fact, not something that varies per source.
@@ -14778,13 +14812,13 @@ function updateShareAudioCheckboxState(source: DesktopSource): void {
         desc = "macOS does not support per-application audio capture — only video will be shared.";
     } else if (source.sourceType !== "window") {
         enabled = false;
-        desc = "Audio sharing is only available for individual application windows.";
+        desc = "Not available when sharing an entire screen — pick a window instead";
     } else if (!audioCaptureSupported) {
         enabled = false;
         desc = "Audio capture isn't available for this window on your system.";
     } else {
         enabled = true;
-        desc = "Share this window's audio too";
+        desc = `Only sound from ${source.name}`;
     }
 
     sourceShareAudioCheckbox.disabled = !enabled;
@@ -14800,6 +14834,7 @@ function selectShareSource(source: DesktopSource, cardEl: HTMLElement): void {
     cardEl.classList.add("selected");
     btnScreenShareStart.disabled = false;
     updateShareAudioCheckboxState(source);
+    updateSharePreview();
 }
 
 async function openScreenShareModal(): Promise<void> {
@@ -14811,8 +14846,11 @@ async function openScreenShareModal(): Promise<void> {
     btnScreenShareStart.disabled = true;
     sourceShareAudioCheckbox.disabled = true;
     sourceShareAudioCheckbox.checked = false;
-    sourceShareAudioDesc.textContent = "Select a source first";
+    sourceShareAudioDesc.textContent = "Pick a window to share its sound";
     sourceShareNameInput.value = "";
+    shareSources = [];
+    shareProcessNames = {};
+    updateSharePreview();
 
     sourceShareGroups.innerHTML = "";
     const loading = document.createElement("div");
@@ -14853,23 +14891,28 @@ async function openScreenShareModal(): Promise<void> {
         return;
     }
 
-    const sources = sourcesRes.sources;
-    const screens = sources.filter((s) => s.sourceType === "screen");
-    const windows = sources.filter((s) => s.sourceType === "window");
+    shareSources = sourcesRes.sources;
+    shareProcessNames = {};
+    const screens = shareSources.filter((s) => s.sourceType === "screen").length;
+    const windows = shareSources.length - screens;
+    const counts = document.querySelectorAll<HTMLElement>("#source-share-tabs .seg-count");
+    counts[0].textContent = String(screens);
+    counts[1].textContent = String(windows);
 
-    if (screens.length === 0 && windows.length === 0) {
+    if (screens + windows === 0) {
         const empty = document.createElement("div");
         empty.className = "source-share-empty";
         empty.textContent = "No screens or windows available to share.";
         sourceShareGroups.appendChild(empty);
         return;
     }
-    if (screens.length > 0) {
-        sourceShareGroups.appendChild(renderSourceShareGroup("Screens", screens));
-    }
-    if (windows.length > 0) {
-        sourceShareGroups.appendChild(renderSourceShareGroup("Application Windows", windows));
-    }
+    setShareTab(screens > 0 ? "screen" : "window");
+    // Process names arrive later (Windows only); the cards fill in when they do.
+    void api.getWindowProcessNames(shareSources.filter((s) => s.sourceType === "window").map((s) => s.id)).then((names) => {
+        shareProcessNames = names;
+        if (screenShareModal.classList.contains("visible")) renderSourceGrid();
+    });
+    updateSharePreview();
 }
 
 function closeScreenShareModal(): void {
@@ -14882,6 +14925,7 @@ screenShareModal.addEventListener("click", (e) => {
 });
 
 btnScreenShareCancel.addEventListener("click", () => closeScreenShareModal());
+document.getElementById("btn-screen-share-close")!.addEventListener("click", () => closeScreenShareModal());
 
 btnScreenShareStart.addEventListener("click", async () => {
     const source = selectedShareSource;
