@@ -11,7 +11,7 @@
  * Integrated = the OS draws its own minimize/maximize/close INSIDE our bar
  * (`titleBarStyle: "hidden"` + `titleBarOverlay`, macOS: the traffic lights),
  * which keeps snap layouts, double-click maximize, the system menu and the
- * native `will-minimize` event the minimize-to-tray logic relies on.
+ * native `minimize` event the minimize-to-tray logic relies on.
  */
 
 import * as fs from "fs";

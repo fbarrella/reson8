@@ -798,22 +798,12 @@ function createWindow(): void {
         }
     });
 
-    // ── Minimize-to-tray interception ────────────────────────────────────
-    // Windows/macOS: intercept `will-minimize` and hide instead, so the
-    // window never enters the minimized state at all (PRD 15.7, hypothesis
-    // H1). Calling `hide()` from inside the post-hoc `minimize` event — what
-    // this used to do — left a window that was both minimized AND hidden,
-    // which `restore()`/`show()` then had to untangle.
-    (mainWindow as any).on("will-minimize", (event: Electron.Event) => {
-        if (!minimizeToTray) return;
-        event.preventDefault();
-        mainWindow?.hide();
-        // The `minimize` event below won't fire for a prevented minimize.
-        mainWindow?.webContents.send("window-minimized");
-    });
-
+    // ── Minimize-to-tray ─────────────────────────────────────────────────
+    // Electron has no cancellable minimize (there is no `will-minimize`
+    // event). With minimize-to-tray on, the window is minimized and THEN
+    // hidden; showMainWindow() is the only path that shows it again and it
+    // restores the window before showing it (PRD 15.7, PRD 20 H1).
     (mainWindow as any).on("minimize", () => {
-        // Fallback for platforms that don't emit `will-minimize` (Linux).
         if (minimizeToTray) {
             mainWindow?.hide();
         }

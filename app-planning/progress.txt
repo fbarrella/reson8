@@ -1052,3 +1052,37 @@ Feature/Fix: Title-bar pill shows address and nickname (PRD 20 U3)
       test window was 1024 px; the cap is min(460px, 100vw - 420px) = 460).
 
   Next Step: Group 1 done — report; then M4 helper, M1–M4, W1, S1–S3, G2.
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Remove the dead will-minimize handler; one show path (PRD 20 H1)
+
+  Problem: Electron 34 has no `will-minimize` event, so the handler registered
+  with `(mainWindow as any).on("will-minimize", …)` never ran and its comment
+  described behaviour that does not exist.
+
+  Solution: Deleted the handler and rewrote the comment above the `minimize`
+  handler: with minimize-to-tray on, the window is minimized and then hidden,
+  and showMainWindow() (the only path that shows the main window) restores it
+  before showing. The `minimize` handler keeps hide() and its single
+  `window-minimized` send. Audited `.show()`/`.restore()` in main.ts: the main
+  window is only shown through showMainWindow() (second-instance, tray click,
+  tray Restore, viewer-return); the one direct show() is the Viewer window's
+  own focus handler, not the main window. Corrected the two stale mentions of
+  `will-minimize` (window-chrome.ts header comment, root AGENTS.md).
+
+  Key Files Modified:
+    apps/client/src/main.ts
+    apps/client/src/window-chrome.ts (comment only)
+    AGENTS.md (one sentence)
+
+  Verification:
+    - apps/client npx tsc --noEmit; npm run lint (0 errors).
+    - Real app with the main-process inspector: with minimizeToTray on,
+      minimize() -> minimized=true visible=false; app.emit("second-instance")
+      -> showMainWindow log "before: minimized=true visible=false" / "after:
+      minimized=false visible=true focused=true".
+    - Not exercised: the owner's 10x hand check on Windows (tray click/menu,
+      10 minutes hidden) — listed in the PRD as a manual verify.
+
+  Next Step: group 2 (M4 helper, M1–M4, W1, S1–S3, G2).
