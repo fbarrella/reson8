@@ -6546,6 +6546,16 @@
     }
 
     /* Same 8 px under the label as a plain .settings-section > .section-label. */
+    #typing-indicator {
+      height: 18px;
+      padding: 4px 10px 0;
+      font-size: 11.5px;
+      color: var(--color-neutral-500);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
     .emoji-section-head {
       display: flex;
       align-items: center;
@@ -9371,6 +9381,7 @@
         <textarea id="chat-input" rows="1" placeholder="Type a message..."></textarea>
         <button id="btn-send">Send <i class="ph ph-paper-plane-right" aria-hidden="true"></i></button>
       </div>
+      <div id="typing-indicator" aria-live="polite"></div>
       </div>
     </div>
   </div>
@@ -10668,6 +10679,20 @@
           </div>
           <label class="toggle-switch">
             <input type="checkbox" id="chk-link-previews">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+
+        <div class="toggle-row">
+          <div class="toggle-row-info">
+            <div class="toggle-row-icon"><i class="ph ph-chat-dots" aria-hidden="true"></i></div>
+            <div class="toggle-row-text">
+              <span class="toggle-row-title">Show others when I'm typing</span>
+              <span class="toggle-row-desc">People in the same channel or DM see “{you} is typing…”.</span>
+            </div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="chk-send-typing">
             <span class="toggle-slider"></span>
           </label>
         </div>

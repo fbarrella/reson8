@@ -1588,3 +1588,43 @@ Feature/Fix: Bans page spacing and banned addresses in the same card style (foll
 
   Verification: client tsc --noEmit; lint exit 0; rebuilt into dist. Waiting for
   the owner's visual check.
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Typing indicator (PRD 20 W2, D4 = a with the "Show others when I'm typing" switch)
+
+  Problem: Nobody could tell that someone was writing in a channel or DM (frame
+  1a shows "Kdshy is typing…" under the composer).
+
+  Solution: New fire-and-forget event TYPING (channel id XOR dmPartnerId,
+  classified "member") relayed by typing.handler.ts as USER_TYPING: for a
+  channel to the server's members room (a TEXT channel of the sender's server,
+  never back to the sender), for a DM only to the partner's sockets; viewer
+  sockets are ignored, signals are never stored and throttled to one per 2.5 s
+  per target per socket (typing.service.ts, pure + tested). The client sends at
+  most one signal per 3 s while the composer has text (not for the Server Log or
+  the voice tab, not when the preference is off — localStorage
+  reson8-send-typing, default on, Privacy & safety), and shows one 18 px line
+  under the composer for the ACTIVE tab: "A is typing…", "A and B are
+  typing…", "Several people are typing…"; entries expire after 5 s or when that
+  person's message arrives.
+
+  Key Files Modified:
+    packages/shared-types/src/socket-events.ts
+    apps/server/src/handlers/typing.handler.ts (NEW), services/typing.service.ts (NEW),
+      __tests__/typing.service.test.ts (NEW), services/access.service.ts, index.ts
+    apps/client/src/preload.ts, renderer/renderer.ts, renderer/index.html
+
+  Verification:
+    - shared-types tsc --build; server tsc --noEmit + npm run test (37 files,
+      496 tests); client tsc --noEmit; lint exit 0.
+    - Real app + Socket.io bots: one/two/three typers -> "TypB1 is typing…" /
+      "TypB1 and TypB2 are typing…" / "Several people are typing…"; cleared 5 s
+      after the last signal and at once when the typer's message arrives; a
+      12-signal burst reached the client once; holding input for 20 s sent 7
+      signals; with the switch off 0; a DM signal reached only the partner and
+      showed in the DM tab.
+    - Not exercised: a restricted user (the central packet gate drops every
+      "member" event; covered by the EVENT_ACCESS classification test).
+
+  Next Step: G1 (Get beta updates).

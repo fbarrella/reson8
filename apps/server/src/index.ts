@@ -31,6 +31,7 @@ import { registerDMHandlers } from "./handlers/dm.handler.js";
 import { registerModerationHandlers } from "./handlers/moderation.handler.js";
 import { registerReactionHandlers } from "./handlers/reaction.handler.js";
 import { registerEmojiHandlers } from "./handlers/emoji.handler.js";
+import { registerTypingHandlers } from "./handlers/typing.handler.js";
 import { registerNudgeHandlers } from "./handlers/nudge.handler.js";
 import { registerUploadHandlers } from "./handlers/upload.handler.js";
 import { registerProfileHandlers } from "./handlers/profile.handler.js";
@@ -258,6 +259,7 @@ async function main(): Promise<void> {
     registerModerationHandlers(io, app, mediasoupService);
     registerReactionHandlers(io, app);
     registerEmojiHandlers(io, app);
+    registerTypingHandlers(io, app);
     registerNudgeHandlers(io, app);
     registerUploadHandlers(io, app);
     registerProfileHandlers(io, app);

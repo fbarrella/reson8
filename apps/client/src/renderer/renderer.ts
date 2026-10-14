@@ -1049,6 +1049,7 @@ interface Reson8Api {
     getPendingEmojis(): Promise<{ success: boolean; emojis?: CustomEmoji[]; error?: string }>;
     reviewCustomEmoji(emojiId: string, decision: "APPROVED" | "REJECTED"): Promise<{ success: boolean; error?: string }>;
     deleteCustomEmoji(emojiId: string): Promise<{ success: boolean; error?: string }>;
+    sendTyping(target: { channelId?: string; dmPartnerId?: string }): void;
     nudgeUser(targetUserId: string): Promise<{ success: boolean; error?: string }>;
     getServerSettings(): Promise<{
         success: boolean;
@@ -2777,6 +2778,14 @@ function renderTabMode(tab: ChatTab): void {
 /** Initial + "load older" page size for both channel and DM history (PRD 14.2). */
 const CHAT_PAGE_SIZE = 20;
 let activeTabId = "server-log"; // default active tab
+
+// ── Typing indicator (PRD 20 W2) ─────────────────────────────────────────────
+// State lives here, above the first call to switchTab() (it renders the line during startup).
+const TYPING_PREF_KEY = "reson8-send-typing"; // D4 (a): "Show others when I'm typing"
+const typingIndicator = document.getElementById("typing-indicator") as HTMLDivElement;
+/** tab id (channel id or "dm:<userId>") → userId → { nickname, expires } */
+const typingByTab = new Map<string, Map<string, { nickname: string; expires: number }>>();
+let lastTypingSent = { key: "", at: 0 };
 let allServerRoles: any[] = []; // cached roles for the admin panel
 
 // ── Logging ───────────────────────────────────────────────────────────────
@@ -7572,6 +7581,8 @@ api.on("disconnected", (data?: { reason?: string }) => {
     previousSharingIds = new Set();
     connectedServerName = null;
     connectedNickname = "";
+    typingByTab.clear(); // PRD 20 W2
+    renderTypingIndicator();
     updateSettingsNavCount("roles", 0, false); // PRD 20 M4
     updateSettingsNavCount("emojis", 0);
     myPermissions = null; // PRD 19 A8: unknown again
@@ -8766,6 +8777,7 @@ document.querySelectorAll<HTMLButtonElement>("#members-filters .seg-opt").forEac
 
 function switchTab(tabId: string): void {
     activeTabId = tabId;
+    renderTypingIndicator(); // PRD 20 W2
     scheduleDmSidebarRender(); // PRD 19 C7: the open conversation is excluded from the rail total
 
     // Close emoji picker on tab switch
@@ -10378,7 +10390,68 @@ function autosizeChatInput(): void {
     chatInput.style.height = `${chatInput.scrollHeight + border}px`;
 }
 
-chatInput.addEventListener("input", autosizeChatInput);
+chatInput.addEventListener("input", () => {
+    autosizeChatInput();
+    maybeSendTyping(); // PRD 20 W2
+});
+
+function sendTypingEnabled(): boolean {
+    try {
+        return localStorage.getItem(TYPING_PREF_KEY) !== "false";
+    } catch {
+        return true;
+    }
+}
+
+function maybeSendTyping(): void {
+    if (!sendTypingEnabled() || !chatInput.value.trim()) return;
+    const tab = activeTabId;
+    if (tab === "server-log" || tab === VOICE_TAB_ID) return;
+    const target = tab.startsWith("dm:") ? { dmPartnerId: tab.slice(3) } : chatTabs.has(tab) ? { channelId: tab } : null;
+    if (!target) return;
+    const now = Date.now();
+    if (lastTypingSent.key === tab && now - lastTypingSent.at < 3000) return;
+    lastTypingSent = { key: tab, at: now };
+    api.sendTyping(target);
+}
+
+function renderTypingIndicator(): void {
+    const now = Date.now();
+    const entries = typingByTab.get(activeTabId);
+    const names: string[] = [];
+    if (entries) {
+        for (const [userId, e] of entries) {
+            if (e.expires <= now) entries.delete(userId);
+            else names.push(e.nickname);
+        }
+    }
+    typingIndicator.textContent =
+        names.length === 0
+            ? ""
+            : names.length === 1
+              ? `${names[0]} is typing…`
+              : names.length === 2
+                ? `${names[0]} and ${names[1]} are typing…`
+                : "Several people are typing…";
+}
+
+function clearTyping(tabId: string, userId: string): void {
+    typingByTab.get(tabId)?.delete(userId);
+    if (tabId === activeTabId) renderTypingIndicator();
+}
+
+api.on("user-typing", (p: { userId: string; nickname: string; channelId?: string }) => {
+    if (p.userId === api.getInstanceId()) return;
+    const tabId = p.channelId ?? `dm:${p.userId}`;
+    let entries = typingByTab.get(tabId);
+    if (!entries) typingByTab.set(tabId, (entries = new Map()));
+    entries.set(p.userId, { nickname: p.nickname, expires: Date.now() + 5000 });
+    if (tabId === activeTabId) renderTypingIndicator();
+});
+
+setInterval(() => {
+    if (typingByTab.size > 0) renderTypingIndicator();
+}, 1000);
 
 async function sendChatMessage(): Promise<void> {
     const content = chatInput.value.trim();
@@ -10435,6 +10508,7 @@ async function sendChatMessage(): Promise<void> {
     }
 
     if (result.success) {
+        lastTypingSent = { key: "", at: 0 }; // PRD 20 W2: the next message's first keystroke signals again
         for (const a of batch) URL.revokeObjectURL(a.objectUrl);
     } else {
         restoreFailedBatch(batch, result.error);
@@ -10905,6 +10979,7 @@ serverLogTab?.addEventListener("click", () => switchTab("server-log"));
 // ── Message Event Listener ────────────────────────────────────────────────
 
 api.on("message", (msg: ChatMessage) => {
+    clearTyping(msg.channelId, msg.userId); // PRD 20 W2: they sent it, they're no longer typing
     const tab = chatTabs.get(msg.channelId);
     if (tab) {
         if (tab.atTrueLatest) {
@@ -11063,6 +11138,7 @@ function renderDmMessage(tab: ChatTab, msg: DirectMessage, opts: { stick?: boole
 }
 
 api.on("dm-received", async (msg: DirectMessage) => {
+    clearTyping(`dm:${msg.senderId}`, msg.senderId); // PRD 20 W2
     const myId = api.getInstanceId();
     // Determine who the DM partner is (the other user)
     const partnerId = msg.senderId === myId ? msg.receiverId : msg.senderId;
@@ -16260,6 +16336,16 @@ chkSystemTitleBar.addEventListener("change", async () => {
     systemTitleBarRestart.style.display = res.restartNeeded ? "" : "none";
 });
 document.getElementById("btn-system-titlebar-restart")?.addEventListener("click", () => void api.windowChrome.relaunch());
+
+const chkSendTyping = document.getElementById("chk-send-typing") as HTMLInputElement;
+chkSendTyping.checked = sendTypingEnabled();
+chkSendTyping.addEventListener("change", () => {
+    try {
+        localStorage.setItem(TYPING_PREF_KEY, String(chkSendTyping.checked));
+    } catch {
+        /* not remembered */
+    }
+});
 
 const chkLinkPreviews = document.getElementById("chk-link-previews") as HTMLInputElement;
 chkLinkPreviews.checked = isLinkPreviewsEnabled();

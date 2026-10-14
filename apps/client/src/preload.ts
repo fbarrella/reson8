@@ -752,6 +752,7 @@ const api = {
             emit("custom-emoji-approved", payload);
         });
         socket.on("CUSTOM_EMOJI_REMOVED", (payload) => emit("custom-emoji-removed", payload));
+        socket.on("USER_TYPING", (payload) => emit("user-typing", payload));
         socket.on("NUDGE_RECEIVED", (payload) => emit("nudge-received", payload));
         socket.on("USER_AVATAR_UPDATED", (payload) => emit("user-avatar-updated", payload));
         socket.on("SERVER_SETTINGS_UPDATED", (payload) => {
@@ -2194,6 +2195,11 @@ const api = {
             }
             socket.emit("REVIEW_CUSTOM_EMOJI", { emojiId, decision }, resolve);
         });
+    },
+
+    /** "I'm typing" (PRD 20 W2): fire-and-forget; the server throttles and relays. */
+    sendTyping(target: { channelId?: string; dmPartnerId?: string }): void {
+        if (socket?.connected) socket.emit("TYPING", target);
     },
 
     deleteCustomEmoji(emojiId: string): Promise<{ success: boolean; error?: string }> {

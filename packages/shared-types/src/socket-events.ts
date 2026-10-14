@@ -618,6 +618,9 @@ export interface ClientToServerEvents {
         ack: (response: { success: boolean; error?: string }) => void,
     ) => void;
 
+    /** "I'm typing" in a text channel or a DM (PRD 20 W2). Fire-and-forget; the server throttles. */
+    TYPING: (payload: { channelId?: string; dmPartnerId?: string }) => void;
+
     /** Removes an APPROVED custom emoji (MANAGE_EMOJIS) (PRD 20 M3). Messages that used it show `:name:` as text. */
     DELETE_CUSTOM_EMOJI: (
         payload: { emojiId: string },
@@ -1042,6 +1045,9 @@ export interface ServerToClientEvents {
 
     /** Broadcasts a newly-approved custom emoji so every connected picker updates live. */
     CUSTOM_EMOJI_APPROVED: (payload: { serverId: string; emoji: ICustomEmoji }) => void;
+
+    /** Someone is typing (PRD 20 W2). `channelId` for a channel; absent = a DM from `userId`. */
+    USER_TYPING: (payload: { userId: string; nickname: string; channelId?: string }) => void;
 
     /** A custom emoji was removed from the server (PRD 20 M3); pickers drop it live. */
     CUSTOM_EMOJI_REMOVED: (payload: { serverId: string; emojiId: string }) => void;
