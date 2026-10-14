@@ -17,6 +17,7 @@ import MarkdownIt from "markdown-it";
 import { loadWindowState, trackWindowState } from "./window-state.js";
 import { displayDomain, toFixerUrl } from "./link-fixers.js";
 import { resolveUpdateChannel } from "./update-channel.js";
+import { extractReleaseTags, selectUpdateTarget, type UpdateTarget } from "./update-release.js";
 import {
     createNewIdentityAfterLock,
     exportIdentityPkcs8Der,
@@ -897,8 +898,9 @@ let betaUpdatesEnabled = false;
 
 /**
  * Picks the update channel for the NEXT check from the current beta opt-in.
- * Must be re-applied before every check (not once at boot), and the channel is
- * set explicitly in BOTH directions (see `update-channel.ts`).
+ * Used by `applyUpdateProvider()`'s fallback (when the releases feed can't be
+ * read) — the normal path chooses a specific tag itself. The channel is set
+ * explicitly in BOTH directions (see `update-channel.ts`).
  *
  * `allowDowngrade = false` MUST follow the channel assignment: electron-updater's
  * `channel` setter forces `allowDowngrade = true`, which would otherwise let a
@@ -910,6 +912,63 @@ function applyUpdateChannel(): void {
     autoUpdater.allowPrerelease = allowPrerelease;
     autoUpdater.channel = channel;
     autoUpdater.allowDowngrade = false;
+}
+
+// ── Choosing the release ourselves (see update-release.ts for the "why") ────
+// electron-updater's GitHub provider takes the first entry in GitHub's releases
+// feed, which is ordered by when each release object was *created* — so a stable
+// published after a beta shadows that beta and beta testers never see it. We
+// read the same feed, pick the newest release by semver for the current mode,
+// and point electron-updater at that exact tag.
+const UPDATE_OWNER = "fbarrella";
+const UPDATE_REPO = "reson8";
+const RELEASES_FEED_URL = `https://github.com/${UPDATE_OWNER}/${UPDATE_REPO}/releases.atom`;
+
+/** Reads the releases feed and returns the tag to update from, or null on any failure. */
+async function resolveUpdateTarget(): Promise<UpdateTarget | null> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    try {
+        const response = await fetch(RELEASES_FEED_URL, {
+            signal: controller.signal,
+            headers: {
+                Accept: "application/atom+xml, application/xml, text/xml, */*",
+                "User-Agent": "Mozilla/5.0 (compatible; Reson8Client/1.0; +https://github.com/fbarrella/reson8)",
+            },
+        });
+        if (!response.ok) return null;
+        return selectUpdateTarget(extractReleaseTags(await response.text()), {
+            allowPrerelease: betaUpdatesEnabled,
+        });
+    } catch {
+        return null; // offline / rate-limited / feed changed — fall back below
+    } finally {
+        clearTimeout(timeout);
+    }
+}
+
+/**
+ * Applies the release we chose to `autoUpdater` before a check. A pre-release's
+ * metadata lives in `beta*.yml` and a stable's in `latest*.yml`, so the channel
+ * must match the *chosen release* (a beta tester is also offered a newer stable).
+ * Falls back to electron-updater's own GitHub provider + the opt-in channel when
+ * the feed can't be read, preserving the pre-existing behaviour.
+ */
+async function applyUpdateProvider(): Promise<void> {
+    const target = await resolveUpdateTarget();
+    if (target === null) {
+        applyUpdateChannel();
+        autoUpdater.setFeedURL({ provider: "github", owner: UPDATE_OWNER, repo: UPDATE_REPO });
+        return;
+    }
+    autoUpdater.allowPrerelease = target.channel !== "latest";
+    autoUpdater.channel = target.channel;
+    autoUpdater.allowDowngrade = false; // the channel setter forces this true
+    autoUpdater.setFeedURL({
+        provider: "generic",
+        url: `https://github.com/${UPDATE_OWNER}/${UPDATE_REPO}/releases/download/${target.tag}/`,
+        channel: target.channel,
+    });
 }
 
 /** Active native-audio capture session for a screen share, if any (PRD 12.7). */
@@ -930,9 +989,13 @@ function checkForUpdatesOnce(): Promise<"available" | "not-available"> {
         autoUpdater.once("update-available", onAvailable);
         autoUpdater.once("update-not-available", onNotAvailable);
         autoUpdater.once("error", onError);
-        // Honour the current "Register for beta tests" choice on every check.
-        applyUpdateChannel();
-        autoUpdater.checkForUpdates().catch(onError);
+        // Point the updater at the release we chose ourselves (newest by semver,
+        // honouring the beta opt-in) before every check — see update-release.ts.
+        void applyUpdateProvider()
+            .catch((err) => console.error("[main] Update target selection failed:", err))
+            .then(() => {
+                autoUpdater.checkForUpdates().catch(onError);
+            });
     });
 }
 

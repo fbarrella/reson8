@@ -806,3 +806,64 @@ Feature/Fix: Opt-in beta update channel (Settings → About)
     GitHub release as pre-release, and uploading the installer(s) together with
     the generated `beta.yml` / `beta-linux.yml` / `beta-mac.yml` — exactly as
     `latest*.yml` for a stable release, or beta clients silently find nothing.
+
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Beta updates never offered — pick the release by semver, not by GitHub's feed order
+
+  Problem: With the beta toggle ON, a 2.8.0 client still reported "You're up
+  to date" while a valid pre-release (v3.0.0-beta.3, correctly marked
+  pre-release, with beta.yml/beta-linux.yml/beta-mac.yml attached) sat on
+  GitHub. Reproduced against the live feed: electron-updater's GitHubProvider
+  does NOT pick the newest VERSION — it walks releases.atom in the order GitHub
+  returns it (newest release OBJECT first, by created_at) and takes the first
+  entry matching the channel. The beta's release object was created on 10-11,
+  before v2.8.0's (10-14), so v2.8.0 sorted first in the feed; the provider
+  picked that stable, fetched its latest.yml (2.8.0), and never looked at the
+  beta. Nothing was wrong with the beta's assets or their upload.
+
+  Solution: Stop letting electron-updater choose the tag. `main.ts` now reads
+  the same releases.atom feed itself and a new Electron-free selector
+  (`update-release.ts`) picks the newest release BY SEMVER that the mode allows
+  — stable-only, or stable + pre-release when the beta opt-in is on — then
+  points autoUpdater.setFeedURL() at that exact tag with a `generic` provider
+  (reusing electron-updater's download/checksum/install path) and the channel
+  matching the chosen release (beta.yml for a pre-release, latest.yml for a
+  stable; a beta tester is also offered a newer stable). If the feed can't be
+  read, applyUpdateProvider() falls back to electron-updater's GitHub provider
+  plus resolveUpdateChannel(), preserving the previous behaviour.
+  `allowDowngrade = false` still follows every channel assignment (the channel
+  setter forces it true). This limitation is known upstream (electron-builder
+  #9894/#7273) and only fixed in electron-updater 7.0.0-alpha, which is
+  ESM-only and needs Node >= 22, so it cannot run on Electron 34's Node 20.
+
+  Client Changes:
+    - New pure module `update-release.ts` (`parseVersion`, `compareVersions`,
+      `extractReleaseTags`, `selectUpdateTarget`), smoke-tested.
+    - `main.ts`: `resolveUpdateTarget()` (feed fetch, 8s deadline) and
+      `applyUpdateProvider()` (setFeedURL), called before every check inside
+      `checkForUpdatesOnce()`.
+    - No shared-types/server changes.
+
+  Key Files Modified:
+    apps/client/src/update-release.ts (NEW)
+    apps/client/scripts/update-release-smoke.mjs (NEW)
+    apps/client/src/main.ts
+    apps/client/package.json
+    AGENTS.md
+    apps/client/AGENTS.md
+
+  Verification:
+    Reproduced first: replayed GitHubProvider's selection loop against the live
+    atom feed and confirmed it chose v2.8.0 (beta.yml 404 → latest.yml 2.8.0).
+    After the fix, ran the new selector against the live feed: beta on →
+    v3.0.0-beta.3/beta-linux.yml (HTTP 200, version 3.0.0-beta.3); beta off →
+    v2.8.0/latest-linux.yml (HTTP 200). Also `npx tsc --noEmit` (client, clean),
+    `npm run test:update-release` and `npm run test:update-channel` (all pass),
+    and `npm run lint` from the repo root (exit 0, no new warnings).
+
+  Next Step: This fix must ship in a release NEWER than 2.8.0 (which is already
+    published without it) — e.g. a 2.8.1 patch or the next beta — for a stable
+    client with the toggle on to start seeing betas. Once installed, beta
+    detection no longer depends on GitHub's release ordering.
