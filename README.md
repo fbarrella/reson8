@@ -8,7 +8,7 @@ A high-performance desktop communication platform inspired by TeamSpeak 3,
 built with modern technology for low-latency voice, hierarchical channel trees,
 and private server ownership.
 
-[![Version](https://img.shields.io/badge/version-2.7.0-blue.svg)](#)
+[![Version](https://img.shields.io/badge/version-2.8.0-blue.svg)](#)
 [![Electron](https://img.shields.io/badge/Electron-34-47848F?logo=electron&logoColor=white)](https://www.electronjs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D20-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
@@ -106,7 +106,7 @@ and private server ownership.
 - **Kick & Ban** — Admin right-click to kick users from voice channels. Ban/Unban lives in the Settings → User Management tab, which lists every server user (online or not), so offline troublemakers can be banned too — persisted by instance ID. Your own row shows a disabled Ban button so the list stays consistent.
 
 ### 🖥️ Desktop Experience
-- **Auto-Updates** — Checks for new releases on launch and installs them with one click; a "Check for Updates" button in the About tab lets you trigger it anytime.
+- **Auto-Updates** — Checks for new releases on launch and installs them with one click; a "Check for Updates" button in the About tab lets you trigger it anytime. Beta (pre-release) builds are available too, but strictly opt-in: flip "Register for beta tests" in the About tab to also receive betas, and turn it back off anytime to follow stable releases only.
 - **Remembers Window Size & Position** — Reson8 reopens at the size and position (and maximized state) you left it, falling back safely if that monitor is gone. (Position can't be restored on Wayland, where the compositor controls it.)
 - **Single Instance** — Opening Reson8 while it's already running focuses the existing window instead of launching a redundant second instance.
 - **"What's New" Modal** — The first time you open Reson8 after an update, a one-time modal renders the GitHub release notes as formatted text, sourced live rather than showing raw markdown.

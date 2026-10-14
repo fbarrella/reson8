@@ -37,6 +37,7 @@ import {
     identityHostOf,
     parseServerAddress,
 } from "./tls-trust";
+import { effectiveBetaOptIn, isPrerelease } from "./update-channel";
 
 type TypedSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 
@@ -1659,6 +1660,15 @@ const api = {
         return ipcRenderer.invoke("get-tray-prefs");
     },
 
+    // ── Beta update channel (Settings → About) ───────────────────────────
+    // The renderer owns the "Register for beta tests" choice (localStorage) and
+    // mirrors it here; main needs it for the silent startup check and to
+    // re-check immediately when the switch is turned on. `userInitiated`
+    // distinguishes a real toggle from the startup sync.
+    setBetaUpdates(enabled: boolean, userInitiated = false): void {
+        ipcRenderer.send("set-beta-updates", { enabled, userInitiated });
+    },
+
     async isWindowFocused(): Promise<boolean> {
         return ipcRenderer.invoke("is-window-focused");
     },
@@ -1865,6 +1875,15 @@ const api = {
      *  main-process-side — see main.ts's ReleaseNotes doc comment). */
     async fetchReleaseNotes(version: string): Promise<{ name: string; bodyHtml: string; htmlUrl: string } | null> {
         return ipcRenderer.invoke("fetch-release-notes", version);
+    },
+
+    // ── Beta update channel (Settings → About) ───────────────────────────
+    // The PURE rules (update-channel.ts) live here because the renderer is a
+    // plain <script> that can't import modules; main applies the same rules to
+    // electron-updater. See update-channel.ts for the channel semantics.
+    updates: {
+        isPrerelease,
+        effectiveBetaOptIn,
     },
 
     // ── Mic Sensitivity / Noise Gate ──────────────────────────────────────

@@ -851,6 +851,11 @@ interface Reson8Api {
     quitAndInstall(): void;
     getAppVersion(): Promise<string>;
     fetchReleaseNotes(version: string): Promise<{ name: string; bodyHtml: string; htmlUrl: string } | null>;
+    setBetaUpdates(enabled: boolean, userInitiated?: boolean): void;
+    updates: {
+        isPrerelease(version: string): boolean;
+        effectiveBetaOptIn(stored: string | null, currentVersion: string): boolean;
+    };
     createChannel(
         serverId: string,
         name: string,
@@ -1442,6 +1447,9 @@ const btnSaveMaxMessageLength = document.getElementById("btn-save-max-message-le
 const aboutVersion = document.getElementById("about-version") as HTMLDivElement;
 const btnCheckUpdates = document.getElementById("btn-check-updates") as HTMLButtonElement;
 const aboutUpdateStatus = document.getElementById("about-update-status") as HTMLDivElement;
+// Beta update opt-in (Settings → About)
+const chkBetaUpdates = document.getElementById("chk-beta-updates") as HTMLInputElement;
+const aboutBetaHint = document.getElementById("about-beta-hint") as HTMLDivElement;
 
 // Update modal (PRD 10.1)
 const updateModal = document.getElementById("update-modal") as HTMLDivElement;
@@ -12138,9 +12146,11 @@ let updateModalState: UpdateModalState = "idle";
 
 function showUpdateFoundModal(version: string): void {
     updateModalState = "found";
-    updateModalTitle.textContent = "⬆ Update Available";
-    updateModalMessage.textContent =
-        `A newer version of Reson8 (${version}) is available. Some features might fail if you don't update.`;
+    const beta = api.updates.isPrerelease(version);
+    updateModalTitle.textContent = beta ? "🧪 Beta Update Available" : "⬆ Update Available";
+    updateModalMessage.textContent = beta
+        ? `A newer beta build of Reson8 (${version}) is available. Beta builds are pre-releases and may be unstable.`
+        : `A newer version of Reson8 (${version}) is available. Some features might fail if you don't update.`;
     updateModalProgressWrap.style.display = "none";
     updateModalStatus.style.display = "none";
     btnUpdateNow.style.display = "";
@@ -12213,6 +12223,45 @@ btnUpdateLater.addEventListener("click", () => {
 api.getAppVersion().then((version) => {
     aboutVersion.textContent = `Version ${version}`;
     checkForWhatsNew(version);
+    initBetaUpdates(version);
+});
+
+// ── Beta update opt-in (Settings → About) ───────────────────────────────────
+// Beta (pre-release) builds are strictly opt-in. The choice lives in
+// localStorage; its default is computed from whether THIS build is itself a
+// pre-release (a beta installer wants betas; a stable installer defaults off).
+// The value is mirrored to main (which owns the startup check) on load and on
+// every toggle — the same shape as the tray preferences above.
+const BETA_UPDATES_KEY = "reson8-beta-updates";
+
+function initBetaUpdates(currentVersion: string): void {
+    const stored = localStorage.getItem(BETA_UPDATES_KEY);
+    const enabled = api.updates.effectiveBetaOptIn(stored, currentVersion);
+    chkBetaUpdates.checked = enabled;
+    // Startup sync only — false, so main doesn't fire an extra check; the
+    // packaged startup check a few seconds from now will pick this up.
+    api.setBetaUpdates(enabled, false);
+    // Tell a beta-build user, once, why betas are on without them asking.
+    if (stored === null && api.updates.isPrerelease(currentVersion)) {
+        aboutBetaHint.textContent =
+            "You're running a pre-release build, so updates include betas. Turn this off to follow stable releases only.";
+        aboutBetaHint.style.display = "";
+    }
+}
+
+chkBetaUpdates.addEventListener("change", () => {
+    const enabled = chkBetaUpdates.checked;
+    try {
+        localStorage.setItem(BETA_UPDATES_KEY, String(enabled));
+    } catch {
+        /* storage unavailable — the preference just won't persist */
+    }
+    // A real user toggle (true): main re-checks immediately when it turns on,
+    // so a beta shows up now rather than at the next launch.
+    api.setBetaUpdates(enabled, true);
+    // Clear a stale "You're up to date." from the other channel.
+    aboutUpdateStatus.textContent = "";
+    aboutBetaHint.style.display = "none";
 });
 
 // ── Post-Update "What's New" Modal (PRD 11.4) ───────────────────────────────
@@ -12328,7 +12377,9 @@ btnCheckUpdates.addEventListener("click", async () => {
     btnCheckUpdates.disabled = false;
     btnCheckUpdates.textContent = "Check for Updates";
     if (result.status === "not-available") {
-        aboutUpdateStatus.textContent = "You're up to date.";
+        aboutUpdateStatus.textContent = chkBetaUpdates.checked
+            ? "You're up to date (beta channel)."
+            : "You're up to date.";
     } else if (result.status === "error") {
         aboutUpdateStatus.textContent = result.message
             ? `Could not check for updates: ${result.message}`

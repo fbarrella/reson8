@@ -6498,6 +6498,25 @@
         <button class="btn btn-create" id="btn-check-updates" style="width:100%;">Check for Updates</button>
         <div id="about-update-status"></div>
 
+        <!-- Beta update opt-in (Settings → About). Off by default: on means the
+             client also looks at GitHub pre-release builds (metadata in beta.yml). -->
+        <div class="toggle-row" style="margin-top:14px;">
+          <div class="toggle-row-info">
+            <div class="toggle-row-icon">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h6"/><path d="M10 3v6l-5 9a2 2 0 0 0 1.7 3h10.6a2 2 0 0 0 1.7-3l-5-9V3"/></svg>
+            </div>
+            <div class="toggle-row-text">
+              <span class="toggle-row-title">🧪 Register for beta tests</span>
+              <span class="toggle-row-desc">Also receive pre-release (beta) builds from GitHub. Betas may be unstable; you can turn this off anytime.</span>
+            </div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="chk-beta-updates">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+        <div id="about-beta-hint" style="display:none; font-size:11px; color:var(--text-muted); margin:-2px 2px 4px;"></div>
+
         <!-- Identity key fingerprint (PRD 17.12) -->
         <div class="identity-row">
           <div class="identity-row-label">Identity</div>
