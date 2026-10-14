@@ -241,14 +241,40 @@
        macOS: the traffic lights at the left). The bar drags the window; anything
        clickable in it, and anything that can float over it, must be no-drag or
        its clicks become window drags. */
+    /* The OS window buttons are drawn OVER the page, so the app keeps out of them (PRD 20 follow-up):
+       --titlebar-h is the band they live in, --controls-right the width of the buttons (Windows/Linux),
+       --controls-left the traffic lights (macOS). Full-window dialogs start below the band; full-bleed
+       media (the image viewer) keeps its own controls beside the buttons; toasts sit under them. */
+    :root {
+      --titlebar-h: 0px;
+      --controls-right: 0px;
+      --controls-left: 0px;
+    }
+
+    body.integrated-titlebar {
+      --titlebar-h: 38px;
+      --controls-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw));
+    }
+
+    body.integrated-titlebar.platform-darwin {
+      --controls-right: 0px;
+      --controls-left: 80px;
+    }
+
+    body.window-fullscreen {
+      --titlebar-h: 0px;
+      --controls-right: 0px;
+      --controls-left: 0px;
+    }
+
     body.integrated-titlebar #titlebar {
       -webkit-app-region: drag;
       user-select: none;
-      padding-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + 12px);
+      padding-right: calc(var(--controls-right) + 12px);
     }
 
     body.integrated-titlebar.platform-darwin #titlebar {
-      padding-left: 80px;
+      padding-left: var(--controls-left);
     }
 
     #titlebar button,
@@ -3328,7 +3354,7 @@
 
     .lightbox-toolbar {
       top: 16px;
-      right: 68px;
+      right: calc(var(--controls-right) + 68px);
       display: flex;
       align-items: center;
       gap: 2px;
@@ -3383,7 +3409,7 @@
     /* Close is separate from the toolbar pill, at the far top-right. */
     .lightbox-close {
       top: 16px;
-      right: 16px;
+      right: calc(var(--controls-right) + 16px);
       width: 40px;
       height: 40px;
       border-radius: 10px;
@@ -3391,8 +3417,8 @@
 
     .lightbox-sender {
       top: 16px;
-      left: 16px;
-      max-width: calc(100vw - 420px);
+      left: calc(var(--controls-left) + 16px);
+      max-width: calc(100vw - var(--controls-left) - var(--controls-right) - 420px);
       padding: 8px 12px;
       border-radius: 10px;
       font-size: 12px;
@@ -3475,6 +3501,8 @@
       left: 0;
       right: 0;
       bottom: 0;
+      box-sizing: border-box;
+      padding-top: var(--titlebar-h);
       background: color-mix(in srgb, var(--color-black) 90%, transparent);
       z-index: 200;
       align-items: center;
@@ -3489,7 +3517,7 @@
 
     #video-lightbox-iframe {
       width: 80vw;
-      height: 80vh;
+      height: calc(80vh - var(--titlebar-h));
       max-width: 1280px;
       max-height: 720px;
       border: none;
@@ -3499,7 +3527,7 @@
 
     #video-lightbox-video {
       max-width: 90vw;
-      max-height: 90vh;
+      max-height: calc(90vh - var(--titlebar-h));
       border-radius: 8px;
       cursor: default;
       box-shadow: 0 4px 40px color-mix(in srgb, var(--color-black) 50%, transparent);
@@ -4329,7 +4357,7 @@
       flex-direction: column;
       width: 600px;
       max-width: calc(100vw - 32px);
-      max-height: min(760px, calc(100vh - 48px));
+      max-height: min(760px, calc(100vh - 48px - var(--titlebar-h)));
       padding: 0;
       overflow: hidden;
     }
@@ -4668,7 +4696,7 @@
     .server-icon-card {
       width: 520px;
       max-width: calc(100vw - 32px);
-      max-height: calc(100vh - 48px);
+      max-height: calc(100vh - 48px - var(--titlebar-h));
       overflow-y: auto;
     }
 
@@ -4797,7 +4825,7 @@
     .about-server-card {
       width: 560px;
       max-width: calc(100vw - 32px);
-      max-height: calc(100vh - 48px);
+      max-height: calc(100vh - 48px - var(--titlebar-h));
       overflow-y: auto;
     }
 
@@ -5181,6 +5209,9 @@
       left: 0;
       right: 0;
       bottom: 0;
+      /* The dialog lives below the window-button band (--titlebar-h), centred in what is left. */
+      box-sizing: border-box;
+      padding-top: var(--titlebar-h);
       background: color-mix(in srgb, var(--color-black) 60%, transparent);
       z-index: 100;
       align-items: center;
@@ -5401,7 +5432,7 @@
 
     .modal-content.wide {
       width: 480px;
-      max-height: 70vh;
+      max-height: calc(70vh - var(--titlebar-h));
       display: flex;
       flex-direction: column;
     }
@@ -7942,7 +7973,7 @@
     /* ── Toast Notifications (Nudge, etc.) ────────────────────────────── */
     #toast-container {
       position: fixed;
-      top: 16px;
+      top: calc(var(--titlebar-h) + 12px);
       right: 16px;
       z-index: 20000;
       display: flex;
@@ -8336,7 +8367,7 @@
       display: flex;
       flex-direction: row;
       width: min(1080px, calc(100vw - 48px));
-      height: min(740px, calc(100vh - 48px));
+      height: min(740px, calc(100vh - 48px - var(--titlebar-h)));
       max-height: none;
       padding: 0;
       overflow: hidden;
@@ -8819,7 +8850,7 @@
       display: grid;
       grid-template-columns: repeat(3, minmax(0, 1fr));
       gap: 12px;
-      max-height: min(46vh, max(150px, calc(100vh - 440px)));
+      max-height: min(46vh, max(150px, calc(100vh - 440px - var(--titlebar-h))));
       overflow-y: auto;
       padding: 2px;
     }

@@ -19,8 +19,13 @@ import * as path from "path";
 
 /** Height of `#titlebar` in px — the overlay buttons are drawn at exactly this height. */
 export const TITLEBAR_HEIGHT = 38;
-/** `--color-bg` and `--color-neutral-300` (the overlay takes plain colours, not CSS variables). */
-export const TITLEBAR_COLOR = "#161826";
+/**
+ * The window buttons' background is TRANSPARENT (like Discord): the page paints the bar, and over a
+ * dialog or the image viewer the buttons blend into what is under them instead of being a black block.
+ * Hover/pressed states are drawn by the OS from the symbol colour.
+ */
+export const TITLEBAR_COLOR = "#00000000";
+/** `--color-neutral-300` (the overlay takes plain colours, not CSS variables). */
 export const TITLEBAR_SYMBOL_COLOR = "#cfd3e5";
 
 const FILE_NAME = "window-chrome.json";

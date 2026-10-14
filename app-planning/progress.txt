@@ -1491,3 +1491,39 @@ Feature/Fix: Play sound alerts switch; nudges play with alerts off (PRD 20 G2)
 
   Next Step: group 2 done; next group is the decision-gated items (W2, G1, Q1)
   and H2.
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: App content keeps out of the window buttons; transparent window buttons (follow-up to PRD 19 R7)
+
+  Problem: With the integrated title bar the OS window buttons are drawn over
+  the page. Dialogs on a small window and every full-window overlay (the image
+  viewer worst) ran under them, and the opaque button strip showed as a
+  detached black block over faded backdrops and over the viewer's own buttons.
+
+  Solution: (1) The overlay background is transparent (TITLEBAR_COLOR
+  "#00000000"; the page paints the bar), so the buttons blend into whatever
+  is under them and keep the OS hover state, as in Discord. (2) Three body
+  tokens describe the safe area: --titlebar-h, --controls-right (from
+  env(titlebar-area-*)) and --controls-left (macOS traffic lights); 0 for the
+  system frame and fullscreen. Full-window dialog wrappers get
+  padding-top: var(--titlebar-h) and their calc(100vh - …) heights subtract it
+  (settings shell, What's new, server icon, About server, share picker grid,
+  .modal-content.wide); the image viewer's toolbar, close and sender pill sit
+  beside the buttons; the video lightbox and toasts start under the band.
+
+  Key Files Modified:
+    apps/client/src/window-chrome.ts, renderer/index.html, AGENTS.md (convention)
+
+  Verification:
+    - tsc --noEmit; lint exit 0.
+    - Real window captured through the OS (the native buttons included): the
+      image viewer's toolbar and close button sit left of the buttons
+      (close right edge 872 px of an 888 px content area, buttons 136 px wide),
+      the sender pill is clear, the buttons are transparent over the backdrop;
+      the Settings dialog starts at 62 px, under the button band.
+    - Not exercised: macOS/Linux (token logic only; env(titlebar-area-*) is the
+      same source on Linux), and the Viewer pop-out window (unchanged; it gets
+      the transparent buttons over its own bar).
+
+  Next Step: owner testing, then the decision-gated group (W2, G1, Q1) and H2.
