@@ -1555,6 +1555,9 @@ const btnLightboxClose = document.getElementById("btn-lightbox-close") as HTMLBu
 
 const voicePanel = document.getElementById("voice-panel") as HTMLDivElement;
 const voiceChannelName = document.getElementById("voice-channel-name") as HTMLSpanElement;
+const voiceDockLatency = document.getElementById("voice-dock-latency") as HTMLSpanElement;
+const btnInputDevices = document.getElementById("btn-input-devices") as HTMLButtonElement;
+const btnOutputDevices = document.getElementById("btn-output-devices") as HTMLButtonElement;
 const btnMute = document.getElementById("btn-mute") as HTMLButtonElement;
 const btnDeafen = document.getElementById("btn-deafen") as HTMLButtonElement;
 const btnShareScreen = document.getElementById("btn-share-screen") as HTMLButtonElement;
@@ -6521,21 +6524,35 @@ document.addEventListener("input", (e) => {
 
 // ── Voice Controls ────────────────────────────────────────────────────────
 
-function updateVoiceUI(channelName?: string): void {
+/** "{room} / {category}" for the voice dock (PRD 20 U1); "" when not in voice. */
+function voiceRoomLabel(): string {
+    const node = isInVoice && currentChannelId ? findChannelNodeById(currentTree, currentChannelId) : null;
+    if (!node) return "";
+    const parent = node.parentId ? findChannelNodeById(currentTree, node.parentId) : null;
+    return parent ? `${node.name} / ${parent.name}` : node.name;
+}
+
+function renderVoiceDockSub(): void {
+    const label = voiceRoomLabel();
+    const reconnecting = voicePanel.classList.contains("reconnecting");
+    voiceChannelName.textContent = reconnecting ? `${label} (reconnecting…)` : label;
+}
+
+function updateVoiceUI(_channelName?: string): void {
     refreshLocalSpeakingHalo();
     updateCardVoiceHook?.(); // PRD 19 C12: the in-call restart note follows the room
     if (isInVoice) {
         renderVoiceRoom(); // PRD 19 C9 (a joined or switched room)
         voicePanel.classList.add("visible");
-        if (channelName) {
-            voiceChannelName.textContent = `Voice: ${channelName}`;
-        }
+        renderVoiceDockSub();
         // Icon-only buttons (PRD 12.9) — state is conveyed by the `.active`
         // (red) styling plus the tooltip, not by swapping label text.
         btnMute.title = isMuted ? "Unmute" : "Mute";
         btnMute.classList.toggle("active", isMuted);
         btnDeafen.title = isDeafened ? "Undeafen" : "Deafen";
         btnDeafen.classList.toggle("active", isDeafened);
+        btnMute.querySelector("i")!.className = `ph ${isMuted ? "ph-microphone-slash" : "ph-microphone"}`;
+        btnDeafen.querySelector("i")!.className = `ph ${isDeafened ? "ph-speaker-slash" : "ph-headphones"}`;
         updateShareScreenButton();
     } else {
         if (stageState !== "idle") void stopStageWatch(); // PRD 19 C10 (also covers a popped Viewer)
@@ -7362,8 +7379,6 @@ api.on("disconnected", (data?: { reason?: string }) => {
     for (const timer of speakerHoldTimers.values()) clearTimeout(timer);
     speakerHoldTimers.clear();
     sessionTimers.clear();
-    const panelTimer = document.getElementById("voice-session-timer");
-    if (panelTimer) panelTimer.textContent = "";
     btnConnect.disabled = false;
     btnDisconnect.disabled = true;
     serverUrlInput.disabled = false;
@@ -7420,12 +7435,13 @@ api.on("voice-connection-lost", () => {
 api.on("voice-reconnecting", (data: { channelId: string }) => {
     voicePanel.classList.add("reconnecting");
     if (isInVoice && currentChannelId === data.channelId) {
-        voiceChannelName.textContent += " (reconnecting…)";
+        renderVoiceDockSub();
     }
 });
 
 api.on("voice-reconnected", (data: { channelId: string }) => {
     voicePanel.classList.remove("reconnecting");
+    renderVoiceDockSub();
     isInVoice = true;
     currentChannelId = data.channelId;
 
@@ -7722,15 +7738,6 @@ setInterval(() => {
             treeEl.textContent = formatDuration(now - new Date(startedAt).getTime());
         }
     }
-    // Update the voice panel timer
-    if (currentChannelId && sessionTimers.has(currentChannelId)) {
-        const panelTimer = document.getElementById("voice-session-timer");
-        if (panelTimer) {
-            panelTimer.textContent = formatDuration(
-                now - new Date(sessionTimers.get(currentChannelId)!).getTime(),
-            );
-        }
-    }
 }, 1000);
 
 // ── Latency Display — poll every 3 seconds ───────────────────────────────
@@ -7741,10 +7748,13 @@ setInterval(() => {
     const ms = typeof raw === "number" && !isNaN(raw) ? raw : -1;
     if (ms < 0) {
         statusLatency.textContent = "";
+        voiceDockLatency.textContent = "";
         return;
     }
     statusLatency.textContent = `${ms}ms`;
     statusLatency.className = "status-latency " + (ms <= 80 ? "good" : ms <= 150 ? "warn" : "bad");
+    voiceDockLatency.textContent = isInVoice ? ` · ${ms}ms` : "";
+    if (isInVoice) renderVoiceDockSub(); // picks up a renamed room or category within 3 s
 }, 3000);
 
 // ── Tree Update Helpers ───────────────────────────────────────────────────
@@ -12627,34 +12637,81 @@ audioOutputSelect.addEventListener("change", () => {
     updateSaveBtnVisibility();
 });
 
+/**
+ * Applies and remembers an audio device (PRD 20 U1). Used by Settings' Save and by
+ * the voice dock / call bar device menus, so the two can never disagree.
+ * deviceId "" = the system default.
+ */
+function applyAudioDevice(kind: "input" | "output", deviceId: string, label: string): void {
+    if (kind === "input") {
+        api.setAudioInputDevice(deviceId || null);
+        try {
+            localStorage.setItem("reson8-audio-input", deviceId);
+        } catch {
+            /* not remembered */
+        }
+        savedInputDevice = deviceId;
+        log(`Microphone set to: ${label}`, "info");
+    } else {
+        try {
+            localStorage.setItem("reson8-audio-output", deviceId);
+        } catch {
+            /* not remembered */
+        }
+        savedOutputDevice = deviceId;
+        for (const el of document.querySelectorAll("audio")) {
+            (el as any).setSinkId?.(deviceId).catch(() => {});
+        }
+        log(`Speaker set to: ${label}`, "info");
+    }
+    // Settings may be open on Voice/Sound: keep its selects showing the truth.
+    if (adminModal.classList.contains("visible")) void populateAudioDevices();
+}
+
 // Apply staged devices on Save
 btnSaveDevices.addEventListener("click", () => {
-    // Apply input device
-    if (pendingInputDevice !== null && pendingInputDevice !== savedInputDevice) {
-        const deviceId = pendingInputDevice || null;
-        api.setAudioInputDevice(deviceId);
-        localStorage.setItem("reson8-audio-input", pendingInputDevice);
-        savedInputDevice = pendingInputDevice;
-        log(`Microphone set to: ${audioInputSelect.selectedOptions[0]?.textContent}`, "info");
-    }
-
-    // Apply output device
-    if (pendingOutputDevice !== null && pendingOutputDevice !== savedOutputDevice) {
-        localStorage.setItem("reson8-audio-output", pendingOutputDevice);
-        savedOutputDevice = pendingOutputDevice;
-        const audioEls = document.querySelectorAll("audio");
-        for (const el of audioEls) {
-            if ((el as any).setSinkId) {
-                (el as any).setSinkId(pendingOutputDevice).catch(() => { });
-            }
-        }
-        log(`Speaker set to: ${audioOutputSelect.selectedOptions[0]?.textContent}`, "info");
-    }
-
-    // Reset pending state
+    // Read both staged values first: populateAudioDevices() (called by applyAudioDevice
+    // while Settings is open) resets the pending state synchronously.
+    const nextInput = pendingInputDevice;
+    const nextOutput = pendingOutputDevice;
+    const inputLabel = audioInputSelect.selectedOptions[0]?.textContent ?? "System Default";
+    const outputLabel = audioOutputSelect.selectedOptions[0]?.textContent ?? "System Default";
     pendingInputDevice = null;
     pendingOutputDevice = null;
     btnSaveDevices.style.display = "none";
+    if (nextInput !== null && nextInput !== savedInputDevice) {
+        applyAudioDevice("input", nextInput, inputLabel);
+    }
+    if (nextOutput !== null && nextOutput !== savedOutputDevice) {
+        applyAudioDevice("output", nextOutput, outputLabel);
+    }
+});
+
+/** The caret menu of the mic / headset split buttons (PRD 20 U1, frames 1a/11a). */
+async function openAudioDeviceMenu(kind: "input" | "output", anchor: HTMLElement): Promise<void> {
+    const { inputs, outputs } = await api.enumerateAudioDevices();
+    const list = kind === "input" ? inputs : outputs;
+    const current = kind === "input" ? savedInputDevice : savedOutputDevice;
+    const icon = kind === "input" ? "ph-microphone" : "ph-speaker-high";
+    const items: MenuItem[] = [{ heading: kind === "input" ? "Input device" : "Output device" }];
+    items.push({ label: "System default", icon, checked: current === "", onClick: () => applyAudioDevice(kind, "", "System default") });
+    for (const d of list) {
+        const label = d.label || "Unnamed device";
+        items.push({ label, icon, checked: d.deviceId === current, onClick: () => applyAudioDevice(kind, d.deviceId, label) });
+    }
+    items.push({ divider: true });
+    items.push({ label: "Voice & audio settings…", icon: "ph-gear-six", onClick: () => openClientSettings(kind === "input" ? "voice" : "sound") });
+    const r = anchor.getBoundingClientRect();
+    openMenu(items, r.left, r.top, { anchor, placement: "above" });
+}
+
+btnInputDevices.addEventListener("click", (e) => {
+    e.stopPropagation();
+    void openAudioDeviceMenu("input", btnInputDevices);
+});
+btnOutputDevices.addEventListener("click", (e) => {
+    e.stopPropagation();
+    void openAudioDeviceMenu("output", btnOutputDevices);
 });
 
 // ── Multi-Key Combo Shortcuts ───────────────────────────────────────

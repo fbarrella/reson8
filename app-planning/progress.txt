@@ -926,3 +926,50 @@ Feature/Fix: Nocturne status tokens, menu "above" placement, segmented control (
       394; --color-voice resolves on :root.
 
   Next Step: U1 (voice dock restyle).
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Voice dock card with device split buttons (PRD 20 U1)
+
+  Problem: The voice dock was a pulsing dot, "Voice: {room}", a room timer and
+  a 2x2 grid of icon buttons; the design (frames 1a/11a) is one tinted card
+  with "Voice connected", "{room} / {category} · {n}ms" and a row of split
+  buttons for microphone and headset whose carets switch the device.
+
+  Solution: Markup and CSS replaced as the PRD describes (.voice-dock-card,
+  .split-btn/.split-main/.split-caret, red muted/deafened state through the
+  U0 tokens). updateVoiceUI() fills the sub line through renderVoiceDockSub()
+  (also used by voice-reconnecting/-reconnected and the 3 s latency tick, so a
+  renamed room or category shows within 3 s) and swaps the mic/headset icons
+  with the state. The dock timer is gone (the tree row keeps its own).
+  applyAudioDevice() is the one place that applies and remembers a device —
+  Settings' Save and the new caret menus (openAudioDeviceMenu(), placement
+  "above") both call it, so they cannot disagree.
+
+  Differences from the PRD text:
+    - The two caret icons use "ph ph-caret-down", not "ph-bold": only the
+      regular and fill Phosphor weights are vendored, so ph-bold drew nothing.
+    - Save handler: both staged values and both labels are read BEFORE the
+      first applyAudioDevice() call. populateAudioDevices() (run by it while
+      Settings is open) resets the pending values synchronously, so with the
+      PRD's literal body a simultaneous input+output change applied only one.
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html — #voice-panel markup, dock CSS
+    apps/client/src/renderer/renderer.ts — voiceRoomLabel/renderVoiceDockSub,
+      updateVoiceUI, latency tick, timer removal, applyAudioDevice,
+      openAudioDeviceMenu
+
+  Verification:
+    - apps/client npx tsc --noEmit; npm run lint (0 errors).
+    - Real app over CDP against the 9800 dev server (fake media devices):
+      dock screenshot compared with 1a.png; mute and deafen icons/red state
+      switch both ways; input menu opens above the button with System default
+      ticked, picking a device writes reson8-audio-input and moves the tick;
+      "Voice & audio settings…" from the output menu opens Settings on Sound;
+      renaming the parent category updated the dock line within 4 s; no
+      console errors on load; no voice-session-timer reference remains.
+    - Temporary admin role + script removed afterwards; category name restored.
+    - Not exercised: self-hear (uses the same updateVoiceUI path).
+
+  Next Step: U2 (voice room header and call controls).

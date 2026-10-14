@@ -1437,8 +1437,8 @@
 
     /* ── Voice Controls (bottom of left pane) ─────────────────────────── */
     #voice-panel {
-      border-top: 1px solid var(--color-divider);
-      padding: 8px 12px;
+      border-top: none;
+      padding: 0 10px 10px;
       display: none;
       flex-direction: column;
       gap: 6px;
@@ -1446,13 +1446,6 @@
 
     #voice-panel.visible {
       display: flex;
-    }
-
-    /* Voice-level connection failure being auto-recovered (PRD 11.1) —
-       the panel stays visible but signals something's temporarily wrong. */
-    #voice-panel.reconnecting .voice-info .dot {
-      background: var(--color-warning);
-      animation: pulse 0.8s infinite;
     }
 
     /* Deliberately much louder than the LIVE badge/red share-screen-button
@@ -1534,22 +1527,6 @@
       background: color-mix(in srgb, var(--color-white) 85%, transparent);
     }
 
-    #voice-panel .voice-info {
-      font-size: 11px;
-      color: var(--color-success);
-      display: flex;
-      align-items: center;
-      gap: 6px;
-    }
-
-    #voice-panel .voice-info .dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: var(--color-success);
-      animation: pulse 2s infinite;
-    }
-
     @keyframes pulse {
 
       0%,
@@ -1562,38 +1539,128 @@
       }
     }
 
-    /* 2×2 grid (PRD 12.9) — Mute/Deafen on top, Share Screen/Leave below,
-       following DOM order (grid auto-placement fills left-to-right,
-       top-to-bottom, so no explicit grid-area assignment is needed). */
+    .voice-dock-card {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      padding: 10px 12px;
+      border-radius: var(--radius-lg);
+      background: linear-gradient(180deg, var(--color-voice-tint), var(--color-surface));
+      box-shadow: var(--shadow-sm);
+    }
+
+    .voice-dock-head {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .voice-dock-signal {
+      font-size: 16px;
+      color: var(--color-voice);
+    }
+
+    /* Voice-level connection failure being auto-recovered (PRD 11.1) —
+       the panel stays visible but signals something's temporarily wrong. */
+    #voice-panel.reconnecting .voice-dock-signal {
+      color: var(--color-warning);
+      animation: pulse 0.8s infinite;
+    }
+
+    .voice-dock-text {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .voice-dock-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--color-voice-text);
+    }
+
+    .voice-dock-sub {
+      font-size: 11.5px;
+      color: var(--color-neutral-500);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
     #voice-controls {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      grid-template-rows: 1fr 1fr;
+      display: flex;
       gap: 6px;
     }
 
+    .split-btn {
+      position: relative;
+      display: flex;
+      flex: 1.4;
+    }
+
     .voice-btn {
+      flex: 1;
+      height: 32px;
       display: flex;
       align-items: center;
       justify-content: center;
-      padding: 6px 0;
+      gap: 6px;
+      padding: 0;
       border: 1px solid var(--color-divider);
-      background: var(--color-field);
-      color: var(--color-neutral-400);
       border-radius: var(--radius-md);
+      background: transparent;
+      color: var(--color-neutral-300);
+      font-size: 16px;
       cursor: pointer;
-      transition: all 0.15s;
+      transition: background 0.15s, color 0.15s, border-color 0.15s;
     }
 
     .voice-btn:hover {
-      border-color: var(--color-accent);
-      color: var(--color-accent);
+      color: var(--color-accent-300);
     }
 
-    .voice-btn.active {
-      background: var(--color-live);
-      border-color: var(--color-live);
-      color: var(--color-white);
+    .split-btn .split-main {
+      border-radius: var(--radius-md) 0 0 var(--radius-md);
+    }
+
+    .split-btn .split-caret {
+      flex: none;
+      width: 20px;
+      font-size: 10px;
+      color: var(--color-neutral-400);
+      border-left-color: transparent;
+      border-radius: 0 var(--radius-md) var(--radius-md) 0;
+      box-shadow: inset 1px 0 0 var(--color-divider);
+    }
+
+    .split-btn .split-caret:hover,
+    .split-btn .split-caret.menu-open {
+      color: var(--color-neutral-100);
+      background: var(--color-accent-900);
+    }
+
+    /* Muted / deafened: the main part AND its caret go red (the design ties the border to the state). */
+    .split-btn:has(.split-main.active) .voice-btn {
+      border-color: var(--color-danger-line);
+    }
+
+    .split-btn .split-main.active {
+      background: var(--color-danger-fill);
+      color: var(--color-danger);
+    }
+
+    #btn-share-screen.active {
+      background: var(--color-accent-900);
+      border-color: var(--color-accent-600);
+      color: var(--color-accent-300);
+    }
+
+    .voice-btn.leave {
+      border-color: var(--color-danger-line);
+      color: var(--color-danger-text);
+    }
+
+    .voice-btn.leave:hover {
+      background: var(--color-danger-hover);
     }
 
     /* Share-screen button: "stop sharing" (crossed-out monitor) icon only
@@ -1627,16 +1694,6 @@
 
     #btn-share-screen.active .icon-share-stop {
       display: block;
-    }
-
-    .voice-btn.leave {
-      border-color: var(--color-live);
-      color: var(--color-live);
-    }
-
-    .voice-btn.leave:hover {
-      background: var(--color-live);
-      color: var(--color-white);
     }
 
     .voice-btn:disabled {
@@ -3412,6 +3469,7 @@
       height: 28px;
       padding: 0;
       flex-shrink: 0;
+      color: var(--color-neutral-400);
     }
 
     .voice-room {
@@ -8761,46 +8819,27 @@
           <span class="self-hear-banner-text">🎧 Previewing your mic — muted &amp; deafened</span>
           <button id="btn-stop-self-hear">Stop Previewing</button>
         </div>
-        <div class="voice-info">
-          <span class="dot"></span>
-          <div style="display:flex; flex-direction:column; flex:1; min-width:0;">
-            <span id="voice-channel-name">Voice Connected</span>
-            <span id="voice-session-timer" class="session-timer"></span>
+        <div class="voice-dock-card">
+          <div class="voice-dock-head">
+            <i class="ph-fill ph-cell-signal-full voice-dock-signal" aria-hidden="true"></i>
+            <div class="voice-dock-text">
+              <div class="voice-dock-title">Voice connected</div>
+              <div class="voice-dock-sub"><span id="voice-channel-name"></span><span id="voice-dock-latency"></span></div>
+            </div>
+            <button type="button" class="btn btn-ghost btn-icon voice-expand-btn" id="btn-expand-voice" title="Expand voice room" aria-label="Expand voice room"><i class="ph ph-arrow-square-out" aria-hidden="true"></i></button>
           </div>
-          <button type="button" class="voice-btn voice-expand-btn" id="btn-expand-voice" title="Expand voice room" aria-label="Expand voice room"><i class="ph ph-arrows-out-simple" aria-hidden="true"></i></button>
-        </div>
-        <div id="voice-controls">
-          <button class="voice-btn" id="btn-mute" title="Mute"><svg width="14" height="14" viewBox="0 0 24 24"
-              fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
-              <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-              <line x1="12" y1="19" x2="12" y2="23" />
-              <line x1="8" y1="23" x2="16" y2="23" />
-            </svg></button>
-          <button class="voice-btn" id="btn-deafen" title="Deafen"><svg width="14" height="14" viewBox="0 0 24 24"
-              fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
-              <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07" />
-            </svg></button>
-          <button class="voice-btn" id="btn-share-screen" title="Share Screen"><svg class="icon-share-start"
-              width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-              stroke-linecap="round" stroke-linejoin="round">
-              <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
-              <line x1="8" y1="21" x2="16" y2="21" />
-              <line x1="12" y1="17" x2="12" y2="21" />
-            </svg><svg class="icon-share-stop" width="14" height="14" viewBox="0 0 24 24" fill="none"
-              stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
-              <line x1="8" y1="21" x2="16" y2="21" />
-              <line x1="12" y1="17" x2="12" y2="21" />
-              <line x1="3" y1="21" x2="21" y2="3" />
-            </svg><span class="share-full-count" aria-hidden="true">5/5</span></button>
-          <button class="voice-btn leave" id="btn-leave-voice" title="Leave Voice"><svg width="14" height="14"
-              viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
-              stroke-linejoin="round">
-              <path d="M10.68 13.31a16 16 0 0 0 3.41 2.6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 17v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11l-1.27 1.27" />
-              <line x1="22" y1="2" x2="2" y2="22" />
-            </svg></button>
+          <div id="voice-controls">
+            <div class="split-btn">
+              <button type="button" class="voice-btn split-main" id="btn-mute" title="Mute"><i class="ph ph-microphone" aria-hidden="true"></i></button>
+              <button type="button" class="voice-btn split-caret" id="btn-input-devices" title="Input device" aria-label="Input device" aria-haspopup="menu"><i class="ph ph-caret-down" aria-hidden="true"></i></button>
+            </div>
+            <div class="split-btn">
+              <button type="button" class="voice-btn split-main" id="btn-deafen" title="Deafen"><i class="ph ph-headphones" aria-hidden="true"></i></button>
+              <button type="button" class="voice-btn split-caret" id="btn-output-devices" title="Output device" aria-label="Output device" aria-haspopup="menu"><i class="ph ph-caret-down" aria-hidden="true"></i></button>
+            </div>
+            <button type="button" class="voice-btn" id="btn-share-screen" title="Share Screen"><i class="ph ph-screencast icon-share-start" aria-hidden="true"></i><i class="ph ph-screencast icon-share-stop" aria-hidden="true"></i><span class="share-full-count" aria-hidden="true">5/5</span></button>
+            <button type="button" class="voice-btn leave" id="btn-leave-voice" title="Leave Voice"><i class="ph ph-phone-x" aria-hidden="true"></i></button>
+          </div>
         </div>
       </div>
     </div>
