@@ -1782,3 +1782,23 @@ Feature/Fix: Window border and rounded corners on Linux
       corner; a snapped/tiled (not maximized) window keeps the border and radius.
       If a Linux setup without a compositor shows black corners, "Use the system
       title bar" is the way back.
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Border missing at the rounded corners on Linux (follow-up)
+
+  Problem: With the Linux border and radius, the straight edges had the 1 px
+  border but the four rounded corners showed none.
+
+  Solution: A `visible` overflow on the root element hands the body's
+  `overflow: hidden` to the viewport, so the body did not clip its children
+  and their square corners (titlebar, rail, status bar) were painted over the
+  curved part of the border. html now has overflow: hidden (scoped to
+  body.platform-linux.integrated-titlebar), so the body clips at its own
+  rounded padding edge.
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html
+
+  Verification: with the temporary test hook (removed) the four corners of a
+  capture of the real window show one continuous border; tsc --noEmit, lint 0.

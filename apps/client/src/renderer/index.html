@@ -273,6 +273,9 @@
        body's background would be propagated to the whole canvas and the corners would stay square. */
     html:has(body.platform-linux.integrated-titlebar) {
       background: rgba(0, 0, 0, 0.01);
+      /* Not "visible": a visible root hands the body's overflow to the viewport, so the body would not clip
+         its children and their square corners would paint over the border's rounded corners. */
+      overflow: hidden;
     }
 
     body.platform-linux.integrated-titlebar:not(.window-maximized):not(.window-fullscreen) {
