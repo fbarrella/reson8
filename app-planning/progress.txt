@@ -1086,3 +1086,27 @@ Feature/Fix: Remove the dead will-minimize handler; one show path (PRD 20 H1)
       10 minutes hidden) — listed in the PRD as a manual verify.
 
   Next Step: group 2 (M4 helper, M1–M4, W1, S1–S3, G2).
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: A press on a menu's own anchor closes it instead of reopening it (follow-up to PRD 20 U3)
+
+  Problem: Clicking the title-bar server pill while its popover was open did
+  not close it: the outside-pointerdown handler closed the menu, then the same
+  click reached the pill's handler and opened a new one, every time.
+
+  Solution: openMenu()'s pointerdown handler now recognises a press on the
+  menu's own anchor: it closes the menu and swallows the click that follows
+  (one-shot capture listener, dropped after 600 ms), so the anchor toggles.
+  Applies to every anchored menu (server pill, dock/call-bar device carets,
+  tab overflow, ...), not only the pill.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts — openMenu onPointerDown
+
+  Verification:
+    - apps/client npx tsc --noEmit; npm run lint (0 errors).
+    - Real app, trusted mouse events (Input.dispatchMouseEvent) on the pill:
+      open, closed, open, closed on four successive clicks.
+
+  Next Step: group 2.

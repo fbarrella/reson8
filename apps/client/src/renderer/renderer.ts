@@ -5085,7 +5085,24 @@ function openMenu(
     const focusables = (): HTMLElement[] =>
         Array.from(menu.querySelectorAll<HTMLElement>("button.menu-item:not(:disabled), input.menu-slider-input"));
     const onPointerDown = (e: PointerEvent): void => {
-        if (!menu.contains(e.target as Node)) closeMenu();
+        if (menu.contains(e.target as Node)) return;
+        const anchor = opts.anchor;
+        closeMenu();
+        // A press on the control that opened the menu is a "close": swallow the click
+        // that follows it, or the control's own handler would open the menu again.
+        if (anchor && anchor.contains(e.target as Node)) {
+            const swallow = (ev: Event): void => {
+                ev.stopPropagation();
+                ev.preventDefault();
+                cleanup();
+            };
+            const cleanup = (): void => {
+                document.removeEventListener("click", swallow, true);
+                clearTimeout(timer);
+            };
+            const timer = window.setTimeout(cleanup, 600);
+            document.addEventListener("click", swallow, true);
+        }
     };
     const onKeyDown = (e: KeyboardEvent): void => {
         if (e.key === "Escape") {
