@@ -413,6 +413,10 @@ export interface IBannedUser {
     userId: string;
     nickname: string;
     bannedAt: string;
+    /** Who banned them (PRD 20 M2); null/absent for a ban made before it was recorded. */
+    bannedByNickname?: string | null;
+    /** The address ban made together with this user ban, masked for non-admins. */
+    address?: string | null;
 }
 
 // ---------------------------------------------------------------------------

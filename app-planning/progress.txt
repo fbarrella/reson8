@@ -1227,3 +1227,43 @@ Feature/Fix: Members search, filters, role pills and role guard (PRD 20 M1, with
       at the end of group 2; never committed.
 
   Next Step: M2 (Bans list).
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Banned people list with who banned and the linked address (PRD 20 M2)
+
+  Problem: The Bans page showed only banned addresses and a note pointing at
+  Members; there was no list of banned people, who banned them, or the address
+  banned together with them.
+
+  Solution: banned_users.bannedByNickname (migration
+  20261019130000_add_banned_by) is written by executeBan() from the acting
+  socket's nickname (BAN_USER and reject-and-ban). GET_BANNED_USERS now also
+  returns bannedByNickname and the address ban linked to each user
+  (bannedAddresses.linkedUserId), full for ADMIN and masked (maskCidr) for a
+  BAN_USER-only moderator; IBannedUser carries both as optional fields. The
+  Bans page has a "Banned people" card (renderBannedUsers(): prohibit icon,
+  name, address chip, "Banned by {name} · {relative time}", Unban; dashed empty
+  state). Unban lifts the linked address ban (existing server behaviour) and
+  refreshes the card, the addresses list and Members. Dead CSS removed:
+  .bans-note, #identity-log-bar, .identity-log-bar (the element went with M1).
+
+  Key Files Modified:
+    packages/shared-types/src/models.ts (IBannedUser)
+    apps/server/prisma/schema.prisma, migrations/20261019130000_add_banned_by (NEW)
+    apps/server/src/services/ban.service.ts, handlers/moderation.handler.ts,
+      handlers/approval.handler.ts
+    apps/client/src/preload.ts, renderer/renderer.ts, renderer/index.html
+
+  Verification:
+    - shared-types tsc --build; server tsc --noEmit + npm run test (493);
+      client tsc --noEmit; npm run lint exit 0.
+    - Real app: empty state text; Ban… on a bot -> "Banned by MembersAdmin ·
+      just now"; with an address ban linked (inserted directly, because the
+      loopback test address is refused as a private range) the chip shows
+      203.0.113.45/32 for the ADMIN and 203.0.113.x for a BAN_USER-only bot via
+      GET_BANNED_USERS; Unban -> row gone and the address ban gone.
+    - Not exercised: a ban made before this change (the code path with no
+      bannedByNickname renders "Banned · …"; covered by reading, not driven).
+
+  Next Step: M3 (Emoji approve-all and library).

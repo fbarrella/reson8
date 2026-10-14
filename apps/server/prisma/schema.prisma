@@ -251,6 +251,8 @@ model BannedUser {
   serverId String
   userId   String // instance ID of the banned user
   nickname String // nickname at time of ban (for display)
+  /// Who banned them (PRD 20 M2); NULL for a ban made before it was recorded.
+  bannedByNickname String?
   bannedAt DateTime @default(now())
 
   @@unique([serverId, userId])

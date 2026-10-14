@@ -34,7 +34,7 @@ export interface ExecuteBanInput {
     io: BanIO;
     serverId: string;
     /** The moderator doing it. */
-    actor: { userId: string; socketId?: string; address?: string };
+    actor: { userId: string; nickname?: string; socketId?: string; address?: string };
     userId: string;
     nickname: string | null;
     /** Where to look when the user has no live socket (users.lastAddress, or a pending request's address). */
@@ -69,7 +69,7 @@ export async function executeBan(input: ExecuteBanInput): Promise<ExecuteBanResu
     await app.prisma.bannedUser.upsert({
         where: { serverId_userId: { serverId, userId } },
         update: {},
-        create: { serverId, userId, nickname: nickname ?? "Unknown" },
+        create: { serverId, userId, nickname: nickname ?? "Unknown", bannedByNickname: actor.nickname ?? null },
     });
 
     for (const [, s] of io.sockets.sockets) {

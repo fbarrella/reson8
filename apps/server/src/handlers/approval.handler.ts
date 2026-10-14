@@ -230,6 +230,7 @@ export function registerApprovalHandlers(io: TypedIO, app: FastifyInstance): voi
                         serverId,
                         actor: {
                             userId: socket.data.userId,
+                            nickname: socket.data.nickname,
                             socketId: socket.id,
                             address: socket.data.clientAddress,
                         },

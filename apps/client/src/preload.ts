@@ -1410,7 +1410,7 @@ const api = {
         });
     },
 
-    getBannedUsers(): Promise<{ success: boolean; users?: { userId: string; nickname: string; bannedAt: string }[]; error?: string }> {
+    getBannedUsers(): Promise<{ success: boolean; users?: { userId: string; nickname: string; bannedAt: string; bannedByNickname?: string | null; address?: string | null }[]; error?: string }> {
         return new Promise((resolve) => {
             if (!socket?.connected) {
                 resolve({ success: false, error: "Not connected" });

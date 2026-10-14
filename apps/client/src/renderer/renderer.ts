@@ -967,7 +967,7 @@ interface Reson8Api {
         opts?: { ban?: boolean; addressBan?: "none" | "exact" | "range" },
     ): Promise<{ success: boolean; error?: string; warning?: string }>;
     unbanUser(userId: string): Promise<{ success: boolean; error?: string }>;
-    getBannedUsers(): Promise<{ success: boolean; users?: { userId: string; nickname: string; bannedAt: string }[]; error?: string }>;
+    getBannedUsers(): Promise<{ success: boolean; users?: { userId: string; nickname: string; bannedAt: string; bannedByNickname?: string | null; address?: string | null }[]; error?: string }>;
     uploadFile(fileBuffer: ArrayBuffer, fileName: string, mimeType: string): Promise<UploadResult>;
     downloadImage(url: string): void;
     setCustomEmojis(list: Array<{ name: string; imageUrl: string }>): void;
@@ -11720,6 +11720,7 @@ async function openSettingsPanel(): Promise<void> {
     membersSearch.value = "";
     membersFilter = "all";
     void renderBannedAddresses(); // PRD 18.7 (no-op for anyone without BAN_USER)
+    void renderBannedUsers(); // PRD 20 M2
     void refreshPendingApprovals(); // PRD 18.8
     void refreshInvites(); // PRD 18.9
     adminModal.classList.add("visible");
@@ -12335,6 +12336,8 @@ document.getElementById("btn-ban-user-confirm")!.addEventListener("click", async
             showToast(escapeHtml(res.warning), 8000);
         }
         SoundAlert.play("user_banned_from_server.mp3");
+        void renderBannedUsers();
+        void renderBannedAddresses();
         if (membersPanelActive()) void refreshMembersPanel();
         else void openSettingsPanel(); // refresh to reflect the new banned state
     } else {
@@ -12342,6 +12345,72 @@ document.getElementById("btn-ban-user-confirm")!.addEventListener("click", async
         if (res.error && /permission|denied/i.test(res.error)) SoundAlert.play("insufficient_perms.mp3");
     }
 });
+
+/** The "Banned people" card on the Bans page (PRD 20 M2). Empty for anyone without BAN_USER. */
+async function renderBannedUsers(): Promise<void> {
+    const list = document.getElementById("banned-users-list");
+    if (!list) return;
+    if (!isConnected) {
+        list.textContent = "";
+        return;
+    }
+    const res = await api.getBannedUsers();
+    list.textContent = "";
+    if (!res.success || !res.users) return;
+    if (res.users.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "bans-empty";
+        empty.textContent = "Nobody is banned. Ban someone from the ⋮ menu in Members.";
+        list.appendChild(empty);
+        return;
+    }
+    for (const u of res.users) {
+        const row = document.createElement("div");
+        row.className = "member-row";
+        const icon = document.createElement("i");
+        icon.className = "ph ph-prohibit ban-row-icon";
+        icon.setAttribute("aria-hidden", "true");
+        const main = document.createElement("div");
+        main.className = "member-main";
+        const name = document.createElement("div");
+        name.className = "member-name";
+        name.append(document.createTextNode(u.nickname));
+        if (u.address) {
+            const chip = document.createElement("span");
+            chip.className = "ban-address";
+            chip.textContent = u.address;
+            name.append(chip);
+        }
+        const sub = document.createElement("div");
+        sub.className = "member-sub";
+        const meta = document.createElement("span");
+        meta.textContent = `Banned${u.bannedByNickname ? ` by ${u.bannedByNickname}` : ""} · ${relativeTime(Date.parse(u.bannedAt))}`;
+        sub.appendChild(meta);
+        main.append(name, sub);
+        const unban = document.createElement("button");
+        unban.type = "button";
+        unban.className = "btn btn-secondary";
+        unban.textContent = "Unban";
+        unban.addEventListener("click", async () => {
+            unban.disabled = true;
+            const r = await api.unbanUser(u.userId);
+            if (r.success) {
+                log(`Unbanned ${escapeHtml(u.nickname)}`, "success");
+                SoundAlert.play("user_unbanned_from_server.mp3");
+            } else {
+                unban.disabled = false;
+                log(`Failed to unban: ${escapeHtml(r.error ?? "unknown error")}`, "error");
+                if (r.error && /permission|denied/i.test(r.error)) SoundAlert.play("insufficient_perms.mp3");
+                return;
+            }
+            void renderBannedUsers();
+            void renderBannedAddresses();
+            void refreshMembersPanel();
+        });
+        row.append(icon, main, unban);
+        list.appendChild(row);
+    }
+}
 
 /** The "Banned addresses" list under the users (BAN_USER holders only; the server masks it for non-ADMINs). */
 async function renderBannedAddresses(): Promise<void> {

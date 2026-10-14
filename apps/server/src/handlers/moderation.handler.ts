@@ -151,6 +151,7 @@ export function registerModerationHandlers(
                     serverId,
                     actor: {
                         userId: socket.data.userId,
+                        nickname: socket.data.nickname,
                         socketId: socket.id,
                         address: socket.data.clientAddress,
                     },
@@ -289,10 +290,20 @@ export function registerModerationHandlers(
                     orderBy: { bannedAt: "desc" },
                 });
 
-                const users = banned.map((b: { userId: string; nickname: string; bannedAt: Date }) => ({
+                // The address ban made together with each user ban (PRD 20 M2), masked for non-ADMINs.
+                const perms = await getUserPermissions(app.prisma, socket.data.userId, serverId);
+                const full = isAdmin(perms);
+                const linked = await app.prisma.bannedAddress.findMany({
+                    where: { serverId, linkedUserId: { in: banned.map((b) => b.userId) } },
+                    select: { linkedUserId: true, cidr: true },
+                });
+                const addressOf = new Map(linked.map((l) => [l.linkedUserId, full ? l.cidr : maskCidr(l.cidr)]));
+                const users = banned.map((b) => ({
                     userId: b.userId,
                     nickname: b.nickname,
                     bannedAt: b.bannedAt.toISOString(),
+                    bannedByNickname: b.bannedByNickname ?? null,
+                    address: addressOf.get(b.userId) ?? null,
                 }));
 
                 ack({ success: true, users });
