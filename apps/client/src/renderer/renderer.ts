@@ -1359,6 +1359,8 @@ let isSharingScreen = false;
  * client sends.
  */
 let serverMaxMessageLength = 4000;
+/** The connect being shown on the welcome screen (PRD 19 R1); declared early because log() reads it. */
+let connectFlow: ConnectFlow | null = null;
 /** The currently-connected server's display name, once fetched via getServerSettings() — null until then / after disconnect. */
 let connectedServerName: string | null = null;
 
@@ -2778,6 +2780,11 @@ function log(message: string, type: "info" | "success" | "error" | "" = ""): voi
 
     eventLog.appendChild(entry);
     eventLog.scrollTop = eventLog.scrollHeight;
+    if (type === "error" && connectFlow && connectFlow.state === "running") {
+        const tmp = document.createElement("div");
+        tmp.innerHTML = message;
+        connectFlow.lastError = (tmp.textContent ?? "").replace(/^Error:\s*/, "");
+    }
 
     // While the welcome screen is showing there is no Server Log to read: mirror
     // connect progress and errors into its status line (text only).
@@ -2815,6 +2822,8 @@ function displayAddress(host: string, port?: number): string {
 /** The connection being made / made — what the status bar and the warning banner describe. */
 let currentConnection: { scheme: "https" | "http"; host: string; port: number | undefined; pinned: boolean } | null = null;
 let connectInProgress = false;
+/** Whether the running connect was started with a typed password (a refusal then means "wrong"). */
+let connectFlowHadPassword = false;
 
 async function startConnect(): Promise<void> {
     if (connectInProgress || isConnected) return;
@@ -2830,13 +2839,28 @@ async function startConnect(): Promise<void> {
     // Only sent when typed; never remembered (a code is single-purpose, PRD 18.9).
     const inviteCode = inviteCodeInput.value.trim() || undefined;
 
-    welcomeStatus("Connecting…", "");
+    welcomeStatus("", "");
+    const hadPasswordTyped = !!password;
+    beginConnectFlow(serverUrlInput.value.trim(), nickname); // PRD 19 R1
+    connectFlowHadPassword = hadPasswordTyped;
 
     connectInProgress = true;
     btnConnect.disabled = true; // the probe can take a few seconds
     try {
         const target = await resolveConnectionTarget(address);
-        if (!target) return; // refused or cancelled — the reason was already shown
+        if (!target) {
+            // Refused (the reason was logged) or cancelled by the user (back to the form).
+            if (connectFlow?.lastError) failConnectFlow(connectFlow.lastError);
+            else showWelcomeForm();
+            return;
+        }
+        if (connectFlow) {
+            connectFlow.steps.resolve = "done";
+            connectFlow.insecure = target.scheme === "http";
+            connectFlow.steps.secure = target.scheme === "https" ? "done" : "warn";
+            connectFlow.steps.signin = "active";
+            renderConnectCard();
+        }
 
         currentConnection = target;
         const shown = displayAddress(target.host, target.port);
@@ -3127,6 +3151,185 @@ btnConnect.addEventListener("click", () => {
     void startConnect();
 });
 
+// ── Connect progress and failure (PRD 19 R1, frames 3a/3b) ───────────────────
+// While a connect runs, the form is replaced by a card listing the steps the
+// client really goes through: the TLS probe (resolving + encrypted), the join
+// (signing in) and the first tree (syncing). A failure keeps the card with the
+// reason, two hints and Try again / Edit details. Nothing about HOW we connect
+// changes; this only shows it. One exception, by design: a first connect that
+// can't reach the server stops retrying (it used to retry forever behind an
+// error line) — Try again starts it over.
+
+type ConnectStepState = "pending" | "active" | "done" | "failed" | "warn";
+interface ConnectFlow {
+    address: string;
+    nickname: string;
+    steps: { resolve: ConnectStepState; secure: ConnectStepState; signin: ConnectStepState; sync: ConnectStepState };
+    insecure: boolean;
+    state: "running" | "failed" | "password";
+    lastError: string;
+}
+
+const connectCard = document.getElementById("connect-card") as HTMLDivElement;
+const welcomeForm = document.getElementById("welcome-form") as HTMLDivElement;
+
+function showWelcomeForm(): void {
+    connectFlow = null;
+    connectCard.style.display = "none";
+    welcomeForm.style.display = "";
+    renderServerPill();
+}
+
+function renderConnectCard(): void {
+    const f = connectFlow;
+    if (!f) {
+        showWelcomeForm();
+        return;
+    }
+    welcomeForm.style.display = "none";
+    connectCard.style.display = "";
+    const failed = f.state === "failed";
+    connectCard.classList.toggle("failed", failed);
+    const signinFailed = f.steps.signin === "failed";
+    (document.getElementById("connect-card-title") as HTMLElement).textContent = failed
+        ? signinFailed
+            ? `Couldn't sign in to ${f.address}`
+            : `Couldn't reach ${f.address}`
+        : `Connecting to ${f.address}`;
+    (document.getElementById("connect-card-sub") as HTMLElement).textContent = failed ? f.lastError : "";
+    (document.getElementById("connect-card-icon") as HTMLElement).className = failed
+        ? "ph ph-plugs connect-card-icon"
+        : "ph ph-plugs-connected connect-card-icon";
+
+    const icon: Record<ConnectStepState, string> = {
+        pending: "ph-circle",
+        active: "ph-circle-notch spinning",
+        done: "ph-check-circle",
+        failed: "ph-x-circle",
+        warn: "ph-lock-simple-open",
+    };
+    const rows: [ConnectStepState, string][] = [
+        [f.steps.resolve, "Resolving address"],
+        [f.steps.secure, f.insecure ? "Not encrypted" : "Encrypted"],
+        [f.steps.signin, f.state === "password" ? `Signing in as ${f.nickname} — password required` : `Signing in as ${f.nickname}`],
+        [f.steps.sync, "Syncing channels"],
+    ];
+    const list = document.getElementById("connect-steps") as HTMLElement;
+    list.replaceChildren();
+    for (const [state, label] of rows) {
+        const li = document.createElement("li");
+        li.className = state;
+        const i = document.createElement("i");
+        i.className = `ph ${f.state === "password" && label.startsWith("Signing") ? "ph-lock-simple" : icon[state]}`;
+        i.setAttribute("aria-hidden", "true");
+        const span = document.createElement("span");
+        span.textContent = label;
+        li.append(i, span);
+        list.appendChild(li);
+    }
+    // The hints only help when the server couldn't be reached at all.
+    (document.getElementById("connect-hints") as HTMLElement).style.display = failed && !signinFailed ? "" : "none";
+    (document.getElementById("btn-connect-retry") as HTMLElement).style.display = failed ? "" : "none";
+    (document.getElementById("btn-connect-edit") as HTMLElement).style.display = failed ? "" : "none";
+    (document.getElementById("btn-connect-cancel") as HTMLElement).style.display = failed ? "none" : "";
+    renderServerPill();
+}
+
+function beginConnectFlow(address: string, nickname: string): void {
+    connectFlow = {
+        address,
+        nickname,
+        steps: { resolve: "active", secure: "pending", signin: "pending", sync: "pending" },
+        insecure: false,
+        state: "running",
+        lastError: "",
+    };
+    renderConnectCard();
+}
+
+/** The flow failed at the step currently running. */
+function failConnectFlow(message: string): void {
+    const f = connectFlow;
+    if (!f) return;
+    f.state = "failed";
+    f.lastError = message || f.lastError || "The connection failed.";
+    const order: (keyof ConnectFlow["steps"])[] = ["resolve", "secure", "signin", "sync"];
+    const running = order.find((k) => f.steps[k] === "active") ?? "resolve";
+    f.steps[running] = "failed";
+    renderConnectCard();
+}
+
+/** The title-bar pill while not connected: what the connect is doing (frames 3a/3b). */
+function connectPillText(): { text: string; failed: boolean } | null {
+    if (!connectFlow) return null;
+    if (connectFlow.state === "failed") return { text: "Connection failed", failed: true };
+    if (connectFlow.state === "password") return { text: "Waiting for password", failed: false };
+    return { text: "Connecting…", failed: false };
+}
+
+document.getElementById("btn-connect-retry")?.addEventListener("click", () => {
+    showWelcomeForm();
+    void startConnect();
+});
+document.getElementById("btn-connect-edit")?.addEventListener("click", () => {
+    showWelcomeForm();
+    serverUrlInput.focus();
+    serverUrlInput.select();
+});
+document.getElementById("btn-connect-cancel")?.addEventListener("click", () => {
+    api.disconnect();
+    showWelcomeForm();
+});
+document.getElementById("btn-copy-host-cmd")?.addEventListener("click", () => {
+    const cmd = (document.getElementById("welcome-host-cmd") as HTMLElement).textContent ?? "";
+    void api.copyText(cmd).then((ok) => showToast(ok ? "Command copied" : "Couldn't copy the command"));
+});
+
+// Password required (frame 3b): the join was refused for its password.
+const passwordModal = document.getElementById("password-modal") as HTMLDivElement;
+const passwordModalInput = document.getElementById("password-modal-input") as HTMLInputElement;
+const btnPasswordJoin = document.getElementById("btn-password-join") as HTMLButtonElement;
+
+function askForServerPassword(wrong: boolean): void {
+    const f = connectFlow;
+    if (!f) return;
+    f.state = "password";
+    f.steps.signin = "active";
+    renderConnectCard();
+    (document.getElementById("password-modal-host") as HTMLElement).textContent = f.address;
+    (document.getElementById("password-modal-nick") as HTMLElement).textContent = f.nickname;
+    (document.getElementById("password-modal-error") as HTMLElement).textContent = wrong ? "That password wasn't accepted." : "";
+    (document.getElementById("password-modal-remember") as HTMLInputElement).checked = rememberMeCheckbox.checked;
+    passwordModalInput.value = "";
+    btnPasswordJoin.disabled = true;
+    passwordModal.classList.add("visible");
+    passwordModalInput.focus();
+}
+
+function closePasswordModal(): void {
+    passwordModal.classList.remove("visible");
+}
+
+passwordModalInput.addEventListener("input", () => {
+    btnPasswordJoin.disabled = passwordModalInput.value.length === 0;
+});
+passwordModalInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !btnPasswordJoin.disabled) btnPasswordJoin.click();
+    if (e.key === "Escape") document.getElementById("btn-password-cancel")?.click();
+});
+btnPasswordJoin.addEventListener("click", () => {
+    serverPasswordInput.value = passwordModalInput.value;
+    // Remembering the password means remembering the server it belongs to.
+    if ((document.getElementById("password-modal-remember") as HTMLInputElement).checked) rememberMeCheckbox.checked = true;
+    closePasswordModal();
+    showWelcomeForm();
+    void startConnect();
+});
+document.getElementById("btn-password-cancel")?.addEventListener("click", () => {
+    closePasswordModal();
+    showWelcomeForm();
+});
+
 btnDisconnect.addEventListener("click", () => {
     api.disconnect();
 });
@@ -3267,7 +3470,7 @@ function fillFormFromSaved(entry: SavedServer): void {
     serverPasswordInput.value = ""; // a stored password is used by the preload, never shown
     rememberMeCheckbox.checked = true;
     selectedSavedServerId = entry.id;
-    serverPasswordInput.placeholder = entry.hasPassword ? "Saved password" : "Password (optional)";
+    serverPasswordInput.placeholder = entry.hasPassword ? "Saved password" : "Optional";
 }
 
 function connectSavedServer(id: string): void {
@@ -3298,6 +3501,14 @@ function renderSavedServers(): void {
     const empty = document.getElementById("saved-server-empty") as HTMLElement;
     list.textContent = "";
     empty.style.display = savedServers.length === 0 ? "" : "none";
+    (document.getElementById("saved-server-label") as HTMLElement).style.display = savedServers.length === 0 ? "none" : "";
+    // "Welcome back" once there is something to come back to (frames 2a/2b).
+    (document.getElementById("welcome-title") as HTMLElement).textContent =
+        savedServers.length > 0 ? "Welcome back" : "Welcome to Reson8";
+    (document.getElementById("welcome-lead") as HTMLElement).textContent =
+        savedServers.length > 0
+            ? "Pick a saved server or connect somewhere new."
+            : "Connect to any Reson8 server — the official one, a friend's, or one you host yourself.";
     for (const entry of savedServers) {
         const row = document.createElement("div");
         row.className = "saved-row";
@@ -3313,38 +3524,63 @@ function renderSavedServers(): void {
         const addr = document.createElement("div");
         addr.className = "saved-row-address";
         addr.textContent = entry.address;
+        main.append(name, addr);
+
+        // "as {nickname} · Last connected …" on the right, then Connect and a ⋯ menu
+        // (Edit / Remove) — the frame (2b) shows only Connect (PRD 19 R1).
         const meta = document.createElement("div");
         meta.className = "saved-row-meta";
-        meta.textContent = `${entry.nickname} · ${relativeTime(entry.lastConnected)}`;
-        main.append(name, addr, meta);
+        const metaWho = document.createElement("div");
+        metaWho.textContent = `as ${entry.nickname}`;
+        const metaWhen = document.createElement("div");
+        metaWhen.textContent = `Last connected ${relativeTime(entry.lastConnected)}`;
+        meta.append(metaWho, metaWhen);
 
         const actions = document.createElement("div");
         actions.className = "saved-row-actions";
         const connect = document.createElement("button");
-        connect.className = "btn btn-primary";
+        connect.className = "btn btn-secondary";
         connect.textContent = "Connect";
         connect.addEventListener("click", (e) => {
             e.stopPropagation();
             connectSavedServer(entry.id);
         });
-        const edit = document.createElement("button");
-        edit.className = "btn btn-secondary";
-        edit.textContent = "Edit";
-        edit.addEventListener("click", (e) => {
+        const more = document.createElement("button");
+        more.className = "btn-icon saved-row-more";
+        more.title = "More";
+        more.setAttribute("aria-label", `More options for ${entry.name}`);
+        more.innerHTML = `<i class="ph ph-dots-three" aria-hidden="true"></i>`;
+        const openRowMenu = (x: number, y: number): void =>
+            openMenu(
+                [
+                    {
+                        label: "Edit details",
+                        icon: "ph-pencil-simple",
+                        onClick: () => {
+                            showWelcomeForm();
+                            fillFormFromSaved(entry);
+                            serverUrlInput.focus();
+                        },
+                    },
+                    { divider: true },
+                    { label: "Remove", icon: "ph-trash", danger: true, onClick: () => removeSavedServer(entry.id) },
+                ],
+                x,
+                y,
+                { anchor: more },
+            );
+        more.addEventListener("click", (e) => {
             e.stopPropagation();
-            fillFormFromSaved(entry);
-            serverUrlInput.focus();
+            const r = more.getBoundingClientRect();
+            openRowMenu(Math.max(8, r.right - 200), r.bottom + 4);
         });
-        const remove = document.createElement("button");
-        remove.className = "btn btn-ghost";
-        remove.textContent = "Remove";
-        remove.addEventListener("click", (e) => {
-            e.stopPropagation();
-            removeSavedServer(entry.id);
+        row.addEventListener("contextmenu", (e) => {
+            e.preventDefault();
+            openRowMenu(e.clientX, e.clientY);
         });
-        actions.append(connect, edit, remove);
+        actions.append(connect, more);
 
-        row.append(main, actions);
+        row.append(main, meta, actions);
         row.addEventListener("click", () => connectSavedServer(entry.id));
         row.addEventListener("keydown", (e) => {
             if (e.key === "Enter") connectSavedServer(entry.id);
@@ -3487,10 +3723,12 @@ function renderServerPill(): void {
     const dot = document.getElementById("server-pill-dot");
     if (!text || !dot) return;
     const saved = activeSavedServerId ? savedServerById(activeSavedServerId) : undefined;
+    const flow = isConnected ? null : connectPillText(); // PRD 19 R1: what a connect is doing
     text.textContent = isConnected
         ? connectedServerName || saved?.name || (currentConnection ? displayAddress(currentConnection.host, currentConnection.port) : "Connected")
-        : "Not connected";
+        : flow?.text ?? "Not connected";
     dot.classList.toggle("connected", isConnected);
+    dot.classList.toggle("failed", !!flow?.failed);
 }
 
 /** The popover under the pill: saved servers (active ticked), Disconnect, Add a server… */
@@ -6922,6 +7160,7 @@ api.on("connected", (data: { serverId: string; instanceId: string; secure?: bool
     document.body.classList.add("is-connected");
     document.body.classList.remove("is-approving");
     onSavedServerConnected(); // PRD 19 C1
+    showWelcomeForm(); // PRD 19 R1: the connect card's job is done
     renderServerPill(); // PRD 19 C2
     renderServerHeader(); // PRD 19 C3
     statusDot.classList.add("connected");
@@ -7141,7 +7380,21 @@ api.on("error", (data: { code?: string; message: string }) => {
     if (data.code === "PERMISSION_DENIED") return;
     // The server wants (or didn't accept) an invite code (PRD 18.9): show the field.
     if (data.code === "INVITE_REQUIRED" || data.code === "INVITE_INVALID" || data.code === "INVITE_THROTTLED") {
+        showWelcomeForm(); // the code field lives in the form (PRD 19 R1)
         revealInviteField(data.message, data.code !== "INVITE_REQUIRED");
+        return;
+    }
+    if (connectFlow && connectFlow.state === "running" && !isConnected) {
+        // A refused password asks for one instead of failing (frame 3b).
+        if (data.code === "JOIN_FAILED" && /password/i.test(data.message)) {
+            log(`Error: ${escapeHtml(data.message)}`, "error");
+            askForServerPassword(connectFlowHadPassword);
+            return;
+        }
+        // A first connect that can't reach the server stops instead of retrying behind the card.
+        if (data.code === "CONNECT_ERROR") api.disconnect();
+        log(`Error: ${escapeHtml(data.message)}`, "error");
+        failConnectFlow(data.message);
         return;
     }
     log(`Error: ${data.message}`, "error");
@@ -11339,6 +11592,7 @@ function hideApprovalScreen(): void {
 }
 
 api.on("approval-pending", (payload: { fingerprint?: string }) => {
+    showWelcomeForm(); // PRD 19 R1
     showApprovalScreen(payload?.fingerprint ?? "");
     log("Waiting for a moderator to approve you…", "info");
 });
@@ -15305,6 +15559,7 @@ btnIdentityImportApply.addEventListener("click", async () => {
 
 // Locked key (PRD 18.6): raised by the preload when a connect finds it.
 api.on("identity-locked", () => {
+    showWelcomeForm(); // PRD 19 R1
     identityLockedModal.classList.add("visible");
     log("Your identity key is locked — import a backup or create a new identity", "error");
     void refreshIdentityPanel();

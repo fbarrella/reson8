@@ -3022,3 +3022,64 @@ Feature/Fix: Integrated title bar (PRD 19 R7)
     - Not checked here: macOS and Linux (X11/Wayland), snap layouts on hover.
 
   Next Step: PRD 19 R1 — connect states.
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Connect states restyle (PRD 19 R1)
+
+  Problem: the welcome screen was a plain form card; a failed connect was a red
+  line under it (behind endless reconnect attempts), and a private server only
+  said "Invalid server password".
+
+  Solution:
+    - Welcome screen per frames 2a/2b: the logo, "Welcome to Reson8" (or
+      "Welcome back" with saved servers) and its lead line; Server address,
+      Username + Password side by side ("· if required"), "Remember this server
+      on this device" (now ticked by default, as in the frames), a full-width
+      Connect →. A vertical divider, then the saved servers (name, address,
+      "as {nickname}" / "Last connected …", Connect, and a ⋯ / right-click
+      menu with Edit details and Remove) or the dashed "No saved servers yet"
+      card, and "Host your own" with the real command (docker compose up -d
+      --build — the frame's single-image command doesn't exist for this
+      project), a copy button and a link to the README's Docker section.
+    - Connect card (3a): while connecting, the form is replaced by the steps
+      the client really runs — Resolving address (the TLS probe), Encrypted /
+      Not encrypted, Signing in as {nickname} (the join), Syncing channels — and
+      Cancel. A failure keeps the card: "Couldn't reach {address}" or
+      "Couldn't sign in to {address}", the reason, two hints when the server
+      wasn't reachable, Try again and Edit details. The title-bar pill reads
+      "Connecting…", "Connection failed" (red dot) or "Waiting for password".
+      One deliberate change: a FIRST connect that can't reach the server stops
+      instead of retrying forever behind the card (an established session's
+      reconnects are untouched).
+    - Password required (3b): a join refused for its password opens a dialog
+      (the address, "join as {nickname}", Remember password for this server);
+      Join server reconnects with it (a wrong typed one says so). Remembering
+      the password remembers the server, as C1 stores passwords per saved
+      entry.
+    - Invite codes still open the form with the code field; approval and
+      identity-locked close the card.
+    - The TLS trust / changed-certificate dialogs and the approval card moved
+      onto the shared dialog look (Phosphor icons, primary/secondary buttons);
+      ids and texts unchanged.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts, index.html
+
+  Verification:
+    - tsc client clean; lint exit 0.
+    - Real client, 1440x900: 2a (fresh profile: "Welcome to Reson8", Remember
+      ticked, empty card); a connect to 127.0.0.1:9 showed the card, then
+      "Couldn't reach 127.0.0.1:9 — Couldn't reach the server (ECONNREFUSED)"
+      with the hints, Try again / Edit details and a red "Connection failed"
+      pill; Edit details brought the form back with the address focused; the
+      password dialog (driven directly — the local server has no password)
+      with "Waiting for password" in the pill and the lock on the signing-in
+      step; a real connect to 127.0.0.1:9800 succeeded, saved the server, and
+      after disconnecting the screen read "Welcome back" with the saved row.
+      Screenshots compared with 2a, 2b, 3a, 3b.
+    - Not driven: the TLS trust and changed-certificate flows (no TLS server
+      here), the approval wait (the admin bot's identity is bound to the
+      owner's key) and a real password-protected server.
+
+  Next Step: PRD 19 R2 — chat.
