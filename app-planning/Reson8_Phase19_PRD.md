@@ -60,6 +60,7 @@
    - [C12 — Update Corner Card](#c12--update-corner-card)
    - **→ Second beta release: `3.0.0-beta.2`** (end of P4)
 7. **P5 — Restyle of the remaining screens (§R)**
+   - [R7 — Integrated Title Bar](#r7--integrated-title-bar) (done first; added 14/10/2026)
    - [R1 — Connect States](#r1--connect-states)
    - [R2 — Chat](#r2--chat)
    - [R3 — Client Settings](#r3--client-settings)
@@ -2595,6 +2596,58 @@ These are visual-only items. Each one is checked against its study frame.
 1. Screenshot every state the item lists, before and after the change.
 2. Compare each with its frame.
 3. Check the light details: focus rings, hover states, disabled states.
+
+## R7 — Integrated Title Bar
+
+**Added:** 14/10/2026, at the owner's request (the frames show one integrated bar; the PRD and SPEC never asked for a frameless window). **Done first in P5**, because R1–R6 are checked against frames that assume this bar. **Exception to the P5 rules:** this item changes window behaviour, not only visuals. **Study frames:** 1a, 13b (the bar with the window controls at the right).
+
+### Current Behavior
+The main window and the Viewer use the OS frame (`main.ts` sets no `frame`, `titleBarStyle` or `titleBarOverlay`). `#titlebar` (C2: logo, "Reson8", server pill) is a 38 px strip *inside* the page, under the OS title bar. PRD 12.9's 🔴 sharing marker lives in `document.title`, i.e. in the OS title bar.
+
+### Owner decisions (14/10/2026)
+- **Native controls inside our bar** — not custom-drawn buttons. Keeps Windows 11 snap layouts, Aero snap, double-click to maximize, the system menu, and the native `will-minimize` event the minimize-to-tray logic depends on.
+- **A "Use the system title bar" switch** (Settings › Application, restart required) as the fallback for desktops where the integrated bar misbehaves.
+- **The Viewer window gets the same treatment.**
+
+### Design
+
+**1. Window options** (`main.ts`, one helper used by the main window and the Viewer, e.g. `integratedFrameOptions(height)`):
+- Windows / Linux: `titleBarStyle: "hidden"`, `titleBarOverlay: { color: <--color-bg>, symbolColor: <--color-neutral-300>, height: 38 }`.
+- macOS: `titleBarStyle: "hidden"` + `trafficLightPosition` vertically centred in the 38 px bar.
+- When the switch is on: none of the above (today's OS frame), and the renderer adds `body.system-titlebar` so `#titlebar` drops its drag region and control spacing.
+- The switch is stored by the main process (a small JSON in `userData`, read before the window is created — localStorage isn't readable that early), set via a validated IPC from the main window only. The renderer shows "Restart Reson8 to apply" with a Restart button (`app.relaunch(); app.quit()`, going through the normal quit path so the socket disconnects cleanly).
+
+**2. Drag regions**
+- `#titlebar { -webkit-app-region: drag }`; the pill and every button or link in it `no-drag`.
+- Every element that can float over the top 38 px must be `no-drag`, or clicking it drags the window: menus and popovers (`.menu`, the switcher, `.tab-overflow-menu`, `.voice-more-menu`), toasts, `#update-card`, the emoji picker, the reaction card, the lightbox and every modal backdrop. Audit with a grep for `position: fixed`; most modals already carry `no-drag`.
+
+**3. Space for the controls**
+- Use `env(titlebar-area-x)` / `env(titlebar-area-width)` (Window Controls Overlay) so nothing sits under the buttons and the pill stays centred in the free area.
+- macOS: left padding for the traffic lights.
+
+**4. State the renderer needs** — `main.ts` sends `window-state-changed { maximized, fullscreen }` on `maximize` / `unmaximize` / `enter-full-screen` / `leave-full-screen`:
+- Fullscreen (F11, or a stream's fullscreen) hides `#titlebar` via `body.window-fullscreen`.
+- Maximized may need a small padding tweak on some platforms.
+
+**5. The sharing marker.** PRD 12.9's redundant "you are sharing" cue was the 🔴 in the OS title, which is no longer visible in the window. Add a red "● Sharing" chip in `#titlebar` while `isSharingScreen` (no-drag; clicking it stops sharing, like the banner's button). `document.title` keeps its 🔴 for the taskbar / Alt-Tab.
+
+**6. The Viewer window.** The same window options. Its existing controls bar stays at the bottom. A new 38 px top bar holds the logo and "{sharer} · {stream} — {room}" (the C10 title string, also kept in `document.title`). The same drag / no-drag rules apply, and the same switch covers it.
+
+**7. Must stay as it is** (re-test, don't change): minimize-to-tray (`will-minimize` → `hide()`), close-to-tray, `showMainWindow()`, `window-state.ts` (size, position, maximized), the `CalculateNativeWinOcclusion` fix, the single-instance re-launch, and the Viewer's always-on-top / native fullscreen (C10).
+
+### Pitfalls
+- A fixed-position element without `no-drag` over the bar silently turns its clicks into window drags. This is the most likely regression; check every popover that opens near the top.
+- `titleBarOverlay` colours are fixed at creation; if a light theme ever ships, update them with `setTitleBarOverlay()`.
+- Linux Wayland with client-side decorations is the least predictable platform; the switch exists for it.
+
+### Done When
+- [ ] One bar on Windows with the native controls, snap layouts, double-click maximize and the system menu working.
+- [ ] Minimize-to-tray, close-to-tray, restore from tray, re-launch and saved size/position/maximized unchanged.
+- [ ] No floating element over the bar drags the window.
+- [ ] Fullscreen hides the bar; the "● Sharing" chip appears while sharing.
+- [ ] The Viewer has the same integrated bar.
+- [ ] "Use the system title bar" restores the OS frame after a restart, for both windows.
+- [ ] macOS and Linux (X11 and Wayland) checked by the owner.
 
 ## R1 — Connect States
 
