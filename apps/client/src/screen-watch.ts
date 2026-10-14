@@ -20,7 +20,7 @@
 import { io, Socket } from "socket.io-client";
 import { Device, types as msTypes } from "mediasoup-client";
 import { createHash } from "crypto";
-import type { ClientToServerEvents, ServerToClientEvents } from "@reson8/shared-types";
+import type { ClientToServerEvents, ServerToClientEvents } from "@reson8/shared-types" with { "resolution-mode": "import" };
 
 type TypedSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 

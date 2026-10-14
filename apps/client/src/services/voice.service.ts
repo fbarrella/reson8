@@ -22,7 +22,7 @@ let softClipCurve: Float32Array<ArrayBuffer> | null = null;
 // compile time (no require()/import() emitted). See the dynamicImport
 // comment below for why this can't be a normal `import type {...} from`
 // statement's value-shaped counterpart.
-type DeepFilterNet3CoreInstance = import("deepfilternet3-noise-filter").DeepFilterNet3Core;
+type DeepFilterNet3CoreInstance = import("deepfilternet3-noise-filter", { with: { "resolution-mode": "import" } }).DeepFilterNet3Core;
 
 // ── Noise cancelling (PRD 13.1) — shared module-level engine ────────────────
 // One DeepFilterNet3Core instance for the whole app session, not per join:

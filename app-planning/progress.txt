@@ -1717,3 +1717,36 @@ Feature/Fix: Message search (PRD 20 Q1, D2 = a)
     - Not exercised: Cmd+F on macOS; the design's filter chips (not built).
 
   Next Step: H2 (TypeScript moduleResolution).
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Client tsconfig on Node16 module resolution (PRD 20 H2)
+
+  Problem: The editor's TypeScript 6 flags "moduleResolution": "Node" (node10)
+  in apps/client/tsconfig.json.
+
+  Solution: module and moduleResolution are Node16. Three type-only imports
+  of the ES-module @reson8/shared-types / deepfilternet3-noise-filter from
+  CommonJS files now carry `with { "resolution-mode": "import" }` (preload.ts,
+  screen-watch.ts) or the import-type equivalent (voice.service.ts).
+  "moduleDetection": "legacy" is required: with Node16's default, renderer.ts
+  and viewer.ts (classic scripts with no import/export) were emitted as
+  CommonJS modules and gained `Object.defineProperty(exports, …)`, which
+  would throw in the browser.
+
+  Key Files Modified:
+    apps/client/tsconfig.json, src/preload.ts, src/screen-watch.ts,
+    src/services/voice.service.ts, AGENTS.md (client; convention)
+
+  Verification:
+    - tsc --noEmit (client + server) clean; npm run lint exit 0; the client's
+      smoke suites (markdown, avatar, soft-clip, link-fixers, link-preview,
+      media-proxy, tls, server-health, version, saved-passwords, window-chrome,
+      update-prefs, identity-backup) pass.
+    - dist/ from before vs after: identical (no file differs, maps included) —
+      so import() handling and the noise-cancelling dynamicImport path are
+      unchanged and AGENTS' ESM gotcha bullet stays valid.
+    - Not run: test:identity (needs the server built) and a packaged
+      test-build:win (dist is byte-identical, so the package would be too).
+
+  Next Step: PRD 20 is implemented except L1 (D1 = b) and the owner's V1-V3.

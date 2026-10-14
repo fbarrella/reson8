@@ -30,7 +30,7 @@ import type {
     IInvite,
     IServerSummary,
     IDmDirectoryEntry,
-} from "@reson8/shared-types";
+} from "@reson8/shared-types" with { "resolution-mode": "import" };
 import { VoiceService, VoiceSignaling } from "./services/voice.service";
 import { startScreenWatch, WatchHandle } from "./screen-watch";
 import { createHash } from "crypto";
