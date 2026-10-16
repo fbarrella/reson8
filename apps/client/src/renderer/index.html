@@ -8548,6 +8548,26 @@
       color: var(--color-neutral-400);
     }
 
+    /* Reply mode (PRD 21.3): the bar, the attachment tray and the box are one shape. */
+    #chat-composer:has(#reply-bar.visible) #chat-input-bar {
+      border-top-left-radius: 0;
+      border-top-right-radius: 0;
+    }
+
+    #chat-composer:has(#reply-bar.visible) #attachment-tray.has-items {
+      margin: 0 14px;
+      border: 1px solid var(--color-divider);
+      border-top: none;
+      border-bottom: none;
+      background: var(--color-surface);
+    }
+
+    /* Focus colours the whole shape, not just its lower half. */
+    #chat-composer:has(#reply-bar.visible):has(#chat-input-bar:focus-within) #reply-bar,
+    #chat-composer:has(#reply-bar.visible):has(#chat-input-bar:focus-within) #attachment-tray.has-items {
+      border-color: var(--color-accent-700);
+    }
+
     /* The NSFW prompt (frame 3c) */
     .nsfw-dialog {
       width: 440px;

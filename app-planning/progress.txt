@@ -1008,3 +1008,35 @@ Feature/Fix: PRD 21.2 — long unbroken text wraps instead of overflowing the ch
     link-preview card with a long description, the search results column.
 
   Next Step: 21.3 — the composer joins the reply bar seamlessly.
+
+--- Entry: 16/10/2026 ---
+
+Feature/Fix: PRD 21.3 — the composer joins the reply bar seamlessly
+
+  Problem: In reply mode #reply-bar (rounded top corners) sat on #chat-input-bar,
+  which kept all four corners rounded, leaving a gap at both top corners; with
+  picked images the tray in between had a different width and background.
+
+  Solution (CSS only, index.html, right after the Nocturne #reply-bar rule):
+    #chat-composer:has(#reply-bar.visible) squares #chat-input-bar's top
+    corners and gives #attachment-tray.has-items the bar's side margins
+    (0 14px), left/right borders, no top/bottom border and the bar's surface
+    background; while the input is focused the bar and the tray borders take
+    --color-accent-700 too. No JS state: .visible (renderReplyBar()) drives
+    everything, so send/Escape/✕ restore the four corners by themselves.
+    #chat-input-bar has no transition, so the radius change isn't animated.
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html
+
+  Verification:
+    Driven for real (Xvfb Electron over CDP, screenshots looked at): reply
+    unfocused and focused (no corner gaps, accent border around the whole
+    shape when focused); reply + two tray cards (one shape); after
+    cancelReply() the input bar's top-left radius is 14px again and the tray
+    is back to its old look. NOT exercised: a real image pick/upload (the
+    tray cards were simulated in the DOM), Escape and the ✕ button by key/click
+    (same cancelReply() path), a DM tab, switching tabs with and without a
+    draft (all are the same .visible class toggle).
+
+  Next Step: 21.4 — the image viewer fits images below its controls.
