@@ -1423,3 +1423,49 @@ Feature/Fix: PRD 21.10 follow-up — the voice card's tint was invisible
     interpolated through the card's transition). Client tsc clean, lint 0.
 
   Next Step: 21.11 — glass category menu in both Settings dialogs.
+
+--- Entry: 16/10/2026 ---
+
+Feature/Fix: PRD 21.11 — glass category menu in both Settings dialogs
+
+  Problem: The Settings category menu (.settings-nav) was a flat opaque panel.
+
+  Solution (index.html only): :root tokens --glass-glow-1/-2, --glass-fill,
+  --glass-edge-right, --glass-edge-top; two decorative <span class="settings-glow"
+  aria-hidden="true"> as the first children of .settings-shell (340 px glow at
+  left -60/top -80, 260 px at left 120/bottom -60, radial-gradient, pointer-events:
+  none, clipped by the shell's overflow: hidden); .settings-nav gets the fill,
+  backdrop-filter blur(28px) saturate(150%), no right border and the lit inset
+  edges; .settings-nav and .settings-main are position: relative; z-index: 1 and
+  .settings-main now has its own --color-surface background so the glows (which
+  extend ~130 px past the 248 px menu) never show on the content side. One
+  change covers both modes (they share the nav). Selected/hover rows untouched.
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html
+    app-planning/design_handoff_reson8_ui_overhaul/TEST_STATES.md (ticks)
+
+  Verification:
+    root `npm run lint` exit 0 (CSS/HTML only). Real window on the owner's KDE
+    session (GPU on), OS captures with spectacle, looked at against 17c.png /
+    17d.png: client mode and server mode (granted the test user the Admin role
+    through the admin bot and removed it afterwards) both show the frosted
+    purple glass with the lit right edge; the server header, "Admins only"
+    line and the 99+ / 0 count pills stay readable. All seven nav buttons
+    receive clicks at their centres (elementFromPoint) and a real click
+    switches the page; the glows have pointer-events: none; a real Tab key
+    shows the focus ring on the glass.
+    CONTRAST (SPEC 9 asks >= 4.5:1 for the 11 px section labels): measured on
+    the captures with the WCAG formula, label colour (147,151,171) = --color-neutral-500.
+      glow 1 at 55 %: "YOU" 2.4-2.9:1, "VOICE & SOUND" 3.2-3.6:1, "CLIENT" 4.25:1.
+      glow 1 at 45 % (applied, as SPEC prescribes): "YOU" 2.6-3.0:1,
+      "VOICE & SOUND" 3.3-3.6:1, "CLIENT" 4.25:1.
+    Even over the plain fill with no glow ("CLIENT") the label is 4.25:1, so the
+    glow can't fix it; SPEC says to change the tint, never the text, so the label
+    colour was NOT changed. Reported to the owner as an open decision.
+    NOT exercised: the CDP Performance timeline with 200+ members, the 17d
+    "Members open" state with real data (the Members button looked dimmed for
+    my test user; not investigated), Windows/macOS, and modals opened from
+    Settings over the glass.
+
+  Next Step: 21.12 — stream thumbnails: protocol and server.

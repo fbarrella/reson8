@@ -53,6 +53,13 @@
       --color-accent-800: #423a6a;
       --color-accent-900: #2b2741;
 
+      /* The frosted-glass category menu of both Settings dialogs (PRD 21.11, SPEC 9). */
+      --glass-glow-1: color-mix(in srgb, var(--color-accent) 45%, transparent); /* SPEC 9: 55 % fell below 4.5:1 for the section labels, so 45 % */
+      --glass-glow-2: color-mix(in srgb, var(--color-accent-600) 50%, transparent);
+      --glass-fill: linear-gradient(170deg, color-mix(in srgb, var(--color-accent-500) 22%, transparent), color-mix(in srgb, var(--color-accent-800) 30%, transparent));
+      --glass-edge-right: color-mix(in srgb, var(--color-accent-300) 22%, transparent);
+      --glass-edge-top: color-mix(in srgb, var(--color-text) 8%, transparent);
+
       --space-1: 2.8px;
       --space-2: 5.6px;
       --space-3: 8.4px;
@@ -8905,15 +8912,46 @@
       border: 1px solid var(--color-divider);
       border-radius: var(--radius-lg);
       background: var(--color-surface);
+      position: relative;
+    }
+
+    /* Two soft accent lights painted on the dialog behind the menu: the blur needs something to
+       blur. The shell's overflow: hidden clips them; they never take clicks (PRD 21.11). */
+    .settings-glow {
+      position: absolute;
+      border-radius: 50%;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .settings-glow-1 {
+      left: -60px;
+      top: -80px;
+      width: 340px;
+      height: 340px;
+      background: radial-gradient(closest-side, var(--glass-glow-1), transparent);
+    }
+
+    .settings-glow-2 {
+      left: 120px;
+      bottom: -60px;
+      width: 260px;
+      height: 260px;
+      background: radial-gradient(closest-side, var(--glass-glow-2), transparent);
     }
 
     .settings-nav {
+      position: relative;
+      z-index: 1;
       width: 248px;
       flex-shrink: 0;
       padding: 22px 12px;
       overflow-y: auto;
-      background: color-mix(in srgb, var(--color-bg) 55%, var(--color-surface));
-      border-right: 1px solid var(--color-divider);
+      background: var(--glass-fill);
+      -webkit-backdrop-filter: blur(28px) saturate(150%);
+      backdrop-filter: blur(28px) saturate(150%);
+      border-right: none; /* the lit edge below replaces it */
+      box-shadow: inset -1px 0 0 var(--glass-edge-right), inset 0 1px 0 var(--glass-edge-top);
     }
 
     .settings-nav-head {
@@ -9026,6 +9064,8 @@
 
     .settings-main {
       position: relative;
+      z-index: 1;
+      background: var(--color-surface); /* the glows must never show through the content side */
       flex: 1;
       min-width: 0;
       display: flex;
@@ -10634,6 +10674,8 @@
   <!-- ── Unified Settings Modal ───────────────────────────────────── -->
   <div id="admin-modal" data-mode="client">
     <div class="modal-content wide settings-shell">
+      <span class="settings-glow settings-glow-1" aria-hidden="true"></span>
+      <span class="settings-glow settings-glow-2" aria-hidden="true"></span>
       <nav class="settings-nav" aria-label="Settings pages">
         <div class="settings-nav-head">
           <div class="settings-nav-server">

@@ -72,5 +72,5 @@ Each study frame is a state the real app must reach. Verify each one by hand, or
 - [x] Kicked from a room: the card goes to Disconnected (not hidden). *(Phase 21.10, real kick from an admin bot: card goes to Disconnected, state kept.)*
 - [ ] Leave while viewing the voice room tab: the tab closes and the first text tab shows.
 - [x] Not connected to any server: no card. *(Phase 21.10: `body.is-connected` rule, checked by toggling the class.)*
-- [ ] **17c:** App settings: the category menu is frosted purple glass over a soft glow, with a lit right edge. The content side is unchanged.
-- [ ] **17d:** Server settings: the same treatment. The nav scrolls and clicks normally.
+- [x] **17c:** App settings: the category menu is frosted purple glass over a soft glow, with a lit right edge. The content side is unchanged. *(Phase 21.11, real window on KDE: frosted purple glass over two soft glows with a lit right edge; content side unchanged. Section-label contrast is below 4.5:1 — see progress.txt.)*
+- [x] **17d:** Server settings: the same treatment. The nav scrolls and clicks normally. *(Phase 21.11: same treatment in server mode; nav scrolls and clicks normally, count pills readable.)*
