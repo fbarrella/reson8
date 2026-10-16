@@ -8951,6 +8951,9 @@
       -webkit-backdrop-filter: blur(28px) saturate(150%);
       backdrop-filter: blur(28px) saturate(150%);
       border-right: none; /* the lit edge below replaces it */
+      /* A backdrop-filter layer is not always clipped by the rounded parent's overflow: hidden, so the
+         menu carries the dialog's own inner radius on its left corners. */
+      border-radius: calc(var(--radius-lg) - 1px) 0 0 calc(var(--radius-lg) - 1px);
       box-shadow: inset -1px 0 0 var(--glass-edge-right), inset 0 1px 0 var(--glass-edge-top);
     }
 

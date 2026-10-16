@@ -1469,3 +1469,29 @@ Feature/Fix: PRD 21.11 — glass category menu in both Settings dialogs
     Settings over the glass.
 
   Next Step: 21.12 — stream thumbnails: protocol and server.
+
+--- Entry: 16/10/2026 ---
+
+Feature/Fix: PRD 21.11 follow-up — the glass menu overflowed the dialog's rounded corners
+
+  Problem: In both Settings dialogs the top-left and bottom-left corners lost
+  their rounding: the glass layer painted square corners over the border. A child
+  with backdrop-filter (and its own stacking context) is not reliably clipped by
+  the rounded parent's overflow: hidden in Chromium.
+
+  Solution: .settings-nav carries the dialog's inner radius on its left corners:
+  border-radius: calc(var(--radius-lg) - 1px) 0 0 calc(var(--radius-lg) - 1px)
+  (the shell's border is 1 px). The glows are plain gradients and were already
+  clipped. Both modes share .settings-nav, so one rule fixes both.
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html
+
+  Verification:
+    Real window on KDE, OS capture of the client-mode dialog before and after,
+    corners enlarged 6x and compared: before, square glass pixels outside the
+    border at top-left and bottom-left; after, the glass follows the rounded
+    border at both. NOT captured separately: server mode (same .settings-nav and
+    rule) and Windows/macOS.
+
+  Next Step: 21.12 — stream thumbnails: protocol and server.
