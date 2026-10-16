@@ -25,6 +25,12 @@ export const TITLEBAR_HEIGHT = 38;
  * Hover/pressed states are drawn by the OS from the symbol colour.
  */
 export const TITLEBAR_COLOR = "#00000000";
+/**
+ * Linux (PRD 21.6): Electron treats a fully transparent overlay colour as "unset" and the desktop (KDE
+ * verified, Wayland and X11) paints its own opaque grey strip. One alpha step above zero is honoured and is
+ * visually transparent. Windows keeps the fully transparent value above.
+ */
+export const TITLEBAR_COLOR_LINUX = "#00000001";
 /** `--color-neutral-300` (the overlay takes plain colours, not CSS variables). */
 export const TITLEBAR_SYMBOL_COLOR = "#cfd3e5";
 
@@ -71,6 +77,6 @@ export function frameOptions(platform: string, systemTitleBar: boolean): FrameOp
     return {
         titleBarStyle: "hidden",
         // One pixel shorter than the bar, so #titlebar's bottom border runs under the buttons too.
-        titleBarOverlay: { color: TITLEBAR_COLOR, symbolColor: TITLEBAR_SYMBOL_COLOR, height: TITLEBAR_HEIGHT - 1 },
+        titleBarOverlay: { color: platform === "linux" ? TITLEBAR_COLOR_LINUX : TITLEBAR_COLOR, symbolColor: TITLEBAR_SYMBOL_COLOR, height: TITLEBAR_HEIGHT - 1 },
     };
 }

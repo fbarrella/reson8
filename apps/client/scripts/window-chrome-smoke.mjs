@@ -37,6 +37,7 @@ try {
     check("win32: overlay colours", win.titleBarOverlay?.color === "#00000000" && win.titleBarOverlay?.symbolColor === "#cfd3e5");
     const lin = wc.frameOptions("linux", false);
     check("linux: hidden + overlay", lin.titleBarStyle === "hidden" && !!lin.titleBarOverlay);
+    check("linux: overlay colour is one alpha step above transparent (PRD 21.6)", lin.titleBarOverlay?.color === "#00000001" && lin.titleBarOverlay?.symbolColor === "#cfd3e5");
     const mac = wc.frameOptions("darwin", false);
     check("darwin: hidden + traffic lights, no overlay", mac.titleBarStyle === "hidden" && !mac.titleBarOverlay && mac.trafficLightPosition?.y === 12);
     for (const p of ["win32", "linux", "darwin"]) {

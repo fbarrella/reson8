@@ -1113,3 +1113,52 @@ Feature/Fix: PRD 21.5 — Linux: full-window overlays keep the rounded corners
     21.6, as the PRD says.
 
   Next Step: 21.6 — Linux: window buttons that belong to the app.
+
+--- Entry: 16/10/2026 ---
+
+Feature/Fix: PRD 21.6 — Linux: transparent native window buttons (step 1 succeeded, step 2 skipped)
+
+  Problem: On KDE the native window-controls overlay drew an opaque grey strip
+  at the top right (over the page, Settings and the image viewer) although the
+  overlay colour was "#00000000".
+
+  Investigation (step 1, owner's KDE Plasma, Electron 34, captured with
+  spectacle, buttons enlarged with ImageMagick):
+    (b) win.setTitleBarOverlay({ color: "#00000000", ... }) after load: still
+        grey — so it is not a timing problem; a fully transparent colour is
+        treated as "unset" and the desktop paints its own strip.
+    (a) "#00000001" (and "#01000000", "#ff000040") through setTitleBarOverlay:
+        transparent / alpha-blended. Then built into window-chrome.ts and
+        launched fresh: transparent at construction time too, on Wayland (the
+        owner's session) AND X11 (--ozone-platform=x11), over the dark UI,
+        over Settings and over a bright red-green gradient laid under the bar.
+    (c) X11 vs Wayland: both work; the owner runs Wayland (XDG_SESSION_TYPE).
+  Per the PRD, a working native option means the HTML-buttons fallback (step 2)
+  is NOT built: frame, right-click window menu, drag/edge snapping, double-click
+  maximize, minimize-to-tray and close-to-tray are all unchanged. The "known
+  loss" of the right-click menu in the PRD does not apply — nothing to put in
+  the beta.5 release notes' known issues for it.
+
+  Solution: window-chrome.ts gets TITLEBAR_COLOR_LINUX = "#00000001"; frameOptions()
+  uses it when platform === "linux" (Windows keeps "#00000000", macOS has no
+  overlay). Both the main window and the Viewer take their frame from
+  frameOptions(), so both get it. Smoke test gets a Linux colour check;
+  apps/client/AGENTS.md ("Window-button safe area") documents why the value must
+  not go back to #00000000 on Linux.
+
+  Key Files Modified:
+    apps/client/src/window-chrome.ts
+    apps/client/scripts/window-chrome-smoke.mjs
+    apps/client/AGENTS.md
+
+  Verification:
+    `npm run test:window-chrome` all pass (incl. the new Linux colour check and
+    the unchanged win32 "#00000000" check); client `tsc --noEmit` clean; root
+    `npm run lint` exit 0. OS capture of the final build on Wayland: no grey
+    block, buttons blend into the bar over Settings. NOT exercised: the Viewer
+    (pop-out) window's buttons (same frameOptions(), not captured), a Windows or
+    macOS build (code path unchanged for them, owner to verify Windows), other
+    desktops (GNOME, etc. — the strip colour comes from the desktop/GTK side),
+    the buttons' hover colours beyond what showed in captures.
+
+  Next Step: 21.7 — the voice card leaves the channel list.
