@@ -1397,3 +1397,29 @@ Feature/Fix: PRD 21.10 — the "Disconnected" voice card and mute/deafen before 
     reduced-motion.
 
   Next Step: 21.11 — glass category menu in both Settings dialogs.
+
+--- Entry: 16/10/2026 ---
+
+Feature/Fix: PRD 21.10 follow-up — the voice card's tint was invisible
+
+  Problem: The owner saw almost no colour in the card's background gradient,
+  unlike frames 17a/17b. Sampling the pixels showed a flat (33,35,49) top to
+  bottom. Cause (mine): --dock-tint is registered with `inherits: false`, but
+  was set on #voice-panel, so .voice-dock-card never received it and the
+  gradient mixed 8 % of "transparent".
+
+  Solution: --dock-tint is now set on .voice-dock-card itself (idle yellow by
+  default, voice green under #voice-panel[data-voice-state="in-room"]). No
+  change to the 8 % figure: it already reproduces the design.
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html
+
+  Verification:
+    Pixel samples of the real card at x=340: idle top (51,45,48) -> bottom
+    (35,37,50); in a room top (40,50,57) -> bottom (35,37,50). The design's
+    17a/17b give (51,46,49) and (40,49,57) at the top, (36,37,50) at the
+    bottom. The colour change still animates (the registered property is
+    interpolated through the card's transition). Client tsc clean, lint 0.
+
+  Next Step: 21.11 — glass category menu in both Settings dialogs.

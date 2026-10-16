@@ -1751,11 +1751,12 @@
       initial-value: transparent;
     }
 
-    #voice-panel {
+    /* --dock-tint is registered with inherits: false, so it must be set on the card itself. */
+    .voice-dock-card {
       --dock-tint: var(--color-voice-idle);
     }
 
-    #voice-panel[data-voice-state="in-room"] {
+    #voice-panel[data-voice-state="in-room"] .voice-dock-card {
       --dock-tint: var(--color-voice);
     }
 
