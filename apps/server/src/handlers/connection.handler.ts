@@ -96,12 +96,14 @@ export async function buildOccupant(
             isDeafened: p.isDeafened,
             isAway: false,
             isSharingScreen: p.isSharingScreen,
+            // undefined (presence written before avatars were kept there) is left absent (PRD 21.9).
+            ...(p.avatarUrl !== undefined ? { avatarUrl: p.avatarUrl } : {}),
         };
     }
 
     const user = await prisma.user.findUnique({
         where: { id: userId },
-        select: { nickname: true },
+        select: { nickname: true, avatarUrl: true },
     });
     return {
         userId,
@@ -110,6 +112,7 @@ export async function buildOccupant(
         isDeafened: false,
         isAway: false,
         isSharingScreen: false,
+        avatarUrl: user?.avatarUrl ?? null,
     };
 }
 
@@ -661,9 +664,9 @@ export function registerConnectionHandlers(
                             ...lastAddressData,
                             ...bindOnCreate,
                         },
-                        select: { publicKey: true },
+                        select: { publicKey: true, avatarUrl: true },
                     });
-                let userRow: { publicKey: string | null };
+                let userRow: { publicKey: string | null; avatarUrl: string | null };
                 if (invitedBy) {
                     // A new user coming in with an invite (PRD 18.9): the user and the
                     // consumed use are ONE transaction, so a failed join costs nothing
@@ -768,7 +771,7 @@ export function registerConnectionHandlers(
                 await syncModeratorRoom(app, io, instanceId, serverId).catch(() => {});
 
                 // Register presence in Redis
-                await presence.joinServer(instanceId, serverId, nickname);
+                await presence.joinServer(instanceId, serverId, nickname, userRow.avatarUrl ?? null);
 
                 // Notify all other clients in the server (a changed avatar first,
                 // so their cache is current before the join is announced)

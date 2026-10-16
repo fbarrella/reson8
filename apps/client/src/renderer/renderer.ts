@@ -2050,6 +2050,9 @@ function applyAvatar(el: HTMLElement, candidates?: string[]): void {
         else img.remove();
     });
     img.src = urls[0];
+    // A cached image is complete right away and may never fire "load" again: show it at once, so a
+    // re-rendered tree doesn't flash its avatars (PRD 21.9).
+    if (img.complete && img.naturalWidth > 0) img.classList.add("loaded");
     el.appendChild(img);
 }
 
@@ -4257,7 +4260,7 @@ interface TreeNode {
     iconEmoji?: string | null;
     iconUrl?: string | null;
     children: TreeNode[];
-    occupants: { userId: string; nickname: string; isMuted?: boolean; isDeafened?: boolean; isSharingScreen?: boolean }[];
+    occupants: { userId: string; nickname: string; isMuted?: boolean; isDeafened?: boolean; isSharingScreen?: boolean; avatarUrl?: string | null }[];
     /** Voice rooms: the user limit, null/absent = unlimited (PRD 19 C9's "{n} / {cap}"). */
     maxUsers?: number | null;
     /** Voice rooms (PRD 19 A3): when the running session began (ISO); absent for an empty room or an older server. */
@@ -5419,7 +5422,16 @@ function renderOccupants(container: HTMLElement, node: TreeNode): void {
         const savedVolume = occ.userId !== myId ? getSavedLocalVolume(occ.userId) : 100;
         const volumeMark =
             !isLocallyMuted && savedVolume !== 100 ? `<span class="occ-local-volume">${savedVolume}%</span>` : "";
-        el.innerHTML = `<span class="occ-dot"></span>${escapeHtml(occ.nickname)}${volumeMark}${voiceStateIcons}${sharingBadge}`;
+        // PRD 21.9: the person's round avatar (`undefined` from an older server leaves the cache alone),
+        // their name as text, then the marks. The `.speaking` ring is drawn by CSS around the avatar.
+        rememberAvatarUrl(occ.userId, occ.avatarUrl);
+        const avatar = createAvatarElement(occ.userId, occ.nickname, 20);
+        avatar.classList.add("occ-avatar");
+        const nameEl = document.createElement("span");
+        nameEl.className = "occ-name";
+        nameEl.textContent = occ.nickname;
+        el.append(avatar, nameEl);
+        el.insertAdjacentHTML("beforeend", `${volumeMark}${voiceStateIcons}${sharingBadge}`);
 
         // Clickable by anyone in the room, including the streamer
         // themself (PRD 12.13) — the badge only exists in the DOM when

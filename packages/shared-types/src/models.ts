@@ -298,6 +298,12 @@ export interface IUserPresence {
     isAway: boolean;
     /** Whether this user currently has an active screen share (PRD 12.12). */
     isSharingScreen: boolean;
+    /**
+     * The user's avatar, a server-built URL (PRD 17.1) — so a room's occupants
+     * show their picture without having written anything (PRD 21.9). Absent =
+     * an older server; `null` = no avatar set.
+     */
+    avatarUrl?: string | null;
 }
 
 // ---------------------------------------------------------------------------

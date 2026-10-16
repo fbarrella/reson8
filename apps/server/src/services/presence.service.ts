@@ -7,7 +7,7 @@
  * Key schema:
  *   presence:server:{serverId}    → SET of userIds
  *   presence:channel:{channelId}  → SET of userIds
- *   presence:user:{userId}        → HASH { serverId, channelId, nickname, isMuted, isDeafened, isSharingScreen, screenShareName }
+ *   presence:user:{userId}        → HASH { serverId, channelId, nickname, avatarUrl, isMuted, isDeafened, isSharingScreen, screenShareName }
  */
 
 import type { Redis } from "ioredis";
@@ -35,10 +35,12 @@ export class PresenceService {
         userId: string,
         serverId: string,
         nickname: string,
+        avatarUrl: string | null = null,
     ): Promise<void> {
         const pipe = this.redis.pipeline();
         pipe.sadd(KEY.server(serverId), userId);
-        pipe.hset(KEY.user(userId), { serverId, nickname, channelId: "" });
+        // avatarUrl: "" stands for "none" (a Redis hash can't hold null).
+        pipe.hset(KEY.user(userId), { serverId, nickname, avatarUrl: avatarUrl ?? "", channelId: "" });
         pipe.expire(KEY.user(userId), USER_TTL);
         await pipe.exec();
     }
@@ -102,6 +104,12 @@ export class PresenceService {
         return this.redis.smembers(KEY.channel(channelId));
     }
 
+    /** Updates the avatar kept in a user's presence (PRD 21.9); a no-op when they are offline. */
+    async setAvatarUrl(userId: string, avatarUrl: string | null): Promise<void> {
+        if (!(await this.redis.exists(KEY.user(userId)))) return;
+        await this.redis.hset(KEY.user(userId), "avatarUrl", avatarUrl ?? "");
+    }
+
     /** Returns the user's current presence metadata (serverId, channelId, nickname, voice state). */
     async getUserPresence(
         userId: string,
@@ -109,6 +117,8 @@ export class PresenceService {
         serverId: string;
         channelId: string;
         nickname: string;
+        /** undefined = this presence was written before avatars were kept here (use the database). */
+        avatarUrl: string | null | undefined;
         isMuted: boolean;
         isDeafened: boolean;
         isSharingScreen: boolean;
@@ -120,6 +130,7 @@ export class PresenceService {
             serverId: data.serverId,
             channelId: data.channelId ?? "",
             nickname: data.nickname ?? "Unknown",
+            avatarUrl: data.avatarUrl === undefined ? undefined : data.avatarUrl || null,
             isMuted: data.isMuted === "1",
             isDeafened: data.isDeafened === "1",
             isSharingScreen: data.isSharingScreen === "1",

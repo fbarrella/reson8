@@ -1571,31 +1571,47 @@
        bullet when only the flag is known (an older server). Its look is the
        shared .count-pill (F4). */
 
-    /* Occupants under a channel */
+    /* Occupants under a channel: avatar, name, marks (PRD 21.9). */
     .tree-occupant {
       display: flex;
       align-items: center;
-      gap: 6px;
-      padding: 2px 12px 2px 40px;
-      font-size: 12px;
+      gap: 8px;
+      height: 26px;
+      padding: 0 8px 0 34px;
+      border-radius: var(--radius-md);
+      font-size: 13px;
       color: var(--color-neutral-400);
       cursor: pointer;
     }
 
-    .tree-occupant .occ-dot {
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      background: var(--color-success);
-      flex-shrink: 0;
-      transition: box-shadow 0.2s ease, background 0.2s ease;
+    .tree-occupant:hover {
+      background: color-mix(in srgb, var(--color-text) 5%, transparent);
     }
 
-    .tree-occupant.speaking .occ-dot {
-      background: var(--color-accent);
-      box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 30%, transparent),
-                  0 0 8px color-mix(in srgb, var(--color-accent) 40%, transparent);
-      animation: speaking-pulse 1.2s ease-in-out infinite;
+    .tree-occupant .occ-name {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    /* The speaking ring (D2: voice green) is drawn around the avatar; .speaking stays on the row. */
+    .tree-occupant .occ-avatar {
+      flex: none;
+      transition: box-shadow 0.15s ease;
+    }
+
+    .tree-occupant.speaking .occ-avatar {
+      box-shadow: 0 0 0 2px var(--color-voice), 0 0 8px color-mix(in srgb, var(--color-voice) 55%, transparent);
+    }
+
+    .tree-occupant.speaking .occ-name {
+      color: var(--color-neutral-100);
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .tree-occupant .occ-avatar { transition: none; }
     }
 
     /* A saved local volume other than 100% (PRD 19 B9). */
@@ -1609,15 +1625,6 @@
     .occ-voice-icon {
       flex-shrink: 0;
       vertical-align: middle;
-    }
-
-    @keyframes speaking-pulse {
-      0%, 100% { box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 30%, transparent), 0 0 6px color-mix(in srgb, var(--color-accent) 30%, transparent); }
-      50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-accent) 15%, transparent), 0 0 12px color-mix(in srgb, var(--color-accent) 50%, transparent); }
-    }
-
-    .tree-occupant.speaking {
-      color: var(--color-accent);
     }
 
     .session-timer {

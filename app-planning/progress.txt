@@ -1255,3 +1255,69 @@ Feature/Fix: PRD 21.8 — a balanced channel tree
     and a side-by-side with frame 17b.
 
   Next Step: 21.9 — avatars and a speaking ring in the tree.
+
+--- Entry: 16/10/2026 ---
+
+Feature/Fix: PRD 21.9 — avatars and a speaking ring in the channel tree
+
+  Problem: A person in a voice room was a 6 px dot + nickname. The target is
+  their round avatar with a green ring while speaking. Occupants (IUserPresence)
+  carried no avatarUrl and the renderer's avatarUrlCache is only filled from
+  messages/DMs/profiles, so someone who never wrote would show a default avatar.
+
+  Solution:
+    shared-types: IUserPresence.avatarUrl?: string | null (absent = older server).
+    Server: presence:user:{id} hash now holds avatarUrl ("" = none);
+    PresenceService.joinServer(…, avatarUrl), new setAvatarUrl(), and
+    getUserPresence() returns avatarUrl (undefined for a hash written before
+    this change). connection.handler.ts: the join upsert also selects avatarUrl
+    and passes it to joinServer(); buildOccupant() returns it (omitted when
+    presence predates it; its Postgres fallback selects it too).
+    profile.handler.ts SET_AVATAR calls presence.setAvatarUrl() before the
+    USER_AVATAR_UPDATED broadcast. New test occupant-avatar.test.ts (4 cases).
+    Client: renderOccupants() builds the row with DOM calls — rememberAvatarUrl(),
+    createAvatarElement(userId, nick, 20) + .occ-avatar, a .occ-name span via
+    textContent, then the existing marks HTML. CSS: 26 px rows, 34 px indent,
+    gap 8, hover tint, name ellipsis; `.tree-occupant.speaking .occ-avatar` gets
+    the voice-green ring + 55 % glow (D2); .speaking stays on the row element so
+    speakingEls()/the local halo/the 300 ms hold are untouched. Removed the dead
+    .occ-dot, the speaking-pulse keyframes and the accent .speaking colour (grep:
+    no other user). applyAvatar() marks an already-complete (cached) image
+    "loaded" at once, so a re-rendered tree doesn't flash avatars.
+
+  Key Files Modified:
+    packages/shared-types/src/models.ts
+    apps/server/src/services/presence.service.ts
+    apps/server/src/handlers/connection.handler.ts
+    apps/server/src/handlers/profile.handler.ts
+    apps/server/src/__tests__/occupant-avatar.test.ts (NEW)
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/renderer/index.html
+
+  Verification:
+    shared-types built; server `npm run test` 505 passed (39 files); client
+    `tsc --noEmit` clean; root `npm run lint` exit 0. Server `tsc --noEmit` shows
+    ONE error, src/services/ban.service.ts(72) 'bannedByNickname' — the same
+    error appears on a clean tree (git stash), so it predates this item and is
+    reported to the owner.
+    ENVIRONMENT NOTE: the Prisma client in node_modules was stale (generated
+    before Phase 19), so server tsc showed many unrelated errors; I ran
+    `npm run db:generate` and, because the regenerated client then crashed the
+    dev server on the missing `servers.iconUrl` column, applied the four
+    committed, additive Phase 19/20 migrations to the dev database with
+    `npx prisma migrate deploy` (add_server_icon, add_user_last_seen,
+    add_banned_by, add_message_search_indexes). No data was changed.
+    Driven for real (Xvfb Electron over CDP + three Socket.io bots in Game
+    Room 2: one with a Gravatar avatar, one that never wrote, one with none):
+    every row showed its own avatar on first render, including the silent one;
+    the green ring + glow appears on a .speaking row; SET_AVATAR on a bot
+    swapped its tree avatar live; renderTree() again showed 4 of 5 avatars
+    already loaded synchronously (the fifth was the just-changed, uncached URL).
+    NOT exercised: a real speaker (the .speaking class was toggled through
+    speakingEls() — the audio path is unchanged), the own-voice ring with
+    mute/PTT, volume/local-mute marks, the LIVE badge and context menu on the
+    new rows (the marks code is untouched), and a 2.7.0 / 3.0.0-beta.4 server
+    (no avatarUrl: rememberAvatarUrl(undefined) leaves the cache alone, so rows
+    fall back to the cached or default avatar by construction).
+
+  Next Step: 21.10 — the "Disconnected" voice card and mute/deafen before joining.

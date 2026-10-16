@@ -61,6 +61,7 @@ export function registerProfileHandlers(io: TypedIO, app: FastifyInstance): void
 
                 if (before.avatarUrl !== avatarUrl) {
                     await app.prisma.user.update({ where: { id: userId }, data: { avatarUrl } });
+                    await presence.setAvatarUrl(userId, avatarUrl); // occupants carry it (PRD 21.9)
                     io.to(`server:${serverId}`).emit("USER_AVATAR_UPDATED", { userId, avatarUrl });
                 }
                 ack({ success: true, avatarUrl });
