@@ -1318,35 +1318,53 @@
     #channel-tree {
       flex: 1;
       overflow-y: auto;
-      padding: 6px 0;
+      padding: 6px 8px 10px; /* PRD 21.8 */
     }
 
     /* Tree Nodes */
     .tree-category {
-      margin-bottom: 2px;
+      margin-top: 8px;
+    }
+
+    #channel-tree > :first-child {
+      margin-top: 0;
+    }
+
+    /* A category inside a category is indented one level (PRD 21.8). */
+    .tree-children .tree-category {
+      margin-left: 16px;
     }
 
     .tree-category-label {
       display: flex;
       align-items: center;
-      gap: 4px;
-      padding: 4px 12px;
+      gap: 6px;
+      height: 26px;
+      padding: 0 6px;
+      border-radius: var(--radius-sm);
       font-size: 11px;
       font-weight: 600;
       text-transform: uppercase;
-      letter-spacing: 0.5px;
+      letter-spacing: 0.08em;
       color: var(--color-neutral-500);
       cursor: pointer;
       user-select: none;
     }
 
     .tree-category-label:hover {
-      color: var(--color-neutral-400);
+      color: var(--color-neutral-300);
     }
 
     .tree-category-label .arrow {
-      font-size: 8px;
+      font-size: 10px;
       transition: transform 0.15s;
+    }
+
+    .tree-category-label .category-name {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
     /* A voice channel that gained a child stays non-joinable — this badge
@@ -1356,14 +1374,16 @@
     .category-badge {
       display: inline-flex;
       align-items: center;
-      font-size: 9px;
-      font-weight: 700;
+      flex-shrink: 0;
+      font-size: 9.5px;
+      font-weight: 500;
+      line-height: 16px;
       color: var(--color-neutral-500);
-      border: 1px solid var(--color-divider);
-      border-radius: 3px;
-      padding: 0 4px;
-      margin-left: 6px;
-      letter-spacing: 0.3px;
+      box-shadow: inset 0 0 0 1px var(--color-neutral-800);
+      border-radius: var(--radius-sm);
+      padding: 0 6px;
+      margin-left: 2px;
+      letter-spacing: 0.04em;
       text-transform: none;
     }
 
@@ -1376,18 +1396,23 @@
     }
 
     .tree-channel {
+      position: relative;
       display: flex;
       align-items: center;
-      gap: 6px;
-      padding: 4px 12px 4px 24px;
+      gap: 9px;
+      height: 30px;
+      padding: 0 8px;
+      font-size: 14px;
+      color: var(--color-neutral-300);
       cursor: pointer;
-      border-radius: 0;
+      border-radius: var(--radius-md);
       transition: background 0.1s;
       user-select: none;
     }
 
     .tree-channel:hover {
-      background: color-mix(in srgb, var(--color-accent) 8%, transparent);
+      color: var(--color-neutral-100);
+      background: color-mix(in srgb, var(--color-text) 4%, transparent);
     }
 
     .draggable-channel {
@@ -1403,9 +1428,26 @@
       background: color-mix(in srgb, var(--color-accent) 12%, transparent);
     }
 
-    .tree-channel.active {
-      background: var(--color-accent-800);
-      color: var(--color-white);
+    /* The voice room you are in (.active) and the text channel you are viewing share one look:
+       a tint, bold light text and an accent bar in the margin (PRD 21.8). */
+    .tree-channel.active,
+    .tree-channel.active:hover {
+      background: color-mix(in srgb, var(--color-accent) 14%, transparent);
+      color: var(--color-neutral-100);
+      font-weight: 600;
+    }
+
+    .tree-channel.active::before,
+    .tree-channel.viewing::before {
+      content: "";
+      position: absolute;
+      left: -8px;
+      top: 7px;
+      bottom: 7px;
+      width: 3px;
+      border-radius: 0 3px 3px 0;
+      background: var(--color-accent);
+      box-shadow: 0 0 10px var(--color-accent);
     }
 
     /* The text channel whose chat tab is currently shown (PRD 16.3). One
@@ -1413,43 +1455,71 @@
        separate from .active, which only ever means "connected voice channel". */
     .tree-channel.viewing,
     .tree-channel.viewing:hover {
-      background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+      background: color-mix(in srgb, var(--color-accent) 14%, transparent);
+      color: var(--color-neutral-100);
+      font-weight: 600;
     }
 
+    /* The eye keeps its tooltip (PRD 21.8 / D10); it reads like the muted bell, a little brighter over the tint. */
     .tree-channel .ch-viewing-icon {
       display: inline-flex;
       align-items: center;
       flex-shrink: 0;
-      color: var(--color-neutral-500);
-      opacity: 0.75;
+      color: var(--color-neutral-400);
     }
 
+    /* Every icon sits in an 18 px box (PRD 21.8). */
     .tree-channel .ch-icon {
-      font-size: 14px;
-      flex-shrink: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 18px;
+      flex: none;
+      font-size: 14.5px;
+      text-align: center;
+    }
+
+    .tree-channel i.ch-icon {
+      font-size: 17px;
     }
 
     .tree-channel .ch-icon.voice {
-      color: var(--color-neutral-400);
+      color: var(--color-neutral-500);
+    }
+
+    .tree-channel.active .ch-icon.voice {
+      color: var(--color-voice);
     }
 
     .tree-channel .ch-icon.text {
       color: var(--color-neutral-400);
     }
 
-    /* Custom uploaded text-channel icon (PRD 14.7) — same footprint as the
-       14px emoji icon it replaces. */
+    /* Custom uploaded text-channel icon (PRD 14.7), 18 px like the initials square. */
     .tree-channel .ch-icon.custom-image {
-      display: inline-flex;
-      width: 14px;
-      height: 14px;
+      height: 18px;
     }
 
     .tree-channel .ch-icon.custom-image img {
       width: 100%;
       height: 100%;
       object-fit: cover;
-      border-radius: 3px;
+      border-radius: var(--radius-sm);
+    }
+
+    /* A text channel with no custom icon (PRD 21.8): initials on a colour from the channel's id.
+       The oklch() formulas use the per-channel --ch-hue, which a :root token cannot (it is computed
+       where --ch-hue doesn't exist) — like avatarColor()'s hsl(), a per-item formula, not a palette colour. */
+    .tree-channel .ch-icon.ch-initials {
+      height: 18px;
+      display: grid;
+      place-items: center;
+      border-radius: var(--radius-sm);
+      font-size: 7.5px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      background: oklch(0.42 0.08 var(--ch-hue));
+      color: oklch(0.92 0.05 var(--ch-hue));
     }
 
     .tree-channel .ch-name {
@@ -1463,16 +1533,38 @@
       display: inline-flex;
       align-items: center;
       gap: 3px;
-      font-size: 10px;
-      color: var(--color-neutral-400);
-      background: color-mix(in srgb, var(--color-white) 10%, transparent);
-      padding: 1px 5px;
-      border-radius: 8px;
+      height: 18px;
+      padding: 0 6px;
+      border-radius: 9px;
+      background: color-mix(in srgb, var(--color-text) 6%, transparent);
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--color-neutral-300);
+    }
+
+    .tree-channel.unread {
+      color: var(--color-neutral-100);
     }
 
     .tree-channel.unread .ch-name {
-      font-weight: 700;
-      color: var(--color-text);
+      font-weight: 600;
+    }
+
+    .tree-channel .unread-count.count-pill {
+      min-width: 18px;
+      height: 18px;
+      line-height: 18px;
+      border-radius: 9px;
+      font-size: 11px;
+    }
+
+    .tree-channel .nsfw-badge {
+      flex-shrink: 0;
+      margin-left: 0;
+      padding: 1px 6px;
+      border-radius: var(--radius-sm);
+      font-size: 10px;
+      letter-spacing: 0.04em;
     }
 
     /* Unread count pill (PRD 19 B1): the number, "99+" from 100, or a dot-sized
@@ -1529,9 +1621,8 @@
     }
 
     .session-timer {
-      font-size: 9px;
-      color: var(--color-neutral-400);
-      margin-left: 4px;
+      font: 500 11px ui-monospace, Menlo, monospace;
+      color: var(--color-neutral-500);
       font-variant-numeric: tabular-nums;
     }
 
@@ -5458,7 +5549,8 @@
     }
 
     .ch-count-icon {
-      font-size: 10px;
+      font-size: 11px;
+      color: var(--color-neutral-500);
     }
 
     .tab .tab-icon .ph {

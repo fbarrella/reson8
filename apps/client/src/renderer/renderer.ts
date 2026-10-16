@@ -3469,6 +3469,18 @@ function serverInitials(name: string): string {
     return letters.toUpperCase();
 }
 
+/** A stable hue (0-359) per channel id, so a channel keeps its colour across renames (PRD 21.8). Same hash as avatarColor(). */
+function channelHue(id: string): number {
+    let hash = 0;
+    for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) | 0;
+    return Math.abs(hash) % 360;
+}
+
+/** An 18 px rounded square with a text channel's initials and a colour from its id (PRD 21.8). */
+function channelInitialsIcon(node: TreeNode): string {
+    return `<span class="ch-icon text ch-initials" style="--ch-hue:${channelHue(node.id)}">${escapeHtml(serverInitials(node.name))}</span>`;
+}
+
 /**
  * The ONE place a server's avatar is drawn (PRD 19 C1/C5): its icon when there
  * is one (a thumbnail data URL or a resolved URL), else the initials on
@@ -4370,7 +4382,7 @@ function renderCategory(node: TreeNode, siblings: TreeNode[]): HTMLDivElement {
 
     const label = document.createElement("div");
     label.className = "tree-category-label";
-    label.innerHTML = `<span class="arrow">▾</span> ${escapeHtml(node.name)}${badge}`;
+    label.innerHTML = `<i class="ph ph-caret-down arrow" aria-hidden="true"></i><span class="category-name">${escapeHtml(node.name)}</span>${badge}`;
     // A rebuilt tree (a rename, a presence change) must not re-expand what the
     // user collapsed, so the state lives in a set keyed by channel id (PRD 19 C6).
     if (collapsedCategoryIds.has(node.id)) category.classList.add("collapsed");
@@ -4530,7 +4542,9 @@ function renderChannel(node: TreeNode, siblings: TreeNode[]): HTMLDivElement {
     // Custom text-channel icon (PRD 14.7): an uploaded image takes priority
     // over a custom emoji, which takes priority over the default 💬 — the
     // two are mutually exclusive server-side, so at most one is ever set.
-    let icon = isVoice ? "🔊" : "💬";
+    // PRD 21.8: a voice room is a Phosphor speaker, and a text channel with no
+    // custom icon gets an initials square instead of the 💬 emoji.
+    let icon = "";
     let iconIsImage = false;
     if (!isVoice) {
         if (node.iconUrl) {
@@ -4540,9 +4554,13 @@ function renderChannel(node: TreeNode, siblings: TreeNode[]): HTMLDivElement {
             icon = node.iconEmoji;
         }
     }
-    const iconHtml = iconIsImage
-        ? `<span class="ch-icon ${iconClass} custom-image"><img src="${escapeHtml(icon)}" alt=""></span>`
-        : `<span class="ch-icon ${iconClass}">${icon}</span>`;
+    const iconHtml = isVoice
+        ? `<i class="ph ph-speaker-high ch-icon voice" aria-hidden="true"></i>`
+        : iconIsImage
+          ? `<span class="ch-icon ${iconClass} custom-image"><img src="${escapeHtml(icon)}" alt=""></span>`
+          : icon
+            ? `<span class="ch-icon ${iconClass}">${icon}</span>`
+            : channelInitialsIcon(node);
 
     const count = node.occupants.length;
     // Count pill (PRD 19 B10): a person icon before the number and a tooltip.
