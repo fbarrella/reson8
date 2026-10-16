@@ -8,7 +8,7 @@ A high-performance desktop communication platform inspired by TeamSpeak 3,
 built with modern technology for low-latency voice, hierarchical channel trees,
 and private server ownership.
 
-[![Version](https://img.shields.io/badge/version-3.0.0--beta.4-blue.svg)](#)
+[![Version](https://img.shields.io/badge/version-3.0.0--beta.5-blue.svg)](#)
 [![Electron](https://img.shields.io/badge/Electron-34-47848F?logo=electron&logoColor=white)](https://www.electronjs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D20-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
@@ -45,6 +45,11 @@ and private server ownership.
 - **New Share Picker** — Screens and Windows tabs, the app's process name on Windows, a share-audio card, and a clearer Linux system-picker flow.
 - **Saved Servers Show Latency** — Each saved server on the welcome screen shows its ping, or "Offline".
 - **Get Beta Updates** — Stable builds can opt in to betas in Settings › About.
+- **A Voice Card That's Always There** — At the bottom of the sidebar, as its own card: green "Voice connected" in a room, yellow "Disconnected" outside one (with Mute and Deafen only). Mute or deafen *before* you join and you join that way — nothing is sent first — and it's remembered across restarts. The two versions fade into each other.
+- **A Balanced Channel Tree** — Roomier rows, a speaker icon for voice rooms, a coloured initials square for text channels without an icon, and a highlighted open channel; people in a room show their round avatar with a green ring while they talk.
+- **Glass Settings Menu** — The category menu in both Settings dialogs is frosted purple glass over a soft glow.
+- **Stream Thumbnails & Ready-to-Watch** — When someone starts sharing, an open room tab switches to stream mode by itself with a frozen frame and a Watch button (no stream is received until you press it); thumbnails also appear on the "Also live" cards and refresh every two minutes. Sharers see their own capture with a Stop sharing button. A separate window opens only through Pop out.
+- **Linux Window Buttons** — The native window buttons no longer draw a grey block over the app on KDE, and dialogs and the image viewer keep the window's rounded corners.
 
 ### 🔊 Voice & Audio
 - **Crystal-Clear Voice** — Low-latency SFU-based audio via mediasoup. No peer-to-peer bottlenecks, even in large groups.
@@ -498,6 +503,7 @@ reson8/
 | 18 | **Encrypted Connections, Admission Control & Safer Previews** — HTTPS-first connections with pinned self-signed certificates and a lock indicator; an identity log, OS-encrypted identity key with a passphrase-protected backup; opt-in address bans, "Approve new users" and invite codes; removing Member genuinely restricts a user; bounded, private-network-safe link previews with NSFW/adult blurring, fullscreen and seekable videos, and a chat that stays put while previews load; DM unread dots; the server can no longer be crashed by a malformed event | ✅ Done |
 | 19 | **The Nocturne UI (3.0 beta)** — A complete redesign: integrated title bar, saved servers and rail, server header, unread counts, DM sidebar, voice room tab, in-app streams with pop-out, left-nav Settings, update corner card | ✅ Beta |
 | 20 | **Finishing the Nocturne UI (3.0 beta)** — Voice dock and call bar, Members search and filters with safer role changes, a banned-people list, emoji library, message search, typing indicator, saved-server latency, a new share picker, "Get beta updates" | ✅ Beta |
+| 21 | **Nocturne Polish (3.0 beta)** — A kick that sticks, long text that wraps, a seamless reply composer, an image viewer that clears its controls, Linux corners and window buttons, an always-on voice card with mute/deafen before joining, a balanced channel tree with avatars and speaking rings, glass Settings, and stream thumbnails with a ready-to-watch room tab | ✅ Beta |
 
 ---
 

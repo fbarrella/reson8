@@ -1675,3 +1675,55 @@ Feature/Fix: PRD 21.14 — the room tab switches to a ready-to-watch stream by i
     keyboard focus on the Watch button.
 
   Next Step: 21.15 — release 3.0.0-beta.5 and documentation.
+
+--- Entry: 16/10/2026 ---
+
+Feature/Fix: PRD 21.15 — release 3.0.0-beta.5 and documentation
+
+  Problem: Phase 21's items (21.1–21.14, plus follow-ups) were committed one by
+  one; the beta needed its version, release notes and documentation.
+
+  Solution (following .claude/commands/bump-version.md, beta rules): on
+  `ui-overhaul-beta` the version goes 3.0.0-beta.4 -> 3.0.0-beta.5 in the root,
+  apps/client and apps/server package.json, the README badge (doubled hyphen,
+  checked against shields.io), the root AGENTS.md "Current version" sentence and
+  package-lock.json (`npm install --package-lock-only`; only the four workspace
+  entries changed). A catch-all grep found no other live pointer.
+  app-planning/releases/v3.0.0-beta.5.md written in the beta format (warning box, a
+  compatibility note — tree avatars and stream thumbnails need the matching server,
+  New Features, Bug Fixes, Known Issues, installation table); every bullet traces
+  to a Phase 21 entry above. README: five new bullets under "The New Interface"
+  and a roadmap row for Phase 21. Root AGENTS.md: "phases 1–21", the history
+  paragraph now says the ongoing log holds Phase 21's entries and describes the
+  Phase 21 PRD. The workspace AGENTS.md files were updated as each item landed.
+  Note vs the PRD: the Linux "right-click title-bar menu loss" known issue was NOT
+  included, because 21.6 kept the native window buttons (no HTML buttons).
+
+  Key Files Modified:
+    package.json, apps/client/package.json, apps/server/package.json,
+    package-lock.json, README.md, AGENTS.md
+    app-planning/releases/v3.0.0-beta.5.md (NEW)
+
+  Verification:
+    Final full run: shared-types `tsc --build`; apps/server `tsc --noEmit` clean and
+    `npm run test` 516 passed (40 files); apps/client `tsc --noEmit` clean and all
+    14 `test:*` scripts pass (markdown, avatar, soft-clip, link-fixers, media-proxy,
+    link-preview, identity (after `npm run build` in the server), identity-backup,
+    tls, saved-passwords, version, window-chrome, server-health, update-prefs);
+    root `npm run lint` exit 0 (82 warnings, 0 errors). `updateChannelArgs()` prints
+    [ '-c.publish.channel=beta' ]. NOTHING was built into installers, pushed or
+    published.
+
+  OWNER TO VERIFY (collected from Phase 21): the Wayland/KDE portal screen share
+  producing thumbnails (21.13); the Windows build's window buttons are unchanged
+  (21.6, "#00000000" kept there); drag-reordering and collapse in the new tree
+  (21.8); PTT carry-over and rejoin with the intended mute/deafen (21.10); the
+  Settings label contrast decision (21.11: labels measure 2.4–3.6:1, SPEC wants
+  4.5:1 — a lighter label colour would fix it); a person joining after you while
+  you are deafened (21.10); a beta.4 / 2.7.0 server against this client (21.9,
+  21.14).
+
+  Next Step: the owner pushes the branch, builds and publishes the beta (see the
+  publishing checklist in .claude/commands/bump-version.md); Phase 21's progress
+  entries can then be condensed and archived, and the owner-to-verify list above
+  moved into app-planning/nextsteps.txt.
