@@ -89,6 +89,47 @@ let lastVoiceChannelId: string | null = null;
 /** The mute/deafen the user wants (PRD 21.10): used by every join and rejoin; kept current by the renderer. */
 let intendedVoiceState: InitialVoiceState = { muted: false, deafened: false, deafenAutoMuted: false, pttResting: false };
 
+// ── Stream thumbnails received from the room's sharers (PRD 21.13) ─────────────
+// One blob: URL per sharer; the previous one is revoked whenever it is replaced or cleared.
+const streamThumbs = new Map<string, { channelId: string; url: string; takenAt: string }>();
+
+function setStreamThumb(t: { channelId: string; userId: string; mime: string; image: ArrayBuffer | Uint8Array; takenAt: string }): void {
+    // The bytes were sniffed by the server, but never trust the type: only these two are shown.
+    const mime = t.mime === "image/webp" ? "image/webp" : t.mime === "image/jpeg" ? "image/jpeg" : null;
+    if (!mime || !t.image) return;
+    const url = URL.createObjectURL(new Blob([t.image as BlobPart], { type: mime }));
+    const prev = streamThumbs.get(t.userId);
+    if (prev) URL.revokeObjectURL(prev.url);
+    streamThumbs.set(t.userId, { channelId: t.channelId, url, takenAt: t.takenAt });
+    emit("stream-thumbnail", { channelId: t.channelId, userId: t.userId, url, takenAt: t.takenAt });
+}
+
+function clearStreamThumb(userId: string, channelId?: string): void {
+    const prev = streamThumbs.get(userId);
+    if (!prev) return;
+    URL.revokeObjectURL(prev.url);
+    streamThumbs.delete(userId);
+    emit("stream-thumbnail", { channelId: channelId ?? prev.channelId, userId, url: null, takenAt: null });
+}
+
+/** Leaving a room: every blob URL is revoked and the renderer is told each one is gone. */
+function clearAllStreamThumbs(): void {
+    for (const userId of [...streamThumbs.keys()]) clearStreamThumb(userId);
+}
+
+/** After entering a room: ask the server for the thumbnails that already exist (5 s, then none). */
+function fetchRoomStreamThumbs(channelId: string): void {
+    const s = socket;
+    if (!s?.connected) return;
+    let done = false;
+    const timer = setTimeout(() => { done = true; }, 5_000);
+    s.emit("GET_STREAM_THUMBNAILS", { channelId }, (res) => {
+        clearTimeout(timer);
+        if (done || !res?.success || lastVoiceChannelId !== channelId) return;
+        for (const t of res.thumbnails ?? []) setStreamThumb(t);
+    });
+}
+
 function sanitizeVoiceState(s: InitialVoiceState): InitialVoiceState {
     return { muted: !!s.muted, deafened: !!s.deafened, deafenAutoMuted: !!s.deafenAutoMuted, pttResting: !!s.pttResting };
 }
@@ -355,6 +396,20 @@ function createSignaling(): VoiceSignaling {
         closeProducer(producerId) {
             socket?.emit("CLOSE_PRODUCER", { producerId });
         },
+        setStreamThumbnail(channelId, image) {
+            // Best effort (PRD 21.13): an older server never answers, so give up after 5 s and never retry.
+            return new Promise<void>((resolve) => {
+                const t = setTimeout(resolve, 5_000);
+                socket?.emit("SET_STREAM_THUMBNAIL", { channelId, image }, () => {
+                    clearTimeout(t);
+                    resolve();
+                });
+                if (!socket) {
+                    clearTimeout(t);
+                    resolve();
+                }
+            });
+        },
     };
 }
 
@@ -437,6 +492,7 @@ async function attemptVoiceRejoin(channelId: string): Promise<void> {
             }
 
             lastVoiceChannelId = channelId;
+            fetchRoomStreamThumbs(channelId);
             emit("voice-reconnected", { channelId });
             voiceRejoinInFlight = false;
             return;
@@ -461,6 +517,7 @@ let voiceSessionGeneration = 0;
 
 /** Ends the local voice session WITHOUT telling the server (it already removed us, or the caller already told it). */
 function endVoiceSessionLocally(): void {
+    clearAllStreamThumbs();
     voiceSessionGeneration++;
     lastVoiceChannelId = null;
     voiceRejoinInFlight = false;
@@ -785,6 +842,10 @@ const api = {
         socket.on("CHANNEL_DELETED", (payload) => emit("channel-deleted", payload));
         socket.on("ERROR", (payload) => emit("error", payload));
         socket.on("ACTIVE_SPEAKERS", (payload) => emit("active-speakers", payload));
+        // Stream thumbnails (PRD 21.13): the room's sharers' latest frames. An older server never sends these.
+        socket.on("STREAM_THUMBNAIL_UPDATED", (payload) => setStreamThumb(payload));
+        socket.on("STREAM_THUMBNAIL_CLEARED", (payload) => clearStreamThumb(payload.userId, payload.channelId));
+
         socket.on("USER_KICKED", (payload) => {
             // A kick ends this voice session for good: no automatic rejoin (PRD 21.1).
             if (payload.channelId === lastVoiceChannelId || payload.channelId === voiceService?.currentChannelId) {
@@ -896,6 +957,7 @@ const api = {
             // Now do the mediasoup voice handshake
             await voiceService.joinVoiceChannel(channelId, { ...intendedVoiceState });
             lastVoiceChannelId = channelId;
+            fetchRoomStreamThumbs(channelId);
             return { success: true };
         } catch (err: any) {
             return { success: false, error: err.message };
@@ -2165,6 +2227,7 @@ const api = {
                 resumeConsumer: () => Promise.resolve({ success: false }),
                 restartIce: () => Promise.resolve({ success: false }),
                 closeProducer: () => {},
+                setStreamThumbnail: () => Promise.resolve(),
             };
             voiceService = new VoiceService(dummySignaling);
         }

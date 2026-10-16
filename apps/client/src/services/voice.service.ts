@@ -204,6 +204,12 @@ export interface VoiceSignaling {
     ): Promise<{ success: boolean; iceParameters?: any; error?: string }>;
 
     /**
+     * Sends the sharer's latest frame of its screen share (PRD 21.12/21.13): JPEG bytes, a few KB.
+     * Resolves when answered or after 5 s; failures are ignored and never retried.
+     */
+    setStreamThumbnail(channelId: string, image: ArrayBuffer): Promise<void>;
+
+    /**
      * Fire-and-forget — tells the server to close this Producer *now*,
      * rather than leaving viewers to find out only when the whole
      * Transport eventually closes (full voice disconnect). Confirmed live
@@ -225,6 +231,9 @@ export class VoiceService {
     private screenAudioProducer: msTypes.Producer | null = null;
     private screenVideoProducer: msTypes.Producer | null = null;
     private screenVideoStream: MediaStream | null = null;
+    /** Stream thumbnails (PRD 21.13): the loop's timer and a counter that stops a stale loop. */
+    private thumbTimer: ReturnType<typeof setTimeout> | null = null;
+    private thumbGeneration = 0;
     private consumers = new Map<string, msTypes.Consumer>();
     private audioElements = new Map<string, HTMLAudioElement>();
     private signaling: VoiceSignaling;
@@ -681,6 +690,7 @@ export class VoiceService {
                 codecOptions: { videoGoogleStartBitrate: 1000 },
                 appData: { mediaType: "screen-video" },
             });
+            this.startThumbnailLoop(track);
         } catch (err) {
             // Refused (e.g. the room is full, PRD 19 A4) or failed: the capture
             // was already granted, so stop it NOW — otherwise the OS keeps
@@ -692,6 +702,7 @@ export class VoiceService {
 
     /** Stops screen-share video capture and closes its Producer. */
     stopScreenVideoProducing(): void {
+        this.stopThumbnailLoop();
         if (this.screenVideoProducer) {
             this.signaling.closeProducer(this.screenVideoProducer.id);
             this.screenVideoProducer.close();
@@ -700,6 +711,121 @@ export class VoiceService {
         if (this.screenVideoStream) {
             for (const track of this.screenVideoStream.getTracks()) track.stop();
             this.screenVideoStream = null;
+        }
+    }
+
+    /** The sharer's own capture (PRD 21.14's "You're live" card) — read-only, the field stays private. */
+    get localScreenStream(): MediaStream | null {
+        return this.screenVideoStream;
+    }
+
+    // ── Stream thumbnails (PRD 21.13) ─────────────────────────────────────────
+    // The sharer takes a small JPEG of its own capture and sends it to the server, which relays it to the
+    // room; viewers show it until they press Watch. First frame ~2 s after the share starts, then every 2 min.
+
+    private static readonly THUMB_FIRST_DELAY_MS = 2_000;
+    private static readonly THUMB_INTERVAL_MS = 120_000;
+    private static readonly THUMB_MAX_BYTES = 120 * 1024;
+
+    private startThumbnailLoop(track: MediaStreamTrack): void {
+        this.stopThumbnailLoop();
+        const generation = ++this.thumbGeneration;
+        const tick = async (): Promise<void> => {
+            if (generation !== this.thumbGeneration) return;
+            try {
+                const channelId = this.channelId;
+                const producer = this.screenVideoProducer;
+                // Never while the share is paused or stopped.
+                if (channelId && producer && !producer.closed && !producer.paused && track.readyState === "live") {
+                    const bytes = await this.captureThumbnail(track);
+                    if (bytes && generation === this.thumbGeneration) await this.signaling.setStreamThumbnail(channelId, bytes);
+                }
+            } catch (err) {
+                console.warn("[voice] stream thumbnail skipped:", err);
+            }
+            if (generation === this.thumbGeneration) {
+                this.thumbTimer = setTimeout(() => void tick(), VoiceService.THUMB_INTERVAL_MS);
+            }
+        };
+        // 2 s after the track delivers frames (a freshly granted capture can start muted).
+        const begin = (): void => {
+            if (generation !== this.thumbGeneration) return;
+            this.thumbTimer = setTimeout(() => void tick(), VoiceService.THUMB_FIRST_DELAY_MS);
+        };
+        if (track.muted) {
+            const onUnmute = (): void => {
+                track.removeEventListener("unmute", onUnmute);
+                begin();
+            };
+            track.addEventListener("unmute", onUnmute);
+            // Never wait forever: some portal tracks never fire "unmute".
+            this.thumbTimer = setTimeout(() => {
+                track.removeEventListener("unmute", onUnmute);
+                begin();
+            }, 5_000);
+        } else {
+            begin();
+        }
+    }
+
+    private stopThumbnailLoop(): void {
+        this.thumbGeneration++;
+        if (this.thumbTimer) {
+            clearTimeout(this.thumbTimer);
+            this.thumbTimer = null;
+        }
+    }
+
+    /** A frame of the capture as a JPEG ≤ 120 KB, or null when none could be taken. */
+    private async captureThumbnail(track: MediaStreamTrack): Promise<ArrayBuffer | null> {
+        const frame = await this.grabFrame(track);
+        if (!frame) return null;
+        try {
+            // 480 px wide (never taller than 480), then smaller if it still doesn't fit.
+            for (const [maxSide, quality] of [[480, 0.72], [480, 0.5], [320, 0.5]] as const) {
+                const scale = Math.min(1, maxSide / frame.width, maxSide / frame.height);
+                const w = Math.max(1, Math.round(frame.width * scale));
+                const h = Math.max(1, Math.round(frame.height * scale));
+                const canvas = new OffscreenCanvas(w, h);
+                const ctx = canvas.getContext("2d");
+                if (!ctx) return null;
+                ctx.drawImage(frame, 0, 0, w, h);
+                const blob = await canvas.convertToBlob({ type: "image/jpeg", quality });
+                if (blob.size <= VoiceService.THUMB_MAX_BYTES) return await blob.arrayBuffer();
+            }
+            return null; // still too big: give up silently
+        } finally {
+            if ("close" in frame) (frame as ImageBitmap).close();
+        }
+    }
+
+    /** ImageCapture first (Chromium); some portal tracks refuse it, so fall back to a hidden <video>. */
+    private async grabFrame(track: MediaStreamTrack): Promise<ImageBitmap | null> {
+        try {
+            const IC = (globalThis as unknown as { ImageCapture?: new (t: MediaStreamTrack) => { grabFrame(): Promise<ImageBitmap> } }).ImageCapture;
+            if (IC) return await new IC(track).grabFrame();
+        } catch {
+            /* fall through */
+        }
+        const stream = this.screenVideoStream;
+        if (!stream) return null;
+        const video = document.createElement("video");
+        video.muted = true;
+        video.playsInline = true;
+        video.srcObject = stream;
+        try {
+            await video.play();
+            if (video.videoWidth === 0) {
+                await new Promise<void>((resolve) => {
+                    const t = setTimeout(resolve, 2_000);
+                    video.addEventListener("loadeddata", () => { clearTimeout(t); resolve(); }, { once: true });
+                });
+            }
+            if (video.videoWidth === 0) return null;
+            return await createImageBitmap(video);
+        } finally {
+            video.pause();
+            video.srcObject = null;
         }
     }
 

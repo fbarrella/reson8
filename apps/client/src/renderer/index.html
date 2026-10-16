@@ -4105,6 +4105,47 @@
       border-color: var(--color-accent);
     }
 
+    /* The sharer's latest frame (PRD 21.13) fills the card behind its text; a dark veil keeps the text legible. */
+    .voice-stream-card {
+      position: relative;
+      overflow: hidden;
+    }
+
+    .voice-stream-card > * {
+      position: relative;
+    }
+
+    .voice-stream-card .voice-stream-card-thumb {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    .voice-stream-card.has-thumb {
+      min-height: 64px;
+      color: var(--color-white);
+    }
+
+    .voice-stream-card.has-thumb::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      z-index: 0;
+      background: linear-gradient(90deg, color-mix(in srgb, var(--color-black) 72%, transparent), color-mix(in srgb, var(--color-black) 25%, transparent));
+    }
+
+    .voice-stream-card.has-thumb > .voice-stream-card-text,
+    .voice-stream-card.has-thumb > .avatar,
+    .voice-stream-card.has-thumb > .voice-live-dot {
+      z-index: 1;
+    }
+
+    .voice-stream-card.has-thumb .voice-stream-card-sub {
+      color: var(--color-neutral-200);
+    }
+
     .voice-stream-card-text {
       display: flex;
       flex-direction: column;

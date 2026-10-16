@@ -6296,6 +6296,47 @@ function renderSharingHeader(): void {
 }
 
 /** The "Also live · {n}" column: static cards for every sharer that isn't on the main stage. */
+// ── Stream thumbnails (PRD 21.13) ─────────────────────────────────────────────
+// The sharers' latest frames (blob: URLs made by the preload), keyed by user id. Updated in place — a new
+// thumbnail never rebuilds a card.
+const streamThumbnails = new Map<string, string>();
+
+function streamThumbnailUrl(userId: string): string | null {
+    return streamThumbnails.get(userId) ?? null;
+}
+
+/** Puts (or removes) a sharer's thumbnail on its "Also live" card, if one is on screen. */
+function applyCardThumbnail(card: HTMLElement, userId: string): void {
+    const url = streamThumbnailUrl(userId);
+    let img = card.querySelector<HTMLImageElement>(".voice-stream-card-thumb");
+    if (!url) {
+        img?.remove();
+        card.classList.remove("has-thumb");
+        return;
+    }
+    if (!img) {
+        img = document.createElement("img");
+        img.className = "voice-stream-card-thumb";
+        img.alt = "";
+        img.draggable = false;
+        card.prepend(img);
+    }
+    if (img.getAttribute("src") !== url) img.src = url;
+    card.classList.add("has-thumb");
+}
+
+function refreshStreamThumbnailViews(userId: string): void {
+    for (const card of document.querySelectorAll<HTMLElement>(`.voice-stream-card[data-user-id="${CSS.escape(userId)}"]`)) {
+        applyCardThumbnail(card, userId);
+    }
+}
+
+api.on("stream-thumbnail", (data: { channelId: string; userId: string; url: string | null }) => {
+    if (data.url) streamThumbnails.set(data.userId, data.url);
+    else streamThumbnails.delete(data.userId);
+    refreshStreamThumbnailViews(data.userId);
+});
+
 function renderStageSide(): void {
     const stream = stageEl<HTMLElement>(".voice-stream");
     const head = stageEl<HTMLElement>(".voice-stream-side-head");
@@ -6338,6 +6379,7 @@ function renderStageSide(): void {
         (card.querySelector(".voice-stream-card-name") as HTMLElement).textContent = occ.nickname;
         (card.querySelector(".voice-stream-card-sub") as HTMLElement).textContent =
             knownStreamNames.get(occ.userId) ?? "Screen share";
+        applyCardThumbnail(card, occ.userId);
     }
 }
 

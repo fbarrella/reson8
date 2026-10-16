@@ -1551,3 +1551,61 @@ Feature/Fix: PRD 21.12 — stream thumbnails: protocol and server
     WebP (unit-tested only).
 
   Next Step: 21.13 — take and show the thumbnails on the client.
+
+--- Entry: 16/10/2026 ---
+
+Feature/Fix: PRD 21.13 — stream thumbnails: taking and showing them
+
+  Problem: Nothing on the client used the thumbnail events of 21.12: viewers saw
+  static "Also live" cards and (soon, 21.14) an empty ready stage.
+
+  Solution:
+    Taking (voice.service.ts): after the screen-video producer exists a loop owned
+    by the service starts — first frame 2 s after the track delivers frames
+    (a muted track waits for "unmute", at most 5 s), then every 120 s, stopped by
+    stopScreenVideoProducing()/cleanup() through a generation counter, and never
+    while the producer is paused/closed or the track isn't live. A frame comes from
+    ImageCapture.grabFrame() or, if that throws, a hidden muted <video> on the same
+    MediaStream; it is scaled to <= 480 px (never taller than 480) on an
+    OffscreenCanvas and encoded JPEG 0.72, retried at 0.5 then at 320 px if over
+    120 KB, and dropped silently if still too big. VoiceSignaling gets
+    setStreamThumbnail(channelId, image) (5 s timeout, never retried), implemented
+    in createSignaling() and stubbed in the preview dummy. New read-only getter
+    VoiceService.localScreenStream (for 21.14's "You're live").
+    Receiving (preload.ts): STREAM_THUMBNAIL_UPDATED makes a blob: URL from the
+    bytes (only image/jpeg or image/webp), revokes the sharer's previous URL and
+    emits "stream-thumbnail" { channelId, userId, url, takenAt }; _CLEARED revokes
+    and emits url: null; entering a room (join and rejoin) calls
+    GET_STREAM_THUMBNAILS (5 s timeout -> none); endVoiceSessionLocally() (leave,
+    kick, disconnect, a rejoin start) revokes everything.
+    Renderer: `streamThumbnails` Map fed by api.on("stream-thumbnail"),
+    streamThumbnailUrl(userId), applyCardThumbnail()/refreshStreamThumbnailViews()
+    update cards IN PLACE (keyed by user id); renderStageSide() applies it to the
+    "Also live" cards (an <img> behind a dark veil, LIVE dot and name kept; no
+    thumbnail = today's look). CSS in index.html.
+    Old server / old client: no events -> the static cards, nothing breaks.
+
+  Key Files Modified:
+    apps/client/src/services/voice.service.ts
+    apps/client/src/preload.ts
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/renderer/index.html
+
+  Verification:
+    client `tsc --noEmit` clean, root `npm run lint` exit 0. Driven with THREE
+    real clients under Xvfb (real desktopCapturer capture, real server): the
+    viewer received the sharer's thumbnail ~3 s after the share started (480x360
+    JPEG, 21 KB, fetched back through a bot and looked at: it is the sharer's
+    real window); with two sharers, the viewer watching one live (the live stream
+    played) showed the other as an "Also live" card WITH its thumbnail (screenshot
+    looked at); stopping that share removed its thumbnail and the card within
+    2 s; the first sharer's NEXT thumbnail arrived exactly 120 s later
+    (16:14:31 -> 16:16:31), the blob URL changed and the OLD URL no longer
+    loaded (revoked); stopping the last share left the viewer's map empty.
+    NOT exercised: a Wayland/KDE portal share (it needs the interactive picker —
+    OWNER TO VERIFY that a portal share produces thumbnails: the ImageCapture ->
+    hidden <video> fallback is written for that case), memory growth over a long
+    session, a 2.7.0 / beta.4 server (no events; code paths only wait on 5 s
+    timeouts), a WebP, and leaving the room revoking the URLs (code path only).
+
+  Next Step: 21.14 — the room tab switches to stream mode by itself.
