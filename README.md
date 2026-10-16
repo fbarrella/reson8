@@ -38,6 +38,13 @@ and private server ownership.
 - **Streams Inside the App** — Watch a screen share right in the voice room tab with volume up to 200 % and fullscreen, pop it out to its own always-on-top window, or follow several at once in Focus or Grid.
 - **Redesigned Settings** — One dialog with a left-hand menu: your own pages from the gear (Profile & identity, Voice, Sound, Shortcuts, Privacy & safety, Window, About) and the server's pages from the server menu (General, Members, Joining & invites, Bans, Sign-in security, Identity log, Emoji).
 - **Gentler Updates** — A small corner card instead of a blocking window, with progress and a note before restarting during a call.
+- **Voice Dock & Call Bar** — A voice card with split mic and headset buttons whose arrows switch the device, and a centred call bar in the voice room (mic, headset, Share screen, Leave).
+- **Message Search** — A search field in the tab bar (Ctrl/Cmd+F) finds messages in every channel or just this channel/DM, with highlighted matches and a click that jumps to the message.
+- **Typing Indicator** — "Name is typing…" under the composer; turn off sending yours in Privacy & safety.
+- **Members, Bans & Emoji Pages** — Search and filter members, toggle Member/Admin with one click (the server refuses removing the last admin or your own roles), see who banned whom, approve all emoji requests and remove emoji from the server.
+- **New Share Picker** — Screens and Windows tabs, the app's process name on Windows, a share-audio card, and a clearer Linux system-picker flow.
+- **Saved Servers Show Latency** — Each saved server on the welcome screen shows its ping, or "Offline".
+- **Get Beta Updates** — Stable builds can opt in to betas in Settings › About.
 
 ### 🔊 Voice & Audio
 - **Crystal-Clear Voice** — Low-latency SFU-based audio via mediasoup. No peer-to-peer bottlenecks, even in large groups.
@@ -490,6 +497,7 @@ reson8/
 | 17 | **Avatars, Smarter Tabs & Identity Protection** — Libravatar/Gravatar avatars in chat and a user profile card; preview tabs with "Keep Tab Open" and unread dots; mic volume up to 300% with a soft limiter; a 15-line collapse threshold; social-media videos playing inline; blank lines in messages and emoji autocomplete while editing; plus a fixed pinned-message jump with two-way history paging, and cryptographic identity so nobody can impersonate another user | ✅ Done |
 | 18 | **Encrypted Connections, Admission Control & Safer Previews** — HTTPS-first connections with pinned self-signed certificates and a lock indicator; an identity log, OS-encrypted identity key with a passphrase-protected backup; opt-in address bans, "Approve new users" and invite codes; removing Member genuinely restricts a user; bounded, private-network-safe link previews with NSFW/adult blurring, fullscreen and seekable videos, and a chat that stays put while previews load; DM unread dots; the server can no longer be crashed by a malformed event | ✅ Done |
 | 19 | **The Nocturne UI (3.0 beta)** — A complete redesign: integrated title bar, saved servers and rail, server header, unread counts, DM sidebar, voice room tab, in-app streams with pop-out, left-nav Settings, update corner card | ✅ Beta |
+| 20 | **Finishing the Nocturne UI (3.0 beta)** — Voice dock and call bar, Members search and filters with safer role changes, a banned-people list, emoji library, message search, typing indicator, saved-server latency, a new share picker, "Get beta updates" | ✅ Beta |
 
 ---
 

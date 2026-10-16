@@ -1,0 +1,977 @@
+================================================================================
+  PHASE 20 — unabridged progress log (archived at 3.0.0-beta.4, 15/10/2026)
+  The condensed summary lives in app-planning/progress.txt. Entries are in the
+  order they were built: the TEST_STATES sweep (V4), U0-U3, H1 and the server-
+  pill follow-ups, M1-M4, W1, S1-S3, G2, the window-button safe area, W2, G1,
+  Q1, H2 and the Linux window border.
+================================================================================
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: TEST_STATES sweep — every study state in the real app, three fixes (PRD 20 V4 prep)
+
+  Problem: app-planning/design_handoff_reson8_ui_overhaul/TEST_STATES.md
+    (61 states) had never been run end to end. The sweep found three real
+    defects:
+    - 6c: the channel rename dialog ignored Enter and Esc and accepted a
+      name another channel in the same list already had (the category
+      dialog did all three; the channel one was the old PRD 4.5 dialog).
+    - The 6th sharer: the voice panel's share button is icon-only, so
+      "Share screen · 5/5" existed only as its tooltip.
+    - A failed update download made the About row say "Couldn't check for
+      updates": main.ts sent update-error twice for one failure (the
+      autoUpdater "error" event AND the rejected downloadUpdate() promise),
+      and the second arrived in the error phase, where the row could not
+      tell a failed download from a failed check.
+
+  Solution:
+    - Rename channel now works like Rename category: inline error, Rename
+      disabled while the name is empty, unchanged or a duplicate (same-type
+      siblings in the same list, case-insensitive), Enter saves, Esc and the
+      backdrop cancel, a server refusal stays in the dialog.
+    - #btn-share-screen carries a .share-full-count "5/5" shown only with
+      .share-full.
+    - main.ts's download-update catch sends the error only if the "error"
+      event hasn't already (isDownloadingUpdate still set). UpdateState gets
+      errorDuring ("download" when the error interrupts available/
+      downloading, kept on a repeat); the row then says "Couldn't download
+      {version}" with the manual-download hint, a failed check keeps
+      "Couldn't check for updates".
+    - TEST_STATES.md: all 61 lines checked, with notes on how each odd one
+      was verified and what stays in PRD 20 (V1 sound/second machine, V2
+      macOS/Linux, U1–U3 real releases).
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts — rename channel dialog
+      (siblingChannelNames, validateRenameChannel, submitRenameChannel),
+      UpdateState.errorDuring, renderUpdateAbout error case, onUpdateError
+    apps/client/src/renderer/index.html — #rename-channel-error, Rename
+      disabled by default; .share-full-count
+    apps/client/src/main.ts — download-update sends update-error once
+    app-planning/design_handoff_reson8_ui_overhaul/TEST_STATES.md — results
+
+  Verification:
+    - CDP sweep over 2–6 real Electron instances (admin + member, four
+      extra sharers), Socket.io bots for the 16-person room, the 9800/9801
+      dev servers (they share one database) and a third server on 9802 with
+      its own database (reson8_sweep, dropped afterwards) for the per-server
+      DM list. A screenshot per state (local).
+    - Re-run after the fixes: 6c (pre-selected, empty/duplicate refused with
+      Enter, Enter saves, Esc cancels without saving), the 5/5 tag (shown at
+      5 live shares, gone when one stops), the real failed download in a dev
+      build → one update-error, "Couldn't download 3.0.0-beta.9 … manually
+      from GitHub"; a failed check still "Couldn't check for updates".
+    - Stream frames rendered on the stage on this machine (earlier sessions
+      saw 0×0 tracks).
+    - Client tsc, server tsc + vitest, lint.
+    - Cleanup: the temporary TSweepAdmin role and its scripts removed, the
+      sweep's channels deleted, the scratch database dropped.
+
+  Next Step: the owner's hand checks in PRD 20 (V1–V3), then
+    /bump-version 3.0.0-beta.3.
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Nocturne status tokens, menu "above" placement, segmented control (PRD 20 U0)
+
+  Problem: Items U1–S3 of PRD 20 need design values that had no token yet
+  (voice green, danger red variants, NO ACCESS ring), a way to open a context
+  menu above its anchor (the voice dock sits at the bottom of the sidebar) and
+  the mockup's segmented control.
+
+  Solution: Added eight tokens to the single :root block (--color-voice,
+  --color-voice-text, --color-voice-tint, --color-danger, --color-danger-line,
+  --color-danger-fill, --color-danger-hover, --color-warning-line). openMenu()
+  takes opts.placement ("below" default | "above"): with "above" y is the
+  anchor's top edge and the menu's bottom sits 6 px above it; the existing
+  flip/clamp lines still apply. Added the .seg / .seg-opt / .seg-count styles
+  after .section-label. --color-danger now also colours .server-pill-dot.failed
+  (it already referenced it with a fallback) — intended.
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html — tokens, .seg styles
+    apps/client/src/renderer/renderer.ts — openMenu placement option
+
+  Verification:
+    - apps/client npx tsc --noEmit; npm run lint (0 errors).
+    - Real app over CDP (no server needed): no console errors on load; a menu
+      opened with placement "above" from an anchor at top 400 had its bottom at
+      394; --color-voice resolves on :root.
+
+  Next Step: U1 (voice dock restyle).
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Voice dock card with device split buttons (PRD 20 U1)
+
+  Problem: The voice dock was a pulsing dot, "Voice: {room}", a room timer and
+  a 2x2 grid of icon buttons; the design (frames 1a/11a) is one tinted card
+  with "Voice connected", "{room} / {category} · {n}ms" and a row of split
+  buttons for microphone and headset whose carets switch the device.
+
+  Solution: Markup and CSS replaced as the PRD describes (.voice-dock-card,
+  .split-btn/.split-main/.split-caret, red muted/deafened state through the
+  U0 tokens). updateVoiceUI() fills the sub line through renderVoiceDockSub()
+  (also used by voice-reconnecting/-reconnected and the 3 s latency tick, so a
+  renamed room or category shows within 3 s) and swaps the mic/headset icons
+  with the state. The dock timer is gone (the tree row keeps its own).
+  applyAudioDevice() is the one place that applies and remembers a device —
+  Settings' Save and the new caret menus (openAudioDeviceMenu(), placement
+  "above") both call it, so they cannot disagree.
+
+  Differences from the PRD text:
+    - The two caret icons use "ph ph-caret-down", not "ph-bold": only the
+      regular and fill Phosphor weights are vendored, so ph-bold drew nothing.
+    - Save handler: both staged values and both labels are read BEFORE the
+      first applyAudioDevice() call. populateAudioDevices() (run by it while
+      Settings is open) resets the pending values synchronously, so with the
+      PRD's literal body a simultaneous input+output change applied only one.
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html — #voice-panel markup, dock CSS
+    apps/client/src/renderer/renderer.ts — voiceRoomLabel/renderVoiceDockSub,
+      updateVoiceUI, latency tick, timer removal, applyAudioDevice,
+      openAudioDeviceMenu
+
+  Verification:
+    - apps/client npx tsc --noEmit; npm run lint (0 errors).
+    - Real app over CDP against the 9800 dev server (fake media devices):
+      dock screenshot compared with 1a.png; mute and deafen icons/red state
+      switch both ways; input menu opens above the button with System default
+      ticked, picking a device writes reson8-audio-input and moves the tick;
+      "Voice & audio settings…" from the output menu opens Settings on Sound;
+      renaming the parent category updated the dock line within 4 s; no
+      console errors on load; no voice-session-timer reference remains.
+    - Temporary admin role + script removed afterwards; category name restored.
+    - Not exercised: self-hear (uses the same updateVoiceUI path).
+
+  Next Step: U2 (voice room header and call controls).
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Voice room header pills and call bar (PRD 20 U2)
+
+  Problem: The voice room tab had a one-line header (name, count, toggles) and
+  no call controls; the design (11a/11b/1m) has a kicker + 28 px room name,
+  status pills (encryption, people, sharing) and a centred call bar.
+
+  Solution: createVoiceTab() builds the new header (kicker "{category} · Voice
+  room", .room-pill pills, icons on the Focus|Grid and Mosaic|Featured
+  toggles) and a .voice-callbar (mic and headset split buttons, Share screen,
+  Leave). The call bar has no state of its own: its buttons call
+  toggleMuteAndNotify / toggleDeafenAndNotify / btnShareScreen.click() /
+  leaveVoiceAndNotify / openAudioDeviceMenu, and renderCallBar() (called from
+  updateShareScreenButton() on both exits and from renderVoiceRoom()) mirrors
+  the dock's mute/deafen/share state onto it. renderVoiceRoom() fills the
+  kicker, "{n} / {cap}" and the Encrypted / Not encrypted pill;
+  renderSharingHeader() hides the sharing pill when nobody shares.
+
+  Differences from the PRD text: the call bar carets use "ph ph-caret-down"
+  (ph-bold is not vendored — see the U1 entry).
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts — createVoiceTab, renderVoiceRoom,
+      renderSharingHeader, updateShareScreenButton, renderCallBar
+    apps/client/src/renderer/index.html — room header, toggle and call bar CSS
+
+  Verification:
+    - apps/client npx tsc --noEmit; npm run lint (0 errors).
+    - Real app over CDP against the 9800 dev server with 15 Socket.io bots in
+      the room (16 tiles): screenshot compared with 11a.png (kicker, name,
+      "Not encrypted" amber pill, 16, Mosaic active, call bar centred, all 16
+      tiles visible); call bar mic/headset <-> dock mic/headset follow each
+      other both ways; a bot sharing shows "1 / 5 sharing" and disables Mosaic
+      with its tooltip, stopping hides the pill; five bots sharing make the
+      call bar read "Share screen · 5/5" (dimmed) and the click shows the
+      toast; Leave leaves voice and closes the tab; a 79-character room name
+      truncates with an ellipsis at 1024 px and keeps the pills in view; no
+      console errors on load.
+    - Not exercised: the keyboard mute shortcut (same toggleMuteAndNotify).
+
+  Next Step: U3 (title-bar pill).
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Title-bar pill shows address and nickname (PRD 20 U3)
+
+  Problem: The title-bar pill showed only the server's name; the design (frame
+  1a) shows "● {address} · 👤 {nickname} ▾".
+
+  Solution: #server-pill gained a #server-pill-user part (separator, ph-user,
+  #server-pill-nick). renderServerPill() writes the address
+  (displayAddress(currentConnection)) when connected, falling back to the
+  server name, and fills/hides the nickname part; the connect-flow texts when
+  not connected are unchanged. New state connectedNickname is set in the
+  `connected` handler before the first render (the status bar's "Connected
+  as" uses it too) and cleared on `disconnected`. CSS: max-width
+  min(460px, 100vw - 420px); the address shrinks first, the nickname only
+  truncates beyond 140 px.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts — connectedNickname, renderServerPill,
+      connected/disconnected handlers
+    apps/client/src/renderer/index.html — #server-pill markup and CSS
+
+  Verification:
+    - apps/client npx tsc --noEmit; npm run lint (0 errors).
+    - Real app over CDP against the 9800 dev server: pill "127.0.0.1:9800 ·
+      DockTester" centred on the window (centre 512 = window centre), tooltip
+      "Reson8 Server — 127.0.0.1:9800 as DockTester"; a 60-character nickname
+      ellipsised at 140 px; a 66-character host truncated while the nickname
+      stayed whole (pill capped at 460 px); disconnect -> "Not connected", no
+      nickname, empty tooltip; the server switcher still opens under the
+      pill; no console errors.
+    - Not exercised: a real 1024 px-wide window below the 460 px cap (the
+      test window was 1024 px; the cap is min(460px, 100vw - 420px) = 460).
+
+  Next Step: Group 1 done — report; then M4 helper, M1–M4, W1, S1–S3, G2.
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Remove the dead will-minimize handler; one show path (PRD 20 H1)
+
+  Problem: Electron 34 has no `will-minimize` event, so the handler registered
+  with `(mainWindow as any).on("will-minimize", …)` never ran and its comment
+  described behaviour that does not exist.
+
+  Solution: Deleted the handler and rewrote the comment above the `minimize`
+  handler: with minimize-to-tray on, the window is minimized and then hidden,
+  and showMainWindow() (the only path that shows the main window) restores it
+  before showing. The `minimize` handler keeps hide() and its single
+  `window-minimized` send. Audited `.show()`/`.restore()` in main.ts: the main
+  window is only shown through showMainWindow() (second-instance, tray click,
+  tray Restore, viewer-return); the one direct show() is the Viewer window's
+  own focus handler, not the main window. Corrected the two stale mentions of
+  `will-minimize` (window-chrome.ts header comment, root AGENTS.md).
+
+  Key Files Modified:
+    apps/client/src/main.ts
+    apps/client/src/window-chrome.ts (comment only)
+    AGENTS.md (one sentence)
+
+  Verification:
+    - apps/client npx tsc --noEmit; npm run lint (0 errors).
+    - Real app with the main-process inspector: with minimizeToTray on,
+      minimize() -> minimized=true visible=false; app.emit("second-instance")
+      -> showMainWindow log "before: minimized=true visible=false" / "after:
+      minimized=false visible=true focused=true".
+    - Not exercised: the owner's 10x hand check on Windows (tray click/menu,
+      10 minutes hidden) — listed in the PRD as a manual verify.
+
+  Next Step: group 2 (M4 helper, M1–M4, W1, S1–S3, G2).
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: A press on a menu's own anchor closes it instead of reopening it (follow-up to PRD 20 U3)
+
+  Problem: Clicking the title-bar server pill while its popover was open did
+  not close it: the outside-pointerdown handler closed the menu, then the same
+  click reached the pill's handler and opened a new one, every time.
+
+  Solution: openMenu()'s pointerdown handler now recognises a press on the
+  menu's own anchor: it closes the menu and swallows the click that follows
+  (one-shot capture listener, dropped after 600 ms), so the anchor toggles.
+  Applies to every anchored menu (server pill, dock/call-bar device carets,
+  tab overflow, ...), not only the pill.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts — openMenu onPointerDown
+
+  Verification:
+    - apps/client npx tsc --noEmit; npm run lint (0 errors).
+    - Real app, trusted mouse events (Input.dispatchMouseEvent) on the pill:
+      open, closed, open, closed on four successive clicks.
+
+  Next Step: group 2.
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Server-pill popover centred under the pill (follow-up to PRD 20 U3)
+
+  Problem: The server switcher opened with its left edge on the pill's left
+  edge, so it looked misaligned, more so now that the pill is wider (address +
+  nickname) and its width changes between connected and disconnected.
+
+  Solution: openMenu() takes opts.align ("start" default | "center"); with
+  "center", x is the anchor's horizontal centre and the menu is centred on it
+  (still clamped to the window). openServerSwitcher() passes the pill's centre.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts — openMenu align option,
+      openServerSwitcher
+
+  Verification:
+    - apps/client npx tsc --noEmit; npm run lint (0 errors).
+    - Real app: menu centre == pill centre (512 / 512) both while not
+      connected (no nickname in the pill) and connected with a long nickname.
+
+  Next Step: group 2.
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Server-pill popover is at least as wide as the pill (follow-up to PRD 20 U3)
+
+  Problem: With a long nickname the pill grew to ~310 px while its popover
+  stayed at the menu's 190 px minimum, which looked unbalanced.
+
+  Solution: openMenu() takes opts.minWidth: the menu's min-width becomes
+  max(190, minWidth) and its max-width max(280, minWidth) (the .menu CSS
+  caps at 280). openServerSwitcher() passes the pill's width. A pill narrower
+  than the menu minimum ("Not connected") leaves the popover wider, as wanted.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts — openMenu minWidth, openServerSwitcher
+
+  Verification:
+    - apps/client npx tsc --noEmit; npm run lint (0 errors).
+    - Real app, trusted clicks: not connected pill 140 / menu 190; connected
+      pill 308 / menu 308; 80-char nickname pill 311 / menu 311; centres
+      equal (512) in all three.
+
+  Next Step: group 2.
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Members search, filters, role pills and role guard (PRD 20 M1, with the M4 nav-count helper)
+
+  Problem: The Members page listed every role as a clickable badge with
+  Ban/Reset buttons per row and had no search or filtering; ASSIGN_ROLE let a
+  MANAGE_ROLES holder grant admin, remove their own admin/Member role or the
+  last admin, and accepted a role id from another server.
+
+  Solution:
+    Client: new Members markup (search, All/Admins/No key/No access segmented
+    filter, one card of rows, legend and Member/Admin help). renderAdminUsers()
+    now builds .member-row via buildMemberRow(): 32 px avatar with an online
+    dot, name with (you) / lock / NO ACCESS / BANNED, "{short id} · Online ·
+    room | Online | Last seen … | Offline", Member and Admin pills (role ids
+    role-default / role-admin; read-only for non-MANAGE_ROLES; disabled with a
+    tooltip on your own row and on the last admin) and a ⋮ menu (Reset key…
+    with a second confirm menu, View identity log, Other roles, Ban…/Unban).
+    Search/filter are client-side; online state comes from one
+    api.getOnlineUsers() per refresh and the page refreshes live on
+    user-joined/user-left. The identity-log bar and its button are gone. Old
+    row CSS (.role-badge, .btn-ban, .btn-reset-key, .user-*-badge) removed;
+    .btn-unban stays (banned addresses use it). The M4 helper
+    updateSettingsNavCount() and its disconnect reset are included here
+    (M1 uses it); M3 will call it for emoji.
+    Server: services/role-guard.ts decideRoleChange() (+ role-guard.test.ts, 9
+    cases) wired into ASSIGN_ROLE, which now also requires the role to belong
+    to the caller's server. users.lastSeenAt (migration
+    20261019120000_add_user_last_seen) is written fire-and-forget in
+    finalizeDisconnect() and returned by GET_ALL_USERS (shared-types
+    lastSeenAt?: string | null; admin-users.ts + test).
+
+  Differences / findings:
+    - #admin-modal .members-search .input is used for the search field's
+      padding: the generic ".modal-content input:not(...)" rules out-specify a
+      single class (the icon overlapped the text).
+    - Pre-existing, NOT changed: settingsTabRoles.disabled is only computed at
+      connect time, so a user who is granted a role mid-session has to
+      reconnect before the Members nav item enables. Say if you want it fixed
+      in openSettingsPanel()'s live re-check.
+    - A user without MANAGE_ROLES doesn't get the roles list, so for a
+      BAN_USER-only moderator the Member/Admin pills are not drawn (the PRD's
+      "a pill whose role isn't in allServerRoles is not drawn").
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts, index.html
+    apps/server/src/services/role-guard.ts (NEW), __tests__/role-guard.test.ts (NEW)
+    apps/server/src/handlers/admin.handler.ts, connection.handler.ts
+    apps/server/src/services/admin-users.ts, __tests__/admin-users.test.ts
+    apps/server/prisma/schema.prisma, migrations/20261019120000_add_user_last_seen (NEW)
+    packages/shared-types/src/socket-events.ts
+
+  Verification:
+    - shared-types tsc --build; server tsc --noEmit + npm run test (36 files,
+      493 tests, role-guard included); client tsc --noEmit; npm run lint exit 0.
+    - Real app against the 9800 dev server with Socket.io bots (234 users in
+      the dev DB): search by name / id fragment / nonsense ("No members match");
+      filter counts; Member pill removal -> NO ACCESS tag and the No access
+      count 1, restored; own Member/Admin pills disabled with tooltips and
+      api.assignRole(self, role-admin|role-default, remove) refused by the
+      server; a MANAGE_ROLES-only bot is refused granting admin ("Only an admin
+      can change who is an admin") but may change Member; ⋮ -> Reset key… ->
+      confirm clears the lock; Ban… dialog -> BANNED tag -> Unban; "Online ·
+      Lobby" for a bot in voice; "Last seen just now" after a bot disconnects.
+    - Not exercised: the removed-Member user regaining channels without
+      reconnecting (PRD 18.18 path, unchanged server code).
+    - Test data: temporary TmpMROnly role and q-members.mjs script are removed
+      at the end of group 2; never committed.
+
+  Next Step: M2 (Bans list).
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Banned people list with who banned and the linked address (PRD 20 M2)
+
+  Problem: The Bans page showed only banned addresses and a note pointing at
+  Members; there was no list of banned people, who banned them, or the address
+  banned together with them.
+
+  Solution: banned_users.bannedByNickname (migration
+  20261019130000_add_banned_by) is written by executeBan() from the acting
+  socket's nickname (BAN_USER and reject-and-ban). GET_BANNED_USERS now also
+  returns bannedByNickname and the address ban linked to each user
+  (bannedAddresses.linkedUserId), full for ADMIN and masked (maskCidr) for a
+  BAN_USER-only moderator; IBannedUser carries both as optional fields. The
+  Bans page has a "Banned people" card (renderBannedUsers(): prohibit icon,
+  name, address chip, "Banned by {name} · {relative time}", Unban; dashed empty
+  state). Unban lifts the linked address ban (existing server behaviour) and
+  refreshes the card, the addresses list and Members. Dead CSS removed:
+  .bans-note, #identity-log-bar, .identity-log-bar (the element went with M1).
+
+  Key Files Modified:
+    packages/shared-types/src/models.ts (IBannedUser)
+    apps/server/prisma/schema.prisma, migrations/20261019130000_add_banned_by (NEW)
+    apps/server/src/services/ban.service.ts, handlers/moderation.handler.ts,
+      handlers/approval.handler.ts
+    apps/client/src/preload.ts, renderer/renderer.ts, renderer/index.html
+
+  Verification:
+    - shared-types tsc --build; server tsc --noEmit + npm run test (493);
+      client tsc --noEmit; npm run lint exit 0.
+    - Real app: empty state text; Ban… on a bot -> "Banned by MembersAdmin ·
+      just now"; with an address ban linked (inserted directly, because the
+      loopback test address is refused as a private range) the chip shows
+      203.0.113.45/32 for the ADMIN and 203.0.113.x for a BAN_USER-only bot via
+      GET_BANNED_USERS; Unban -> row gone and the address ban gone.
+    - Not exercised: a ban made before this change (the code path with no
+      bannedByNickname renders "Banned · …"; covered by reading, not driven).
+
+  Next Step: M3 (Emoji approve-all and library).
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Emoji approve-all and the server library with remove (PRD 20 M3, plus the M4 emoji nav count)
+
+  Problem: The Emoji page only listed pending requests one by one with
+  Approve/Reject; an approved emoji could never be removed.
+
+  Solution: New event DELETE_CUSTOM_EMOJI (MANAGE_EMOJIS; row deleted, then the
+  file released through the ledger; classified "open" in EVENT_ACCESS) with the
+  CUSTOM_EMOJI_REMOVED broadcast on server:<id>, so pickers drop it live and a
+  message that used it shows :name: as text. Client: preload
+  deleteCustomEmoji() + the "custom-emoji-removed" event; the Emoji page has a
+  "Requests · n" section (member-row cards, Approve all shown for 2+, an empty
+  state) and an "On this server · n" grid with a two-click Remove (Remove ->
+  Confirm for 4 s). The queue and library update the Emoji nav count through
+  updateSettingsNavCount() (M4). Dead emoji-request CSS removed.
+
+  Key Files Modified:
+    packages/shared-types/src/socket-events.ts
+    apps/server/src/handlers/emoji.handler.ts, services/access.service.ts
+    apps/client/src/preload.ts, renderer/renderer.ts, renderer/index.html
+
+  Verification:
+    - shared-types tsc --build; server tsc --noEmit + npm run test (493, the
+      EVENT_ACCESS classification test included); client tsc --noEmit; lint 0.
+    - Real app against the 9800 dev server: three emoji submitted through the
+      client, "Requests · 3" + Emoji nav "3" + Approve all -> all approved, the
+      library shows "On this server · 3", empty state text, nav count hidden;
+      Remove -> "Confirm" -> removed, library 2, customEmojis 2; a second socket
+      (WatchBot) received CUSTOM_EMOJI_REMOVED; a member calling
+      DELETE_CUSTOM_EMOJI got "Permission denied". Test emoji deleted after.
+    - Not exercised: another client's open picker re-rendering (same handler as
+      custom-emoji-approved, which renders from customEmojis).
+
+  Next Step: M4 remaining pieces are in M1/M3; then W1.
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Latency or Offline on saved servers (PRD 20 W1)
+
+  Problem: The saved-server rows on the welcome screen showed only "as {name} ·
+  Last connected …"; the design (frame 2b) also shows the server's latency or
+  "Offline".
+
+  Solution: Pure src/server-health.ts healthProbeUrl() (scheme from the
+  address, else https when that host:port was ever reached over https or has a
+  pin; default ports dropped) with scripts/server-health-smoke.mjs
+  (npm run test:server-health). The main process handles
+  "probe-server-latency" through session.defaultSession.fetch (so the pinned
+  certificate verifier applies): GET /health only, 3 s timeout, no cookies, no
+  redirects, cached 60 s per address (100 entries). Preload
+  probeServerLatency(); the renderer probes every saved address on the welcome
+  screen at startup and every 60 s, stops on connect and resumes on
+  disconnect; rows paint "{n} ms" (≤ 80 good, ≤ 150 warn, else bad) or
+  "Offline". savedLatency/paintSavedPing sit above renderSavedServers() (it
+  runs during startup).
+
+  Key Files Modified:
+    apps/client/src/server-health.ts (NEW), scripts/server-health-smoke.mjs (NEW),
+      package.json, src/main.ts, src/preload.ts,
+      src/renderer/renderer.ts, src/renderer/index.html
+
+  Verification:
+    - npm run test:server-health (8 checks); client tsc --noEmit; lint exit 0.
+    - Real app (fresh profile, two saved entries): 127.0.0.1:9800 -> "25 ms"
+      (green), 127.0.0.1:9999 (nothing listening) -> "Offline"; the probe timer
+      is running on the welcome screen, cleared while connected, running again
+      after disconnect. The row stays on one wrapped line in the narrow
+      container layout ("… · Last connected 5 minutes ago · 25 ms").
+    - Not exercised: the server being stopped mid-session ("Offline" within
+      60 s) and counting /health hits in the server log (request logging is
+      off); both follow from the 60 s cache and the timer states above.
+
+  Next Step: S1 (share picker tabs).
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Share picker with Screens/Windows tabs and process names (PRD 20 S1)
+
+  Problem: The share picker listed two labelled groups of cards in a narrow
+  dialog with a plain checkbox for audio and no hint of what viewers will see;
+  the design (frame 1k) has Screens | Windows tabs, one 3-column grid, a share
+  audio card and an "Others will see" line.
+
+  Solution: New 740 px .share-picker markup (kept every id the code queries).
+  renderSourceGrid()/setShareTab() draw the grid for the chosen tab (selection
+  survives a tab switch), counts sit in the segmented control, the audio row
+  is a card with a switch and new copy, updateSharePreview() renders "Others
+  will see: {name}" and the name field's placeholder, and × closes the dialog.
+  Windows only: main's "get-window-process-names" resolves each window
+  source's pid and maps it through one `tasklist /FO CSV` call (3 s timeout,
+  ≤ 100 ids); the cards show "Code.exe" under the title once it arrives
+  (preload getWindowProcessNames()). Old .source-share-* group/title/duplicate
+  card CSS removed.
+
+  Differences / findings:
+    - ph-bold is not vendored: the check badge uses "ph ph-check".
+    - .modal-content label (display: block) beat the audio card's display:
+      flex, dropping the switch below the text; the card rule is prefixed with
+      .share-picker. The grid height is min(46vh, max(150px, 100vh - 440px)) so
+      the dialog fits a 768 px-high window (46vh alone cut the title off).
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts, index.html
+    apps/client/src/main.ts, preload.ts
+
+  Verification:
+    - Client tsc --noEmit; lint exit 0.
+    - Real app on Windows against the 9800 dev server, in a voice room: counts
+      "Screens 2 | Windows 7", process names Discord.exe / Code.exe /
+      mintty.exe / firefox.exe / Notepad.exe / explorer.exe; selecting a window
+      shows the ring + check, "Only sound from …" and "Others will see: My
+      stream" tracking the name field; switching tabs and back keeps the
+      selection; clicking the audio card toggles the switch exactly once;
+      Start sharing shared the window (Stop sharing label in the call bar,
+      stopped cleanly); × and Cancel both close the dialog. Screenshot
+      compared with 1k.png.
+    - Not exercised: Start sharing with audio on (needs a real audio session),
+      macOS and Linux (the Linux system-picker flow is S2).
+
+  Next Step: S2 (Linux system-picker flow).
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Linux portal waiting card and source row in Name your stream (PRD 20 S2)
+
+  Problem: On Linux/Wayland the OS portal picks the source; Reson8 showed
+  nothing while it was open, flagged you as sharing BEFORE the name prompt, and
+  the prompt's only exits were Skip (start anyway) and Start.
+
+  Solution: A waiting card ("Waiting for your system's screen picker", Cancel)
+  shows while api.startScreenShareViaSystemPicker() is pending; Cancel bumps
+  portalAttempt so a capture the portal returns later is stopped at once and
+  nothing is announced. "Name your stream" now shows the chosen source, a
+  Change button (stops the capture, re-opens the portal), × / Cancel / Escape
+  (stop the capture, no share) and Start sharing; promptForStreamName()
+  resolves a start | change | cancel choice. isSharingScreen is only set after
+  Start sharing. Skip (#btn-stream-name-skip) is gone.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts, index.html
+
+  Verification:
+    - Client tsc --noEmit; lint exit 0.
+    - Real app on Windows (this path only runs on Linux Wayland): the card and
+      the dialog were forced over CDP and compared with 1l.png/1m.png;
+      promptForStreamName() resolved start (trimmed name) / cancel (Cancel,
+      ×, Escape) / change (Change) / start (Enter) and hid the dialog each
+      time.
+    - Not exercised: the real portal flow — the owner verifies on Linux
+      Wayland as the PRD says (Cancel then pick in the portal shares nothing;
+      Change re-opens the portal; Start announces LIVE with the typed or
+      default name).
+
+  Next Step: S3 (icon in Create channel).
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Choose a channel icon while creating a channel (PRD 20 S3)
+
+  Problem: A text channel's icon could only be set afterwards from the channel
+  menu; the design (frame 1g) puts an icon button next to the name field in
+  Create channel.
+
+  Solution: A 38 px dashed icon button + hint for TEXT channels (hidden for
+  voice, which also clears the draft). The existing #channel-icon-modal runs in
+  a draft mode (channelIconDraftMode): an emoji, a cropped image or Reset go
+  into createChannelIconDraft instead of being applied; the channel menu's "Set
+  icon…" turns draft mode off, so it still applies immediately. After
+  CREATE_CHANNEL succeeds, applyNewChannelIcon() applies an emoji with
+  updateChannel(), or uploads the image THEN applies it (a failed create
+  uploads nothing; a failed apply discards the upload).
+
+  Differences: the generic ".modal-content input" margin would have pushed the
+  hint 12 px down, so the name input inside .new-channel-name-row resets it.
+  Note (pre-existing): on its first open the dialog's hidden select defaults to
+  Voice, so the icon button is hidden until Text is picked.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts, index.html
+
+  Verification:
+    - Client tsc --noEmit; lint exit 0.
+    - Real app (admin on the 9800 server): button visible for Text, hidden for
+      Voice; the icon chooser opens on top of Create channel
+      (elementFromPoint); an emoji shows in the button and the new channel's
+      tree row shows it; an image -> crop -> 24 px preview -> create -> the
+      tree row shows the uploaded image; cancelling Create after choosing an
+      image left stored_files unchanged (21 -> 21); Text -> Voice -> Text
+      cleared the draft; "Set icon…" on an existing channel applied at once
+      with draft mode off. Test channels deleted afterwards.
+
+  Next Step: G2 (Play sound alerts).
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Play sound alerts switch; nudges play with alerts off (PRD 20 G2)
+
+  Problem: The setting read "Mute sound alerts" (checked = silent) while the
+  design (frame 4b) has "Play sound alerts", and a muted profile silenced
+  nudges too.
+
+  Solution: The switch is "Play sound alerts" (#chk-play-alerts, checked =
+  sounds on, with the new description); the stored key reson8-mute-alerts keeps
+  its meaning, so existing profiles with alerts muted open with the switch off.
+  The alert-volume row dims (.is-off) while it is off, a note under Nudge
+  volume says nudges play even with alerts off, and SoundAlert.play() only
+  skips when muted AND the file isn't nudge.mp3. All chkMuteAlerts /
+  chk-mute-alerts references are gone.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts, index.html
+
+  Verification:
+    - Client tsc --noEmit; lint exit 0.
+    - Real app: a profile with reson8-mute-alerts=true opened with the switch
+      off and the alert-volume row dimmed; with Audio.play stubbed, connected.mp3
+      was NOT played and nudge.mp3 WAS while muted; toggling on stored "false",
+      un-dimmed the row and played connected.mp3.
+    - Not exercised: audible output (the check counts play() calls).
+
+  Next Step: group 2 done; next group is the decision-gated items (W2, G1, Q1)
+  and H2.
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: App content keeps out of the window buttons; transparent window buttons (follow-up to PRD 19 R7)
+
+  Problem: With the integrated title bar the OS window buttons are drawn over
+  the page. Dialogs on a small window and every full-window overlay (the image
+  viewer worst) ran under them, and the opaque button strip showed as a
+  detached black block over faded backdrops and over the viewer's own buttons.
+
+  Solution: (1) The overlay background is transparent (TITLEBAR_COLOR
+  "#00000000"; the page paints the bar), so the buttons blend into whatever
+  is under them and keep the OS hover state, as in Discord. (2) Three body
+  tokens describe the safe area: --titlebar-h, --controls-right (from
+  env(titlebar-area-*)) and --controls-left (macOS traffic lights); 0 for the
+  system frame and fullscreen. Full-window dialog wrappers get
+  padding-top: var(--titlebar-h) and their calc(100vh - …) heights subtract it
+  (settings shell, What's new, server icon, About server, share picker grid,
+  .modal-content.wide); the image viewer's toolbar, close and sender pill sit
+  beside the buttons; the video lightbox and toasts start under the band.
+
+  Key Files Modified:
+    apps/client/src/window-chrome.ts, renderer/index.html, AGENTS.md (convention)
+
+  Verification:
+    - tsc --noEmit; lint exit 0.
+    - Real window captured through the OS (the native buttons included): the
+      image viewer's toolbar and close button sit left of the buttons
+      (close right edge 872 px of an 888 px content area, buttons 136 px wide),
+      the sender pill is clear, the buttons are transparent over the backdrop;
+      the Settings dialog starts at 62 px, under the button band.
+    - Not exercised: macOS/Linux (token logic only; env(titlebar-area-*) is the
+      same source on Linux), and the Viewer pop-out window (unchanged; it gets
+      the transparent buttons over its own bar).
+
+  Next Step: owner testing, then the decision-gated group (W2, G1, Q1) and H2.
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Image viewer controls below the window buttons, opaque Close, symmetric dialog margins (follow-up)
+
+  Problem: After the window-button safe area, the image viewer's controls were
+  squeezed to the left of the buttons (a broken-looking layout), its Close
+  button was transparent and could be mistaken for a window button, and dialogs
+  had a much bigger margin on top than at the bottom.
+
+  Solution: The viewer's toolbar and Close are back at the right edge, one row
+  below the button band (top: titlebar-h + 8px), together with the sender pill.
+  Close has the toolbar's pill look (surface background + border). Full-window
+  dialog wrappers use padding: var(--titlebar-h) 0, so the gap is the same above
+  and below, and their calc(100vh - …) sizes subtract 2 * --titlebar-h.
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html, apps/client/AGENTS.md
+
+  Verification:
+    - lint exit 0. Real OS window captures: viewer controls on one row under the
+      buttons with an opaque Close; Settings dialog 62 px from the top and
+      62 px from the bottom (644 px high in a 768 px window).
+
+  Next Step: owner testing, then the decision-gated group (W2, G1, Q1) and H2.
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Spacing under the Requests label on the Emoji page (follow-up to PRD 20 M3)
+
+  Problem: The "Requests" label sat directly on the request list / empty box:
+  the label lives in .emoji-section-head, which the 8 px rule for
+  ".settings-section > .section-label" doesn't reach.
+
+  Solution: .emoji-section-head carries the 8 px bottom margin itself, centres
+  its content and keeps a 28 px minimum height so the Approve all button
+  doesn't change the spacing when it appears.
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html
+
+  Verification: copied to dist; waiting for the owner's visual check.
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Bans page spacing and banned addresses in the same card style (follow-up to PRD 20 M2)
+
+  Problem: "Banned addresses" was a bare title with no spacing under it and
+  plain bordered rows, unlike the "Banned people" card above it.
+
+  Solution: The addresses block is a .settings-section with a .section-label
+  (the same 8 px under the label) and renders into the same .members-list
+  card: prohibit icon, the CIDR in monospace, "Banned with {name} · {date}"
+  and a secondary Unban button; the empty state is the dashed .bans-empty box.
+  Dead CSS removed (.banned-address-row*, .btn-unban).
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts, index.html
+
+  Verification: client tsc --noEmit; lint exit 0; rebuilt into dist. Waiting for
+  the owner's visual check.
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Typing indicator (PRD 20 W2, D4 = a with the "Show others when I'm typing" switch)
+
+  Problem: Nobody could tell that someone was writing in a channel or DM (frame
+  1a shows "Kdshy is typing…" under the composer).
+
+  Solution: New fire-and-forget event TYPING (channel id XOR dmPartnerId,
+  classified "member") relayed by typing.handler.ts as USER_TYPING: for a
+  channel to the server's members room (a TEXT channel of the sender's server,
+  never back to the sender), for a DM only to the partner's sockets; viewer
+  sockets are ignored, signals are never stored and throttled to one per 2.5 s
+  per target per socket (typing.service.ts, pure + tested). The client sends at
+  most one signal per 3 s while the composer has text (not for the Server Log or
+  the voice tab, not when the preference is off — localStorage
+  reson8-send-typing, default on, Privacy & safety), and shows one 18 px line
+  under the composer for the ACTIVE tab: "A is typing…", "A and B are
+  typing…", "Several people are typing…"; entries expire after 5 s or when that
+  person's message arrives.
+
+  Key Files Modified:
+    packages/shared-types/src/socket-events.ts
+    apps/server/src/handlers/typing.handler.ts (NEW), services/typing.service.ts (NEW),
+      __tests__/typing.service.test.ts (NEW), services/access.service.ts, index.ts
+    apps/client/src/preload.ts, renderer/renderer.ts, renderer/index.html
+
+  Verification:
+    - shared-types tsc --build; server tsc --noEmit + npm run test (37 files,
+      496 tests); client tsc --noEmit; lint exit 0.
+    - Real app + Socket.io bots: one/two/three typers -> "TypB1 is typing…" /
+      "TypB1 and TypB2 are typing…" / "Several people are typing…"; cleared 5 s
+      after the last signal and at once when the typer's message arrives; a
+      12-signal burst reached the client once; holding input for 20 s sent 7
+      signals; with the switch off 0; a DM signal reached only the partner and
+      showed in the DM tab.
+    - Not exercised: a restricted user (the central packet gate drops every
+      "member" event; covered by the EVENT_ACCESS classification test).
+
+  Next Step: G1 (Get beta updates).
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Get beta updates switch for stable builds (PRD 20 G1, D3 = a)
+
+  Problem: A beta could only be installed by hand; a stable build never saw
+  prereleases.
+
+  Solution: src/update-prefs.ts (update-prefs.json in userData, atomic write,
+  default false) + scripts/update-prefs-smoke.mjs (npm run test:update-prefs).
+  main.ts: allowPrerelease = running a beta OR the stored preference, and
+  allowDowngrade stays false (autoUpdater.channel is never set — its setter
+  enables downgrades). IPC update-prefs-get / update-prefs-set-beta (on a beta
+  build the setter is a no-op that answers true). Settings → About has a "Get
+  beta updates" card with a BETA tag under the Updates row; changing it applies
+  live, persists and re-runs the update check; on a beta build the switch is
+  shown on and disabled with "You're on a beta build. It moves to the next
+  stable release automatically when one is out.". Root AGENTS.md "Beta
+  releases" bullet updated. Also fixed scripts/window-chrome-smoke.mjs, which
+  still expected the old opaque overlay colour.
+
+  Key Files Modified:
+    apps/client/src/update-prefs.ts (NEW), scripts/update-prefs-smoke.mjs (NEW),
+      package.json, src/main.ts, src/preload.ts, renderer/renderer.ts,
+      renderer/index.html, scripts/window-chrome-smoke.mjs, AGENTS.md
+
+  Verification:
+    - npm run test:update-prefs (6 checks) and test:window-chrome; client tsc
+      --noEmit; lint exit 0.
+    - Dev build (3.0.0-beta.3): About shows the switch ON, disabled, with the
+      beta note.
+    - Not exercised (needs a packaged stable build against the real GitHub
+      feed, the owner's test in the PRD): the switch on a stable build offering
+      the newest beta, off offering nothing newer than stable, never a
+      downgrade.
+
+  Next Step: Q1 (message search).
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Message search (PRD 20 Q1, D2 = a)
+
+  Problem: Neither channels nor DMs could be searched.
+
+  Solution: Server: SEARCH_MESSAGES ("member"), migration
+  20261019140000_add_message_search_indexes (GIN on to_tsvector('simple',
+  content) for messages and direct_messages), search.service.ts (pure: query
+  2-100 chars after whitespace collapse, ids/cursor validation, 1 search per
+  second per socket) and search.handler.ts: $queryRaw with the query ONLY as a
+  bound parameter (plainto_tsquery), ts_headline with << >> markers, 25 per page
+  (+1 row to know hasMore), newest first, cursor on createdAt. No ids = the
+  server's TEXT channels; channelId = that channel; dmPartnerId = the caller's
+  conversation with that person (never anyone else's). Client: a Search field
+  at the right of the tab bar (Ctrl/Cmd+F focuses it; Enter searches, input
+  searches after 450 ms, Escape/× closes), a 370 px results column beside the
+  chat (the composer stays under the chat only) with "{n} results · Newest
+  first", scope "All channels | #current / this DM", results grouped by channel
+  (author avatar, date, two-line snippet with <mark> built from text — never
+  innerHTML), Load more, and click-to-jump (opens the tab if needed, waits for
+  its first page, then jumpToMessage()).
+
+  Not built (not in the PRD's plan): the design's Has image / Has link / From /
+  Any date filter chips.
+
+  Key Files Modified:
+    packages/shared-types/src/models.ts (ISearchResult), socket-events.ts
+    apps/server/prisma/migrations/20261019140000_add_message_search_indexes (NEW)
+    apps/server/src/services/search.service.ts (NEW), handlers/search.handler.ts (NEW),
+      __tests__/search.service.test.ts (NEW), services/access.service.ts, index.ts
+    apps/client/src/preload.ts, renderer/renderer.ts, renderer/index.html
+
+  Verification:
+    - shared-types tsc --build; server tsc --noEmit + npm run test (38 files,
+      501 tests); client tsc --noEmit; lint exit 0; migration deployed.
+    - Real app against the 9800 server with 33 seeded messages: "dragon" ->
+      "25+ results", all highlighted, case-insensitive ("DRAGON" matched), the
+      SQL-looking message was just text; Load more -> "32 results"; scope
+      "#Chat"; "zzzqqqq" -> nothing; 1 character -> "Type at least 2
+      characters"; clicking a result from the Server Log switched to the
+      channel and landed on the message. DM scope between two bots: both
+      participants found the DM, a third user got 0 results (also none through
+      the all-channels search); a second search within a second is refused
+      ("Searching too fast") and the client retries once.
+    - Fixed on the way: the composer is a sibling of the tab content, so the
+      results column needed a #chat-column wrapper; the column's children must
+      not shrink.
+    - Not exercised: Cmd+F on macOS; the design's filter chips (not built).
+
+  Next Step: H2 (TypeScript moduleResolution).
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Client tsconfig on Node16 module resolution (PRD 20 H2)
+
+  Problem: The editor's TypeScript 6 flags "moduleResolution": "Node" (node10)
+  in apps/client/tsconfig.json.
+
+  Solution: module and moduleResolution are Node16. Three type-only imports
+  of the ES-module @reson8/shared-types / deepfilternet3-noise-filter from
+  CommonJS files now carry `with { "resolution-mode": "import" }` (preload.ts,
+  screen-watch.ts) or the import-type equivalent (voice.service.ts).
+  "moduleDetection": "legacy" is required: with Node16's default, renderer.ts
+  and viewer.ts (classic scripts with no import/export) were emitted as
+  CommonJS modules and gained `Object.defineProperty(exports, …)`, which
+  would throw in the browser.
+
+  Key Files Modified:
+    apps/client/tsconfig.json, src/preload.ts, src/screen-watch.ts,
+    src/services/voice.service.ts, AGENTS.md (client; convention)
+
+  Verification:
+    - tsc --noEmit (client + server) clean; npm run lint exit 0; the client's
+      smoke suites (markdown, avatar, soft-clip, link-fixers, link-preview,
+      media-proxy, tls, server-health, version, saved-passwords, window-chrome,
+      update-prefs, identity-backup) pass.
+    - dist/ from before vs after: identical (no file differs, maps included) —
+      so import() handling and the noise-cancelling dynamicImport path are
+      unchanged and AGENTS' ESM gotcha bullet stays valid.
+    - Not run: test:identity (needs the server built) and a packaged
+      test-build:win (dist is byte-identical, so the package would be too).
+
+  Next Step: PRD 20 is implemented except L1 (D1 = b) and the owner's V1-V3.
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Window border and rounded corners on Linux
+
+  Problem: On Linux (Arch + KDE Plasma) the app rendered completely square
+  with no border, unlike Windows. The 1 px border and the rounded corners on
+  Windows are NOT the app's: Windows 11 draws them for a frameless window. The
+  page itself (html/body) never had a border or radius, and Linux compositors
+  draw nothing for a frameless window.
+
+  Solution: On Linux with the integrated title bar the window is created
+  transparent (main.ts: transparent + backgroundColor #00000000), and the
+  page draws it: body.platform-linux.integrated-titlebar gets a 1 px border
+  (white at 22 %) and a 10 px radius, removed while maximized/fullscreen. html
+  gets a 1 %-opaque colour on purpose: with a fully transparent root, the
+  body's background propagates to the whole canvas and the corners would stay
+  square. "Use the system title bar" is unaffected (no transparency, OS frame).
+
+  Key Files Modified:
+    apps/client/src/main.ts, apps/client/src/renderer/index.html
+
+  Verification:
+    - tsc --noEmit; lint exit 0.
+    - Not testable on Linux from this Windows machine. Simulated: a temporary
+      test hook made the Windows build create the same transparent window and
+      the class was added by hand — the border and radius rendered correctly
+      (hook removed). The owner confirms on Arch/KDE.
+    - Known limits: the OS window buttons' hover box is square at the top-right
+      corner; a snapped/tiled (not maximized) window keeps the border and radius.
+      If a Linux setup without a compositor shows black corners, "Use the system
+      title bar" is the way back.
+
+--- Entry: 14/10/2026 ---
+
+Feature/Fix: Border missing at the rounded corners on Linux (follow-up)
+
+  Problem: With the Linux border and radius, the straight edges had the 1 px
+  border but the four rounded corners showed none.
+
+  Solution: A `visible` overflow on the root element hands the body's
+  `overflow: hidden` to the viewport, so the body did not clip its children
+  and their square corners (titlebar, rail, status bar) were painted over the
+  curved part of the border. html now has overflow: hidden (scoped to
+  body.platform-linux.integrated-titlebar), so the body clips at its own
+  rounded padding edge.
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html
+
+  Verification: with the temporary test hook (removed) the four corners of a
+  capture of the real window show one continuous border; tsc --noEmit, lint 0.
