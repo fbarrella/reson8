@@ -1321,3 +1321,79 @@ Feature/Fix: PRD 21.9 — avatars and a speaking ring in the channel tree
     fall back to the cached or default avatar by construction).
 
   Next Step: 21.10 — the "Disconnected" voice card and mute/deafen before joining.
+
+--- Entry: 16/10/2026 ---
+
+Feature/Fix: PRD 21.10 — the "Disconnected" voice card and mute/deafen before joining
+
+  Problem: Outside a room the bottom of the left column was empty, mute/deafen did
+  nothing without a voice session, and every join reset both to "off".
+
+  Solution:
+    Card (index.html + renderer.ts): #voice-panel[data-voice-state] with two
+    versions written only by setVoiceCardState() (called from updateVoiceUI());
+    shown whenever body.is-connected (the .visible toggling is gone). New tokens
+    --color-voice-idle / -idle-text / -idle-tint (and --color-voice-tint is now
+    8 %). The card background is a gradient from a registered `@property
+    --dock-tint` so it animates; signal icons and titles are stacked and
+    cross-fade; the room line collapses with grid rows; #voice-controls is a
+    four-cell grid (column-gap 0, 6 px as padding-left on the cells) that goes
+    1.4fr 1.4fr 1fr 1fr <-> 1fr 1fr 0fr 0fr; room-only parts are `inert` and
+    aria-hidden while idle; all motion inside prefers-reduced-motion:
+    no-preference. Title block min-height is 30 px, NOT the SPEC's 28: the
+    connected title + room line measure 30 here and the two states must match
+    (94 px each, measured).
+    State: isMuted/isDeafened/deafenAutoMuted are the intended state, saved in
+    `reson8-voice-self-state` (D5), restored at startup (deafened implies muted),
+    never reset on join; toggleMuteAndNotify()/toggleDeafenAndNotify() work with
+    no session (toggleDeafenLocal() = the PRD 10.4 rule, undeafen restores,
+    mute-while-deafened undeafens first), play the same sounds and persist
+    (skipped while self-hear has forced the state; self-hear teardown restores).
+    VoiceService.toggleDeafen() also returns deafenAutoMuted.
+    Join: preload joinVoiceChannel(id, initial) / attemptVoiceRejoin() pass
+    `intendedVoiceState` (renderer keeps it current via setIntendedVoiceState();
+    PTT resting keeps the mic paused too) and send SET_VOICE_STATE right after the
+    USER_JOIN_CHANNEL ack, before the mediasoup handshake.
+    VoiceService.joinVoiceChannel(id, initial): _isDeafened/_deafenAutoMuted are
+    set first (consumers start silenced); mediasoup-client 3.18.7 has no
+    start-paused option, so the processed track is disabled before produce() and
+    the producer paused right after.
+    Leave/kick: resetLocalVoiceState() removes you from currentTree's room and
+    re-renders the tree immediately; the card goes idle; the self state stays.
+    "connected" event: updateVoiceUI() + push the intended state to the preload.
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/preload.ts
+    apps/client/src/services/voice.service.ts
+    apps/client/AGENTS.md
+    app-planning/design_handoff_reson8_ui_overhaul/TEST_STATES.md (ticks)
+
+  Verification:
+    client `tsc --noEmit` clean, root `npm run lint` exit 0 (no server change).
+    Driven for real (Xvfb Electron over CDP, fake microphone, Socket.io bots):
+    connect -> yellow "Disconnected" card with Mute+Deafen only, device menu
+    opens above; mute / deafen / mute-while-deafened / undeafen sequences give
+    the right state and persisted JSON; the state survives an app restart;
+    heights 94/94/94 (idle, room, idle again); you leave the tree in the same
+    frame; a real kick by an admin bot lands on the idle card and keeps the
+    state; mid-transition screenshot shows the titles cross-fading and the
+    buttons collapsing. NO-LEAK MEASUREMENT: hooked RTCPeerConnection inside the
+    preload's isolated world over CDP and read the outbound audio source's
+    totalAudioEnergy from getStats(): joined open -> energy rises every second
+    (positive control); joined muted and joined deafened -> exactly 0 from the
+    first sample on, with only silence/DTX packets (~4/s); unmuting by
+    undeafening in the room -> 0 then 0.16. (The server's ACTIVE_SPEAKERS did
+    not fire for the fake mic even unmuted, so it was not usable.) Watching bot:
+    the first presence update after the join still shows the unmuted default,
+    the next one (milliseconds later) shows muted/deafened — the protocol was
+    not changed (PRD item 8).
+    NOT exercised: a person joining after you while deafened (no audio-sending
+    bot; the code path is computeGainForUser's existing _isDeafened check, set
+    before any consumer), PTT carry-over by hand, the update card's in-call
+    note, the DM view and a 2.7.0 server (no protocol change), "Leave while on
+    the room tab goes to the first text tab" (closeVoiceTab is old code), and
+    reduced-motion.
+
+  Next Step: 21.11 — glass category menu in both Settings dialogs.

@@ -133,6 +133,17 @@ function ensureNoiseCancelInitialized(): Promise<void> {
 }
 
 /** Signaling callbacks — the preload wires these to the Socket.io connection. */
+/**
+ * The self mute/deafen a join starts with (PRD 21.10). `muted` is what other people are shown;
+ * `pttResting` additionally keeps the mic paused until the push-to-talk key opens it.
+ */
+export interface InitialVoiceState {
+    muted: boolean;
+    deafened: boolean;
+    deafenAutoMuted: boolean;
+    pttResting?: boolean;
+}
+
 export interface VoiceSignaling {
     getRouterCapabilities(
         channelId: string,
@@ -311,6 +322,8 @@ export class VoiceService {
      *  mic wasn't already paused going in) — so undeafening knows whether to
      *  resume it, rather than clobbering a mute that predates the deafen. */
     private _deafenAutoMuted: boolean = false;
+    /** Join muted (PRD 21.10): set from the initial state of the current join. */
+    private _startMuted: boolean = false;
 
     /** Producers that arrived before recv transport was ready. */
     private pendingProducers: { producerId: string; userId: string }[] = [];
@@ -325,8 +338,13 @@ export class VoiceService {
      * Full voice join orchestration.
      * Performs the complete WebRTC handshake and starts producing audio.
      */
-    async joinVoiceChannel(channelId: string): Promise<void> {
+    async joinVoiceChannel(channelId: string, initial?: InitialVoiceState): Promise<void> {
         this.channelId = channelId;
+        // The mute/deafen the user chose BEFORE joining (PRD 21.10). Deafen state first, so every
+        // consumer created below already starts silenced; the mic is held back in startProducing().
+        this._isDeafened = initial?.deafened === true;
+        this._deafenAutoMuted = initial?.deafened === true && initial?.deafenAutoMuted === true;
+        this._startMuted = initial?.muted === true || initial?.deafened === true || initial?.pttResting === true;
 
         // 1. Get Router capabilities and load Device
         const capRes = await this.signaling.getRouterCapabilities(channelId);
@@ -716,7 +734,15 @@ export class VoiceService {
         });
 
         const processedTrack = await this.buildMicProcessingGraph();
+        // Joining muted/deafened (PRD 21.10): no audio may leave before the pause lands. mediasoup-client
+        // 3.18 has no "start paused" option, so the track is disabled BEFORE produce() (it then sends
+        // silence only) and the producer is paused right after; resume() re-enables the track.
+        if (this._startMuted) processedTrack.enabled = false;
         this.producer = await this.sendTransport.produce({ track: processedTrack });
+        if (this._startMuted) {
+            this.producer.pause();
+            this._isManuallyMuted = true;
+        }
 
         // If the noise gate setting was already on before this join, start
         // its envelope loop now that the graph it needs exists.
@@ -948,7 +974,7 @@ export class VoiceService {
      * resulting combined state so the caller can send a single
      * SET_VOICE_STATE update reflecting both flags at once.
      */
-    toggleDeafen(): { isMuted: boolean; isDeafened: boolean } {
+    toggleDeafen(): { isMuted: boolean; isDeafened: boolean; deafenAutoMuted: boolean } {
         if (!this._isDeafened) {
             const wasPaused = this.producer?.paused ?? false;
             this._deafenAutoMuted = !wasPaused;
@@ -975,7 +1001,11 @@ export class VoiceService {
             const gain = this.remoteGainNodes.get(consumerId);
             if (gain) gain.gain.value = this.computeGainForUser(userId);
         }
-        return { isMuted: this.producer?.paused ?? false, isDeafened: this._isDeafened };
+        return {
+            isMuted: this.producer?.paused ?? false,
+            isDeafened: this._isDeafened,
+            deafenAutoMuted: this._deafenAutoMuted,
+        };
     }
 
     // ── Send-side mic processing graph (PRD 13.2/13.3/13.1) ─────────────────
@@ -1503,6 +1533,7 @@ export class VoiceService {
         this._isDeafened = false;
         this._isManuallyMuted = false;
         this._deafenAutoMuted = false;
+        this._startMuted = false;
         this.pendingProducers = [];
     }
 

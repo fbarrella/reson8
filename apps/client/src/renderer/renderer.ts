@@ -875,10 +875,14 @@ interface Reson8Api {
         removeTrust(hostKey: string): Promise<boolean>;
     };
     disconnect(): void;
-    joinVoiceChannel(channelId: string): Promise<{ success: boolean; error?: string }>;
+    joinVoiceChannel(
+        channelId: string,
+        initial?: { muted: boolean; deafened: boolean; deafenAutoMuted: boolean; pttResting?: boolean },
+    ): Promise<{ success: boolean; error?: string }>;
     leaveVoiceChannel(): void;
     toggleMute(): boolean;
-    toggleDeafen(): { isMuted: boolean; isDeafened: boolean };
+    toggleDeafen(): { isMuted: boolean; isDeafened: boolean; deafenAutoMuted?: boolean };
+    setIntendedVoiceState(state: { muted: boolean; deafened: boolean; deafenAutoMuted: boolean; pttResting?: boolean }): void;
     setMuted(muted: boolean): void;
     setVoiceState(isMuted: boolean, isDeafened: boolean): void;
     setScreenShareState(isSharingScreen: boolean, streamName?: string): void;
@@ -1207,7 +1211,23 @@ let currentChannelId: string | null = null;
 let isInVoice = false;
 let isMuted = false;
 let isDeafened = false;
+/** True when deafening is what muted the mic (undeafening then restores the mic) — PRD 10.4. */
+let deafenAutoMuted = false;
 let pttModeEnabled = localStorage.getItem("reson8-ptt-mode") === "true";
+
+// The self mute/deafen is the renderer's INTENDED state (PRD 21.10, D5): it exists before joining,
+// survives leaving, a kick and an app restart, and is handed to every join. Deafened implies muted.
+const VOICE_SELF_STATE_KEY = "reson8-voice-self-state";
+try {
+    const saved = JSON.parse(localStorage.getItem(VOICE_SELF_STATE_KEY) ?? "null");
+    if (saved && typeof saved === "object") {
+        isDeafened = saved.deafened === true;
+        isMuted = saved.muted === true || isDeafened;
+        deafenAutoMuted = isDeafened && saved.deafenAutoMuted === true;
+    }
+} catch {
+    /* unreadable: start unmuted */
+}
 
 // Attachment state (PRD 16.10): the composer's pending images. Global, not per
 // tab — a picked image survives switching tabs, as it always has.
@@ -5597,10 +5617,10 @@ async function handleChannelClick(node: TreeNode): Promise<void> {
         log(`Joining voice channel: ${node.name}...`, "info");
 
         try {
-            const result = await api.joinVoiceChannel(node.id);
+            // The intended self state goes WITH the join, so the mic never opens first (PRD 21.10).
+            const result = await api.joinVoiceChannel(node.id, intendedVoiceState());
             if (result.success) {
                 isInVoice = true;
-                isDeafened = false;
 
                 // joinVoiceChannel() constructs a fresh VoiceService instance
                 // per session — reapply the saved global voice volume, mic
@@ -5617,11 +5637,10 @@ async function handleChannelClick(node: TreeNode): Promise<void> {
 
                 // In PTT mode, mic starts muted (resting state) but isMuted=false
                 // so PTT key can activate it. isMuted=true means "PTT locked".
+                // The mute/deafen state is whatever the user chose before joining (PRD 21.10) — not reset here.
                 if (pttModeEnabled) {
                     api.setMuted(true);
-                    isMuted = false;
                 } else {
-                    isMuted = false;
                     // Enable noise gate if setting is on
                     if (micSensitivityEnabled) {
                         const threshold = parseInt(micSensitivitySlider.value, 10);
@@ -6721,26 +6740,44 @@ function renderVoiceDockSub(): void {
     voiceChannelName.textContent = reconnecting ? `${label} (reconnecting…)` : label;
 }
 
+/**
+ * The ONE place the voice card's version is chosen (PRD 21.10): "in-room" (green, full controls) or
+ * "idle" (yellow "Disconnected", Mute and Deafen only). CSS does the rest from `data-voice-state`; the
+ * parts that are collapsed away are made `inert` so they can't be tabbed to or clicked.
+ */
+function setVoiceCardState(state: "in-room" | "idle"): void {
+    voicePanel.dataset.voiceState = state;
+    const idle = state === "idle";
+    for (const el of voicePanel.querySelectorAll<HTMLElement>("[data-room-only]")) {
+        el.toggleAttribute("inert", idle);
+        el.setAttribute("aria-hidden", idle ? "true" : "false");
+    }
+    // The two titles and signal icons live in the DOM together; the hidden one is hidden from screen readers.
+    for (const el of voicePanel.querySelectorAll<HTMLElement>("[data-state-only]")) {
+        el.setAttribute("aria-hidden", el.dataset.stateOnly === state ? "false" : "true");
+    }
+}
+
 function updateVoiceUI(_channelName?: string): void {
     refreshLocalSpeakingHalo();
     updateCardVoiceHook?.(); // PRD 19 C12: the in-call restart note follows the room
+    setVoiceCardState(isInVoice ? "in-room" : "idle");
+    // Mute / Deafen exist (and show their state) in both versions of the card (PRD 21.10).
+    // Icon-only buttons (PRD 12.9) — state is conveyed by the `.active`
+    // (red) styling plus the tooltip, not by swapping label text.
+    btnMute.title = isMuted ? "Unmute" : "Mute";
+    btnMute.classList.toggle("active", isMuted);
+    btnDeafen.title = isDeafened ? "Undeafen" : "Deafen";
+    btnDeafen.classList.toggle("active", isDeafened);
+    btnMute.querySelector("i")!.className = `ph ${isMuted ? "ph-microphone-slash" : "ph-microphone"}`;
+    btnDeafen.querySelector("i")!.className = `ph ${isDeafened ? "ph-speaker-slash" : "ph-headphones"}`;
     if (isInVoice) {
         renderVoiceRoom(); // PRD 19 C9 (a joined or switched room)
-        voicePanel.classList.add("visible");
         renderVoiceDockSub();
-        // Icon-only buttons (PRD 12.9) — state is conveyed by the `.active`
-        // (red) styling plus the tooltip, not by swapping label text.
-        btnMute.title = isMuted ? "Unmute" : "Mute";
-        btnMute.classList.toggle("active", isMuted);
-        btnDeafen.title = isDeafened ? "Undeafen" : "Deafen";
-        btnDeafen.classList.toggle("active", isDeafened);
-        btnMute.querySelector("i")!.className = `ph ${isMuted ? "ph-microphone-slash" : "ph-microphone"}`;
-        btnDeafen.querySelector("i")!.className = `ph ${isDeafened ? "ph-speaker-slash" : "ph-headphones"}`;
         updateShareScreenButton();
     } else {
         if (stageState !== "idle") void stopStageWatch(); // PRD 19 C10 (also covers a popped Viewer)
         closeVoiceTab(); // PRD 19 C9: leaving voice, a kick or a deleted channel closes the room tab
-        voicePanel.classList.remove("visible");
         isSharingScreen = false;
         // Leaving voice while sharing (Leave Voice, a kick, a disconnect)
         // skips the explicit stop-sharing path — without this, the title
@@ -6839,18 +6876,58 @@ function renderCallBar(): void {
 // Shared mute/deafen/disconnect logic — used by both the button click handlers
 // below and the keyboard-shortcut handlers, so sound alerts stay in sync between
 // the two triggers instead of silently drifting apart (see PRD 4.15).
+/** The self state in the shape the engine's join takes (PRD 21.10). */
+function intendedVoiceState(): { muted: boolean; deafened: boolean; deafenAutoMuted: boolean; pttResting: boolean } {
+    return { muted: isMuted || isDeafened, deafened: isDeafened, deafenAutoMuted, pttResting: pttModeEnabled };
+}
+
+/** Remembers the self mute/deafen on this device and tells the preload (for the next join / rejoin). */
+function persistVoiceSelfState(): void {
+    // Self-hear forces mute+deafen only for its duration; that is never the user's own choice.
+    if (selfHearEnabled || selfHearForcedDeafen) return;
+    try {
+        localStorage.setItem(VOICE_SELF_STATE_KEY, JSON.stringify({ muted: isMuted, deafened: isDeafened, deafenAutoMuted }));
+    } catch {
+        /* storage unavailable — the choice just won't survive a restart */
+    }
+    api.setIntendedVoiceState(intendedVoiceState());
+}
+
+/** Deafen / undeafen with no voice session: the same accumulation rule the engine applies (PRD 10.4). */
+function toggleDeafenLocal(): void {
+    if (!isDeafened) {
+        deafenAutoMuted = !isMuted;
+        isMuted = true;
+        isDeafened = true;
+    } else {
+        isDeafened = false;
+        if (deafenAutoMuted) isMuted = false;
+        deafenAutoMuted = false;
+    }
+}
+
+// Shared mute/deafen/disconnect logic — used by both the button click handlers
+// below and the keyboard-shortcut handlers, so sound alerts stay in sync between
+// the two triggers instead of silently drifting apart (see PRD 4.15).
 function toggleMuteAndNotify(): void {
     if (isDeafened) {
         // Clicking Mute while deafened auto-undeafens first — restoring
         // whatever mute state existed before deafening — then a normal mute
         // toggle applies on top of that resolved state below, as a single
         // combined action (one SET_VOICE_STATE, one sound: PRD 10.4).
-        const resolved = api.toggleDeafen();
-        isMuted = resolved.isMuted;
-        isDeafened = resolved.isDeafened;
+        if (isInVoice) {
+            const resolved = api.toggleDeafen();
+            isMuted = resolved.isMuted;
+            isDeafened = resolved.isDeafened;
+            deafenAutoMuted = resolved.deafenAutoMuted ?? false;
+        } else {
+            toggleDeafenLocal(); // not in a room: the same rule on the intended state (PRD 21.10)
+        }
     }
 
-    if (pttModeEnabled) {
+    if (!isInVoice) {
+        isMuted = !isMuted; // PTT mode: the lock; otherwise the mic switch for the next join
+    } else if (pttModeEnabled) {
         // In PTT mode: mute = lock PTT (block key), unmute = unlock PTT (allow key)
         isMuted = !isMuted;
         if (isMuted) {
@@ -6860,22 +6937,25 @@ function toggleMuteAndNotify(): void {
     } else {
         isMuted = api.toggleMute();
     }
+    persistVoiceSelfState();
     updateVoiceUI();
-    if (isInVoice) {
-        SoundAlert.play(isMuted ? "mic_muted.mp3" : "mic_activated.mp3");
-        api.setVoiceState(isMuted, isDeafened);
-    }
+    SoundAlert.play(isMuted ? "mic_muted.mp3" : "mic_activated.mp3");
+    if (isInVoice) api.setVoiceState(isMuted, isDeafened);
 }
 
 function toggleDeafenAndNotify(): void {
-    const resolved = api.toggleDeafen();
-    isMuted = resolved.isMuted;
-    isDeafened = resolved.isDeafened;
-    updateVoiceUI();
     if (isInVoice) {
-        SoundAlert.play(isDeafened ? "sound_muted.mp3" : "sound_resumed.mp3");
-        api.setVoiceState(isMuted, isDeafened);
+        const resolved = api.toggleDeafen();
+        isMuted = resolved.isMuted;
+        isDeafened = resolved.isDeafened;
+        deafenAutoMuted = resolved.deafenAutoMuted ?? deafenAutoMuted;
+    } else {
+        toggleDeafenLocal();
     }
+    persistVoiceSelfState();
+    updateVoiceUI();
+    SoundAlert.play(isDeafened ? "sound_muted.mp3" : "sound_resumed.mp3");
+    if (isInVoice) api.setVoiceState(isMuted, isDeafened);
 }
 
 // ── Self-Hear Mic Monitor (PRD 14.10) ────────────────────────────────────────
@@ -6924,12 +7004,21 @@ function setSelfHearEnabledAndNotify(enabled: boolean): void {
             toggleDeafenAndNotify();
         }
         selfHearForcedDeafen = false;
+        persistVoiceSelfState(); // the user's own choice is what stays remembered (PRD 21.10)
     }
     updateSelfHearBanner();
 }
 
 /** The local half of leaving a room, shared by a manual Leave and a kick (PRD 21.1). */
 function resetLocalVoiceState(): void {
+    // You are gone from the tree in the same frame the card turns idle, not when the next
+    // PRESENCE_UPDATE arrives (PRD 21.10) — the server's list replaces this one as soon as it comes.
+    const leftChannelId = currentChannelId;
+    const myId = api.getInstanceId();
+    if (leftChannelId) {
+        const room = findChannelNodeById(currentTree, leftChannelId);
+        if (room) room.occupants = room.occupants.filter((o) => o.userId !== myId);
+    }
     isInVoice = false;
     currentChannelId = null;
     previousOccupantIds = new Set();
@@ -6940,12 +7029,16 @@ function resetLocalVoiceState(): void {
     // torn-down session, so just resets the UI/flags to match. No need to
     // restore mute/deafen here: leaving the channel makes that moot.
     if (selfHearEnabled) {
+        // What self-hear itself forced must not leak into the remembered state (PRD 21.10).
+        if (selfHearForcedDeafen && isDeafened) toggleDeafenLocal();
         selfHearEnabled = false;
         selfHearForcedDeafen = false;
         if (chkSelfHear) chkSelfHear.checked = false;
         updateSelfHearBanner();
+        persistVoiceSelfState();
     }
     updateVoiceUI();
+    if (leftChannelId && currentTree.length > 0) renderTree(currentTree);
 }
 
 function leaveVoiceAndNotify(): void {
@@ -6953,9 +7046,6 @@ function leaveVoiceAndNotify(): void {
     resetLocalVoiceState();
     log("Left voice channel", "info");
     SoundAlert.play("leaving-channel.mp3");
-    if (currentTree.length > 0) {
-        renderTree(currentTree);
-    }
 }
 
 btnMute.addEventListener("click", toggleMuteAndNotify);
@@ -7534,6 +7624,8 @@ api.on("connected", (data: { serverId: string; instanceId: string; secure?: bool
     document.body.classList.add("is-connected");
     document.body.classList.remove("is-approving");
     connectedNickname = nicknameInput.value.trim() || "User";
+    updateVoiceUI(); // the voice card shows from the moment the sidebar does — "Disconnected" with the remembered mute/deafen (PRD 21.10)
+    api.setIntendedVoiceState(intendedVoiceState());
     stopSavedServerProbes(); // PRD 20 W1
     onSavedServerConnected(); // PRD 19 C1
     showWelcomeForm(); // PRD 19 R1: the connect card's job is done
@@ -13588,6 +13680,7 @@ btnVoiceActivation.addEventListener("click", () => {
     pttModeEnabled = false;
     localStorage.setItem("reson8-ptt-mode", "false");
     updatePttModeUI();
+    api.setIntendedVoiceState(intendedVoiceState()); // a rejoin must know whether the mic rests paused (PRD 21.10)
     // Re-enable noise gate section
     if (micSensitivitySection) micSensitivitySection.style.display = "";
     // If currently in voice, unmute mic so it streams immediately — unless
@@ -13609,6 +13702,7 @@ btnPttMode.addEventListener("click", () => {
     pttModeEnabled = true;
     localStorage.setItem("reson8-ptt-mode", "true");
     updatePttModeUI();
+    api.setIntendedVoiceState(intendedVoiceState());
     // Disable noise gate section when in PTT mode
     if (micSensitivitySection) micSensitivitySection.style.display = "none";
     // Disable noise gate if active

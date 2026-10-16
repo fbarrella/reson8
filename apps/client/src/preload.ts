@@ -31,7 +31,7 @@ import type {
     IServerSummary,
     IDmDirectoryEntry,
 } from "@reson8/shared-types" with { "resolution-mode": "import" };
-import { VoiceService, VoiceSignaling } from "./services/voice.service";
+import { VoiceService, VoiceSignaling, InitialVoiceState } from "./services/voice.service";
 import { startScreenWatch, WatchHandle } from "./screen-watch";
 import { createHash } from "crypto";
 import {
@@ -86,6 +86,12 @@ let clockOffsetMs: number = 0;
  * 11.1) and nothing previously re-established voice automatically.
  */
 let lastVoiceChannelId: string | null = null;
+/** The mute/deafen the user wants (PRD 21.10): used by every join and rejoin; kept current by the renderer. */
+let intendedVoiceState: InitialVoiceState = { muted: false, deafened: false, deafenAutoMuted: false, pttResting: false };
+
+function sanitizeVoiceState(s: InitialVoiceState): InitialVoiceState {
+    return { muted: !!s.muted, deafened: !!s.deafened, deafenAutoMuted: !!s.deafenAutoMuted, pttResting: !!s.pttResting };
+}
 let voiceRejoinInFlight = false;
 
 /** What the renderer holds for a finished upload (PRD 16.8). `uploadId` is the server's ledger id. */
@@ -422,8 +428,9 @@ async function attemptVoiceRejoin(channelId: string): Promise<void> {
             joinedOnServer = joinRes.success;
             if (abandoned()) return; // endVoiceSessionLocally() already cleaned up the service
             if (!joinRes.success) throw new Error(joinRes.error ?? "Failed to rejoin channel");
+            socket?.emit("SET_VOICE_STATE", { isMuted: intendedVoiceState.muted, isDeafened: intendedVoiceState.deafened }, () => { });
 
-            await service.joinVoiceChannel(channelId);
+            await service.joinVoiceChannel(channelId, { ...intendedVoiceState });
             if (abandoned()) {
                 service.cleanup();
                 return;
@@ -860,11 +867,13 @@ const api = {
 
     async joinVoiceChannel(
         channelId: string,
+        initial?: InitialVoiceState,
     ): Promise<{ success: boolean; error?: string }> {
         try {
             if (!socket?.connected) {
                 return { success: false, error: "Not connected" };
             }
+            if (initial) intendedVoiceState = sanitizeVoiceState(initial);
 
             // Clean up any existing voice session before starting a new one
             voiceService?.cleanup();
@@ -881,8 +890,11 @@ const api = {
                 return { success: false, error: joinRes.error ?? "Failed to join channel" };
             }
 
+            // Others see the chosen state from the first moment (PRD 21.10), not after the handshake.
+            socket.emit("SET_VOICE_STATE", { isMuted: intendedVoiceState.muted, isDeafened: intendedVoiceState.deafened }, () => { });
+
             // Now do the mediasoup voice handshake
-            await voiceService.joinVoiceChannel(channelId);
+            await voiceService.joinVoiceChannel(channelId, { ...intendedVoiceState });
             lastVoiceChannelId = channelId;
             return { success: true };
         } catch (err: any) {
@@ -920,8 +932,13 @@ const api = {
         return voiceService?.toggleMute() ?? false;
     },
 
-    toggleDeafen(): { isMuted: boolean; isDeafened: boolean } {
-        return voiceService?.toggleDeafen() ?? { isMuted: false, isDeafened: false };
+    toggleDeafen(): { isMuted: boolean; isDeafened: boolean; deafenAutoMuted: boolean } {
+        return voiceService?.toggleDeafen() ?? { isMuted: false, isDeafened: false, deafenAutoMuted: false };
+    },
+
+    /** The renderer's current self mute/deafen, used by the next join or rejoin (PRD 21.10). */
+    setIntendedVoiceState(state: InitialVoiceState): void {
+        intendedVoiceState = sanitizeVoiceState(state);
     },
 
     setMuted(muted: boolean): void {

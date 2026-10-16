@@ -65,12 +65,12 @@ Each study frame is a state the real app must reach. Verify each one by hand, or
 - [x] **5a–5f:** each server settings page. *(All 7 pages, Identity log included, at both sizes.)*
 
 ## Revision 2 (Turn 17)
-- [ ] **17a:** connected to a server, not in a room: the card shows "Disconnected" in yellow, no second line, Mute and Deafen with working device menus, and no Share, Leave or Expand.
-- [ ] **17a:** you're not listed in any room in the tree, and room counts don't include you.
-- [ ] **17b:** join a room: the card turns green with the full controls. Leave: back to 17a at once, with no layout jump.
-- [ ] Mute while disconnected, then join: you join muted. The same goes for Deafen.
-- [ ] Kicked from a room: the card goes to Disconnected (not hidden).
+- [x] **17a:** connected to a server, not in a room: the card shows "Disconnected" in yellow, no second line, Mute and Deafen with working device menus, and no Share, Leave or Expand. *(Phase 21.10, driven in the real app: yellow card, no second line, Mute + Deafen with working device menus, no Share/Leave/Expand.)*
+- [x] **17a:** you're not listed in any room in the tree, and room counts don't include you. *(Phase 21.10: you disappear from the tree in the same frame as Leave/kick.)*
+- [x] **17b:** join a room: the card turns green with the full controls. Leave: back to 17a at once, with no layout jump. *(Phase 21.10: card height 94 px in both states, measured; animated cross-fade checked mid-transition.)*
+- [x] Mute while disconnected, then join: you join muted. The same goes for Deafen. *(Phase 21.10: measured with WebRTC stats — source energy stays 0 and only silence packets are sent while joined muted or deafened; unmuting resumes it. Others see the state from the first presence update after join.)*
+- [x] Kicked from a room: the card goes to Disconnected (not hidden). *(Phase 21.10, real kick from an admin bot: card goes to Disconnected, state kept.)*
 - [ ] Leave while viewing the voice room tab: the tab closes and the first text tab shows.
-- [ ] Not connected to any server: no card.
+- [x] Not connected to any server: no card. *(Phase 21.10: `body.is-connected` rule, checked by toggling the class.)*
 - [ ] **17c:** App settings: the category menu is frosted purple glass over a soft glow, with a lit right edge. The content side is unchanged.
 - [ ] **17d:** Server settings: the same treatment. The nav scrolls and clicks normally.

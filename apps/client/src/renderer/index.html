@@ -79,7 +79,10 @@
       /* PRD 20 U0 — values from the mockup (Appendix A) that had no token yet. */
       --color-voice: oklch(0.78 0.14 155);          /* "Voice connected" signal, speaking green */
       --color-voice-text: oklch(0.8 0.13 155);       /* the "Voice connected" label */
-      --color-voice-tint: color-mix(in srgb, oklch(0.78 0.14 155) 7%, var(--color-surface)); /* dock card top */
+      --color-voice-tint: color-mix(in srgb, oklch(0.78 0.14 155) 8%, var(--color-surface)); /* dock card top */
+      --color-voice-idle: oklch(0.75 0.16 65);       /* "Disconnected": the logo's yellow — icon and gradient (PRD 21.10) */
+      --color-voice-idle-text: oklch(0.8 0.15 75);   /* the "Disconnected" label */
+      --color-voice-idle-tint: color-mix(in srgb, oklch(0.75 0.16 65) 8%, var(--color-surface));
       --color-danger: oklch(0.7 0.15 22);            /* a muted mic/headset icon */
       --color-danger-line: oklch(0.5 0.12 22);       /* its border */
       --color-danger-fill: color-mix(in srgb, oklch(0.6 0.16 22) 16%, transparent); /* its fill */
@@ -1634,6 +1637,7 @@
     }
 
     /* ── Voice Controls (bottom of left pane) ─────────────────────────── */
+    /* Shown whenever the sidebar is (connected to a server), in a room or not (PRD 21.10). */
     #voice-panel {
       border-top: none;
       padding: 0;
@@ -1643,7 +1647,7 @@
       gap: 6px;
     }
 
-    #voice-panel.visible {
+    body.is-connected #voice-panel {
       display: flex;
     }
 
@@ -1738,6 +1742,23 @@
       }
     }
 
+    /* The voice card has two versions driven by ONE attribute, #voice-panel[data-voice-state],
+       written only by setVoiceCardState() (PRD 21.10): "in-room" (green, full controls) and the
+       default "idle" (yellow "Disconnected", Mute + Deafen only). Same height in both. */
+    @property --dock-tint {
+      syntax: "<color>";
+      inherits: false;
+      initial-value: transparent;
+    }
+
+    #voice-panel {
+      --dock-tint: var(--color-voice-idle);
+    }
+
+    #voice-panel[data-voice-state="in-room"] {
+      --dock-tint: var(--color-voice);
+    }
+
     .voice-dock-card {
       display: flex;
       flex-direction: column;
@@ -1745,7 +1766,7 @@
       padding: 10px 12px;
       border: 1px solid var(--color-divider);
       border-radius: var(--radius-lg);
-      background: linear-gradient(180deg, var(--color-voice-tint), var(--color-surface));
+      background: linear-gradient(180deg, color-mix(in srgb, var(--dock-tint) 8%, var(--color-surface)), var(--color-surface));
       box-shadow: var(--shadow-sm);
     }
 
@@ -1755,30 +1776,85 @@
       gap: 10px;
     }
 
+    /* Both signal icons share one cell and cross-fade. */
+    .voice-dock-signals {
+      display: grid;
+      flex: none;
+    }
+
     .voice-dock-signal {
+      grid-area: 1 / 1;
       font-size: 16px;
+    }
+
+    .voice-dock-signal.sig-room {
       color: var(--color-voice);
+    }
+
+    .voice-dock-signal.sig-idle {
+      color: var(--color-voice-idle);
+    }
+
+    #voice-panel:not([data-voice-state="in-room"]) .sig-room,
+    #voice-panel[data-voice-state="in-room"] .sig-idle {
+      opacity: 0;
+      transform: scale(0.9);
     }
 
     /* Voice-level connection failure being auto-recovered (PRD 11.1) —
        the panel stays visible but signals something's temporarily wrong. */
-    #voice-panel.reconnecting .voice-dock-signal {
+    #voice-panel.reconnecting .voice-dock-signal.sig-room {
       color: var(--color-warning);
       animation: pulse 0.8s infinite;
     }
 
+    /* The title block keeps a minimum height so the card is as tall disconnected as connected (checked with getBoundingClientRect in both states),
+       and the tree above it never jumps (SPEC 1.6). */
     .voice-dock-text {
       flex: 1;
       min-width: 0;
+      min-height: 30px; /* SPEC says 28; the connected title + room line measure 30 here, and both versions must match */
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+    }
+
+    .voice-dock-titles {
+      display: grid;
     }
 
     .voice-dock-title {
+      grid-area: 1 / 1;
       font-size: 13px;
       font-weight: 600;
+    }
+
+    .voice-dock-title.title-room {
       color: var(--color-voice-text);
     }
 
+    .voice-dock-title.title-idle {
+      color: var(--color-voice-idle-text);
+    }
+
+    #voice-panel:not([data-voice-state="in-room"]) .title-room,
+    #voice-panel[data-voice-state="in-room"] .title-idle {
+      opacity: 0;
+    }
+
+    /* The room line collapses (grid row 1fr <-> 0fr) when there is no room. */
+    .voice-dock-subwrap {
+      display: grid;
+      grid-template-rows: 1fr;
+    }
+
+    #voice-panel:not([data-voice-state="in-room"]) .voice-dock-subwrap {
+      grid-template-rows: 0fr;
+      opacity: 0;
+    }
+
     .voice-dock-sub {
+      min-height: 0;
       font-size: 11.5px;
       color: var(--color-neutral-500);
       white-space: nowrap;
@@ -1786,15 +1862,88 @@
       text-overflow: ellipsis;
     }
 
-    #voice-controls {
+    .voice-expand-slot {
       display: flex;
-      gap: 6px;
+      flex: none;
+    }
+
+    #voice-panel:not([data-voice-state="in-room"]) .voice-expand-slot {
+      display: none;
+    }
+
+    /* Four cells with NO column gap: every cell but the first carries the 6 px as padding-left, so the
+       Share and Leave cells can collapse to exactly 0 px when idle. */
+    #voice-controls {
+      display: grid;
+      grid-template-columns: 1fr 1fr 0fr 0fr;
+      column-gap: 0;
+    }
+
+    #voice-panel[data-voice-state="in-room"] #voice-controls {
+      grid-template-columns: 1.4fr 1.4fr 1fr 1fr;
+    }
+
+    #voice-controls .vc-cell {
+      display: flex;
+      min-width: 0;
+    }
+
+    #voice-controls .vc-cell + .vc-cell {
+      padding-left: 6px;
+    }
+
+    #voice-controls .vc-cell.vc-room {
+      overflow: hidden;
+    }
+
+    #voice-panel:not([data-voice-state="in-room"]) #voice-controls .vc-cell.vc-room {
+      padding-left: 0;
+    }
+
+    #voice-controls .vc-cell > .voice-btn,
+    #voice-controls .vc-cell > .split-btn {
+      flex: 1;
+      min-width: 0;
+    }
+
+    /* Smooth switch between the two versions (the owner's request; the study switches instantly). */
+    @media (prefers-reduced-motion: no-preference) {
+      .voice-dock-card {
+        transition: --dock-tint 320ms ease;
+      }
+
+      .voice-dock-signal,
+      .voice-dock-title,
+      .voice-dock-subwrap {
+        transition: opacity 200ms ease, transform 200ms ease, grid-template-rows 280ms cubic-bezier(.2, .8, .2, 1);
+      }
+
+      #voice-controls {
+        transition: grid-template-columns 280ms cubic-bezier(.2, .8, .2, 1);
+      }
+
+      #voice-controls .vc-cell {
+        transition: padding-left 280ms cubic-bezier(.2, .8, .2, 1);
+      }
+
+      #voice-controls .vc-room .voice-btn {
+        transition: opacity 200ms ease 60ms, transform 200ms ease 60ms, background 0.15s, color 0.15s, border-color 0.15s;
+      }
+
+      #voice-panel:not([data-voice-state="in-room"]) #voice-controls .vc-room .voice-btn {
+        opacity: 0;
+        transform: scale(0.9);
+        transition-delay: 0s;
+      }
+    }
+
+    #voice-panel:not([data-voice-state="in-room"]) #voice-controls .vc-room .voice-btn {
+      opacity: 0;
     }
 
     .split-btn {
       position: relative;
       display: flex;
-      flex: 1.4;
     }
 
     .voice-btn {
@@ -9696,7 +9845,7 @@
         <div class="dm-list-body" id="dm-list-body"></div>
       </div>
       </div>
-      <div id="voice-panel">
+      <div id="voice-panel" data-voice-state="idle">
         <div id="screen-share-alert-banner">
           <span class="screen-share-alert-text">You are sharing your screen</span>
           <button id="btn-stop-share-alert">Stop Sharing</button>
@@ -9707,24 +9856,40 @@
         </div>
         <div class="voice-dock-card">
           <div class="voice-dock-head">
-            <i class="ph-fill ph-cell-signal-full voice-dock-signal" aria-hidden="true"></i>
+            <span class="voice-dock-signals">
+              <i class="ph-fill ph-cell-signal-full voice-dock-signal sig-room" data-state-only="in-room" aria-hidden="true"></i>
+              <i class="ph-fill ph-cell-signal-slash voice-dock-signal sig-idle" data-state-only="idle" aria-hidden="true"></i>
+            </span>
             <div class="voice-dock-text">
-              <div class="voice-dock-title">Voice connected</div>
-              <div class="voice-dock-sub"><span id="voice-channel-name"></span><span id="voice-dock-latency"></span></div>
+              <div class="voice-dock-titles">
+                <div class="voice-dock-title title-room" data-state-only="in-room">Voice connected</div>
+                <div class="voice-dock-title title-idle" data-state-only="idle" aria-hidden="true">Disconnected</div>
+              </div>
+              <div class="voice-dock-subwrap" data-room-only>
+                <div class="voice-dock-sub"><span id="voice-channel-name"></span><span id="voice-dock-latency"></span></div>
+              </div>
             </div>
-            <button type="button" class="btn btn-ghost btn-icon voice-expand-btn" id="btn-expand-voice" title="Expand voice room" aria-label="Expand voice room"><i class="ph ph-arrow-square-out" aria-hidden="true"></i></button>
+            <span class="voice-expand-slot" data-room-only><button type="button" class="btn btn-ghost btn-icon voice-expand-btn" id="btn-expand-voice" title="Expand voice room" aria-label="Expand voice room"><i class="ph ph-arrow-square-out" aria-hidden="true"></i></button></span>
           </div>
           <div id="voice-controls">
-            <div class="split-btn">
-              <button type="button" class="voice-btn split-main" id="btn-mute" title="Mute"><i class="ph ph-microphone" aria-hidden="true"></i></button>
-              <button type="button" class="voice-btn split-caret" id="btn-input-devices" title="Input device" aria-label="Input device" aria-haspopup="menu"><i class="ph ph-caret-down" aria-hidden="true"></i></button>
+            <div class="vc-cell">
+              <div class="split-btn">
+                <button type="button" class="voice-btn split-main" id="btn-mute" title="Mute"><i class="ph ph-microphone" aria-hidden="true"></i></button>
+                <button type="button" class="voice-btn split-caret" id="btn-input-devices" title="Input device" aria-label="Input device" aria-haspopup="menu"><i class="ph ph-caret-down" aria-hidden="true"></i></button>
+              </div>
             </div>
-            <div class="split-btn">
-              <button type="button" class="voice-btn split-main" id="btn-deafen" title="Deafen"><i class="ph ph-headphones" aria-hidden="true"></i></button>
-              <button type="button" class="voice-btn split-caret" id="btn-output-devices" title="Output device" aria-label="Output device" aria-haspopup="menu"><i class="ph ph-caret-down" aria-hidden="true"></i></button>
+            <div class="vc-cell">
+              <div class="split-btn">
+                <button type="button" class="voice-btn split-main" id="btn-deafen" title="Deafen"><i class="ph ph-headphones" aria-hidden="true"></i></button>
+                <button type="button" class="voice-btn split-caret" id="btn-output-devices" title="Output device" aria-label="Output device" aria-haspopup="menu"><i class="ph ph-caret-down" aria-hidden="true"></i></button>
+              </div>
             </div>
-            <button type="button" class="voice-btn" id="btn-share-screen" title="Share Screen"><i class="ph ph-screencast icon-share-start" aria-hidden="true"></i><i class="ph ph-screencast icon-share-stop" aria-hidden="true"></i><span class="share-full-count" aria-hidden="true">5/5</span></button>
-            <button type="button" class="voice-btn leave" id="btn-leave-voice" title="Leave Voice"><i class="ph ph-phone-x" aria-hidden="true"></i></button>
+            <div class="vc-cell vc-room" data-room-only>
+              <button type="button" class="voice-btn" id="btn-share-screen" title="Share Screen"><i class="ph ph-screencast icon-share-start" aria-hidden="true"></i><i class="ph ph-screencast icon-share-stop" aria-hidden="true"></i><span class="share-full-count" aria-hidden="true">5/5</span></button>
+            </div>
+            <div class="vc-cell vc-room" data-room-only>
+              <button type="button" class="voice-btn leave" id="btn-leave-voice" title="Leave Voice"><i class="ph ph-phone-x" aria-hidden="true"></i></button>
+            </div>
           </div>
         </div>
       </div>
