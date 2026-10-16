@@ -13916,10 +13916,28 @@ function lightboxStageSize(): { w: number; h: number } {
     return { w: lightboxStage.clientWidth, h: lightboxStage.clientHeight };
 }
 
+/** Height at the top of the stage that the viewer's own controls cover (PRD 21.4):
+ *  the lowest edge of the visible toolbar / Close / "Sent by" pill, plus 8 px.
+ *  Measured, not hard-coded, so it follows the title-bar band and the preview-only
+ *  viewer's smaller control set. */
+function lightboxChromeInset(): number {
+    const stageTop = lightboxStage.getBoundingClientRect().top;
+    let bottom = 0;
+    for (const el of document.querySelectorAll<HTMLElement>("#image-lightbox-modal .lightbox-toolbar, #image-lightbox-modal .lightbox-close, #image-lightbox-modal .lightbox-sender")) {
+        if (el.hidden) continue;
+        const r = el.getBoundingClientRect();
+        if (r.width === 0 || r.height === 0) continue; // display: none
+        bottom = Math.max(bottom, r.bottom - stageTop);
+    }
+    return bottom > 0 ? bottom + 8 : 0;
+}
+
 function lightboxComputeFit(): number {
     if (!lightbox.naturalW || !lightbox.naturalH) return 1;
     const { w, h } = lightboxStageSize();
-    return Math.min(1, (w * LIGHTBOX_FIT_MARGIN) / lightbox.naturalW, (h * LIGHTBOX_FIT_MARGIN) / lightbox.naturalH);
+    // The same inset at the top and the bottom keeps the fitted image centred in the window.
+    const safeH = Math.max(1, h - 2 * lightboxChromeInset());
+    return Math.min(1, (w * LIGHTBOX_FIT_MARGIN) / lightbox.naturalW, (safeH * LIGHTBOX_FIT_MARGIN) / lightbox.naturalH);
 }
 
 /** Keeps the image from being dragged out of view: while it's smaller than

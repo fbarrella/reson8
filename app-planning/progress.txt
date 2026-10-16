@@ -1040,3 +1040,39 @@ Feature/Fix: PRD 21.3 — the composer joins the reply bar seamlessly
     draft (all are the same .visible class toggle).
 
   Next Step: 21.4 — the image viewer fits images below its controls.
+
+--- Entry: 16/10/2026 ---
+
+Feature/Fix: PRD 21.4 — the image viewer fits images below its controls
+
+  Problem: The viewer's controls sit one row below the title-bar band, but the
+  fit-to-window size used the whole stage, so a window-shaped image filled the
+  window and the toolbar, Close and "Sent by" pill covered its top.
+
+  Solution (renderer.ts): new lightboxChromeInset() measures the lowest edge of
+  the visible .lightbox-toolbar / .lightbox-close / .lightbox-sender
+  (relative to the stage's top, skipping hidden and display:none ones, + 8 px;
+  0 when none is visible). lightboxComputeFit() now fits into
+  { w, h - 2 * inset } — the same inset top and bottom keeps the image centred.
+  The fit is still the floor of zooming (lightboxSetScale clamps to
+  lightbox.fit), pan limits (lightboxClampPan) still use the full stage, fit
+  stays <= 1. The window resize handler already calls lightboxComputeFit(),
+  so there is no second copy of the maths.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts
+
+  Verification:
+    client `npx tsc --noEmit` clean; `npm run lint` exit 0. Driven for real
+    (Xvfb Electron, 800x600 window, canvas images): 1920x1080, 1080x1920,
+    3000x600, 400x300 and a window-sized 800x600 image — controls end at
+    y=88, every fitted image starts at y>=116 and is vertically centred (116 px
+    above and below); the 400x300 image keeps its natural size (fit 1);
+    preview-only viewer (previewOnly: true) the same; zoom to 100% and back to
+    fit works; screenshot looked at. NOT exercised: "Use the system title bar"
+    (band 0 — the inset is measured, so it should shrink), a live window resize
+    while open, wheel/drag-pan/double-click by hand, and the "Sent by" pill
+    (shown only for chat images; tested images were opened without sender
+    meta).
+
+  Next Step: 21.5 — Linux: darkened backdrops keep the rounded corners.
