@@ -1076,3 +1076,40 @@ Feature/Fix: PRD 21.4 — the image viewer fits images below its controls
     meta).
 
   Next Step: 21.5 — Linux: darkened backdrops keep the rounded corners.
+
+--- Entry: 16/10/2026 ---
+
+Feature/Fix: PRD 21.5 — Linux: full-window overlays keep the rounded corners
+
+  Problem: On Linux the page draws its own 1 px border and 10 px radius and
+  `html { overflow: hidden }` clips the body's children, but overflow never
+  clips position: fixed descendants — every dialog backdrop and the image/video
+  lightbox are fixed inset 0 — so their darkened layer painted square corners
+  over the rounded window.
+
+  Solution (CSS only, index.html): the existing rule
+  `body.platform-linux.integrated-titlebar:not(.window-maximized):not(.window-fullscreen)`
+  gets `clip-path: inset(0 round 10px)` (same radius as its border-radius so the
+  border stays visible). Not contain: paint / transform (they would make the
+  body the containing block of every fixed element). Maximized/fullscreen don't
+  match the rule, so nothing is clipped; Windows/macOS don't carry the class.
+  The Viewer window is untouched.
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html
+
+  Verification:
+    Real window on the owner's KDE Plasma (Wayland) session, captured through
+    the OS with spectacle (-b -a -n -o), corners enlarged with ImageMagick and
+    compared before (change stashed) vs after: with Settings open the top-left
+    corner outside the radius was a dark-purple dim layer before and is fully
+    transparent after, with the 1 px border visible along the edges; the image
+    viewer over it also follows the corners (top-left and bottom-right checked).
+    With .window-maximized added in the DOM the computed clip-path is none, and
+    inset(0px round 10px) when removed. NOT exercised: a real OS maximize /
+    restore, fullscreen, the confirmation dialog, the profile card, the NSFW
+    prompt and the video lightbox (all the same fixed-inset-0 mechanism), X11,
+    Windows/macOS. The native window buttons stay square at the top-right until
+    21.6, as the PRD says.
+
+  Next Step: 21.6 — Linux: window buttons that belong to the app.

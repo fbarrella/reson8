@@ -282,6 +282,10 @@
       box-sizing: border-box;
       border: 1px solid color-mix(in srgb, var(--color-white) 22%, transparent);
       border-radius: 10px;
+      /* overflow never clips position: fixed descendants (every dialog backdrop and the image/video
+         lightbox), a graphical clip does (PRD 21.5). Same radius as above so the border stays visible.
+         Not contain: paint / transform — they would make the body the containing block of every fixed element. */
+      clip-path: inset(0 round 10px);
     }
 
     body.integrated-titlebar #titlebar {
