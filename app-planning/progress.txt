@@ -971,3 +971,40 @@ Feature/Fix: PRD 21.1 — a kick ends the voice session instead of auto-rejoinin
     who is sharing their screen, a transport-only failure with signaling up.
 
   Next Step: 21.2 — long text never overflows the window.
+
+--- Entry: 16/10/2026 ---
+
+Feature/Fix: PRD 21.2 — long unbroken text wraps instead of overflowing the chat
+
+  Problem: A single-line (inline) message has no wrap rule, so a long run
+  with no spaces (the Braille art, a 300-character URL or word, an inline
+  code span) set the list's min-content width and the whole message list
+  scrolled sideways. A very long nickname and a reply snippet's nickname did
+  the same. Reproduced first with a bot: .chat-messages scrollWidth 2434 vs
+  clientWidth 646 (horizontal scrollbar in the screenshot).
+
+  Solution (CSS only, index.html):
+    .chat-msg .msg-text gets overflow-wrap: anywhere (every message, not just
+    .msg-text-block); .chat-msg gets min-width: 0 (it is a flex item);
+    .chat-msg .msg-nick gets min-width: 0 + overflow-wrap: anywhere and
+    .msg-time flex-shrink: 0 so the time keeps its place; .msg-reply-nick is
+    capped at max-width: 50% with an ellipsis; .msg-text pre max-width: 100%
+    (keeps its own horizontal scroll); .lpc-desc and .toast get
+    overflow-wrap: anywhere. Already safe and left alone: reply snippet text,
+    pinned bar, lpc-title (all ellipsized), search snippet (word-break),
+    profile name (already overflow-wrap: anywhere).
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html
+
+  Verification:
+    Driven for real (Xvfb Electron over CDP + bot sending: Braille art
+    truncated to the 1900-char server limit, 300-char URL, 300-char word,
+    200-char code span, a reply to a 300-char word, a 60-char nickname):
+    scrollWidth == clientWidth (422) in the 800 px window, screenshots looked
+    at; the Braille message still collapses with "See more"; normal messages
+    unchanged. NOT exercised: the 1024 px window and the minimum width
+    separately (the layout is container-driven), a toast with a long word, a
+    link-preview card with a long description, the search results column.
+
+  Next Step: 21.3 — the composer joins the reply bar seamlessly.

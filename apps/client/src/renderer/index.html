@@ -2139,6 +2139,7 @@
        (without it, every taller message got squashed to 47px and overlapped). */
     .chat-msg {
       flex-shrink: 0;
+      min-width: 0; /* a flex item may shrink below its longest word (PRD 21.2) */
     }
 
     .chat-msg.msg-group-start {
@@ -2162,11 +2163,14 @@
     .chat-msg .msg-time {
       color: var(--color-neutral-500);
       font-size: 10px;
+      flex-shrink: 0;
     }
 
     .chat-msg .msg-nick {
       font-weight: 600;
       color: var(--color-accent);
+      min-width: 0; /* a very long nickname wraps instead of widening the list (PRD 21.2) */
+      overflow-wrap: anywhere;
     }
 
     .chat-msg.msg-continuation .msg-header {
@@ -2191,6 +2195,9 @@
 
     .chat-msg .msg-text {
       color: var(--color-text);
+      /* Every message wraps, single-line or block (PRD 21.2). "anywhere" — unlike
+         "break-word" — also shrinks the min-content size flex parents measure. */
+      overflow-wrap: anywhere;
     }
 
     /* A message that's nothing but a single emoji renders ~4x size (PRD
@@ -2270,6 +2277,7 @@
       background: var(--color-field);
       border: 1px solid var(--color-divider);
       overflow-x: auto;
+      max-width: 100%;
     }
 
     .msg-text pre code {
@@ -2784,6 +2792,7 @@
       line-clamp: 3;
       -webkit-box-orient: vertical;
       overflow: hidden;
+      overflow-wrap: anywhere;
       line-height: 1.4;
     }
 
@@ -3043,6 +3052,10 @@
 
     .msg-reply-nick {
       flex-shrink: 0;
+      max-width: 50%; /* a very long nickname is cut, the snippet text keeps the rest (PRD 21.2) */
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
       color: var(--color-accent);
       font-weight: 600;
     }
@@ -8222,6 +8235,7 @@
       font-size: 12px;
       color: var(--color-text);
       max-width: 280px;
+      overflow-wrap: anywhere;
       opacity: 0;
       transform: translateX(20px);
       transition: opacity 0.2s, transform 0.2s;
