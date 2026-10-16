@@ -13,6 +13,32 @@
 <script src="_ds/nocturne-74132c8e-6d8d-407f-9d91-f4b24746852e/_ds_bundle.js"></script>
 <style>body{margin:0;background:#0f1019}a{color:var(--color-accent-300)}a:hover{color:var(--color-accent-200)}.dv-turn{padding:48px 56px 40px;scroll-margin-top:16px}.dv-thd{display:flex;align-items:baseline;gap:10px;margin:0 0 24px}.dv-tid{font:600 10px ui-monospace,Menlo,monospace;padding:3px 7px;background:var(--color-accent-800);color:var(--color-accent-200);border-radius:4px;text-decoration:none}.dv-tname{font:600 14px/1.2 var(--font-body);color:var(--color-neutral-200)}.dv-opts{display:flex;flex-wrap:wrap;gap:48px;align-items:flex-start}.dv-opt{flex:none;display:flex;flex-direction:column;gap:12px;scroll-margin-top:16px}.dv-oid{font:600 10.5px ui-monospace,Menlo,monospace;padding:3px 7px;background:var(--color-neutral-900);color:var(--color-neutral-200);border-radius:5px;text-decoration:none}.dv-olabel{display:flex;align-items:baseline;gap:8px;font:400 13px/1.4 var(--font-body);color:var(--color-neutral-400)}.dv-opt:target .dv-oid{background:var(--color-accent-700);color:var(--color-neutral-100)}.dv-next{margin:28px 0 0;font:13px/1.5 var(--font-body);color:var(--color-neutral-500)}</style>
 </helmet>
+<section class="dv-turn" id="t17">
+  <div class="dv-thd"><a class="dv-tid" href="#t17">17</a><span class="dv-tname">Always-on voice card · glass settings menus</span></div>
+  <div style="max-width:1440px;display:grid;grid-template-columns:repeat(2, minmax(0,1fr));gap:32px;margin-bottom:40px;font-size:13.5px;line-height:1.55;color:var(--color-neutral-400)">
+    <div><div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-accent-400);margin-bottom:6px">Voice card, always there</div>The card at the bottom of the sidebar stays put whether or not you’re in a room. Out of a room it turns the logo’s yellow, reads <b style="color:var(--color-neutral-200);font-weight:500">Disconnected</b>, and keeps only Mute and Deafen with their device menus. Share, Leave and Expand only appear once you join. Press Leave on <a href="#17b">17b</a> to watch it switch.</div>
+    <div><div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-accent-400);margin-bottom:6px">Glass settings menus</div>The category menu in both App settings and Server settings becomes a frosted purple panel. Soft accent light sits behind it, and the menu blurs it with a thin lit edge on the right. The content side stays as it was. Compare with <a href="#4a">4a</a> and <a href="#5a">5a</a>.</div>
+  </div>
+  <div class="dv-opts">
+    <div class="dv-opt" id="17a">
+      <div class="dv-olabel"><a class="dv-oid" href="#17a">17a</a>Not in a voice room — yellow card, mute and deafen only (try the device carets)</div>
+      <dc-import name="Reson8 App" view="text" disconnected="{{ true }}" hint-size="1440px,900px"></dc-import>
+    </div>
+    <div class="dv-opt" id="17b">
+      <div class="dv-olabel"><a class="dv-oid" href="#17b">17b</a>In a voice room — press Leave to drop to Disconnected</div>
+      <dc-import name="Reson8 App" view="text" hint-size="1440px,900px"></dc-import>
+    </div>
+    <div class="dv-opt" id="17c">
+      <div class="dv-olabel"><a class="dv-oid" href="#17c">17c</a>App settings — glass category menu</div>
+      <dc-import name="Reson8 App" view="text" settings="voice" glass-nav="{{ true }}" disconnected="{{ true }}" hint-size="1440px,900px"></dc-import>
+    </div>
+    <div class="dv-opt" id="17d">
+      <div class="dv-olabel"><a class="dv-oid" href="#17d">17d</a>Server settings — glass category menu</div>
+      <dc-import name="Reson8 App" view="text" server-settings="members" glass-nav="{{ true }}" hint-size="1440px,900px"></dc-import>
+    </div>
+  </div>
+  <p class="dv-next">Try next: "glass on the voice card too" · "yellow vs neutral for Disconnected" · "join a room from the card"</p>
+</section>
 <section class="dv-turn" id="t16">
   <div class="dv-thd"><a class="dv-tid" href="#t16">16</a><span class="dv-tname">About the server</span></div>
   <div style="max-width:1440px;display:grid;grid-template-columns:repeat(3, minmax(0,1fr));gap:32px;margin-bottom:40px;font-size:13.5px;line-height:1.55;color:var(--color-neutral-400)">

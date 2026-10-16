@@ -32,6 +32,7 @@ Frame ids such as `13b` refer to the study screenshots. "🖧" means the item ch
 | **P3** | §F: Nocturne foundation (tokens, fonts, icons, menu builder) | Small; lets P4 be built once in its final look. |
 | **P4** | §C: new surfaces, built directly in Nocturne | |
 | **P5** | §R: restyle of the remaining existing screens | Pure visuals, safest last. |
+| **P6** | §D: revision 2 (Turn 17): always-on voice card, glass settings menu | Added after P1–P5 shipped. Two independent items. |
 
 Each numbered item below is sized to be one PRD item and one `progress.txt` entry.
 
@@ -428,3 +429,38 @@ One item per screen group, visual only, each checked against its study frame.
 - **Hard-coded colours:** replace the ones listed in F1.
 
 Remove the old CSS variable aliases only after a final grep shows no remaining use.
+
+---
+
+# P6: Revision 2 (Turn 17)
+Two independent items; either order works. Both are client-only, with no server or protocol changes.
+
+## D1. Voice card always shown
+**Spec.** SPEC §1.6; frames 17a, 17b.
+**Verify first.**
+- Where the dock is shown and hidden today. Find every place that toggles its visibility (join, leave, kick, disconnect, channel deleted, server switch).
+- Where mute and deafen live while not in a room. If the state is only created on join, it needs to exist before joining.
+- That the device menus work without an active call (enumerating devices doesn't need a live track).
+**Change.**
+1. **One state function.** `setVoiceCardState("in-room" | "idle")`. Every place that used to hide the dock calls it with `"idle"` instead; join calls `"in-room"`. The dock is hidden only when the whole sidebar is (not connected to a server).
+2. **Idle state:** swap the icon, title and colour token (§1.6); hide the room line, latency, Expand, Share screen and Leave. Keep Mute, Deafen and both device carets.
+3. **Mute/Deafen while idle** write the same persisted state the in-room buttons do. On join, apply it before the first audio is sent, so nobody hears an unmuted moment.
+4. **Self in the tree:** make sure leaving removes you from the occupant list immediately (don't wait for the next `CHANNEL_TREE_UPDATE`, or the card says Disconnected while the tree still lists you).
+5. **Height:** keep the title row's 28px minimum so the layout doesn't shift between states.
+**Cautions.**
+- **Kick and server-side removal** must land in the idle state too, not in a hidden dock.
+- **Deafen while idle** shouldn't play the deafen sound into a call you aren't in. If sounds play locally, that's fine; just check it isn't confusing.
+- **The update card's in-call note** (15b) must use "in a room", not "dock visible", as its condition.
+**Done when.** Connect to a server: the card shows Disconnected in yellow with Mute and Deafen only. Mute while idle, join a room: you join muted. Leave: the card goes idle at once and you're gone from the tree. Get kicked: same result. Disconnect from the server: the card goes away with the sidebar.
+
+## D2. Glass settings menu
+**Spec.** SPEC §9; frames 17c, 17d.
+**Change.**
+1. Give both settings dialogs' left columns the same fill, blur and edge shadow (one shared class if they don't already share one).
+2. Add the two glow elements as the dialog's first children, absolutely positioned, `pointer-events: none`, behind the nav (the nav gets `position: relative` so it stacks above them).
+3. Leave the content column untouched.
+**Cautions.**
+- **Electron/Chromium** supports `backdrop-filter`; no fallback needed. If the GPU is disabled (`--disable-gpu`), it degrades to the plain tinted fill, which is acceptable.
+- **Performance:** a 28px blur over a static area is cheap; don't animate the glows.
+- **Contrast:** check the section labels per §9.
+**Done when.** Both dialogs match 17c / 17d side by side, the nav still scrolls and clicks normally, and nothing on the content side changed.

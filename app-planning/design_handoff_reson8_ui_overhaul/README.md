@@ -11,6 +11,13 @@ Treat this as the input for the repo's next phase PRD (Phase 19). Following repo
 - Every item you implement gets a `progress.txt` entry via `/log-progress`.
 - The release goes through `/bump-version`.
 
+## Revision 2 (Turn 17): read this first
+Most of the overhaul is already shipped. This revision adds two changes on top of it. Build only these:
+- **Voice card always shown** (17a, 17b): SPEC §1.6, PENDING_FEATURES › P6 D1.
+- **Glass settings menu** (17c, 17d): SPEC §9, PENDING_FEATURES › P6 D2.
+
+`TEST_STATES.md` › "Revision 2" is the acceptance list. Everything else in this package is unchanged from revision 1.
+
 ## About the design files
 The files in `design/` are **design references built in HTML**. They show the intended look and behaviour; they are not production code.
 - **Do not port their markup or their state code.** The mockup is a single React-like component full of fake data.
@@ -29,7 +36,7 @@ The files in `design/` are **design references built in HTML**. They show the in
 | `SPEC.md` | The final behaviour rules, area by area: what to build. This is the source of truth; where an early study frame disagrees with a later one, SPEC.md records the final decision. |
 | `CODE_MAP.md` | Each area mapped to the repo: the existing functions, DOM ids and events it touches, whether it's **Exists / Modify / New**, and which items need **server + shared-types** work. |
 | `PENDING_FEATURES.md` | **What the study defines that the app doesn't do yet** (behaviour and server work only), plus the recommended phase order (P1–P5). Start here. |
-| `screenshots/` | One PNG per study frame (`6a.png`, `13b.png`…), 1440×932. |
+| `screenshots/` | One PNG per study frame (`6a.png`, `13b.png`…), 1440×932. Revision 2 adds `17a`–`17d`. |
 | `TEST_STATES.md` | Every study frame as a state the real app must reach. Use it as the manual and headless (CDP) verification checklist. |
 | `design/` | The study, the mockup component, the Nocturne stylesheet and the logo. |
 

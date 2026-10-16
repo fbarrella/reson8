@@ -63,3 +63,14 @@ Each study frame is a state the real app must reach. Verify each one by hand, or
 ## Settings (restyle only)
 - [x] **4a–4h:** each client settings page. *(All 7 pages at 1440×900 and 1024×680: no horizontal scroll, nothing outside the panel.)*
 - [x] **5a–5f:** each server settings page. *(All 7 pages, Identity log included, at both sizes.)*
+
+## Revision 2 (Turn 17)
+- [ ] **17a:** connected to a server, not in a room: the card shows "Disconnected" in yellow, no second line, Mute and Deafen with working device menus, and no Share, Leave or Expand.
+- [ ] **17a:** you're not listed in any room in the tree, and room counts don't include you.
+- [ ] **17b:** join a room: the card turns green with the full controls. Leave: back to 17a at once, with no layout jump.
+- [ ] Mute while disconnected, then join: you join muted. The same goes for Deafen.
+- [ ] Kicked from a room: the card goes to Disconnected (not hidden).
+- [ ] Leave while viewing the voice room tab: the tab closes and the first text tab shows.
+- [ ] Not connected to any server: no card.
+- [ ] **17c:** App settings: the category menu is frosted purple glass over a soft glow, with a lit right edge. The content side is unchanged.
+- [ ] **17d:** Server settings: the same treatment. The nav scrolls and clicks normally.

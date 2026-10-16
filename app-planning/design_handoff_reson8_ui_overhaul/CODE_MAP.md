@@ -82,12 +82,14 @@ All `renderer.ts` line numbers are as of v2.7.0 and are only a guide; search by 
 | Pop-out window (10a) | `viewer.html` / `viewer.ts`: add Always on top (a main-process `setAlwaysOnTop` via IPC), the title format, and a "Return" action that closes the window and focuses the main stage | Modify |
 | 5-stream cap | 🖧 the server must refuse a 6th `SET_SCREEN_SHARE_STATE` per room with an error code; the client shows the toast. `updateShareScreenButton()` (~3397) shows "· 5/5" | New 🖧 |
 | Focus / Grid | new | New |
+| Voice card, always shown (17a, 17b) · rev 2 | the voice dock (the element that holds `#voice-session-timer`, mute/deafen and their device menus). **Verify** where it's shown and hidden today (probably in the join/leave handlers or a `renderVoiceDock()`-style function) and how the mute/deafen state is stored | Modify |
 | Share picker (1k–1m) | `openScreenShareModal()` (~10567), `startScreenShareViaSystemPicker()` (~3601), `promptForStreamName()` (~3636) | Exists (restyle) |
 
 ## 7. Settings
 | Item | Where | Status |
 | --- | --- | --- |
 | Client settings pages (4a–4h) | the settings modal in `index.html` (~6200–6520) | Exists (restyle) |
+| Glass category menu (17c, 17d) · rev 2 | the left nav column of the client settings modal and of `#admin-modal`. **Verify** whether both use one shared nav class; if they do, the change is one CSS rule plus the glow element(s) | Modify (visual) |
 | Server settings (5a–5f) | `#admin-modal` with tabs `roles` / `emojis` / `server` (~5933). The study reorganises it into General · Members · Joining & invites · Bans · Sign-in security · Identity log · Emoji (a left nav) | Modify (restructure) |
 
 ## 8. Updates

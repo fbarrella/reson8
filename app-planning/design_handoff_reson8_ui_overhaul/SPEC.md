@@ -44,6 +44,20 @@ These are the final rules. Frame ids (e.g. `13b`) point into `design/Reson8 UI S
   - **Saving:** "Save icon" stays disabled until a file is chosen.
 - **Without an icon,** every place the server appears (header, settings header, rail, saved list, About) shows its initials on `--color-accent-900`.
 
+### 1.6 Voice card, always shown (17a, 17b) · revision 2
+- **Where:** the card at the bottom of the sidebar. It's shown whenever the sidebar is (connected to a server), **whether or not you're in a voice room**. It no longer appears on join and disappears on leave.
+- **In a room** (17b): unchanged. Green signal icon, "Voice connected", "{room} / {category} · {latency}", Expand voice room, then Mute, Deafen, Share screen and Leave.
+- **Not in a room** (17a):
+  - **Title:** "Disconnected", with no second line (no room, no latency).
+  - **Icon:** `ph-cell-signal-slash` (fill).
+  - **Colour:** the logo's yellow instead of green. Icon `oklch(0.75 0.16 65)`, title `oklch(0.8 0.15 75)`. The card background is the same vertical gradient as before, from that yellow at 8% over `--color-surface` to plain `--color-surface`. Add it as one token (e.g. `--color-voice-idle`) beside the green.
+  - **Controls:** only **Mute** and **Deafen**, each with its device caret and menu (input and output device), exactly as in a room. **No Share screen, no Leave, no Expand.**
+- **Mute and Deafen while disconnected** set your state for the next join. They are the same persisted settings the in-room buttons use, so joining a room keeps them.
+- **Leave** switches the card to Disconnected immediately. If the voice room tab was open, it closes and you go to your first text tab (§4).
+- **The tree:** you're not listed as an occupant anywhere while disconnected, and the room's count doesn't include you.
+- **Rejoining** works as it does today: click a voice channel in the tree. The card goes back to the in-room state.
+- **Height:** the title row keeps a 28px minimum, so the card is the same height in both states and the tree above it doesn't jump.
+
 ---
 
 ## 2. Channel tree
@@ -231,3 +245,17 @@ The gear in the rail shows the accent dot in the *available* and *ready* states 
   - **Footer:** "From the GitHub release. Shown once after each update; find it again in Settings › About." with a **Got it** button.
 - **Reopening:** from Settings › About ("What's new in {v}"), or from "Release notes" for a pending update. In those cases the kicker reads "Release notes" or "Available update" and the button reads Close.
 - **Marking as seen:** only Got it does that, as today. A backdrop click doesn't.
+
+---
+
+## 9. Settings menu: glass (17c, 17d) · revision 2
+Applies to the category menu (the left column) in **both** App settings and Server settings. The content side, the dialog size and the nav items themselves are unchanged.
+- **Glow behind it:** two soft accent lights painted on the dialog behind the menu, so the blur has something to work on. They don't intercept clicks.
+  - A 340px circle at left −60px, top −80px: `radial-gradient(closest-side, color-mix(in srgb, var(--color-accent) 55%, transparent), transparent)`.
+  - A 260px circle at left 120px, bottom −60px: the same with `--color-accent-600` at 50%.
+  - The dialog clips them (`overflow: hidden`, already set).
+- **Menu fill:** `linear-gradient(170deg, color-mix(in srgb, var(--color-accent-500) 22%, transparent), color-mix(in srgb, var(--color-accent-800) 30%, transparent))`.
+- **Blur:** `backdrop-filter: blur(28px) saturate(150%)`.
+- **Edges:** `box-shadow: inset -1px 0 0 color-mix(in srgb, var(--color-accent-300) 22%, transparent), inset 0 1px 0 color-mix(in srgb, var(--color-text) 8%, transparent)`. That's a faint lit line on the right, where the menu meets the content, and a highlight along the top.
+- **Selected and hover rows** keep their current styles; they read fine on the glass.
+- **Text contrast:** labels stay `--color-neutral-*` as before; check that the 11px section labels still reach 4.5:1 over the brightest part of the glow (top left). If they don't, lower the first glow to 45%.

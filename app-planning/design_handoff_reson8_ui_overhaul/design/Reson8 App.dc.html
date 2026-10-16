@@ -161,14 +161,14 @@
       </div>
 
       <!-- voice dock -->
-      <div style="border-radius:var(--radius-lg);padding:10px 12px;background:linear-gradient(180deg, color-mix(in srgb, oklch(0.78 0.14 155) 7%, var(--color-surface)), var(--color-surface));box-shadow:var(--shadow-sm);display:flex;flex-direction:column;gap:10px">
+      <div style="border-radius:var(--radius-lg);padding:10px 12px;background:linear-gradient(180deg, color-mix(in srgb, {{ dockTint }} 8%, var(--color-surface)), var(--color-surface));box-shadow:var(--shadow-sm);display:flex;flex-direction:column;gap:10px">
         <div style="display:flex;align-items:center;gap:10px">
-          <i class="ph-fill ph-cell-signal-full" style="color:oklch(0.78 0.14 155);font-size:16px"></i>
-          <div style="flex:1;min-width:0">
-            <div style="font-size:13px;font-weight:600;color:oklch(0.8 0.13 155)">Voice connected</div>
-            <div style="font-size:11.5px;color:var(--color-neutral-500)">Sala Precisa / Gaming · 18ms</div>
+          <i class="ph-fill {{ dockIcon }}" style="color:{{ dockTint }};font-size:16px"></i>
+          <div style="flex:1;min-width:0;min-height:28px;display:flex;flex-direction:column;justify-content:center">
+            <div style="font-size:13px;font-weight:600;color:{{ dockTitleFg }}">{{ dockTitle }}</div>
+            <sc-if value="{{ dockOn }}" hint-placeholder-val="{{ true }}"><div style="font-size:11.5px;color:var(--color-neutral-500)">Sala Precisa / Gaming · 18ms</div></sc-if>
           </div>
-          <button onClick="{{ openVoice }}" title="Expand voice room" class="btn btn-ghost btn-icon" style="width:28px;height:28px;color:var(--color-neutral-400)"><i class="ph ph-arrow-square-out"></i></button>
+          <sc-if value="{{ dockOn }}" hint-placeholder-val="{{ true }}"><button onClick="{{ openVoice }}" title="Expand voice room" class="btn btn-ghost btn-icon" style="width:28px;height:28px;color:var(--color-neutral-400)"><i class="ph ph-arrow-square-out"></i></button></sc-if>
         </div>
         <div style="display:flex;gap:6px">
           <div style="position:relative;flex:1.4;display:flex">
@@ -213,8 +213,8 @@
   </div>
 </sc-if>
           </div>
-          <button onClick="{{ toggleShare }}" title="Share screen" style="flex:1;height:32px;border-radius:var(--radius-md);border:1px solid {{ shareBorder }};background:{{ shareBg }};color:{{ shareFg }};font-size:16px;cursor:pointer;display:grid;place-items:center"><i class="ph ph-screencast"></i></button>
-          <button title="Leave voice" style="flex:1;height:32px;border-radius:var(--radius-md);border:1px solid oklch(0.5 0.12 22);background:transparent;color:oklch(0.74 0.14 22);font-size:16px;cursor:pointer;display:grid;place-items:center" style-hover="background:color-mix(in srgb, oklch(0.6 0.16 22) 14%, transparent)"><i class="ph ph-phone-x"></i></button>
+          <sc-if value="{{ dockOn }}" hint-placeholder-val="{{ true }}"><button onClick="{{ toggleShare }}" title="Share screen" style="flex:1;height:32px;border-radius:var(--radius-md);border:1px solid {{ shareBorder }};background:{{ shareBg }};color:{{ shareFg }};font-size:16px;cursor:pointer;display:grid;place-items:center"><i class="ph ph-screencast"></i></button>
+          <button onClick="{{ leaveVoice }}" title="Leave voice" style="flex:1;height:32px;border-radius:var(--radius-md);border:1px solid oklch(0.5 0.12 22);background:transparent;color:oklch(0.74 0.14 22);font-size:16px;cursor:pointer;display:grid;place-items:center" style-hover="background:color-mix(in srgb, oklch(0.6 0.16 22) 14%, transparent)"><i class="ph ph-phone-x"></i></button></sc-if>
         </div>
       </div>
     </div>
@@ -1067,7 +1067,8 @@
   <sc-if value="{{ svOpen }}" hint-placeholder-val="{{ false }}">
     <div onClick="{{ svClose }}" style="position:absolute;inset:0;background:color-mix(in srgb, var(--color-bg) 65%, transparent);z-index:30"></div>
     <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:31;width:1080px;height:740px;display:flex;border-radius:var(--radius-lg);background:var(--color-surface);box-shadow:var(--shadow-lg);overflow:hidden">
-      <div style="width:248px;flex:none;display:flex;flex-direction:column;gap:20px;padding:24px 12px;background:color-mix(in srgb, var(--color-bg) 45%, var(--color-surface))">
+      <sc-if value="{{ glassNav }}" hint-placeholder-val="{{ false }}"><div style="position:absolute;left:-60px;top:-80px;width:340px;height:340px;border-radius:50%;background:radial-gradient(closest-side, color-mix(in srgb, var(--color-accent) 55%, transparent), transparent);pointer-events:none"></div><div style="position:absolute;left:120px;bottom:-60px;width:260px;height:260px;border-radius:50%;background:radial-gradient(closest-side, color-mix(in srgb, var(--color-accent-600) 50%, transparent), transparent);pointer-events:none"></div></sc-if>
+      <div style="position:relative;width:248px;flex:none;display:flex;flex-direction:column;gap:20px;padding:24px 12px;background:{{ navBg }};backdrop-filter:{{ navBlur }};-webkit-backdrop-filter:{{ navBlur }};box-shadow:{{ navEdge }}">
         <div style="padding:0 10px;display:flex;flex-direction:column;gap:8px">
           <div style="display:flex;align-items:center;gap:10px">
             <div style="width:36px;height:36px;flex:none;border-radius:var(--radius-md);display:grid;place-items:center;font-size:12.5px;font-weight:600;background:{{ srvIconBg }};color:var(--color-accent-200);box-shadow:inset 0 0 0 1px var(--color-accent-700)">{{ srvIconText }}</div>
@@ -1372,7 +1373,8 @@
   <sc-if value="{{ settingsOpen }}" hint-placeholder-val="{{ false }}">
     <div onClick="{{ closeSettings }}" style="position:absolute;inset:0;background:color-mix(in srgb, var(--color-bg) 65%, transparent);z-index:30"></div>
     <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:31;width:1080px;height:740px;display:flex;border-radius:var(--radius-lg);background:var(--color-surface);box-shadow:var(--shadow-lg);overflow:hidden">
-      <div style="width:248px;flex:none;display:flex;flex-direction:column;gap:20px;padding:24px 12px;background:color-mix(in srgb, var(--color-bg) 45%, var(--color-surface))">
+      <sc-if value="{{ glassNav }}" hint-placeholder-val="{{ false }}"><div style="position:absolute;left:-60px;top:-80px;width:340px;height:340px;border-radius:50%;background:radial-gradient(closest-side, color-mix(in srgb, var(--color-accent) 55%, transparent), transparent);pointer-events:none"></div><div style="position:absolute;left:120px;bottom:-60px;width:260px;height:260px;border-radius:50%;background:radial-gradient(closest-side, color-mix(in srgb, var(--color-accent-600) 50%, transparent), transparent);pointer-events:none"></div></sc-if>
+      <div style="position:relative;width:248px;flex:none;display:flex;flex-direction:column;gap:20px;padding:24px 12px;background:{{ navBg }};backdrop-filter:{{ navBlur }};-webkit-backdrop-filter:{{ navBlur }};box-shadow:{{ navEdge }}">
         <div style="padding:0 10px;display:flex;flex-direction:column;gap:4px">
           <div style="font-size:20px;font-weight:500">Settings</div>
           <div style="font-size:12px;line-height:1.45;color:var(--color-neutral-500);text-wrap:pretty">Saved on this device. Server options live in the server menu.</div>
@@ -2244,8 +2246,9 @@ class Component extends DCLogic {
       channels:c.ch.map(ch=>{
         const voice=ch.t==='voice',active=(view==='voice'&&voice&&ch.n===channel)||((view==='text')&&!voice&&ch.n===channel);
         const menuOn=!!cm&&(cm.kind==='channel'||cm.kind==='vchannel')&&cm.name===ch.n;
+        const chm=ch.members&&ch.members.filter(n=>!(n==='PoPaDiNhAs'&&(s.vOff??!!this.props.disconnected)));
         return{name:ch.n,active,nsfw:ch.nsfw,unread:ch.muted?null:ch.unread,muted:!!ch.muted,op:ch.muted&&!active?0.5:1,ring:menuOn?'inset 0 0 0 1px var(--color-accent-700)':'none',
-          onCtx:e=>this.openMenu(e,voice?'vchannel':'channel',ch.n),onDbl:()=>{if(voice||this.state.nsfwAsk)return;this.setKeep(ch.n,true)},count:voice&&ch.members&&ch.members.length?`${ch.members.length}`:null,countTitle:voice&&ch.members?`${ch.members.length} ${ch.members.length===1?'person':'people'} connected`:'',timer:voice&&ch.members&&ch.members.length?fmtSes((SES0[ch.n]||0)+Math.floor(((s.tick||this._t0||0)-(this._t0||0))/1000)):null,
+          onCtx:e=>this.openMenu(e,voice?'vchannel':'channel',ch.n),onDbl:()=>{if(voice||this.state.nsfwAsk)return;this.setKeep(ch.n,true)},count:voice&&chm&&chm.length?`${chm.length}`:null,countTitle:voice&&chm?`${chm.length} ${chm.length===1?'person':'people'} connected`:'',timer:voice&&chm&&chm.length?fmtSes((SES0[ch.n]||0)+Math.floor(((s.tick||this._t0||0)-(this._t0||0))/1000)):null,
           icon:voice?'ph-speaker-high':'ph-hash',emoji:ch.e,img:ch.img,imgBg:ch.img?`oklch(0.42 0.08 ${ch.h})`:null,imgFg:ch.img?`oklch(0.92 0.05 ${ch.h})`:null,plain:!ch.e&&!ch.img,voiceMark:voice&&!!(ch.e||ch.img),iconColor:active?'var(--color-accent)':(voice&&ch.members&&ch.members.includes('PoPaDiNhAs')?GREEN:'var(--color-neutral-500)'),
           bg:active?'color-mix(in srgb, var(--color-accent) 14%, transparent)':'transparent',fg:active?'var(--color-neutral-100)':ch.muted?'var(--color-neutral-500)':(ch.unread?'var(--color-neutral-100)':'var(--color-neutral-300)'),weight:active||(ch.unread&&!ch.muted)?600:400,
           onClick:()=>{
@@ -2253,7 +2256,7 @@ class Component extends DCLogic {
             if(voice) set({view:'voice',channel:ch.n,room:ch.n,roomTab:true});
             else this.openText(ch.n);
           },
-          members:(ch.members||[]).map(n=>{const a=av(n);const isSpk=n===speaking&&!deaf;const me=n==='PoPaDiNhAs';
+          members:(chm||[]).map(n=>{const a=av(n);const isSpk=n===speaking&&!deaf;const me=n==='PoPaDiNhAs';
             const pv=(s.pv||{})[n]??100,lm=!!(s.plm||{})[n],mOn=!!cm&&cm.kind==='member'&&cm.name===n;
             return{name:n,onProfile:()=>set({profile:n}),onCtx:e=>this.openMenu(e,'member',n,ch.n),bg2:mOn?'color-mix(in srgb, var(--color-text) 6%, transparent)':'transparent',localMute:lm,volLabel:!me&&!lm&&pv!==100?pv+'%':null,initials:a.initials,bg:a.bg,fg:a.fg,ring:isSpk?`0 0 0 2px ${GREEN}, 0 0 8px ${GREEN}`:'none',nameColor:isSpk?'var(--color-neutral-100)':'var(--color-neutral-400)',muted:me&&muted}})};
       })}));
@@ -2663,6 +2666,8 @@ class Component extends DCLogic {
       muteIcon:muted?'ph-microphone-slash':'ph-microphone',muteBg:mb.bg,muteFg:mb.fg,muteBorder:mb.border,toggleMute:()=>set({muted:!muted}),
       deafIcon:deaf?'ph-speaker-slash':'ph-headphones',deafBg:db.bg,deafFg:db.fg,deafBorder:db.border,toggleDeaf:()=>set({deaf:!deaf}),
       openVoice:()=>set({view:'voice',channel:s.room||'Sala Precisa',roomTab:true}),
+      ...(()=>{const off=s.vOff??!!this.props.disconnected,glass=s.glassNav??!!this.props.glassNav;return{dockOn:!off,dockTint:off?'oklch(0.75 0.16 65)':'oklch(0.78 0.14 155)',dockIcon:off?'ph-cell-signal-slash':'ph-cell-signal-full',dockTitle:off?'Disconnected':'Voice connected',dockTitleFg:off?'oklch(0.8 0.15 75)':'oklch(0.8 0.13 155)',leaveVoice:()=>set({vOff:true,sharing:false,...(view==='voice'?{view:'text',channel:'general'}:{})}),
+        glassNav:glass,navBg:glass?'linear-gradient(170deg, color-mix(in srgb, var(--color-accent-500) 22%, transparent), color-mix(in srgb, var(--color-accent-800) 30%, transparent))':'color-mix(in srgb, var(--color-bg) 45%, var(--color-surface))',navBlur:glass?'blur(28px) saturate(150%)':'none',navEdge:glass?'inset -1px 0 0 color-mix(in srgb, var(--color-accent-300) 22%, transparent), inset 0 1px 0 color-mix(in srgb, var(--color-text) 8%, transparent)':'none'}})(),
       draft:s.draft||'',onDraft:e=>set({draft:e.target.value}),onKey:e=>{if(e.key==='Enter')send()},send,
       placeholder:view==='dm'?'Message @'+dmW:`Message #${channel}`,
       typing:view==='dm'?'':(channel==='Bug Reports'?'Kdshy is typing…':''),
