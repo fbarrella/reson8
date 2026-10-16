@@ -368,6 +368,8 @@ function measureLatencyAndClockOffset(): void {
 /** Wires a freshly-constructed VoiceService's failure callbacks. */
 function wireVoiceServiceCallbacks(vs: VoiceService): void {
     vs.onConnectionLost = () => {
+        // A service that was cleaned up (kick, manual leave, replaced) must never trigger a rejoin (PRD 21.1).
+        if (vs !== voiceService) return;
         emit("voice-connection-lost", null);
         if (lastVoiceChannelId) {
             attemptVoiceRejoin(lastVoiceChannelId);
@@ -390,32 +392,53 @@ async function attemptVoiceRejoin(channelId: string): Promise<void> {
     if (voiceRejoinInFlight) return;
     if (!socket?.connected) return; // the "connect" handler will retry once reconnected
     voiceRejoinInFlight = true;
+    const generation = voiceSessionGeneration;
     emit("voice-reconnecting", { channelId });
 
     const MAX_ATTEMPTS = 3;
     let lastError: string | undefined;
+    let joinedOnServer = false;
+
+    /** The session was ended on purpose (kick, Leave) while this rejoin was running: give up quietly. */
+    const abandoned = (): boolean => {
+        if (generation === voiceSessionGeneration) return false;
+        if (joinedOnServer && socket?.connected) {
+            socket.emit("USER_LEAVE_CHANNEL", { channelId });
+        }
+        return true;
+    };
 
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
         try {
             voiceService?.cleanup();
             voiceService = new VoiceService(createSignaling());
             wireVoiceServiceCallbacks(voiceService);
+            const service = voiceService;
 
+            joinedOnServer = false;
             const joinRes = await new Promise<{ success: boolean; error?: string }>((resolve) => {
                 socket!.emit("USER_JOIN_CHANNEL", { channelId }, resolve);
             });
+            joinedOnServer = joinRes.success;
+            if (abandoned()) return; // endVoiceSessionLocally() already cleaned up the service
             if (!joinRes.success) throw new Error(joinRes.error ?? "Failed to rejoin channel");
 
-            await voiceService.joinVoiceChannel(channelId);
+            await service.joinVoiceChannel(channelId);
+            if (abandoned()) {
+                service.cleanup();
+                return;
+            }
 
             lastVoiceChannelId = channelId;
             emit("voice-reconnected", { channelId });
             voiceRejoinInFlight = false;
             return;
         } catch (err: any) {
+            if (abandoned()) return;
             lastError = err?.message ?? "Unknown error";
             if (attempt < MAX_ATTEMPTS) {
                 await new Promise((resolve) => setTimeout(resolve, 1500));
+                if (abandoned()) return;
             }
         }
     }
@@ -424,6 +447,18 @@ async function attemptVoiceRejoin(channelId: string): Promise<void> {
     lastVoiceChannelId = null;
     voiceService?.cleanup();
     emit("voice-rejoin-failed", { channelId, error: lastError });
+}
+
+/** Bumped whenever the session is ended on purpose; a rejoin that started earlier gives up (PRD 21.1). */
+let voiceSessionGeneration = 0;
+
+/** Ends the local voice session WITHOUT telling the server (it already removed us, or the caller already told it). */
+function endVoiceSessionLocally(): void {
+    voiceSessionGeneration++;
+    lastVoiceChannelId = null;
+    voiceRejoinInFlight = false;
+    voiceService?.cleanup();
+    voiceService = null;
 }
 
 /** Approved custom emoji for Markdown `:name:` rendering — set by the renderer (PRD 15.10). */
@@ -743,7 +778,15 @@ const api = {
         socket.on("CHANNEL_DELETED", (payload) => emit("channel-deleted", payload));
         socket.on("ERROR", (payload) => emit("error", payload));
         socket.on("ACTIVE_SPEAKERS", (payload) => emit("active-speakers", payload));
-        socket.on("USER_KICKED", (payload) => emit("user-kicked", payload));
+        socket.on("USER_KICKED", (payload) => {
+            // A kick ends this voice session for good: no automatic rejoin (PRD 21.1).
+            if (payload.channelId === lastVoiceChannelId || payload.channelId === voiceService?.currentChannelId) {
+                // The native app-audio capture isn't owned by VoiceService (PRD 12.7).
+                if (screenAudioGenerator) void api.stopAppAudioCapture();
+                endVoiceSessionLocally();
+            }
+            emit("user-kicked", payload);
+        });
         socket.on("CHANNEL_USER_KICKED", (payload) => emit("channel-user-kicked", payload));
         socket.on("USER_BANNED", () => emit("user-banned", null));
         socket.on("REACTION_UPDATED", (payload) => emit("reaction-updated", payload));
@@ -801,10 +844,7 @@ const api = {
 
     disconnect(): void {
         joinServerInFlight = false;
-        lastVoiceChannelId = null;
-        voiceRejoinInFlight = false;
-        voiceService?.cleanup();
-        voiceService = null;
+        endVoiceSessionLocally();
         socket?.disconnect();
         socket = null;
     },
@@ -867,7 +907,8 @@ const api = {
         if (screenAudioGenerator) {
             void api.stopAppAudioCapture();
         }
-        voiceService?.cleanup();
+        // Also stops a rejoin that is racing this Leave (PRD 21.1).
+        endVoiceSessionLocally();
         // Reinitialize voice service for next join
         if (socket?.connected) {
             voiceService = new VoiceService(createSignaling());

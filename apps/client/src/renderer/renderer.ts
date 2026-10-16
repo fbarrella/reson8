@@ -6898,8 +6898,8 @@ function setSelfHearEnabledAndNotify(enabled: boolean): void {
     updateSelfHearBanner();
 }
 
-function leaveVoiceAndNotify(): void {
-    api.leaveVoiceChannel();
+/** The local half of leaving a room, shared by a manual Leave and a kick (PRD 21.1). */
+function resetLocalVoiceState(): void {
     isInVoice = false;
     currentChannelId = null;
     previousOccupantIds = new Set();
@@ -6916,6 +6916,11 @@ function leaveVoiceAndNotify(): void {
         updateSelfHearBanner();
     }
     updateVoiceUI();
+}
+
+function leaveVoiceAndNotify(): void {
+    api.leaveVoiceChannel();
+    resetLocalVoiceState();
     log("Left voice channel", "info");
     SoundAlert.play("leaving-channel.mp3");
     if (currentTree.length > 0) {
@@ -7753,13 +7758,9 @@ api.on("user-kicked", (data: { channelId: string }) => {
     suppressNextPresenceSound = true;
     // Leave voice state
     if (isInVoice && currentChannelId === data.channelId) {
-        isInVoice = false;
-        currentChannelId = null;
-        previousOccupantIds = new Set();
-        previousSharingIds = new Set();
+        resetLocalVoiceState(); // PRD 19 C9: closes the room tab; PRD 21.1: also stops the mic meter and self-hear
         voiceChannelName.textContent = "";
         voicePanel.classList.remove("in-voice");
-        updateVoiceUI(); // PRD 19 C9: closes the room tab
     }
 });
 

@@ -921,3 +921,53 @@ Feature/Fix: <name>
   Verification:
     ...
   Next Step: ...
+
+--- Entry: 16/10/2026 ---
+
+Feature/Fix: PRD 21.1 — a kick ends the voice session instead of auto-rejoining
+
+  Problem: A kicked user reappeared in the room ~10 s later. The server tore
+  the session down, but the preload only forwarded USER_KICKED, leaving
+  lastVoiceChannelId set and the old VoiceService alive; its ICE failure
+  then fired onConnectionLost -> attemptVoiceRejoin -> a fresh
+  USER_JOIN_CHANNEL the server accepted. The renderer's user-kicked handler
+  also reset less than leaveVoiceAndNotify() (mic meter, self-hear kept running).
+  Reproduced first (headless client + admin bot on the dev server): kicked
+  12:09:34, "Voice connection lost" 12:09:45, "Reconnected to voice channel"
+  the same second (about 11 s).
+
+  Solution:
+    Client (preload.ts): USER_KICKED now calls endVoiceSessionLocally()
+    (bumps voiceSessionGeneration, clears lastVoiceChannelId and the
+    in-flight flag, cleans up and drops the service; also stops the native
+    app-audio capture first, as leaveVoiceChannel() does). attemptVoiceRejoin()
+    captures the generation and, after every await, gives up if it changed
+    (emitting USER_LEAVE_CHANNEL if the join had already succeeded, and never
+    voice-reconnected / voice-rejoin-failed). onConnectionLost ignores a
+    service that is no longer voiceService. leaveVoiceChannel() and
+    disconnect() go through endVoiceSessionLocally() too, so a rejoin racing
+    a manual Leave stops.
+    Client (renderer.ts): new resetLocalVoiceState() holds the local reset of
+    leaveVoiceAndNotify(); the user-kicked handler calls it (keeping its log
+    line, sound and suppressNextPresenceSound).
+    Server untouched (D3); VOICE_SESSION_LOST still rejoins.
+
+  Callers checked: attemptVoiceRejoin (onConnectionLost, connect handler,
+  VOICE_SESSION_LOST); leaveVoiceAndNotify (all UI leave paths);
+  voiceRejoinInFlight / lastVoiceChannelId writers in preload.ts.
+
+  Key Files Modified:
+    apps/client/src/preload.ts
+    apps/client/src/renderer/renderer.ts
+
+  Verification:
+    apps/client `npx tsc --noEmit` clean; `npm run lint` exit 0 (warnings only).
+    Driven for real (Xvfb Electron over CDP + admin bot): after the fix the
+    kicked client stayed out for 70 s (a fresh bot join saw it in no room),
+    isInVoice false, room tab closed; clicking the room joined again normally;
+    restarting the server (Socket.io reconnect) still made the client rejoin
+    its room by itself.
+    NOT exercised: kick during the "Reconnecting…" window, kicking someone
+    who is sharing their screen, a transport-only failure with signaling up.
+
+  Next Step: 21.2 — long text never overflows the window.
