@@ -1609,3 +1609,69 @@ Feature/Fix: PRD 21.13 — stream thumbnails: taking and showing them
     timeouts), a WebP, and leaving the room revoking the URLs (code path only).
 
   Next Step: 21.14 — the room tab switches to stream mode by itself.
+
+--- Entry: 16/10/2026 ---
+
+Feature/Fix: PRD 21.14 — the room tab switches to a ready-to-watch stream by itself
+
+  Problem: Someone starting a share did nothing to an open room tab; you had to
+  click a LIVE badge, answer a dialog and only then saw anything. The owner wants the
+  tab to switch to stream mode with a frozen frame and a Watch button, and a
+  separate window only through Pop out.
+
+  Solution (renderer.ts, index.html, preload.ts):
+    StageState gains "ready" and "self" (no consumer in either); the audit of every
+    stageState use is written as a comment above the type. isWatchingState() = has a
+    consumer or Viewer. syncStageWithRoom(), called from renderVoiceRoom() (so from
+    openVoiceTab() too), is the one place that picks idle / ready (most recent OTHER
+    sharer, via shareStartedAt/readyChosenAt) / self (you share) and runs only while
+    the tab exists (D4); it never touches a watch. renderReadyStage(): the sharer's
+    thumbnail (blob URL from 21.13) or their 64 px avatar, "{name} is sharing ·
+    {stream}", a Watch stream button; Pop out / volume / fullscreen are hidden in
+    ready and self. Watch calls the unchanged startStageWatch(). Self: new
+    VoiceService-backed api.stage.showOwnPreview(containerId|null) in the preload (a
+    muted <video> on localScreenStream, no socket/consumer), a "You're sharing ·
+    {name}" title (ownStreamName) and a Stop sharing button (stopSharingScreen()).
+    enterStreamFromBadge() (tree badge and tile badge, D9): open+focus the tab, ready
+    on that sharer, THEN the unchanged "Watch {name}'s stream?" dialog; Confirm ->
+    startStageWatch(), Cancel -> stays ready; the dialog closes if the sharer stops;
+    a watch already running is left alone until Confirm; your own badge only opens
+    the tab; an already-watched sharer opens the tab with no dialog. Also live cards
+    move the ready target when nothing is watched, and switch the watch as before
+    when one is. stopStageWatch() also drops the own preview; renderVoiceRoom() only
+    toasts "The stream ended" for a WATCH — ready/self move on silently.
+    client AGENTS.md: the stage bullets updated.
+
+  Key Files Modified:
+    apps/client/src/renderer/renderer.ts
+    apps/client/src/renderer/index.html
+    apps/client/src/preload.ts
+    apps/client/AGENTS.md
+
+  Verification:
+    client `tsc --noEmit` clean, root `npm run lint` exit 0. Driven for real with
+    THREE clients under Xvfb (real desktopCapturer shares through the dev server),
+    results read from state and screenshots looked at:
+    - tab open, another client starts sharing -> ready on it within one presence
+      update (1.5 s), api.stage.isWatching() false (no consumer), thumbnail appears
+      ~3 s later, Pop out/volume/fullscreen hidden, Watch button;
+    - tab CLOSED, another client starts sharing -> no tab opens (D4); click its LIVE
+      badge in the tree -> tab opens focused on its ready stage and the dialog appears
+      on top (D9); Cancel -> stays ready; badge + Confirm -> live stream plays;
+      while watching A, a badge on B opens the dialog and A keeps playing; B stops
+      while the dialog is open -> it closes and nothing changes;
+    - Pop out -> Viewer window; Bring back -> stage; watched sharer stops -> toast
+      "The stream ended" and idle;
+    - I share -> self: own capture playing locally (a 640 px video), title "You're
+      sharing · My own stream", Stop sharing, no consumer; if another person then
+      shares the stage moves to ready on them (PRD order: others first) and the Stop
+      sharing button ends my share; leaving voice while ready -> idle, tab gone;
+      a real KICK_USER while watching -> idle, no leftover Viewer window or tab;
+    - the ready placeholder (no thumbnail) shows the avatar above the title; the
+      first layout overlapped in a short stage and was fixed before the commit.
+    NOT exercised: Grid from ready, access loss and a deleted room in each state
+    (they end in stopStageWatch() like the kick), a Wayland portal share, a
+    3.0.0-beta.4 / 2.7.0 server (no thumbnails -> the avatar placeholder), and
+    keyboard focus on the Watch button.
+
+  Next Step: 21.15 — release 3.0.0-beta.5 and documentation.

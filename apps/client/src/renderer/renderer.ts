@@ -1170,6 +1170,7 @@ interface Reson8Api {
         watch(targetUserId: string, channelId: string, containerId: string): Promise<{ success: boolean; streamName?: string; error?: string }>;
         stop(targetUserId?: string): Promise<void>;
         isWatching(targetUserId?: string): boolean;
+        showOwnPreview(containerId: string | null): void;
         setVolume(percent: number, targetUserId?: string): void;
         setMuted(muted: boolean, targetUserId?: string): void;
         qualityHeight(targetUserId: string): number | null;
@@ -5458,9 +5459,7 @@ function renderOccupants(container: HTMLElement, node: TreeNode): void {
         // `occ.isSharingScreen` is true, so no extra guard needed here.
         el.querySelector(".sharing-badge")?.addEventListener("click", (e) => {
             e.stopPropagation();
-            pendingWatchShare = { userId: occ.userId, nickname: occ.nickname, channelId: node.id };
-            watchShareConfirmNickname.textContent = occ.nickname;
-            watchShareConfirmModal.classList.add("visible");
+            enterStreamFromBadge({ userId: occ.userId, nickname: occ.nickname, channelId: node.id });
         });
 
         // Re-apply any saved local volume/mute for this participant. Cheap and
@@ -5825,6 +5824,10 @@ function createVoiceTab(): VoiceTab {
         `<div class="voice-stream" id="voice-stream">` +
         `<div class="voice-stream-main">` +
         `<div class="voice-stream-video" id="voice-stream-video"></div>` +
+        `<div class="voice-stream-ready"><img class="voice-stream-ready-thumb" alt="" draggable="false">` +
+        `<div class="voice-stream-ready-center"><div class="voice-stream-ready-placeholder"></div><div class="voice-stream-ready-title"></div>` +
+        `<button type="button" class="btn btn-primary voice-stream-watch"><i class="ph-fill ph-play" aria-hidden="true"></i>Watch stream</button></div></div>` +
+        `<div class="voice-stream-self-actions"><button type="button" class="btn btn-secondary voice-stream-stop-share"><i class="ph ph-stop-circle" aria-hidden="true"></i>Stop sharing</button></div>` +
         `<div class="voice-stream-info"><span class="sharing-badge">LIVE</span>` +
         `<span class="voice-stream-quality"></span><span class="voice-stream-title"></span></div>` +
         `<div class="voice-stream-controls">` +
@@ -5991,9 +5994,7 @@ function updateVoiceTile(el: HTMLElement, occ: TreeNode["occupants"][number], no
         badge.textContent = "LIVE";
         badge.addEventListener("click", (e) => {
             e.stopPropagation();
-            pendingWatchShare = { userId: occ.userId, nickname: occ.nickname, channelId: node.id };
-            watchShareConfirmNickname.textContent = occ.nickname;
-            watchShareConfirmModal.classList.add("visible");
+            enterStreamFromBadge({ userId: occ.userId, nickname: occ.nickname, channelId: node.id });
         });
         el.appendChild(badge);
     } else if (!occ.isSharingScreen && badge) {
@@ -6056,10 +6057,20 @@ function renderVoiceRoom(): void {
     }
 
     const sharing = anyoneSharingInRoom(node);
-    // The sharer stopped, or left the room: the stage has nothing to show (PRD 19 C10).
-    if (stageTarget && stageState !== "idle" && !node.occupants.some((o) => o.userId === stageTarget!.userId && o.isSharingScreen)) {
+    // Who started when, for "the most recent sharer" (PRD 21.14).
+    const sharingNow = new Set(node.occupants.filter((o) => o.isSharingScreen).map((o) => o.userId));
+    for (const id of sharingNow) if (!shareStartedAt.has(id)) shareStartedAt.set(id, Date.now());
+    for (const id of [...shareStartedAt.keys()]) if (!sharingNow.has(id)) shareStartedAt.delete(id);
+    // The sharer stopped, or left the room: a WATCH has nothing to show (PRD 19 C10). ready/self just move on, silently.
+    if (stageTarget && isWatchingState() && !sharingNow.has(stageTarget.userId)) {
         void stopStageWatch("The stream ended");
     }
+    // "Watch {name}'s stream?" for a sharer who has stopped: close it, nothing starts (PRD 21.14, D9).
+    if (pendingWatchShare && !sharingNow.has(pendingWatchShare.userId)) {
+        watchShareConfirmModal.classList.remove("visible");
+        pendingWatchShare = null;
+    }
+    syncStageWithRoom();
     renderSharingHeader(); // PRD 19 C11
     renderStageSide();
     syncStreamGrid();
@@ -6197,12 +6208,34 @@ document.getElementById("btn-expand-voice")?.addEventListener("click", () => ope
 // stage. Clicks are ignored while a transition runs, and every transition waits
 // for the previous side to close — there is never a moment with two consumers.
 
-type StageState = "idle" | "starting" | "stage" | "popping" | "popped" | "returning" | "grid";
+//
+// PRD 21.14 adds two states that have NO consumer:
+//   "ready" — someone else is sharing: their thumbnail (or an avatar) and a Watch button. Pop out/Fullscreen
+//             are not offered.
+//   "self"  — you are the sharer: your own capture, shown locally, and a Stop sharing button.
+// Every use of stageState was audited for them:
+//   - like a stage (people strip, `has-stream`, "Also live" cards): renderStage(), layoutVoiceTiles(),
+//     buildVoiceMoreMenu(), renderStageSide() — they test `!== "idle"`, which ready/self satisfy on purpose;
+//   - like idle for consumers (nothing to stop, only to reset): stopStageWatch() resets them without a toast,
+//     closeVoiceTab()/updateVoiceUI()/enterStreamGrid()/startStageWatch() reach them through it;
+//   - never entered by clicks on pop out / bring back / stage-ended (they test "stage"/"popped" exactly).
+// syncStageWithRoom() is the ONE function that picks idle / ready / self.
+type StageState = "idle" | "ready" | "self" | "starting" | "stage" | "popping" | "popped" | "returning" | "grid";
 let stageState: StageState = "idle";
 let stageTarget: { userId: string; channelId: string; nickname: string } | null = null;
 let stageStreamName = "";
 let stageViewerWindowId: number | null = null;
 let stageQualityTimer: ReturnType<typeof setInterval> | null = null;
+/** When each current sharer started, so "most recent sharer" is known (PRD 21.14). */
+const shareStartedAt = new Map<string, number>();
+/** When the ready target was last chosen — a sharer who started after that takes over. */
+let readyChosenAt = 0;
+/** The name you gave your own stream (PRD 21.14's "You're sharing · {name}"). */
+let ownStreamName = "";
+/** True for the states that have a consumer or a Viewer (everything but idle/ready/self). */
+function isWatchingState(): boolean {
+    return stageState !== "idle" && stageState !== "ready" && stageState !== "self";
+}
 
 function stageEl<T extends HTMLElement>(selector: string): T | null {
     return (voiceTab?.contentEl.querySelector(selector) as T | null) ?? null;
@@ -6222,6 +6255,9 @@ function renderStage(): void {
     stream.classList.toggle("is-grid", stageState === "grid");
     stream.classList.toggle("is-popped", stageState === "popped" || stageState === "returning" || stageState === "popping");
     stream.classList.toggle("is-busy", stageState === "starting");
+    stream.classList.toggle("is-ready", stageState === "ready");
+    stream.classList.toggle("is-self", stageState === "self");
+    renderReadyStage();
     renderStageSide();
 
     const note = stageEl<HTMLElement>(".voice-stream-note-text");
@@ -6240,8 +6276,39 @@ function renderStage(): void {
     if (actions) actions.style.display = stageState === "popped" ? "" : "none";
 
     const title = stageEl<HTMLElement>(".voice-stream-title");
-    if (title) title.textContent = stageStreamName ? `${who} · ${stageStreamName}` : who;
+    if (title) {
+        title.textContent =
+            stageState === "self"
+                ? ownStreamName ? `You're sharing · ${ownStreamName}` : "You're sharing"
+                : stageState === "ready"
+                  ? stageStreamName ? `${who} is sharing · ${stageStreamName}` : `${who} is sharing`
+                  : stageStreamName ? `${who} · ${stageStreamName}` : who;
+    }
     layoutVoiceTiles();
+}
+
+/** The "ready to watch" overlay (PRD 21.14): the sharer's thumbnail, or their avatar, and the Watch button. */
+function renderReadyStage(): void {
+    const overlay = stageEl<HTMLElement>(".voice-stream-ready");
+    if (!overlay) return;
+    if (stageState !== "ready" || !stageTarget) return;
+    const img = overlay.querySelector<HTMLImageElement>(".voice-stream-ready-thumb")!;
+    const placeholder = overlay.querySelector<HTMLElement>(".voice-stream-ready-placeholder")!;
+    const url = streamThumbnailUrl(stageTarget.userId);
+    if (url) {
+        if (img.getAttribute("src") !== url) img.src = url;
+        overlay.classList.add("has-thumb");
+    } else {
+        img.removeAttribute("src");
+        overlay.classList.remove("has-thumb");
+    }
+    // The placeholder avatar is rebuilt only when the target changes.
+    if (placeholder.dataset.userId !== stageTarget.userId) {
+        placeholder.dataset.userId = stageTarget.userId;
+        placeholder.replaceChildren(createAvatarElement(stageTarget.userId, stageTarget.nickname, 64));
+    }
+    (overlay.querySelector(".voice-stream-ready-title") as HTMLElement).textContent =
+        stageStreamName ? `${stageTarget.nickname} is sharing · ${stageStreamName}` : `${stageTarget.nickname} is sharing`;
 }
 
 // ── Several streams: Focus and Grid (PRD 19 C11) ──────────────────────────────
@@ -6335,6 +6402,7 @@ api.on("stream-thumbnail", (data: { channelId: string; userId: string; url: stri
     if (data.url) streamThumbnails.set(data.userId, data.url);
     else streamThumbnails.delete(data.userId);
     refreshStreamThumbnailViews(data.userId);
+    if (stageState === "ready" && stageTarget?.userId === data.userId) renderReadyStage();
 });
 
 function renderStageSide(): void {
@@ -6372,7 +6440,11 @@ function renderStageSide(): void {
             card.append(text, dot);
             card.addEventListener("click", () => {
                 const channelId = currentChannelId;
-                if (channelId) void startStageWatch({ userId: occ.userId, nickname: occ.nickname, channelId });
+                if (!channelId) return;
+                // While nothing is being watched a card only moves the "ready" target (PRD 21.14); while
+                // watching it switches the watch, as before.
+                if (!isWatchingState()) setReadyTarget({ userId: occ.userId, nickname: occ.nickname, channelId });
+                else void startStageWatch({ userId: occ.userId, nickname: occ.nickname, channelId });
             });
             cards.appendChild(card);
         }
@@ -6589,6 +6661,82 @@ function stopStageQualityPoll(): void {
     stageQualityTimer = null;
 }
 
+/** Puts the stage in "ready" on `target` — no consumer is started (PRD 21.14). */
+function setReadyTarget(target: { userId: string; nickname: string; channelId: string }): void {
+    if (isWatchingState()) return; // a watch is never replaced by this; startStageWatch() does that
+    api.stage.showOwnPreview(null);
+    stageTarget = { ...target };
+    stageStreamName = knownStreamNames.get(target.userId) ?? "";
+    stageState = "ready";
+    readyChosenAt = Date.now();
+    renderStage();
+}
+
+/**
+ * The ONE function that decides what the stage shows when nothing is being watched (PRD 21.14): ready on the
+ * most recent other sharer, else your own capture (self), else idle. Called from renderVoiceRoom() (every
+ * presence change) and so from openVoiceTab(). It only runs while the room tab exists — with the tab closed
+ * nothing happens and nothing opens it (D4).
+ */
+function syncStageWithRoom(): void {
+    if (!voiceTab || !isInVoice || !currentChannelId) return;
+    if (isWatchingState()) return; // a watch (or a popped Viewer, or the grid) is left alone
+    const myId = api.getInstanceId();
+    const sharers = roomSharers();
+    const others = sharers.filter((o) => o.userId !== myId);
+    if (others.length > 0) {
+        const newest = others.reduce((a, b) => ((shareStartedAt.get(b.userId) ?? 0) > (shareStartedAt.get(a.userId) ?? 0) ? b : a));
+        const current = stageState === "ready" && stageTarget ? others.find((o) => o.userId === stageTarget!.userId) : undefined;
+        // Keep the one already on show unless somebody started sharing after it was chosen.
+        const takeover = current && (shareStartedAt.get(newest.userId) ?? 0) > readyChosenAt && newest.userId !== current.userId;
+        const pick = current && !takeover ? current : newest;
+        if (stageState !== "ready" || stageTarget?.userId !== pick.userId) {
+            setReadyTarget({ userId: pick.userId, nickname: pick.nickname, channelId: currentChannelId });
+        } else {
+            renderStage();
+        }
+        return;
+    }
+    if (sharers.some((o) => o.userId === myId)) {
+        if (stageState !== "self") {
+            stageTarget = { userId: myId, nickname: "You", channelId: currentChannelId };
+            stageStreamName = "";
+            stageState = "self";
+            api.stage.showOwnPreview("voice-stream-video");
+        }
+        renderStage();
+        return;
+    }
+    if (stageState === "ready" || stageState === "self") {
+        api.stage.showOwnPreview(null);
+        stageState = "idle";
+        stageTarget = null;
+        stageStreamName = "";
+        renderStage();
+    }
+}
+
+/**
+ * A LIVE badge (the tree's or the room tile's), PRD 21.14 / D9: the room tab opens FIRST, focused, on that
+ * sharer's ready stage, and only THEN "Watch {name}'s stream?" asks. Cancel leaves the stage ready.
+ */
+function enterStreamFromBadge(t: { userId: string; nickname: string; channelId: string }): void {
+    if (!isInVoice || currentChannelId !== t.channelId) {
+        showToast("Join the voice channel to watch its stream.");
+        return;
+    }
+    openVoiceTab({ focus: true });
+    if (!voiceTab) return;
+    // Your own badge, or a stream you are already watching: just the tab, no dialog.
+    if (t.userId === api.getInstanceId()) return;
+    const watchingThem = stageState === "grid" ? gridCells.has(t.userId) : isWatchingState() && stageTarget?.userId === t.userId;
+    if (watchingThem) return;
+    setReadyTarget(t); // no-op while another watch runs: that watch stays until the user confirms
+    pendingWatchShare = { ...t };
+    watchShareConfirmNickname.textContent = t.nickname;
+    watchShareConfirmModal.classList.add("visible");
+}
+
 /** Starts (or switches) the in-app watch of `target`, opening the room tab. */
 async function startStageWatch(target: { userId: string; nickname: string; channelId: string }): Promise<void> {
     if (!requireServerAccess()) return; // PRD 18.18
@@ -6645,6 +6793,7 @@ async function stopStageWatch(message?: string): Promise<void> {
     stageState = "idle";
     stageTarget = null;
     stageStreamName = "";
+    api.stage.showOwnPreview(null); // ready/self have no consumer, only a local preview to drop (PRD 21.14)
     stopStageQualityPoll();
     if (windowId !== null) await api.closeViewerWindow(windowId);
     await Promise.all(gridWindows.map((w) => api.closeViewerWindow(w)));
@@ -6747,7 +6896,11 @@ api.on("stage-ended", (data: { targetUserId: string; reason: string; kind: "ende
 // Stage controls (the buttons live in the room tab, built once per tab).
 document.addEventListener("click", (e) => {
     const t = e.target as HTMLElement;
-    if (t.closest(".voice-stream-popout")) void popOutStage();
+    if (t.closest(".voice-stream-watch")) {
+        if (stageState === "ready" && stageTarget) void startStageWatch({ ...stageTarget }); // PRD 21.14
+    } else if (t.closest(".voice-stream-stop-share")) {
+        void stopSharingScreen();
+    } else if (t.closest(".voice-stream-popout")) void popOutStage();
     else if (t.closest(".voice-stream-bringback")) void bringBackStage();
     else if (t.closest(".voice-stream-showwindow")) {
         if (stageViewerWindowId !== null) void api.focusViewerWindow(stageViewerWindowId);
@@ -7198,6 +7351,7 @@ async function startScreenShareViaSystemPicker(): Promise<void> {
     // (which reads this back via WATCH_SCREEN_SHARE) shows the exact same
     // name this client's own "Started sharing" log does, not a stale
     // pre-naming placeholder.
+    ownStreamName = resolvedName;
     api.setScreenShareState(true, resolvedName);
     log(`Started sharing "${resolvedName}"`, "success");
 
@@ -15305,6 +15459,7 @@ btnScreenShareStart.addEventListener("click", async () => {
     // Makes the sharing badge (PRD 12.12) appear for other occupants, and
     // — via `streamName` — lets a viewer's Viewer window show this same
     // resolved name.
+    ownStreamName = resolvedName;
     api.setScreenShareState(true, resolvedName);
     log(`Started sharing "${resolvedName}"`, "success");
 });

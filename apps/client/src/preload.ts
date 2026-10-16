@@ -308,6 +308,8 @@ let activePin: { ca: string; fingerprint256: string } | null = null;
  * five in Grid. Owned here because MediaStreams can't cross contextBridge.
  */
 const stageHandles = new Map<string, WatchHandle>();
+/** The sharer's own local preview <video> (PRD 21.14), at most one. */
+let ownPreviewVideo: HTMLVideoElement | null = null;
 const stageStarting = new Set<string>();
 let stageVolume = 100;
 
@@ -2137,6 +2139,28 @@ const api = {
             const handles = ids.map((id) => stageHandles.get(id)).filter((h): h is WatchHandle => !!h);
             for (const id of ids) stageHandles.delete(id);
             await Promise.all(handles.map((h) => h.close()));
+        },
+
+        /**
+         * Shows YOUR OWN capture inside `containerId` (PRD 21.14's "You're live" stage): a muted <video> on the
+         * local MediaStream. No socket, no consumer, no server traffic. `null` removes it.
+         */
+        showOwnPreview(containerId: string | null): void {
+            ownPreviewVideo?.remove();
+            ownPreviewVideo = null;
+            if (!containerId) return;
+            const host = document.getElementById(containerId);
+            const stream = voiceService?.localScreenStream;
+            if (!host || !stream) return;
+            const video = document.createElement("video");
+            video.muted = true;
+            video.autoplay = true;
+            video.playsInline = true;
+            video.dataset.ownPreview = "true";
+            video.srcObject = stream;
+            host.appendChild(video);
+            void video.play().catch(() => { /* autoplay refused: the first frame shows once it can */ });
+            ownPreviewVideo = video;
         },
 
         isWatching(targetUserId?: string): boolean {
