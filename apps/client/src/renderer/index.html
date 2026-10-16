@@ -1209,9 +1209,20 @@
     }
 
     /* ── Left Pane (Channel Tree) ─────────────────────────────────────── */
-    #left-pane {
+    /* The tree card and the voice card, stacked (PRD 21.7). */
+    #left-column {
       width: 280px;
       min-width: 220px;
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      min-height: 0;
+    }
+
+    #left-pane {
+      flex: 1;
+      min-height: 0;
       background: var(--color-surface);
       border-right: 1px solid var(--color-divider);
       display: flex;
@@ -1527,7 +1538,8 @@
     /* ── Voice Controls (bottom of left pane) ─────────────────────────── */
     #voice-panel {
       border-top: none;
-      padding: 0 10px 10px;
+      padding: 0;
+      flex-shrink: 0;
       display: none;
       flex-direction: column;
       gap: 6px;
@@ -1633,6 +1645,7 @@
       flex-direction: column;
       gap: 10px;
       padding: 10px 12px;
+      border: 1px solid var(--color-divider);
       border-radius: var(--radius-lg);
       background: linear-gradient(180deg, var(--color-voice-tint), var(--color-surface));
       box-shadow: var(--shadow-sm);
@@ -9550,6 +9563,8 @@
       </div>
     </div>
 
+    <!-- Left column (PRD 21.7): the channel tree card and, below it, the voice card -->
+    <div id="left-column">
     <!-- Left Pane: Channel Tree -->
     <div id="left-pane">
       <div id="tree-header">
@@ -9580,6 +9595,7 @@
           </div>
         </div>
         <div class="dm-list-body" id="dm-list-body"></div>
+      </div>
       </div>
       <div id="voice-panel">
         <div id="screen-share-alert-banner">

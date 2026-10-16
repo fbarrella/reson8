@@ -1162,3 +1162,43 @@ Feature/Fix: PRD 21.6 — Linux: transparent native window buttons (step 1 succe
     the buttons' hover colours beyond what showed in captures.
 
   Next Step: 21.7 — the voice card leaves the channel list.
+
+--- Entry: 16/10/2026 ---
+
+Feature/Fix: PRD 21.7 — the voice card leaves the channel list
+
+  Problem: #voice-panel (the dock card plus the screen-share and self-hear
+  banners) was the last child INSIDE #left-pane, the bordered card that also
+  holds the tree and the DM list, so it read as part of the channel list.
+
+  Solution (index.html only; no renderer.ts change): new #left-column wraps
+  #left-pane and #voice-panel (ids kept). #left-column = 280 px / min 220,
+  flex column, gap 10 px, min-height 0; #left-pane lost its width and gets
+  flex: 1; min-height: 0 (card look unchanged); #voice-panel has padding 0 and
+  flex-shrink 0, and .voice-dock-card gets the card frame
+  (1px --color-divider border). The banners still sit above the dock card
+  inside #voice-panel. Callers checked: every `left-pane` / `voice-panel` /
+  `voicePanel` / `leftPaneEl` hit in renderer.ts only toggles classes
+  (.visible, .reconnecting, .in-voice, .show-dms) and needs no change; CSS
+  rules `#left-pane.show-dms …` and the `#main` welcome-screen hiding still
+  match (the wrapper lives inside #main).
+  Caught and fixed during testing: an extra closing </div> had closed #main
+  early (right pane overlapped), found with getBoundingClientRect().
+
+  Key Files Modified:
+    apps/client/src/renderer/index.html
+    apps/client/AGENTS.md
+
+  Verification:
+    `npm run lint` exit 0 (only HTML/CSS and docs changed; no TS touched).
+    Driven for real (Xvfb Electron over CDP, joined Game Room 1, screenshots
+    looked at): two separate cards, voice card 10 px under the tree card, tree
+    and right pane share top and bottom; tree scrolls inside its card; the
+    share-screen and self-hear banners show above the dock card; the DM view
+    keeps the voice card below it; leaving voice hides it (display none) and the
+    tree card takes the full column height (473 px). NOT exercised: the
+    220 px minimum column width (the window was 800 px), the frame 17b side by
+    side with the screenshot, a real screen share raising the banner (classes
+    were toggled by hand).
+
+  Next Step: 21.8 — a balanced channel tree.
