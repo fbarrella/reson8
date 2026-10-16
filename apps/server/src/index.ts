@@ -36,6 +36,7 @@ import { registerSearchHandlers } from "./handlers/search.handler.js";
 import { registerNudgeHandlers } from "./handlers/nudge.handler.js";
 import { registerUploadHandlers } from "./handlers/upload.handler.js";
 import { registerProfileHandlers } from "./handlers/profile.handler.js";
+import { registerStreamThumbnailHandlers } from "./handlers/stream-thumbnail.handler.js";
 import { registerApprovalHandlers } from "./handlers/approval.handler.js";
 import { describeHandler, normalizePacket, requiresSignIn } from "./services/packet-guard.js";
 import { NO_ACCESS_MESSAGE, requiresAccess } from "./services/access.service.js";
@@ -265,6 +266,7 @@ async function main(): Promise<void> {
     registerNudgeHandlers(io, app);
     registerUploadHandlers(io, app);
     registerProfileHandlers(io, app);
+    registerStreamThumbnailHandlers(io, app);
     registerApprovalHandlers(io, app);
     registerInviteHandlers(io, app);
     startUploadSweeper(app);

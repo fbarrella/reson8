@@ -127,6 +127,8 @@ export const EVENT_ACCESS: Record<keyof ClientToServerEvents, "open" | "member">
     CONSUME: "member",
     RESUME_CONSUMER: "member",
     SET_SCREEN_SHARE_STATE: "member",
+    SET_STREAM_THUMBNAIL: "member",
+    GET_STREAM_THUMBNAILS: "member",
     WATCH_SCREEN_SHARE: "member",
     REQUEST_VIEWER_TICKET: "member",
 

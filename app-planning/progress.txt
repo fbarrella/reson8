@@ -1495,3 +1495,59 @@ Feature/Fix: PRD 21.11 follow-up — the glass menu overflowed the dialog's roun
     rule) and Windows/macOS.
 
   Next Step: 21.12 — stream thumbnails: protocol and server.
+
+--- Entry: 16/10/2026 ---
+
+Feature/Fix: PRD 21.12 — stream thumbnails: protocol and server
+
+  Problem: A viewer can't show a frame of a share it isn't consuming, and consuming
+  a stream per viewer just for a picture is too expensive (and the stage's rule is
+  one consumer). The sharer's own app will take a small frame (21.13); the server
+  has to carry it to the people in the voice room.
+
+  Solution:
+    shared-types: IStreamThumbnail; client->server SET_STREAM_THUMBNAIL and
+    GET_STREAM_THUMBNAILS; server->client STREAM_THUMBNAIL_UPDATED and
+    STREAM_THUMBNAIL_CLEARED. Both client events are "member" in EVENT_ACCESS.
+    Server: services/stream-thumbnail.service.ts (validateThumbnail via sniffImage:
+    JPEG/WebP only, <= 128 KB, 1..960 px; toBuffer; ThumbnailStore with the 20 s
+    per-socket throttle; the process-wide `streamThumbnails`; clearStreamThumbnail()
+    and clearChannelThumbnails()); handlers/stream-thumbnail.handler.ts (primary
+    socket, currentChannelId == payload.channelId, presence isSharingScreen in that
+    channel, validate, throttle, store, emit to `channel:<id>` only; GET only from
+    inside the room and dropping owners that stopped sharing); registered in
+    index.ts. Clearing wired into: SET_SCREEN_SHARE_STATE false, CLOSE_PRODUCER of a
+    screen-video producer, USER_LEAVE_CHANNEL, switching rooms, the immediate
+    disconnect cleanup, finalizeDisconnect, supersedeSocket, removeSocketFromChannel
+    (kick, access loss, deleted room's sockets) and the channel delete
+    (clearChannelThumbnails). The throttle is reset whenever the share flag is set
+    (on or off) so a re-started share can send its first frame at once.
+    apps/server/AGENTS.md has the convention bullet. Nothing is sent to old clients
+    (they ignore the new events); an old server never answers (21.13 times out).
+
+  Key Files Modified:
+    packages/shared-types/src/models.ts, socket-events.ts
+    apps/server/src/services/stream-thumbnail.service.ts (NEW)
+    apps/server/src/handlers/stream-thumbnail.handler.ts (NEW)
+    apps/server/src/__tests__/stream-thumbnail.service.test.ts (NEW)
+    apps/server/src/index.ts, services/access.service.ts, services/voice-session.service.ts
+    apps/server/src/handlers/voice.handler.ts, connection.handler.ts, channel.handler.ts
+    apps/server/AGENTS.md
+
+  Verification:
+    shared-types builds; server `tsc --noEmit` clean; `npm run test` all pass
+    (new file: wrong magic, PNG, oversize bytes, oversize/zero dimensions, throttle,
+    clear paths); root lint exit 0. Driven against the running dev server with
+    Socket.io bots (sharer, room-mate, bot in another room, bot in no room,
+    non-sharer, admin): a non-sharer and a sharer with the flag off are refused;
+    PNG, 200 KB and wrong-room are refused; a real 6.5 KB JPEG is relayed to the
+    room-mate ONLY (nothing to the other room or the roomless bot); a 2nd one
+    within 20 s is refused; GET works from inside and is refused from outside or
+    another room; STREAM_THUMBNAIL_CLEARED reaches the room on share stop, leave,
+    a real KICK_USER and the sharer's disconnect, and the store is empty after
+    each; the packet gate answers "Not signed in" to both events. NOT exercised:
+    clearing through CLOSE_PRODUCER, a deleted room, access loss and a superseded
+    socket (same helper; not driven), 100+ thumbnails of memory growth, and a
+    WebP (unit-tested only).
+
+  Next Step: 21.13 — take and show the thumbnails on the client.

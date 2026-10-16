@@ -26,6 +26,7 @@ import { parseDeleteMode, planChannelDelete } from "../services/channel-delete.j
 import { PresenceService } from "../services/presence.service.js";
 import type { MediasoupService } from "../services/mediasoup.service.js";
 import { getMediasoupSessionKey } from "./connection.handler.js";
+import { clearChannelThumbnails } from "../services/stream-thumbnail.service.js";
 import { requirePermission } from "../middleware/permissions.middleware.js";
 import {
     claimUploads,
@@ -238,6 +239,7 @@ export function registerChannelHandlers(
                         await presence.leaveChannel(uid, voiceId);
                     }
                     voiceSessionStartedAt.delete(voiceId);
+                    clearChannelThumbnails(io, voiceId); // PRD 21.12
                 }
 
                 ack({ success: true, deletedChannelIds: plan.deleteIds });

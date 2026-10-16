@@ -18,6 +18,7 @@ import type {
     IRole,
     IUser,
     IUserPresence,
+    IStreamThumbnail,
     ITransportOptions,
     IConsumerInfo,
     ICustomEmoji,
@@ -681,6 +682,22 @@ export interface ClientToServerEvents {
         }) => void,
     ) => void;
 
+    /**
+     * The sharer's latest frame of its screen share (PRD 21.12): JPEG or WebP bytes, at most 128 KB
+     * and 960 px a side. Only accepted from the sharer, from inside the room, at most once per 20 s;
+     * relayed to the room as STREAM_THUMBNAIL_UPDATED and kept in server memory only.
+     */
+    SET_STREAM_THUMBNAIL: (
+        payload: { channelId: string; image: ArrayBuffer | Uint8Array },
+        ack: (response: { success: boolean; error?: string }) => void,
+    ) => void;
+
+    /** The current thumbnails of the room you are in (asked after entering a room, PRD 21.12). */
+    GET_STREAM_THUMBNAILS: (
+        payload: { channelId: string },
+        ack: (response: { success: boolean; thumbnails?: IStreamThumbnail[]; error?: string }) => void,
+    ) => void;
+
     // ── Screen Share Viewing (PRD 12.13) ──────────────────────────────────
     // Emitted only by a Viewer window's own second ("viewer"-role) socket —
     // see `SocketData.role`'s doc comment for the full dual-socket design.
@@ -977,6 +994,12 @@ export interface ServerToClientEvents {
         producerId: string;
         mediaType?: "screen-audio" | "screen-video";
     }) => void;
+
+    /** A sharer's new stream thumbnail, to the voice room only (PRD 21.12). */
+    STREAM_THUMBNAIL_UPDATED: (payload: IStreamThumbnail) => void;
+
+    /** A sharer's thumbnail is gone because their share ended (PRD 21.12). */
+    STREAM_THUMBNAIL_CLEARED: (payload: { channelId: string; userId: string }) => void;
 
     /** Notifies the channel that a producer was closed. */
     PRODUCER_CLOSED: (payload: {

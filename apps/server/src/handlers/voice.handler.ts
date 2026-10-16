@@ -24,6 +24,8 @@ import type {
 import type { MediasoupService } from "../services/mediasoup.service.js";
 import { PresenceService } from "../services/presence.service.js";
 import { buildOccupant, voiceSessionStartedAt, getMediasoupSessionKey } from "./connection.handler.js";
+import { clearStreamThumbnail, streamThumbnails } from "../services/stream-thumbnail.service.js";
+
 import { withChannelLock } from "../services/channel-lock.js";
 import { screenShareEnabled } from "../config/screen-share.config.js";
 import { screenConsumeDecision } from "../services/screen-consume.js";
@@ -527,6 +529,7 @@ export function registerVoiceHandlers(
 
                 session[sessionField]!.close();
                 session[sessionField] = null;
+                if (sessionField === "screenVideoProducer") clearStreamThumbnail(io, channelId, socket.data.userId); // PRD 21.12
 
                 // Notify other users
                 socket.to(`channel:${channelId}`).emit("PRODUCER_CLOSED", {
@@ -613,6 +616,12 @@ export function registerVoiceHandlers(
                 }
 
                 await presence.setScreenShareState(userId, isSharingScreen, streamName);
+                // The thumbnail goes the moment the share does (PRD 21.12), and a share that (re)starts may
+                // send its first frame at once instead of waiting out the previous share's 20 s.
+                if (channelId) {
+                    if (!isSharingScreen) clearStreamThumbnail(io, channelId, userId);
+                    streamThumbnails.forgetSocket(socket.id);
+                }
 
                 if (channelId) {
                     const occupantIds = await presence.getChannelOccupants(channelId);

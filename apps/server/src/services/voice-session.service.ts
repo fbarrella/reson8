@@ -18,6 +18,7 @@ import type {
 import type { PresenceService } from "./presence.service.js";
 import type { MediasoupService } from "./mediasoup.service.js";
 import { buildOccupant } from "../handlers/connection.handler.js";
+import { clearStreamThumbnail } from "../services/stream-thumbnail.service.js";
 
 /**
  * In-memory voice session start times (channelId → Date): set when the first
@@ -123,6 +124,7 @@ export async function removeSocketFromChannel(
         socket.to(`channel:${channelId}`).emit("PRODUCER_CLOSED", { userId, producerId });
     }
     deps.mediasoup.cleanupUserSession(channelId, userId);
+    clearStreamThumbnail({ to: (room) => socket.to(room) }, channelId, userId); // PRD 21.12
 
     // Leave channel presence + room
     await deps.presence.leaveChannel(userId, channelId);

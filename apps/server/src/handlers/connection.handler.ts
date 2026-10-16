@@ -58,6 +58,7 @@ import {
 /** Thrown inside the user-creation transaction to roll the whole join back. */
 class InviteUnusableError extends Error {}
 import { issueViewerTicket, resolveViewerTicket, revokeViewerTickets } from "../services/viewer-ticket.service.js";
+import { clearStreamThumbnail } from "../services/stream-thumbnail.service.js";
 
 type TypedIO = SocketIOServer<
     ClientToServerEvents,
@@ -242,6 +243,7 @@ export function registerConnectionHandlers(
                 old.to(`channel:${currentChannelId}`).emit("PRODUCER_CLOSED", { userId, producerId });
             }
             mediasoup.cleanupUserSession(currentChannelId, userId);
+            clearStreamThumbnail(io, currentChannelId, userId); // PRD 21.12
             await presence.leaveChannel(userId, currentChannelId);
 
             const occupantIds = await presence.getChannelOccupants(currentChannelId);
@@ -270,6 +272,7 @@ export function registerConnectionHandlers(
         currentChannelId: string | null,
     ): Promise<void> {
         if (currentChannelId) {
+            clearStreamThumbnail(io, currentChannelId, userId); // PRD 21.12 (belt and braces: the disconnect already cleared it)
             await presence.leaveChannel(userId, currentChannelId);
 
             const occupantIds = await presence.getChannelOccupants(currentChannelId);
@@ -944,6 +947,7 @@ export function registerConnectionHandlers(
                         });
                     }
                     mediasoup.cleanupUserSession(prevChannelId, userId);
+                    clearStreamThumbnail(io, prevChannelId, userId); // PRD 21.12
 
                     // Leave old channel presence + room
                     await presence.leaveChannel(userId, prevChannelId);
@@ -1044,6 +1048,7 @@ export function registerConnectionHandlers(
                     });
                 }
                 mediasoup.cleanupUserSession(channelId, userId);
+                clearStreamThumbnail(io, channelId, userId); // PRD 21.12
 
                 socket.data.currentChannelId = null;
 
@@ -1139,6 +1144,7 @@ export function registerConnectionHandlers(
                             });
                         }
                         mediasoup.cleanupUserSession(currentChannelId, userId);
+                        clearStreamThumbnail(io, currentChannelId, userId); // PRD 21.12 — the share's producer just closed
                     }
 
                     // Cancel any earlier pending deferred-leave for this user

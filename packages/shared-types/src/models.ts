@@ -290,6 +290,19 @@ export interface IObservedAuthHost {
 }
 
 /** Lightweight presence record for channel occupants. */
+/**
+ * One sharer's latest frame of their screen share (PRD 21.12): a small JPEG/WebP the sharer's own
+ * app takes and the server relays to the voice room only, in memory, never stored.
+ */
+export interface IStreamThumbnail {
+    channelId: string;
+    userId: string;
+    mime: "image/jpeg" | "image/webp";
+    image: ArrayBuffer | Uint8Array;
+    /** ISO time the server accepted it. */
+    takenAt: string;
+}
+
 export interface IUserPresence {
     userId: string;
     nickname: string;
